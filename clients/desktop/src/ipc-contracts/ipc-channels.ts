@@ -139,8 +139,14 @@ export const RunnerHostInvoke = {
   fileDropCopyTemporary: "runnerHost:fileDrops:copyTemporary",
   fileDropReadNativeClipboardPaths:
     "runnerHost:fileDrops:readNativeClipboardPaths",
-  fileSave: "runnerHost:file:save",
-  // Opens a file `fileSave` wrote earlier in this process lifetime with the
+  // A native save is two steps so the renderer can withdraw between them:
+  // `fileSavePick` shows the save dialog and returns a one-shot target id
+  // bound to the calling document (no bytes cross yet), `fileSaveWrite`
+  // consumes that id and writes the bytes, `fileSaveCancel` discards it.
+  fileSavePick: "runnerHost:file:savePick",
+  fileSaveWrite: "runnerHost:file:saveWrite",
+  fileSaveCancel: "runnerHost:file:saveCancel",
+  // Opens a file `fileSaveWrite` wrote earlier in this process lifetime with the
   // OS default app (the "Open file" action on the saved toast). Main keeps
   // the allowlist of paths it saved, so the renderer can only ever open what
   // the user just chose in the native save dialog - never an arbitrary path.

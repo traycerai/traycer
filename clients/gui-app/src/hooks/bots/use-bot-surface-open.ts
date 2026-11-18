@@ -176,7 +176,12 @@ export interface BotArtifactOpenTarget {
   readonly lifetime: ArtifactReadLifetime;
 }
 
-/** The admitted tile on its serving host, with a return to this Tracy transcript. */
+/**
+ * The admitted tile on its serving host, with a return to this Tracy
+ * transcript. The task's tab opens on that host unless a tab of this window
+ * already holds the task elsewhere, and the read's lifetime is checked again
+ * when the activation runs.
+ */
 export function useBotArtifactOpen(
   target: BotArtifactOpenTarget | null,
 ): (() => void) | null {
@@ -203,7 +208,7 @@ export function useBotArtifactOpen(
             migrationSource: undefined,
           },
           preparation: {
-            kind: "open-tile",
+            kind: "open-admitted-tile",
             node: {
               id: target.artifactId,
               instanceId: uuidv4(),
@@ -211,7 +216,9 @@ export function useBotArtifactOpen(
               name: target.title,
               hostId: target.hostId,
             },
+            hostId: target.hostId,
             gesture: "explicit",
+            lifetime: target.lifetime,
           },
           includeNestedFocus: true,
         }),

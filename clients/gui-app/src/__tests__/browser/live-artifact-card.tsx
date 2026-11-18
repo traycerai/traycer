@@ -21,15 +21,19 @@ import {
   type ServedFile,
 } from "./chat-artifact-card-host-support";
 import "@/lib/theme-applier";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import "@/index.css";
 
 /**
  * THE REAL `LiveArtifactRow` over the real sandbox frame, artifact server and
  * expansion owner, for what jsdom cannot decide about the live card: the page
- * really loads in one sandboxed iframe; that iframe is the SAME element through
- * Expand and a routine head save; revoking the reader's lifetime lowers the
- * raise and withdraws the page; a missing entry stops at Retry, which asks the
- * provider and reloads nothing until a new admission.
+ * really loads in one sandboxed iframe; Expand and lower keep that very
+ * iframe element, while a save that changes the page bytes replaces the frame
+ * once inside the surviving raised card (a save that changes none keeps it);
+ * revoking the reader's lifetime lowers the raise and withdraws the page; a
+ * missing entry stops at Retry, which asks the provider and reloads nothing
+ * until a new admission. `?theme=dark` sets the real settings-store theme
+ * before the first render, so the real theme applier paints the dark theme.
  *
  * The provider, controller and registry are NOT here (their cases are jsdom
  * ones): this fixture hands the row exactly what an admitted provider hands it,
@@ -234,6 +238,10 @@ export function LiveArtifactCardFixture(): ReactNode {
     </QueryClientProvider>
   );
 }
+
+// The real theme store, set BEFORE mount: the module-level applier reacts to it.
+if (new URLSearchParams(location.search).get("theme") === "dark")
+  useSettingsStore.setState({ theme: "dark" });
 
 const container = document.getElementById("root");
 if (container === null) throw new Error("fixture root missing");

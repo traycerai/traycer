@@ -217,4 +217,27 @@ describe("useHtmlArtifactDownload under a reader lifetime", () => {
     expect(save.downloadFile).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(save.savedToast).toHaveBeenCalledTimes(1));
   });
+
+  it("announces nothing when the lifetime is revoked while the native write is pending and then lands", async () => {
+    const write = Promise.withResolvers<{ name: string; path: null }>();
+    save.downloadFile.mockReturnValue(write.promise);
+    const { result } = mountDownload();
+    const { lifetime, revoke } = revocableLifetime();
+    const input = {
+      source: sourceReadingThrough(servesBytes),
+      title: "Roadmap",
+      lifetime,
+    };
+
+    const settled = result.current.mutateAsync(input).catch(() => undefined);
+    // The archive is built and the native save is in flight.
+    await waitFor(() => expect(save.downloadFile).toHaveBeenCalledTimes(1));
+    revoke();
+    write.resolve({ name: "Roadmap.zip", path: null });
+    await settled;
+
+    expect(save.savedToast).not.toHaveBeenCalled();
+    expect(save.hostErrorToast).not.toHaveBeenCalled();
+    expect(save.runnerErrorToast).not.toHaveBeenCalled();
+  });
 });

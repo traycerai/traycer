@@ -4,7 +4,6 @@
  * epic join one charged entry.
  */
 import { QueryClient } from "@tanstack/react-query";
-import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -22,9 +21,7 @@ import {
   defaultTestEpicSessionEnvironment,
   installTestEpicSessionEnvironment,
   openTestEpicTab,
-  seedLocalRootEdit,
   setTestEffectiveHost,
-  snapshotMeta,
   setTestEpicSessionHostClientResolver,
 } from "@/lib/registries/test-support/epic-session-controller-test-support";
 import {
@@ -73,31 +70,18 @@ function openShownTab(tabId: string, epicId: string): void {
 
 const queryClient = new QueryClient();
 const NO_HANDLERS = {};
-const streamCallbacks = new Map<string, EpicStreamCallbacks>();
-const recordingStream: EpicStreamClientFactory = (epicId, callbacks) => {
-  streamCallbacks.set(epicId, callbacks);
-  return {
-    applyUpdate: () => undefined,
-    awareness: () => undefined,
-    applyArtifactRoomUpdate: () => undefined,
-    artifactRoomAwareness: () => undefined,
-    retryMigration: () => undefined,
-    close: () => undefined,
-  };
-};
-
-/** The host answering the epic's subscribe: open, then an authorised snapshot. */
-function deliverSnapshot(epicId: string): void {
-  const callbacks = streamCallbacks.get(epicId);
-  if (callbacks === undefined) throw new Error(`no stream for ${epicId}`);
-  callbacks.onConnectionStatus("open", null, false, null);
-  callbacks.onSnapshot(snapshotMeta(epicId), new Uint8Array([0, 0]));
-}
+const quietStream: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
 let previousAuth: AuthState;
 
 beforeEach(() => {
   resetTestHostClients();
-  streamCallbacks.clear();
   __getOpenEpicRegistryForTests().disposeAll();
   __resetEpicParkingForTests();
   __setAgentActivityPlaneAnsweringForTests();
@@ -123,7 +107,7 @@ beforeEach(() => {
   __setEpicRuntimeWorkerFactoryForTests(() => {
     constructionCount += 1;
     return createInProcessEpicRuntimeWorker({
-      streamClientFactory: recordingStream,
+      streamClientFactory: quietStream,
       laneSelection: null,
     }).createWorker();
   });
@@ -213,19 +197,18 @@ describe("reader and tab ownership, both directions", () => {
   });
 });
 
-describe("capacity is reserved before construction", () => {
-  it("concurrent distinct previews never exceed the live-epic maximum", () => {
+describe("a reader acquires like a tab, over the cap", () => {
+  it("every distinct preview is constructed and none is refused, however many there are", () => {
     const tokens = Array.from({ length: DEFAULT_MAX_LIVE_EPICS + 3 }, (_, i) =>
       reader("host-a", `epic-${i}`, `row-${i}`),
     );
-    const registry = __getOpenEpicRegistryForTests();
-    expect(registry.size()).toBeLessThanOrEqual(DEFAULT_MAX_LIVE_EPICS);
-    expect(constructionCount).toBeLessThanOrEqual(DEFAULT_MAX_LIVE_EPICS);
-    const deferred = tokens.filter((t) => t.read().kind === "deferred");
-    expect(deferred.length).toBe(3);
+    expect(constructionCount).toBe(DEFAULT_MAX_LIVE_EPICS + 3);
+    for (const token of tokens) {
+      expect(["acquiring", "ready"]).toContain(token.read().kind);
+    }
   });
 
-  it("a tab acquisition keeps the ordinary soft cap and outranks previews", () => {
+  it("a tab acquisition still gets its session when readers fill the cap", () => {
     for (let i = 0; i < DEFAULT_MAX_LIVE_EPICS; i += 1) {
       reader("host-a", `epic-${i}`, `row-${i}`);
     }
@@ -234,71 +217,8 @@ describe("capacity is reserved before construction", () => {
   });
 });
 
-describe("a revoked or deferred row stays inactive", () => {
-  it("rerenders, generic updates and repeated capacity-full add no attempt", () => {
-    for (let i = 0; i < DEFAULT_MAX_LIVE_EPICS; i += 1) {
-      reader("host-a", `epic-${i}`, `row-${i}`);
-    }
-    const waiting = reader("host-a", "epic-extra", "row-extra");
-    expect(waiting.read().kind).toBe("deferred");
-    const before = constructionCount;
-    const again = reader("host-a", "epic-extra", "row-extra");
-    // Generic updates: a tab record opens and closes (hidden, so it builds
-    // nothing) and the same row asks again.
-    openTestEpicTab("tab-z", "epic-z", "Z");
-    closeTestEpicTab("tab-z");
-    expect(constructionCount).toBe(before);
-    expect(again.read().kind).toBe("deferred");
-  });
-
-  it("explicit retry after a clean warm entry becomes eligible grants exactly one attempt, never past the cap", async () => {
-    const holders = Array.from({ length: DEFAULT_MAX_LIVE_EPICS }, (_, i) =>
-      reader("host-a", `epic-${i}`, `row-${i}`),
-    );
-    const waiting = reader("host-a", "epic-extra", "row-extra");
-    expect(waiting.read().kind).toBe("deferred");
-    // Letting go of one reader leaves its entry warm and still counted; with
-    // the activity plane answering it is a clean, eligible entry.
-    const [first] = holders;
-    expect(first).toBeDefined();
-    first.release();
-    expect(__getOpenEpicRegistryForTests().size()).toBe(DEFAULT_MAX_LIVE_EPICS);
-    const before = constructionCount;
-
-    waiting.retry();
-    waiting.retry();
-
-    expect(constructionCount).toBe(before + 1);
-    expect(__getOpenEpicRegistryForTests().size()).toBeLessThanOrEqual(
-      DEFAULT_MAX_LIVE_EPICS,
-    );
-    await waitForKind(waiting, "ready");
-  });
-
-  it("a dirty warm entry is never evicted to admit a retry", async () => {
-    const holders = Array.from({ length: DEFAULT_MAX_LIVE_EPICS }, (_, i) =>
-      reader("host-a", `epic-${i}`, `row-${i}`),
-    );
-    const [first] = holders;
-    expect(first).toBeDefined();
-    await waitForKind(first, "ready");
-    const ready = first.read();
-    if (ready.kind !== "ready") throw new Error("expected a ready reader");
-    deliverSnapshot("epic-0");
-    await seedLocalRootEdit(ready.handle, "title", "Unsynced title");
-    const waiting = reader("host-a", "epic-extra", "row-extra");
-    expect(waiting.read().kind).toBe("deferred");
-    first.release();
-    const before = constructionCount;
-
-    waiting.retry();
-
-    expect(waiting.read().kind).toBe("deferred");
-    expect(constructionCount).toBe(before);
-    expect(__getOpenEpicRegistryForTests().peek("epic-0")).not.toBeNull();
-  });
-
-  it("a closed token never reactivates and release is idempotent", () => {
+describe("a released token", () => {
+  it("never reactivates, and release is idempotent", () => {
     const token = reader("host-a", "epic-1", "row-1");
     token.release();
     token.release();

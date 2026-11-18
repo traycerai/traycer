@@ -145,14 +145,23 @@ export interface DisplayTopology {
   readonly primaryId: number;
 }
 
-export interface FileSaveInput {
+/** What `fileSavePick` offers in the save dialog. It carries no bytes. */
+export interface FileSavePickInput {
   readonly name: string;
   readonly type: string;
+}
+
+/**
+ * The bytes for a target `fileSavePick` returned. `id` is accepted once, from
+ * the same document that picked it.
+ */
+export interface FileSaveWriteInput {
+  readonly id: string;
   readonly bytes: ArrayBuffer;
 }
 
 /**
- * What `fileSave` hands back once the bytes are on disk. `name` is the base
+ * What `fileSaveWrite` hands back once the bytes are on disk. `name` is the base
  * name the user settled on in the save dialog (display copy for the toast);
  * `path` is the absolute location, which is the only thing `fileOpenSaved`
  * accepts - the renderer never composes or edits it.

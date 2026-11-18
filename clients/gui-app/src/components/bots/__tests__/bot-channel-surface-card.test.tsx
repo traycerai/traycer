@@ -89,6 +89,7 @@ import { useAuthStore, type AuthState } from "@/stores/auth/auth-store";
 import { answerArtifactObjectRead } from "@/lib/host/test-support/artifact-object-answer";
 import { setArtifactFieldsInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
+import { AlwaysIntersectingObserver } from "@/components/bots/__tests__/always-intersecting-observer";
 import { expectArtifactOpenIntent } from "@/components/bots/__tests__/artifact-open-intent-support";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 
@@ -1787,6 +1788,8 @@ describe("<BotChannelView tiles={null} /> a post's live artifact card", () => {
   }
 
   beforeEach(() => {
+    // The cards are all in view: a card is shown only while it is presented.
+    vi.stubGlobal("IntersectionObserver", AlwaysIntersectingObserver);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     handlersByHost.clear();
     for (const key of Object.keys(objectReads)) delete objectReads[key];
@@ -1830,6 +1833,7 @@ describe("<BotChannelView tiles={null} /> a post's live artifact card", () => {
     sessionHarness.teardown();
     __getOpenEpicRegistryForTests().disposeAll();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   /** The live card is the shared figure; it has no surface-card wrapper. */

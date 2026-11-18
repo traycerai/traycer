@@ -191,7 +191,7 @@ describe("saveBlobToDisk", () => {
       expect.objectContaining({ name: "d.png", type: "image/png" }),
     );
     const [[input]] = saveFile.mock.calls;
-    expect(input.bytes).toBeInstanceOf(ArrayBuffer);
+    expect(await input.readBytes()).toBeInstanceOf(ArrayBuffer);
   });
 
   it("resolves null when the save host reports a dismissal", async () => {

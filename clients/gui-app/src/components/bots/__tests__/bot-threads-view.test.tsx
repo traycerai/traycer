@@ -2000,6 +2000,28 @@ describe("<BotThreadsView /> a thread card's live artifact", () => {
     );
   }
 
+  /**
+   * The artifact cards inside the revealed thread card are in view: tell the
+   * observers watching them so (the thread card's own observers are left to
+   * `revealFullUnderFakeTimers`). A card is shown only while it is presented.
+   */
+  function presentArtifactCards(threadId: string): void {
+    const figure = within(card(threadId)).getByTestId("artifact-row");
+    const threadCard = card(threadId);
+    act(() => {
+      for (const observer of FakeIntersectionObserver.all) {
+        const entries = [...observer.targets]
+          .filter(
+            (target) =>
+              target !== threadCard &&
+              (target.contains(figure) || figure.contains(target)),
+          )
+          .map((target) => ({ target, isIntersecting: true }));
+        if (entries.length > 0) observer.fire(entries);
+      }
+    });
+  }
+
   function liveReply(artifactPath: string): Message {
     return {
       ...botReply({
@@ -2022,6 +2044,7 @@ describe("<BotThreadsView /> a thread card's live artifact", () => {
     mount();
     await vi.waitFor(() => expect(listed()).toContain("team-new"));
     await revealFullUnderFakeTimers("team-new");
+    presentArtifactCards("team-new");
     expect(objectReads).toEqual({});
     expect(document.querySelectorAll("iframe")).toHaveLength(0);
 
@@ -2040,6 +2063,7 @@ describe("<BotThreadsView /> a thread card's live artifact", () => {
     mount();
     await vi.waitFor(() => expect(listed()).toContain("team-new"));
     await revealFullUnderFakeTimers("team-new");
+    presentArtifactCards("team-new");
     await act(() => vi.advanceTimersByTimeAsync(0));
     await vi.waitFor(() =>
       expect(objectReads[TASK_HOST_ID] ?? 0).toBeGreaterThan(0),
@@ -2057,6 +2081,7 @@ describe("<BotThreadsView /> a thread card's live artifact", () => {
     mount();
     await vi.waitFor(() => expect(listed()).toContain("team-new"));
     await revealFullUnderFakeTimers("team-new");
+    presentArtifactCards("team-new");
     await act(() => vi.advanceTimersByTimeAsync(0));
 
     expect(screen.getByText(/unavailable/i)).toBeTruthy();
@@ -2068,6 +2093,7 @@ describe("<BotThreadsView /> a thread card's live artifact", () => {
     mount();
     await vi.waitFor(() => expect(listed()).toContain("team-new"));
     await revealFullUnderFakeTimers("team-new");
+    presentArtifactCards("team-new");
     await act(() => vi.advanceTimersByTimeAsync(0));
     await vi.waitFor(() =>
       expect(objectReads[TASK_HOST_ID] ?? 0).toBeGreaterThan(0),

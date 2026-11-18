@@ -1,8 +1,11 @@
 import { anyAbortSignal } from "@traycer-clients/shared/auth/request-abort";
 import {
   createContext,
+  use,
   useContext,
   useCallback,
+  useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -12,6 +15,7 @@ import {
 } from "react";
 import { PanelsTopLeft } from "lucide-react";
 import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
+import { useArtifactExpanded } from "@/components/artifacts/artifact-expanded-context";
 import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import {
@@ -63,8 +67,10 @@ import {
   selectArtifactRowState,
   type ArtifactRowState,
 } from "./artifact-row-state";
+import { LiveArtifactPresentationContext } from "./live-artifact-presentation-context";
 
 const NO_PREVIEW_COPY = "No preview.";
+export const SHOW_PREVIEW_COPY = "Show preview";
 const MIN_PAGE_HEIGHT_PX = 80;
 const MAX_PAGE_HEIGHT_PX = 4000;
 
@@ -304,6 +310,7 @@ function ArtifactCardFrame(props: {
     | "deleted"
     | "unavailable"
     | "no-preview"
+    | "anchor"
     | "ready";
   readonly source: ArtifactFrameSource | null;
   readonly lifetime: ArtifactReadLifetime | null;
@@ -369,6 +376,13 @@ function ArtifactCardFrame(props: {
         {props.children}
       </div>
     );
+  } else if (props.state === "anchor") {
+    content = (
+      <div className="flex flex-col items-start gap-2 p-4 text-ui-sm text-muted-foreground">
+        <span>{props.title}</span>
+        {props.children}
+      </div>
+    );
   } else if (props.state === "unavailable" || source === null) {
     content =
       props.onRetry === null ? (
@@ -377,6 +391,7 @@ function ArtifactCardFrame(props: {
         </div>
       ) : (
         <div className="flex flex-col items-start gap-2 p-4 text-ui-sm text-muted-foreground">
+          {props.children}
           <span>Artifact unavailable.</span>
           <Button variant="outline" size="sm" onClick={props.onRetry}>
             Retry
@@ -450,6 +465,31 @@ export type LiveArtifactCardInput =
       readonly title: string;
     };
 
+/**
+ * A card that is not presenting its content: the authored title only, and the
+ * explicit button where nothing can observe whether the card is in view.
+ */
+export function ArtifactRowAnchor(props: {
+  readonly title: string;
+  readonly onShowPreview: (() => void) | null;
+}): ReactNode {
+  return (
+    <ArtifactCardFrame
+      title={props.title}
+      state="anchor"
+      source={null}
+      lifetime={null}
+      onRetry={null}
+    >
+      {props.onShowPreview === null ? null : (
+        <Button variant="outline" size="sm" onClick={props.onShowPreview}>
+          {SHOW_PREVIEW_COPY}
+        </Button>
+      )}
+    </ArtifactCardFrame>
+  );
+}
+
 interface ArtifactReadClient {
   readonly requestWithSignal: ArtifactObjectRequest;
 }
@@ -497,17 +537,24 @@ export function LiveArtifactRow(props: {
   if (artifact.kind !== "ready") {
     const noPreview = artifact.kind === "no-preview";
     const state = noPreview && !live ? "unavailable" : artifact.kind;
+    // Only a no-preview title is projected from the task; the other states
+    // carry the provider's authored title, which outlives a withdrawn reader.
+    const title = live || !noPreview ? artifact.title : "";
+    let detail: ReactNode = null;
+    if (noPreview && live) {
+      detail = <ArtifactOpenButton onOpen={props.onOpen} lifetime={lifetime} />;
+    } else if (!noPreview && title !== "") {
+      detail = <span>{title}</span>;
+    }
     return (
       <ArtifactCardFrame
-        title={live ? artifact.title : ""}
+        title={title}
         state={state}
         source={null}
         lifetime={lifetime}
         onRetry={state === "unavailable" ? props.onRetry : null}
       >
-        {noPreview && live ? (
-          <ArtifactOpenButton onOpen={props.onOpen} lifetime={lifetime} />
-        ) : null}
+        {detail}
       </ArtifactCardFrame>
     );
   }
@@ -551,6 +598,13 @@ function LiveArtifactAdmission(props: {
 }): ReactNode {
   const [unavailable, setUnavailable] = useState(false);
   const refuse = useCallback(() => setUnavailable(true), []);
+  const presentation = use(LiveArtifactPresentationContext);
+  const reportMissing = useEffectEvent(() => {
+    presentation?.reportEntryMissing(props.artifact);
+  });
+  useEffect(() => {
+    if (unavailable) reportMissing();
+  }, [unavailable]);
   if (unavailable) {
     return (
       <ArtifactCardFrame
@@ -865,6 +919,7 @@ function PlainCardPage(props: {
   const layout = useCardFrameLayout();
   return (
     <ArtifactExpansion title={props.title} commentsInline>
+      <ArtifactRaiseReporter />
       {props.caption}
       <ArtifactPagesFrame
         source={props.source}
@@ -884,6 +939,27 @@ function PlainCardPage(props: {
       />
     </ArtifactExpansion>
   );
+}
+
+/**
+ * Tells a live card's provider when its surface is raised or lowered, and when
+ * the surface leaves. Transitions only: a surface that mounts inline reports
+ * nothing, so a provider's remembered raise survives a surface remount.
+ */
+function ArtifactRaiseReporter(): null {
+  const report = use(LiveArtifactPresentationContext)?.reportRaise ?? null;
+  const expanded = useArtifactExpanded();
+  const reported = useRef(false);
+  useLayoutEffect(() => {
+    if (report === null || reported.current === expanded) return;
+    reported.current = expanded;
+    report(expanded ? "raised" : "lowered");
+  }, [expanded, report]);
+  useLayoutEffect(() => {
+    if (report === null) return;
+    return () => report("gone");
+  }, [report]);
+  return null;
 }
 
 /** The tile's version picker, over the version this card holds. */

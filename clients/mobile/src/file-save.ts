@@ -420,6 +420,10 @@ function isShareDismissal(error: unknown): boolean {
   return message.includes("cancel");
 }
 
+function isStillWanted(request: FileSaveRequest): boolean {
+  return request.stillWanted === null || request.stillWanted();
+}
+
 /**
  * The phone's `IRunnerHost.fileSave`.
  *
@@ -465,12 +469,16 @@ export class MobileFileSave implements IFileSaveHost {
 
   async saveFile(request: FileSaveRequest): Promise<SavedFileLocation | null> {
     const name = toFileName(request.name, request.type);
+    const data = toBase64(await request.readBytes());
+    if (!isStillWanted(request)) return null;
     const written = await Filesystem.writeFile({
       path: stagingPath(name),
-      data: toBase64(request.bytes),
+      data,
       directory: Directory.Cache,
       recursive: true,
     });
+    // The sheet takes the bytes when it opens, so this is the last boundary.
+    if (!isStillWanted(request)) return null;
     try {
       await Share.share({ title: name, files: [written.uri] });
     } catch (error) {
@@ -555,11 +563,15 @@ export class MobileFileSave implements IFileSaveHost {
     request: FileSaveRequest,
   ): Promise<SavedFileLocation> {
     const name = toFileName(request.name, request.type);
+    const data = toBase64(await request.readBytes());
     const path = await claimDownloadPath(name);
     try {
+      if (!isStillWanted(request)) {
+        throw new Error("The file is no longer available to save.");
+      }
       const written = await Filesystem.writeFile({
         path,
-        data: toBase64(request.bytes),
+        data,
         directory: Directory.Documents,
         recursive: true,
       });

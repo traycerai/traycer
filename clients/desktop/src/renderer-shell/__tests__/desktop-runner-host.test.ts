@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { DesktopSystemWake } from "../../ipc-contracts/host-types";
 import type {
+  FileSaveRequest,
   HostControllerStatus,
   HostLifecycleSetRequest,
   HostLifecycleSetResult,
@@ -395,10 +396,12 @@ function buildFakeBridge(
       copyTemporaryFiles: async (paths) =>
         paths.map((path) => `/tmp/copied/${path.split("/").pop() ?? ""}`),
       readNativeClipboardFilePaths: async () => [],
-      saveFile: async (input) => {
-        temporaryWrites.push(input);
-        return { name: input.name, path: `/tmp/saved/${input.name}` };
-      },
+      pickFileSaveTarget: async (_input) => "save-target",
+      writeFileSave: async (input) => ({
+        name: "saved",
+        path: `/tmp/saved/${input.id}`,
+      }),
+      cancelFileSave: async (_id) => undefined,
       openSavedFile: async () => undefined,
       downloadUrl: async () => null,
     },
@@ -1967,5 +1970,156 @@ describe("DesktopRunnerHost.localHostCapability", () => {
     expect(restartHostServiceIfHostIdle).toHaveBeenCalledWith(input);
     expect(restartHostIfIdle).not.toHaveBeenCalled();
     expect(result).toEqual({ kind: "host-busy" });
+  });
+});
+
+describe("DesktopRunnerHost.fileSave.saveFile", () => {
+  const BYTES = new Uint8Array([122, 105, 112]).buffer;
+
+  interface SaveRig {
+    readonly host: DesktopRunnerHost;
+    readonly pick: Mock<
+      DesktopPreloadBridge["fileDrops"]["pickFileSaveTarget"]
+    >;
+    readonly write: Mock<DesktopPreloadBridge["fileDrops"]["writeFileSave"]>;
+    readonly cancel: Mock<DesktopPreloadBridge["fileDrops"]["cancelFileSave"]>;
+  }
+
+  /** A host whose preload save calls are recorded; the process boundary. */
+  function rig(picked: string | null): SaveRig {
+    const pick = vi.fn<DesktopPreloadBridge["fileDrops"]["pickFileSaveTarget"]>(
+      () => Promise.resolve(picked),
+    );
+    const write = vi.fn<DesktopPreloadBridge["fileDrops"]["writeFileSave"]>(
+      () => Promise.resolve({ name: "roadmap.zip", path: "/tmp/roadmap.zip" }),
+    );
+    const cancel = vi.fn<DesktopPreloadBridge["fileDrops"]["cancelFileSave"]>(
+      () => Promise.resolve(),
+    );
+    const fake = buildFakeBridge(null).bridge;
+    const host = new DesktopRunnerHost({
+      bridge: {
+        ...fake,
+        fileDrops: {
+          ...fake.fileDrops,
+          pickFileSaveTarget: pick,
+          writeFileSave: write,
+          cancelFileSave: cancel,
+        },
+      },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    return { host, pick, write, cancel };
+  }
+
+  function request(
+    readBytes: FileSaveRequest["readBytes"],
+    stillWanted: FileSaveRequest["stillWanted"],
+  ): FileSaveRequest {
+    return {
+      name: "roadmap.zip",
+      type: "application/zip",
+      readBytes,
+      stillWanted,
+    };
+  }
+
+  const readsBytes = () =>
+    vi.fn<FileSaveRequest["readBytes"]>(() => Promise.resolve(BYTES));
+
+  it("picks, reads and writes once, in that order, while the source stays wanted", async () => {
+    const save = rig("target-1");
+
+    const result = await save.host.fileSave.saveFile(
+      request(readsBytes(), () => true),
+    );
+
+    expect(result).toEqual({ name: "roadmap.zip", path: "/tmp/roadmap.zip" });
+    expect(save.pick).toHaveBeenCalledTimes(1);
+    expect(save.write).toHaveBeenCalledWith({ id: "target-1", bytes: BYTES });
+    expect(save.cancel).not.toHaveBeenCalled();
+  });
+
+  it("behaves as it always did for a source with no lifetime", async () => {
+    const save = rig("target-1");
+
+    await save.host.fileSave.saveFile(request(readsBytes(), null));
+
+    expect(save.write).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens no chooser for a source that is already gone", async () => {
+    const save = rig("target-1");
+    const readBytes = readsBytes();
+
+    const result = await save.host.fileSave.saveFile(
+      request(readBytes, () => false),
+    );
+
+    expect(result).toBeNull();
+    expect(save.pick).not.toHaveBeenCalled();
+    expect(readBytes).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when the chooser was dismissed", async () => {
+    const save = rig(null);
+
+    const result = await save.host.fileSave.saveFile(
+      request(readsBytes(), () => true),
+    );
+
+    expect(result).toBeNull();
+    expect(save.cancel).not.toHaveBeenCalled();
+    expect(save.write).not.toHaveBeenCalled();
+  });
+
+  it("cancels the picked target and reads nothing when the source retired while the chooser was open", async () => {
+    const save = rig("target-1");
+    let wanted = true;
+    save.pick.mockImplementation(() => {
+      wanted = false;
+      return Promise.resolve("target-1");
+    });
+    const readBytes = readsBytes();
+
+    const result = await save.host.fileSave.saveFile(
+      request(readBytes, () => wanted),
+    );
+
+    expect(result).toBeNull();
+    expect(save.cancel).toHaveBeenCalledWith("target-1");
+    expect(readBytes).not.toHaveBeenCalled();
+    expect(save.write).not.toHaveBeenCalled();
+  });
+
+  it("cancels the picked target and writes nothing when the source retired while the bytes were read", async () => {
+    const save = rig("target-1");
+    let wanted = true;
+    const readBytes = vi.fn<FileSaveRequest["readBytes"]>(() => {
+      wanted = false;
+      return Promise.resolve(BYTES);
+    });
+
+    const result = await save.host.fileSave.saveFile(
+      request(readBytes, () => wanted),
+    );
+
+    expect(result).toBeNull();
+    expect(save.cancel).toHaveBeenCalledWith("target-1");
+    expect(save.write).not.toHaveBeenCalled();
+  });
+
+  it("cancels the target and reports the read's own failure, even when the cancel fails too", async () => {
+    const save = rig("target-1");
+    save.cancel.mockRejectedValue(new Error("the cancel failed"));
+    const readBytes = vi.fn<FileSaveRequest["readBytes"]>(() =>
+      Promise.reject(new Error("the bytes could not be read")),
+    );
+
+    await expect(
+      save.host.fileSave.saveFile(request(readBytes, () => true)),
+    ).rejects.toThrow("the bytes could not be read");
+    expect(save.cancel).toHaveBeenCalledWith("target-1");
+    expect(save.write).not.toHaveBeenCalled();
   });
 });

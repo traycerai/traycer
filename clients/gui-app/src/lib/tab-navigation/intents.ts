@@ -12,6 +12,7 @@ import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileOpenGesture } from "@/lib/canvas/tile-open/intent";
+import type { ArtifactReadLifetime } from "@/lib/artifacts/artifact-read-lifetime";
 
 export interface EpicRouteFocus {
   readonly focusedAt: number | undefined;
@@ -48,6 +49,25 @@ export type EpicPostResolvePreparation =
       readonly paneId: string;
       readonly tileTabId: string;
     };
+
+/**
+ * An open-tile preparation for a tile a Tracy card admitted on `hostId`. Read
+ * when the activation runs, after any hydration queue: a retired `lifetime`
+ * opens nothing, a tab of this window already holding the task on another host
+ * is focused as it is, and otherwise the task's tab opens its session on
+ * `hostId`.
+ */
+export interface AdmittedTileOpenPreparation {
+  readonly kind: "open-admitted-tile";
+  readonly node: EpicCanvasTileRef;
+  readonly hostId: string;
+  readonly gesture: TileOpenGesture;
+  readonly lifetime: ArtifactReadLifetime;
+}
+
+export type OpenEpicPreparation =
+  | EpicPostResolvePreparation
+  | AdmittedTileOpenPreparation;
 
 export type TabNavigationIntent =
   | {
@@ -109,7 +129,7 @@ export type TabActivationIntent =
        */
       readonly replaceEmptyDraftId: string | null;
       /** Canvas work that needs the exact resolved tab id. */
-      readonly preparation: EpicPostResolvePreparation | null;
+      readonly preparation: OpenEpicPreparation | null;
       readonly includeNestedFocus: boolean;
       /** Set only through {@link fromTracyTranscript}. */
       readonly tracyOrigin: TracyTranscriptOrigin | null;
@@ -230,7 +250,7 @@ export function resourceEpicTabIntent(input: {
   readonly tabId: string | null;
   readonly name: string | undefined;
   readonly focus: EpicRouteFocus;
-  readonly preparation: EpicPostResolvePreparation;
+  readonly preparation: OpenEpicPreparation;
   readonly includeNestedFocus: boolean;
 }): Extract<TabActivationIntent, { kind: "open-epic" }> {
   return {

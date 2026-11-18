@@ -26,8 +26,8 @@ export function expectArtifactOpenIntent(
   if (intent.kind !== "open-epic")
     throw new Error(`expected an open-epic intent, got ${intent.kind}`);
   const preparation = intent.preparation;
-  if (preparation === null || preparation.kind !== "open-tile")
-    throw new Error("expected an open-tile preparation");
+  if (preparation === null || preparation.kind !== "open-admitted-tile")
+    throw new Error("expected an open-admitted-tile preparation");
   expect(intent.epicId).toBe(expected.epicId);
   expect(intent.focus?.focusArtifactId).toBe(expected.artifactId);
   expect(preparation.gesture).toBe("explicit");
@@ -35,6 +35,8 @@ export function expectArtifactOpenIntent(
   expect(preparation.node.type).toBe("html");
   expect(preparation.node.name).toBe(expected.title);
   expect(preparation.node.hostId).toBe(expected.hostId);
+  // The host the card was admitted on travels beside the node.
+  expect(preparation.hostId).toBe(expected.hostId);
   expect(preparation.node.instanceId).toMatch(UUID);
   expect(intent.includeNestedFocus).toBe(true);
   expect(intent.tracyOrigin).toEqual({ botId: expected.botId });

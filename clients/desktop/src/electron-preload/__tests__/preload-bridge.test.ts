@@ -189,7 +189,9 @@ interface PreloadBridge {
     getPathForFile(file: File): string;
     writeTemporaryFile(input: unknown): Promise<string>;
     copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
-    saveFile(input: unknown): Promise<unknown>;
+    pickFileSaveTarget(input: unknown): Promise<unknown>;
+    writeFileSave(input: unknown): Promise<unknown>;
+    cancelFileSave(id: string): Promise<void>;
     openSavedFile(path: string): Promise<void>;
   };
   requestHostRespawn(): Promise<unknown>;
@@ -751,17 +753,27 @@ describe("preload new-capability wiring", () => {
     );
 
     await expect(
-      bridge.fileDrops.saveFile({
+      bridge.fileDrops.pickFileSaveTarget({
         name: "diagram.png",
         type: "image/png",
-        bytes,
       }),
     ).resolves.toBe("/tmp/materialized-drop.png");
-    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.fileSave, {
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.fileSavePick, {
       name: "diagram.png",
       type: "image/png",
+    });
+
+    await bridge.fileDrops.writeFileSave({ id: "target-1", bytes });
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.fileSaveWrite, {
+      id: "target-1",
       bytes,
     });
+
+    await bridge.fileDrops.cancelFileSave("target-2");
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.fileSaveCancel,
+      "target-2",
+    );
 
     await bridge.fileDrops.openSavedFile("/tmp/saved/diagram.png");
     expect(invokeFn).toHaveBeenCalledWith(

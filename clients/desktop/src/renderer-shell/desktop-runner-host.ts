@@ -57,6 +57,7 @@ import type {
   IHostManagement,
   IHostTray,
   IFileDropHost,
+  FileSaveRequest,
   IFileSaveHost,
   IHostLifecycleHost,
   IMigrationHost,
@@ -98,8 +99,9 @@ import type {
   DisplaySnapshot,
   DisplayTopology,
   FileDownloadUrlInput,
-  FileSaveInput,
+  FileSavePickInput,
   FileSaveResult,
+  FileSaveWriteInput,
   HostKeyPinMismatch,
   InstalledFont,
   PendingCertificateError,
@@ -513,7 +515,9 @@ export interface DesktopFileDropsBridge {
   }): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
-  saveFile(input: FileSaveInput): Promise<FileSaveResult | null>;
+  pickFileSaveTarget(input: FileSavePickInput): Promise<string | null>;
+  writeFileSave(input: FileSaveWriteInput): Promise<FileSaveResult>;
+  cancelFileSave(id: string): Promise<void>;
   openSavedFile(path: string): Promise<void>;
   downloadUrl(input: FileDownloadUrlInput): Promise<FileSaveResult | null>;
 }
@@ -1785,7 +1789,7 @@ function isEphemeralDropPath(filePath: string): boolean {
  */
 function buildDesktopFileSave(bridge: DesktopFileDropsBridge): IFileSaveHost {
   return {
-    saveFile: (request) => bridge.saveFile(request),
+    saveFile: (request) => saveThroughNativeDialog(bridge, request),
     // The native dialog writes the file the user named.
     saveRoute: "download" as const,
     openSavedFile: (path) => bridge.openSavedFile(path),
@@ -1796,6 +1800,43 @@ function buildDesktopFileSave(bridge: DesktopFileDropsBridge): IFileSaveHost {
     // The same dialog, then the session's download manager writes the bytes.
     downloadUrl: (request) => bridge.downloadUrl(request),
   };
+}
+
+/**
+ * Pick, then write: the dialog can stay open for as long as the user likes, so
+ * `stillWanted` is asked again once it returns and once the bytes are read, and
+ * a target the source no longer wants is cancelled rather than written. Only
+ * the accepted write is irreversible.
+ */
+async function saveThroughNativeDialog(
+  bridge: DesktopFileDropsBridge,
+  request: FileSaveRequest,
+): Promise<FileSaveResult | null> {
+  const stillWanted = (): boolean =>
+    request.stillWanted === null || request.stillWanted();
+  if (!stillWanted()) return null;
+  const id = await bridge.pickFileSaveTarget({
+    name: request.name,
+    type: request.type,
+  });
+  if (id === null) return null;
+  if (!stillWanted()) {
+    await bridge.cancelFileSave(id);
+    return null;
+  }
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await request.readBytes();
+  } catch (error) {
+    // Cleanup must not replace the read failure.
+    await bridge.cancelFileSave(id).catch(() => undefined);
+    throw error;
+  }
+  if (!stillWanted()) {
+    await bridge.cancelFileSave(id);
+    return null;
+  }
+  return bridge.writeFileSave({ id, bytes });
 }
 
 function buildDesktopFileDrops(bridge: DesktopFileDropsBridge): IFileDropHost {

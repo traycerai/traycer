@@ -5,10 +5,11 @@ import { fixture } from "./support/fixtures.ts";
 // The live artifact card (a Tracy reference to a task artifact) is the shared
 // card renderer over a reader's lifetime. jsdom proves the object port; this
 // reads what only a browser decides: that the page really loads in ONE
-// sandboxed iframe, that the raised card is a modal dialog around the SAME
-// iframe element through a head save, that revoking the reader withdraws the
-// page and leaves nothing reading afterwards, and that a missing entry waits
-// for the provider's Retry. The provider/controller are not here; the fixture
+// sandboxed iframe, that Expand and lower keep that very iframe element, that
+// a save which changes the page bytes replaces the frame exactly once inside
+// the surviving raised modal card (and one that changes none keeps the
+// element), that revoking the reader withdraws the page and leaves nothing
+// reading afterwards, and that a missing entry waits for the provider's Retry. The provider/controller are not here; the fixture
 // hands the row what an admitted provider hands it.
 //
 // Every wait below is for something that HAPPENED (a role, a dialog state, a
@@ -144,6 +145,32 @@ async function focusIsInside(dialog: Locator): Promise<boolean> {
   return dialog.evaluate((element) => element.contains(document.activeElement));
 }
 
+type ThemeChoice = "light" | "dark";
+
+/** Dark is captured at the desktop width only: one held capture beside the light ones. */
+function themesFor(viewportName: string): readonly ThemeChoice[] {
+  return viewportName === "desktop" ? ["light", "dark"] : ["light"];
+}
+
+/** Whether the element paints a dark background, read from its computed colour. */
+async function isDarkSurface(element: Locator): Promise<boolean> {
+  return element.evaluate((node) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("no 2d context");
+    const painted = getComputedStyle(node).backgroundColor;
+    // A transparent surface paints nothing of its own, and would read as black.
+    if (painted === "rgba(0, 0, 0, 0)" || painted === "transparent")
+      throw new Error("the surface has no background of its own");
+    context.fillStyle = painted;
+    context.fillRect(0, 0, 1, 1);
+    const [red, green, blue] = context.getImageData(0, 0, 1, 1).data;
+    return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255 < 0.4;
+  });
+}
+
 function figure(page: Page, name: string): Locator {
   return page.getByRole("figure", { name });
 }
@@ -219,85 +246,100 @@ for (const viewport of VIEWPORTS) {
       ).toHaveCount(0);
     });
 
-    test("a save that changes the page keeps the raised card modal and replaces its frame exactly once", async ({
-      page,
-    }, testInfo) => {
-      const gate = await open(page, "");
-      await expect(pageFrame(page).locator("#known")).toBeVisible();
-      const dialog = await expand(page);
-      const before = await dialog
-        .locator("iframe")
-        .evaluateHandle((element) => element);
-      // The raised surface and the card's figure, held by element identity.
-      const dialogBefore = await dialog.elementHandle();
-      const figureBefore = await figure(
+    for (const theme of themesFor(viewport.name)) {
+      const themeNote = theme === "dark" ? " (dark theme)" : "";
+      const themeFile = theme === "dark" ? "-dark" : "";
+      test(`a save that changes the page keeps the raised card modal and replaces its frame exactly once${themeNote}`, async ({
         page,
-        "Artifact: Live report",
-      ).elementHandle();
-      await watchIframeInsertions(page);
+      }, testInfo) => {
+        const gate = await open(page, theme === "dark" ? "?theme=dark" : "");
+        if (theme === "dark") {
+          // The real theme applier painted dark, and the card shows it.
+          await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+        }
+        await expect(pageFrame(page).locator("#known")).toBeVisible();
+        const dialog = await expand(page);
+        if (theme === "dark") {
+          // The raised dialog itself is transparent by design; the surface that
+          // paints is its first inner box (artifact-expansion.tsx, `bg-popover`).
+          expect(await isDarkSurface(dialog.locator("div.bg-popover"))).toBe(
+            true,
+          );
+        }
+        const before = await dialog
+          .locator("iframe")
+          .evaluateHandle((element) => element);
+        // The raised surface and the card's figure, held by element identity.
+        const dialogBefore = await dialog.elementHandle();
+        const figureBefore = await figure(
+          page,
+          "Artifact: Live report",
+        ).elementHandle();
+        await watchIframeInsertions(page);
 
-      // Hold the replacement frame's document, so the open dialog can be seen
-      // with the new frame inserted and nothing yet loaded in it. This records
-      // a held response, not how long a real one takes.
-      gate.arm();
-      try {
-        await callProbe(page, "saveHead");
-        await gate.held;
+        // Hold the replacement frame's document, so the open dialog can be seen
+        // with the new frame inserted and nothing yet loaded in it. This records
+        // a held response, not how long a real one takes.
+        gate.arm();
+        try {
+          await callProbe(page, "saveHead");
+          await gate.held;
+          expect(await insertedIframes(page)).toBe(1);
+          // Written to a file in the test's output directory so it survives a
+          // passing run, then attached by path (one capture, no duplicate).
+          const screenshotPath = testInfo.outputPath(
+            `live-card-${viewport.name}${themeFile}-replacement-document-held.png`,
+          );
+          await dialog.screenshot({ path: screenshotPath });
+          await testInfo.attach(
+            `live-card-${viewport.name}${themeFile}-replacement-document-held.png`,
+            { path: screenshotPath, contentType: "image/png" },
+          );
+        } finally {
+          gate.release();
+        }
+
+        // The new page is what loads: a save the card ignored cannot pass.
+        await expect(
+          dialog.frameLocator('iframe[title="Live report"]').locator("#known"),
+        ).toHaveText("Live report version 2");
+        // The raised card is the same surface, still open and modal, with the
+        // reader's focus still inside it.
+        await expectRaisedAndModal(dialog);
+        expect(await focusIsInside(dialog)).toBe(true);
+        // The frame was replaced, once: the old element is gone and exactly one
+        // new one was inserted for this save.
+        expect(await before.evaluate((element) => element.isConnected)).toBe(
+          false,
+        );
         expect(await insertedIframes(page)).toBe(1);
-        // Written to a file in the test's output directory so it survives a
-        // passing run, then attached by path (one capture, no duplicate).
-        const screenshotPath = testInfo.outputPath(
-          `live-card-${viewport.name}-replacement-document-held.png`,
-        );
-        await dialog.screenshot({ path: screenshotPath });
-        await testInfo.attach(
-          `live-card-${viewport.name}-replacement-document-held.png`,
-          { path: screenshotPath, contentType: "image/png" },
-        );
-      } finally {
-        gate.release();
-      }
+        await expect(page.locator("iframe")).toHaveCount(1);
+        // The same dialog and the same figure carried the save: only the frame
+        // inside them was replaced.
+        expect(
+          await dialogBefore.evaluate((element) => element.isConnected),
+        ).toBe(true);
+        expect(
+          await figureBefore.evaluate((element) => element.isConnected),
+        ).toBe(true);
+        expect(
+          await dialog.evaluate(
+            (element, held) => element === held,
+            dialogBefore,
+          ),
+        ).toBe(true);
 
-      // The new page is what loads: a save the card ignored cannot pass.
-      await expect(
-        dialog.frameLocator('iframe[title="Live report"]').locator("#known"),
-      ).toHaveText("Live report version 2");
-      // The raised card is the same surface, still open and modal, with the
-      // reader's focus still inside it.
-      await expectRaisedAndModal(dialog);
-      expect(await focusIsInside(dialog)).toBe(true);
-      // The frame was replaced, once: the old element is gone and exactly one
-      // new one was inserted for this save.
-      expect(await before.evaluate((element) => element.isConnected)).toBe(
-        false,
-      );
-      expect(await insertedIframes(page)).toBe(1);
-      await expect(page.locator("iframe")).toHaveCount(1);
-      // The same dialog and the same figure carried the save: only the frame
-      // inside them was replaced.
-      expect(
-        await dialogBefore.evaluate((element) => element.isConnected),
-      ).toBe(true);
-      expect(
-        await figureBefore.evaluate((element) => element.isConnected),
-      ).toBe(true);
-      expect(
-        await dialog.evaluate(
-          (element, held) => element === held,
-          dialogBefore,
-        ),
-      ).toBe(true);
-
-      await page.keyboard.press("Escape");
-      await expect(dialog).toBeHidden();
-      await expect(page.locator("iframe")).toHaveCount(1);
-      // Lowering after the save returns focus to the Expand control.
-      await expect(
-        figure(page, "Artifact: Live report").getByRole("button", {
-          name: "Expand",
-        }),
-      ).toBeFocused();
-    });
+        await page.keyboard.press("Escape");
+        await expect(dialog).toBeHidden();
+        await expect(page.locator("iframe")).toHaveCount(1);
+        // Lowering after the save returns focus to the Expand control.
+        await expect(
+          figure(page, "Artifact: Live report").getByRole("button", {
+            name: "Expand",
+          }),
+        ).toBeFocused();
+      });
+    }
 
     test("a save that changes no page bytes keeps the very same frame element", async ({
       page,

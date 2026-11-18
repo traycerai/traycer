@@ -124,9 +124,41 @@ export async function downloadBlobToDevice(
     }
     return saveBlobToDisk(blob, suggestedName, fileSave, beforeSave);
   }
+  // A direct write has no chooser to defer the read behind, so the bytes are
+  // read here and the retirement checked before the shell is reached at all.
   const bytes = await blob.arrayBuffer();
   beforeSave?.();
-  return download({ name: suggestedName, type: blob.type, bytes });
+  try {
+    return await download({
+      name: suggestedName,
+      type: blob.type,
+      readBytes: () => Promise.resolve(bytes),
+      stillWanted: stillWantedBy(beforeSave),
+    });
+  } catch (error) {
+    // A source that retired while the write was pending reports its own
+    // retirement rather than the shell's refusal to write it.
+    beforeSave?.();
+    throw error;
+  }
+}
+
+/**
+ * `beforeSave` as the shell's local `stillWanted` check: the shell needs a
+ * yes/no at each boundary, while `beforeSave` states a retirement by throwing.
+ */
+function stillWantedBy(
+  beforeSave: (() => void) | null,
+): (() => boolean) | null {
+  if (beforeSave === null) return null;
+  return () => {
+    try {
+      beforeSave();
+      return true;
+    } catch {
+      return false;
+    }
+  };
 }
 
 /**
@@ -171,9 +203,16 @@ export async function saveBlobToDisk(
 ): Promise<SavedFile | null> {
   beforeSave?.();
   if (fileSave !== null) {
-    const bytes = await blob.arrayBuffer();
-    beforeSave?.();
-    return fileSave.saveFile({ name: suggestedName, type: blob.type, bytes });
+    const saved = await fileSave.saveFile({
+      name: suggestedName,
+      type: blob.type,
+      readBytes: () => blob.arrayBuffer(),
+      stillWanted: stillWantedBy(beforeSave),
+    });
+    // The shell answers a retired source as a dismissal; the caller hears the
+    // retirement itself.
+    if (saved === null) beforeSave?.();
+    return saved;
   }
 
   if (typeof window.showSaveFilePicker === "function") {
