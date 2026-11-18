@@ -2318,6 +2318,60 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
         Number(channelTranscript().getAttribute("data-land-visit")),
       ).toBeGreaterThan(firstVisit);
     });
+
+    describe("replaced by a landing on a message of a listed thread", () => {
+      const THREAD_LANDING: BotChannelLanding = {
+        messageId: "reply-a9",
+        sendPostId: null,
+        threadId: "thread-a",
+        visit: 2,
+      };
+
+      it("hands the channel's transcript no landing once the tab asks for the thread's message instead", () => {
+        const view = mount({ openThreadPostId: null });
+        mountLanding = REPORTING;
+        view.rerender();
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+
+        mountLanding = THREAD_LANDING;
+        view.rerender();
+
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("none");
+      });
+
+      it("keeps handing it a landing that reports no miss", () => {
+        const view = mount({ openThreadPostId: null });
+        mountLanding = { ...REPORTING, reportsMiss: false };
+        view.rerender();
+
+        mountLanding = THREAD_LANDING;
+        view.rerender();
+
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+        expect(channelTranscript().getAttribute("data-land-reports-miss")).toBe(
+          "false",
+        );
+      });
+
+      it("jumps again when the tab then asks for the same channel message", () => {
+        const view = mount({ openThreadPostId: null });
+        mountLanding = REPORTING;
+        view.rerender();
+        const firstVisit = Number(
+          channelTranscript().getAttribute("data-land-visit"),
+        );
+        mountLanding = THREAD_LANDING;
+        view.rerender();
+
+        mountLanding = { ...REPORTING, visit: 3 };
+        view.rerender();
+
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+        expect(
+          Number(channelTranscript().getAttribute("data-land-visit")),
+        ).toBeGreaterThan(firstVisit);
+      });
+    });
   });
 
   it("lands the thread beside a channel that is already shown on the message the tab names after its mount", () => {

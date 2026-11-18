@@ -273,9 +273,9 @@ function useThreadPanelLanding(
  * then each the tab asks of it while it is shown (a tapped notification),
  * which arrives as a new `landOn` that no mount reads. Each is a new visit,
  * numbered past the memory links' own. One that reports its miss is the
- * tab's to withdraw: once the tab asks for nothing the list is shown none, so
- * an answer arriving afterwards says nothing, and the visit it took stays
- * counted.
+ * tab's to withdraw: once the tab asks for nothing, or for a message of a
+ * thread instead, the list is shown none, so an answer arriving afterwards
+ * says nothing, and the visit it took stays counted.
  */
 function useChannelLanding(
   landOn: BotChannelLanding | null,
@@ -300,7 +300,9 @@ function useChannelLanding(
       }));
     }
   }
-  const withdrawn = landOn === null && landing?.reportsMiss === true;
+  const withdrawn =
+    (landOn === null || landOn.threadId !== null) &&
+    landing?.reportsMiss === true;
   return [withdrawn ? null : landing, setLanding];
 }
 
