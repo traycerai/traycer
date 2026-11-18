@@ -180,6 +180,7 @@ function SecretRowControls(props: {
 /** A replacement's progress, on the row until it settles. */
 function SecretRowReplacement(props: {
   readonly secretId: string;
+  readonly kind: string;
   readonly client: HostClient<HostRpcRegistry>;
   readonly replacements: number;
 }): ReactNode {
@@ -189,6 +190,7 @@ function SecretRowReplacement(props: {
       key={props.replacements}
       client={props.client}
       secretId={props.secretId}
+      kind={props.kind}
     />
   );
 }
@@ -242,6 +244,7 @@ function SecretDetailsControls(props: {
       <SecretRotationStatus
         client={props.client}
         secretId={props.secret.secretId}
+        kind={props.secret.kind}
       />
       <SecretVersionsList
         secret={{ ...props.secret, revoked: props.revoked }}
@@ -405,6 +408,7 @@ export function SecretRow(props: {
       )}
       <SecretRowReplacement
         secretId={secret.secretId}
+        kind={secret.kind}
         client={props.client}
         replacements={replacements}
       />
