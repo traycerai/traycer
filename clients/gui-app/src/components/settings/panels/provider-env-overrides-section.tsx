@@ -19,8 +19,6 @@ import { useHostBinding } from "@/lib/host";
 import { EnvOverrideEditor } from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "./provider-env-subtitle";
-import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
-import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 
@@ -53,9 +51,6 @@ export function ProviderEnvOverridesSection(props: {
         );
   const viewerId = useCloudChatViewerId();
   const configurationKey = useConfigurationKey();
-  // A team is read from the cloud (`TeamProviders`): this tab is Personal on
-  // a host running it, or a Local row's computer.
-  const local = useEnvironmentPick().kind === "local";
   const submittedValue = useSubmittedSecretInput<string | null>(
     "Provider variable input is unavailable.",
   );
@@ -115,26 +110,6 @@ export function ProviderEnvOverridesSection(props: {
     providerId,
     keyPrefix: `${providerIdToGuiHarnessId(providerId)}:`,
   });
-  // The hosts this save propagates to, for the pending row's own label; a
-  // Local row's save reaches only this computer, so it keeps the plain
-  // Adding/Saving/Removing text instead. Only once the list has actually
-  // answered with at least one host - `loading`/`failed` is not a count, and
-  // `ready` with zero is not either: the list goes `ready` as soon as the
-  // cloud read answers, while this computer's own status can still be
-  // unresolved and held out of `hosts` a moment longer - presenting any of
-  // that as an exact "on N hosts" would misstate the reach the save has. Nor
-  // while this computer's own status is unread even with another host
-  // already listed (`thisComputerUnread`): `hosts` can already hold that
-  // other host while this computer's own membership is still unknown, and an
-  // exact count taken then would understate the real total.
-  const hostsRunningPersonal = useHostsRunningPersonal(!local);
-  const applyingHostsCount =
-    !local &&
-    hostsRunningPersonal.state === "ready" &&
-    !hostsRunningPersonal.thisComputerUnread &&
-    hostsRunningPersonal.hosts.length > 0
-      ? hostsRunningPersonal.hosts.length
-      : null;
   const rowNotes = new Map<string, ReactNode>();
   for (const [key, note] of notes) {
     rowNotes.set(
@@ -175,7 +150,9 @@ export function ProviderEnvOverridesSection(props: {
           </div>
           <ProviderEnvSubtitleLine />
         </div>
-        {setOverride.isPending || deleteOverride.isPending ? (
+        {setOverride.isPending ||
+        deleteOverride.isPending ||
+        commitOverride.isPending ? (
           <MutedAgentSpinner />
         ) : null}
       </div>
@@ -187,7 +164,6 @@ export function ProviderEnvOverridesSection(props: {
         namePlaceholder={envNamePlaceholder(providerId)}
         emptyLabel={`No variables for ${providerName}.`}
         staleRefusal={null}
-        applyingHostsCount={applyingHostsCount}
         renderDetails={(key) => (
           <AppliedProviderItemDetails
             kind="env_override"
