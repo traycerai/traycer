@@ -931,6 +931,91 @@ describe("a pending jump that waits for its row beyond the bound", () => {
   });
 });
 
+/**
+ * Not shown here: the bound's timer firing between the commit in which the
+ * row landed the jump and that commit's passive effects, which cancel it. The
+ * row reaches the transcript through a store write, which React renders at
+ * its sync lane, and it runs a sync-lane commit's passive effects at the tail
+ * of the commit itself; with the flag that stops it counting a write outside
+ * act as a test's mistake, the cleanup ran before the microtask that rendered
+ * the write had finished, so no timer can be placed between the two without
+ * stubbing React's scheduler or the hook.
+ */
+
+/** The bound's timer is cancelled when its jump lands: past the bound, a landed jump says nothing and the store is not asked again. */
+describe("a pending jump that landed before its bound", () => {
+  it("has its bound's timer cancelled: nothing is said and the store is asked for nothing at the bound", async () => {
+    mocks.locate = () => Promise.resolve(FOUND_ROW);
+    const view = mountTranscript();
+    await settleLegendList();
+    askNotification(view);
+    await answered();
+    await advanceToJumpAge(TRANSCRIPT_JUMP_TTL_MS - 1_000);
+    await rowArrives();
+    await waitFor(() => {
+      expect(flashing(TARGET)).toBe(true);
+    });
+    await waitFor(() => {
+      expect(lastOrdinalRequested()).toBeNull();
+    });
+    const asks = requestTranscriptOrdinal.mock.calls.length;
+
+    await advanceToJumpAge(TRANSCRIPT_JUMP_TTL_MS + 1_000);
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(requestTranscriptOrdinal.mock.calls).toHaveLength(asks);
+  });
+});
+
+describe('an "in reply to" open that was tried in view, and whose pane then leaves it', () => {
+  /** Tried in view; the pane then hidden for longer than the bound, and shown again. */
+  async function triedThenHiddenThenShown(): Promise<void> {
+    mocks.locate = () => Promise.resolve(FOUND_ROW);
+    listHeader = <InReplyToOpener />;
+    const view = mountTranscript();
+    await settleLegendList();
+    askInReplyTo();
+    await answered();
+
+    paneVisible = false;
+    act(() => {
+      view.rerender();
+    });
+    await vi.advanceTimersByTimeAsync(TRANSCRIPT_JUMP_TTL_MS * 2);
+
+    paneVisible = true;
+    jumpAskedAt = Date.now();
+    act(() => {
+      view.rerender();
+    });
+  }
+
+  it("lands when its row arrives after the pane was hidden for longer than the bound and shown again", async () => {
+    await triedThenHiddenThenShown();
+    await rowArrives();
+
+    await waitFor(() => {
+      expect(flashing(TARGET)).toBe(true);
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("has the whole bound once the pane shows again, then ends silently and does not scroll to a late row", async () => {
+    await triedThenHiddenThenShown();
+
+    await advanceToJumpAge(TRANSCRIPT_JUMP_TTL_MS - 1);
+    expect(lastOrdinalRequested()).toBe(FOUND_ORDINAL);
+    await advanceToJumpAge(TRANSCRIPT_JUMP_TTL_MS);
+    await waitFor(() => {
+      expect(lastOrdinalRequested()).toBeNull();
+    });
+    await rowArrives();
+
+    expect(flashing(TARGET)).toBe(false);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
 describe("a landing that reports its miss, withdrawn as its row arrives", () => {
   it("is not scrolled to", async () => {
     mocks.locate = () => Promise.resolve(FOUND_ROW);

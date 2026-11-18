@@ -8,6 +8,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -683,27 +684,46 @@ function BotChatTranscriptBody(props: {
       reportsMiss: false,
     });
   }
-  const jumpView = useJumpInView(pendingJump);
   useReportedMiss({
     pendingJump,
-    view: jumpView,
     withdrawn: landOn === null,
     located,
     end: () => setPendingJump(null),
   });
-  const expireJump = useCallback(
-    (jump: PendingJump) =>
-      setPendingJump((current) => (current === jump ? null : current)),
-    [],
-  );
-  usePendingJumpBound(pendingJump, jumpView.tried, expireJump);
+  // The jump pending as of the last commit, for the ends that happen outside
+  // render: the reader moving, the bound falling due, and an "in reply to"
+  // open replacing it. A passive effect's cleanup runs after its commit, so
+  // the bound's timer can fire for a jump that has already ended; it asks
+  // here first. The layout effect keeps this current inside the commit, for
+  // the ends settled during render (a landing, a reported miss, a send's
+  // fallback, a landing's new jump), which never write it themselves: a
+  // render may be discarded or run twice. Its cleanup clears it on unmount,
+  // ahead of the timer's own. An end in an event clears it there, before its
+  // write.
+  const liveJumpRef = useRef<PendingJump | null>(null);
+  useLayoutEffect(() => {
+    liveJumpRef.current = pendingJump;
+    return () => {
+      liveJumpRef.current = null;
+    };
+  }, [pendingJump]);
+  const expireJump = useCallback((jump: PendingJump): boolean => {
+    if (liveJumpRef.current !== jump) return false;
+    liveJumpRef.current = null;
+    setPendingJump(null);
+    return true;
+  }, []);
+  usePendingJumpBound(pendingJump, expireJump);
   // The reader moved the view while a jump waited on its row: where they went
   // is where they stay. Clearing the jump is what releases the range the
   // store holds open for it, below. The list is given this only while a jump
   // waits: React keeps a write that changes nothing and replays it in a later
   // render, after the jump that render set (`useLandOnMessage` lands during
   // render), which would clear a jump asked after the reader moved.
-  const dropPendingJump = useCallback(() => setPendingJump(null), []);
+  const dropPendingJump = useCallback(() => {
+    liveJumpRef.current = null;
+    setPendingJump(null);
+  }, []);
   const locatedOrdinal = located.status === "found" ? located.ordinal : null;
   const { requestTranscriptOrdinal } = state;
   // The store's pending-jump ordinal follows the pending jump: named while
@@ -832,8 +852,10 @@ function BotChatTranscriptBody(props: {
     return {
       ...repliesBase,
       above: (messageId) => above.get(messageId) ?? null,
-      open: (messageId) =>
-        jumpTo({ kind: "message", messageId, reportsMiss: false }),
+      open: (messageId) => {
+        liveJumpRef.current = null;
+        jumpTo({ kind: "message", messageId, reportsMiss: false });
+      },
     };
   }, [flow, jumpTo, messages, repliesBase, transcriptWindow]);
   const listHeader = surface?.kind === "channel" ? surface.history : header;
@@ -948,9 +970,7 @@ function BotChatTranscriptBody(props: {
                   systemOverlayActive={false}
                   scrollRequest={scrollRequest}
                   onScrollRequestSettled={onScrollRequestSettled}
-                  onReaderMoved={
-                    pendingJump === null ? undefined : dropPendingJump
-                  }
+                  onReaderMoved={pendingJump === null ? null : dropPendingJump}
                   composerOverlayHeight={0}
                   subagentDrillIn={subagentDrillIn}
                 />
@@ -1436,12 +1456,13 @@ function useLandOnMessage(
  */
 function useReportedMiss(args: {
   readonly pendingJump: PendingJump | null;
-  readonly view: JumpView;
   readonly withdrawn: boolean;
   readonly located: ChatLocateRowAnswer;
   readonly end: () => void;
 }): void {
-  const { pendingJump, view, withdrawn, located, end } = args;
+  const { pendingJump, withdrawn, located, end } = args;
+  const paneVisible = usePaneVisible();
+  const [seenJump, setSeenJump] = useState<PendingJump | null>(null);
   const [unopened, setUnopened] = useState<PendingJump | null>(null);
   const toldUnopened = useRef<PendingJump | null>(null);
   useEffect(() => {
@@ -1450,65 +1471,46 @@ function useReportedMiss(args: {
     toast.error(NOTIFICATION_MESSAGE_UNAVAILABLE);
   }, [unopened]);
   if (pendingJump?.kind !== "message" || !pendingJump.reportsMiss) return;
-  if (withdrawn || (!view.paneVisible && view.tried)) {
+  if (paneVisible && seenJump !== pendingJump) setSeenJump(pendingJump);
+  if (withdrawn || (!paneVisible && seenJump === pendingJump)) {
     end();
     return;
   }
-  if (!view.paneVisible) return;
+  if (!paneVisible) return;
   if (located.status === "missing" && located.cause !== "unsupported") {
     end();
     setUnopened(pendingJump);
   }
 }
 
-/** A pending jump's pane: in view now, and whether the jump has been tried with it in view. */
-interface JumpView {
-  readonly paneVisible: boolean;
-  readonly tried: boolean;
-}
-
 /**
- * What a reported miss and a jump's bound both wait for: the pending jump
- * tried with its pane in view. Settled during render, as a pending jump is.
- */
-function useJumpInView(pendingJump: PendingJump | null): JumpView {
-  const paneVisible = usePaneVisible();
-  const [triedJump, setTriedJump] = useState<PendingJump | null>(null);
-  if (pendingJump !== null && paneVisible && triedJump !== pendingJump) {
-    setTriedJump(pendingJump);
-  }
-  return {
-    paneVisible,
-    tried: pendingJump !== null && triedJump === pendingJump,
-  };
-}
-
-/**
- * A pending jump is given up `TRANSCRIPT_JUMP_TTL_MS` after it was first
- * tried with its pane in view, the bound a task chat's parked jump and find's
- * index read have: a row the host located whose range never loads, or one it
- * never answers for, would otherwise wait for as long as the list is mounted
- * and scroll whenever the row came. Time out of view is not counted, so a
- * jump asked of a hidden pane has the whole bound once shown. One that
- * reports its miss says so; any other ends silently. The bound is this
- * mount's and this jump's: a landing a remount tries again starts another, as
- * does the turn a send falls back to.
+ * A pending jump is given up once its pane has been in view for
+ * `TRANSCRIPT_JUMP_TTL_MS` without its row, the bound a task chat's parked
+ * jump and find's index read have: a row the host located whose range never
+ * loads, or one it never answers for, would otherwise wait for as long as the
+ * list is mounted and scroll whenever the row came. The clock runs only while
+ * the pane is in view and starts again each time it returns, so nobody comes
+ * back to a jump that ended while they could not see it. One that reports its
+ * miss says so; any other ends silently. `expire` answers whether the jump
+ * was still the pending one: a timer that outlives its jump says and writes
+ * nothing. The bound is this mount's and this jump's: a landing a remount
+ * tries again starts another, as does the turn a send falls back to.
  */
 function usePendingJumpBound(
   pendingJump: PendingJump | null,
-  tried: boolean,
-  expire: (jump: PendingJump) => void,
+  expire: (jump: PendingJump) => boolean,
 ): void {
+  const paneVisible = usePaneVisible();
   useEffect(() => {
-    if (pendingJump === null || !tried) return;
+    if (pendingJump === null || !paneVisible) return;
     const timer = window.setTimeout(() => {
-      expire(pendingJump);
+      if (!expire(pendingJump)) return;
       if (pendingJump.kind === "message" && pendingJump.reportsMiss) {
         toast.error(NOTIFICATION_MESSAGE_UNAVAILABLE);
       }
     }, TRANSCRIPT_JUMP_TTL_MS);
     return () => window.clearTimeout(timer);
-  }, [expire, pendingJump, tried]);
+  }, [expire, paneVisible, pendingJump]);
 }
 
 /**

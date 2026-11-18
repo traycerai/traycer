@@ -288,9 +288,10 @@ interface ChatMessagesProps {
    * The reader moved the view themselves: a wheel, a touch drag, a scroll key
    * or the scrollbar, which the viewport could answer. Never a click on a
    * row, and never a navigation this component performs. An owner holding a
-   * scroll it has not issued yet drops it on this.
+   * scroll it has not issued yet drops it on this; `null` where there is
+   * nothing to drop.
    */
-  onReaderMoved?: () => void;
+  onReaderMoved: (() => void) | null;
   /** Measured height of the overlaid composer/queue/pinned/agents dock
    *  (chat-tile.tsx), reserved as the transcript's bottom content inset. */
   composerOverlayHeight: number;

@@ -1202,6 +1202,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           systemOverlayActive={state.systemOverlayActive}
           scrollRequest={state.scrollRequest}
           onScrollRequestSettled={state.onScrollRequestSettled}
+          onReaderMoved={null}
           composerOverlayHeight={state.composerOverlayHeight}
           transcriptWindow={state.transcriptWindow}
           onVisibleOrdinalRangeChange={state.onVisibleOrdinalRangeChange}
@@ -6328,6 +6329,7 @@ describe("ChatMessages scroll policy", () => {
             systemOverlayActive={false}
             scrollRequest={null}
             onScrollRequestSettled={null}
+            onReaderMoved={null}
             composerOverlayHeight={80}
             transcriptWindow={null}
             onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}

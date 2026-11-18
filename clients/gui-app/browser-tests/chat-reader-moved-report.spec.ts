@@ -299,7 +299,6 @@ test.describe("the list's reader-moved report", () => {
     await callProbe(page, "startStream", [STREAM_INTERVAL_MS]);
     await holdRangeAt(page, ordinal);
     await pointAtTranscript(page);
-    await nextFrames(page, 4);
     expect(await readerMovedReports(page)).toBe(0);
     await wheelsDelivered(page, [WHEEL_AWAY], 0);
     await expect.poll(() => readerMovedReports(page)).toBeGreaterThanOrEqual(1);

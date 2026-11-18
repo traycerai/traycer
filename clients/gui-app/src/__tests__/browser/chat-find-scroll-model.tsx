@@ -145,6 +145,7 @@ export function Fixture() {
             systemOverlayActive={false}
             scrollRequest={null}
             onScrollRequestSettled={null}
+            onReaderMoved={null}
             composerOverlayHeight={0}
             subagentDrillIn={subagentDrillIn}
           />

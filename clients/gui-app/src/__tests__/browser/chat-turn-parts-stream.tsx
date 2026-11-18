@@ -118,6 +118,7 @@ function ChatMessagesHarness({
       systemOverlayActive={false}
       scrollRequest={scrollRequest}
       onScrollRequestSettled={onScrollRequestSettled}
+      onReaderMoved={null}
       composerOverlayHeight={0}
       subagentDrillIn={subagentDrillIn}
     />

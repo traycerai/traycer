@@ -4751,6 +4751,7 @@ export function ChatSessionMessagesSurface(
                 backgroundItems={props.backgroundItems}
                 scrollRequest={props.scrollRequest}
                 onScrollRequestSettled={props.onScrollRequestSettled}
+                onReaderMoved={null}
                 getMessageActions={props.getMessageActions}
                 nextStepActions={props.nextStepActions}
                 instanceId={props.node.instanceId}
