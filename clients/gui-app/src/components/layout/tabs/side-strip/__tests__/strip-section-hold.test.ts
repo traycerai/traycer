@@ -1,7 +1,9 @@
 /**
- * Which openings take the opened-from-To-review hold: focusing the pair's
- * other member does, swapping its sides does not. Where a held row is drawn,
- * and when it lets go on screen, is
+ * The current task's row is held in the most urgent section it has been drawn
+ * in since it became current, and released when another task is opened. These
+ * are the openings that carry the hold and the ones that start it afresh: a
+ * pair's swap and its other member's close carry it, its focused member's
+ * close does not. Where a held row is drawn, and when it lets go on screen, is
  * `browser-tests/side-strip-section-motion.spec.ts`'s.
  */
 import { renderHook } from "@testing-library/react";
@@ -16,7 +18,7 @@ import {
   type StripItem,
 } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
-import { holdInPlace, useOpenedSectionHold } from "../strip-section-hold";
+import { holdInPlace, useCurrentSectionHold } from "../strip-section-hold";
 import {
   groupEntriesBySection,
   type StripSection,
@@ -45,20 +47,26 @@ function swapped(item: SplitStripItem): ReadonlyArray<StripItem> {
     .items;
 }
 
+function sectionsOf(
+  rows: ReadonlyArray<readonly [string, StripSection]>,
+): ReadonlyArray<StripSectionGroup> {
+  return groupEntriesBySection(
+    rows.map(([itemId, section], stripIndex) => ({
+      kind: "tabs",
+      itemId,
+      stripIndex,
+      section,
+      group: null,
+      members: [],
+    })),
+  );
+}
+
 function sectionsWith(
   itemId: string,
   section: StripSection,
 ): ReadonlyArray<StripSectionGroup> {
-  return groupEntriesBySection([
-    {
-      kind: "tabs",
-      itemId,
-      stripIndex: 0,
-      section,
-      group: null,
-      members: [],
-    },
-  ]);
+  return sectionsOf([[itemId, section]]);
 }
 
 function sectionsWithPairIn(
@@ -74,15 +82,17 @@ interface Input {
 }
 
 interface Drawn {
-  /** The section the pair's row is drawn in under the hold the hook answers. */
+  /** The section the first row is drawn in under the hold the hook answers. */
   readonly section: () => StripSection | undefined;
+  /** The section the given item's row is drawn in. */
+  readonly sectionOf: (itemId: string) => StripSection | undefined;
   readonly set: (next: Partial<Input>) => void;
 }
 
 function drawnOf(input: Input): Drawn {
   const { result, rerender } = renderHook(
     (props: Input) => {
-      const hold = useOpenedSectionHold(
+      const hold = useCurrentSectionHold(
         props.sections,
         props.items,
         props.activeItemId,
@@ -95,6 +105,12 @@ function drawnOf(input: Input): Drawn {
   let current = input;
   return {
     section: () => result.current.at(0)?.section,
+    sectionOf: (itemId) =>
+      result.current.find((group) =>
+        group.entries.some(
+          (entry) => entry.kind === "tabs" && entry.itemId === itemId,
+        ),
+      )?.section,
     set: (next) => {
       current = { ...current, ...next };
       rerender(current);
@@ -102,61 +118,194 @@ function drawnOf(input: Input): Drawn {
   };
 }
 
-describe("useOpenedSectionHold", () => {
-  // A mount is not an opening.
-  it("takes no hold for a task already current in To review when the list mounts", () => {
-    const itemId = tabItemId(REF_A);
+function loneTab(ref: TabRef): StripItem {
+  return { kind: "tab", id: tabItemId(ref), ref };
+}
+
+describe("useCurrentSectionHold", () => {
+  const ID_A = tabItemId(REF_A);
+  const ID_B = tabItemId(REF_B);
+
+  it("never sinks the current task's row, whatever its state does", () => {
     const drawn = drawnOf({
-      activeItemId: itemId,
-      sections: sectionsWith(itemId, "to-review"),
-      items: [{ kind: "tab", id: itemId, ref: REF_A }],
+      activeItemId: ID_A,
+      sections: sectionsWith(ID_A, "needs-you"),
+      items: [loneTab(REF_A)],
     });
-    expect(drawn.section()).toBe("to-review");
 
-    drawn.set({ sections: sectionsWith(itemId, "idle") });
+    drawn.set({ sections: sectionsWith(ID_A, "working") });
+    expect(drawn.section()).toBe("needs-you");
 
-    expect(drawn.section()).toBe("idle");
+    drawn.set({ sections: sectionsWith(ID_A, "idle") });
+    expect(drawn.section()).toBe("needs-you");
   });
 
-  it("holds a current pair in To review when its other member is focused from there", () => {
+  it("raises the hold as the current task's row rises, and keeps it there", () => {
     const drawn = drawnOf({
-      activeItemId: PAIR,
-      sections: sectionsWithPairIn("idle"),
-      items: [pairFocusing("left")],
+      activeItemId: ID_A,
+      sections: sectionsWith(ID_A, "idle"),
+      items: [loneTab(REF_A)],
     });
-    // The right member finishes while the left one is on screen.
-    drawn.set({ sections: sectionsWithPairIn("to-review") });
-    drawn.set({ items: [pairFocusing("right")] });
 
-    // Focusing it read it.
-    drawn.set({ sections: sectionsWithPairIn("idle") });
+    drawn.set({ sections: sectionsWith(ID_A, "working") });
+    expect(drawn.section()).toBe("working");
 
+    drawn.set({ sections: sectionsWith(ID_A, "to-review") });
+    expect(drawn.section()).toBe("to-review");
+
+    drawn.set({ sections: sectionsWith(ID_A, "idle") });
     expect(drawn.section()).toBe("to-review");
   });
 
-  it("lets a pair that finished and was read under the person, then had its sides swapped, go to Idle", () => {
+  it("releases the row when another task is opened", () => {
+    const drawn = drawnOf({
+      activeItemId: ID_A,
+      sections: sectionsOf([
+        [ID_A, "to-review"],
+        [ID_B, "idle"],
+      ]),
+      items: [loneTab(REF_A), loneTab(REF_B)],
+    });
+    drawn.set({
+      sections: sectionsOf([
+        [ID_A, "idle"],
+        [ID_B, "idle"],
+      ]),
+    });
+    expect(drawn.sectionOf(ID_A)).toBe("to-review");
+
+    drawn.set({ activeItemId: ID_B });
+
+    expect(drawn.sectionOf(ID_A)).toBe("idle");
+  });
+
+  it("holds an opened task in the section its row was drawn in, not the one a change in the same render moved it to", () => {
+    const drawn = drawnOf({
+      activeItemId: ID_A,
+      sections: sectionsOf([
+        [ID_A, "idle"],
+        [ID_B, "to-review"],
+      ]),
+      items: [loneTab(REF_A), loneTab(REF_B)],
+    });
+
+    drawn.set({
+      activeItemId: ID_B,
+      sections: sectionsOf([
+        [ID_A, "idle"],
+        [ID_B, "idle"],
+      ]),
+    });
+
+    expect(drawn.sectionOf(ID_B)).toBe("to-review");
+  });
+
+  it("keeps a task answered into Working in To review while it is current, and lets it go when another is opened", () => {
+    const drawn = drawnOf({
+      activeItemId: ID_B,
+      sections: sectionsOf([
+        [ID_A, "to-review"],
+        [ID_B, "idle"],
+      ]),
+      items: [loneTab(REF_A), loneTab(REF_B)],
+    });
+    drawn.set({ activeItemId: ID_A });
+
+    drawn.set({
+      sections: sectionsOf([
+        [ID_A, "working"],
+        [ID_B, "idle"],
+      ]),
+    });
+    expect(drawn.sectionOf(ID_A)).toBe("to-review");
+
+    drawn.set({ activeItemId: ID_B });
+
+    expect(drawn.sectionOf(ID_A)).toBe("working");
+  });
+
+  it("holds a current task that had no row at mount from the section it first appears in", () => {
+    const drawn = drawnOf({
+      activeItemId: ID_A,
+      sections: sectionsOf([[ID_B, "idle"]]),
+      items: [loneTab(REF_A), loneTab(REF_B)],
+    });
+
+    drawn.set({
+      sections: sectionsOf([
+        [ID_B, "idle"],
+        [ID_A, "to-review"],
+      ]),
+    });
+    drawn.set({
+      sections: sectionsOf([
+        [ID_B, "idle"],
+        [ID_A, "working"],
+      ]),
+    });
+
+    expect(drawn.sectionOf(ID_A)).toBe("to-review");
+  });
+
+  describe("when the layout changes around a held current tab", () => {
+    function heldTab(): Drawn {
+      return drawnOf({
+        activeItemId: ID_A,
+        sections: sectionsOf([
+          [ID_A, "to-review"],
+          [ID_B, "idle"],
+        ]),
+        items: [loneTab(REF_A), loneTab(REF_B)],
+      });
+    }
+
+    it("keeps the hold when the items are reordered", () => {
+      const drawn = heldTab();
+
+      drawn.set({
+        items: [loneTab(REF_B), loneTab(REF_A)],
+        sections: sectionsOf([
+          [ID_B, "idle"],
+          [ID_A, "idle"],
+        ]),
+      });
+
+      expect(drawn.sectionOf(ID_A)).toBe("to-review");
+    });
+
+    it("keeps the hold when the tab is paired as the focused member of a split", () => {
+      const drawn = heldTab();
+
+      drawn.set({
+        items: [pairFocusing("left")],
+        activeItemId: PAIR,
+        sections: sectionsWithPairIn("idle"),
+      });
+
+      expect(drawn.sectionOf(PAIR)).toBe("to-review");
+    });
+  });
+
+  it("keeps a pair's hold through a swap of its sides", () => {
     const drawn = drawnOf({
       activeItemId: PAIR,
-      sections: sectionsWithPairIn("idle"),
+      sections: sectionsWithPairIn("to-review"),
       items: [pairFocusing("left")],
     });
-    drawn.set({ sections: sectionsWithPairIn("to-review") });
     drawn.set({ items: swapped(pairFocusing("left")) });
 
     drawn.set({ sections: sectionsWithPairIn("idle") });
 
-    expect(drawn.section()).toBe("idle");
+    expect(drawn.section()).toBe("to-review");
   });
 
-  it("keeps an existing hold through a swap of the pair's sides", () => {
+  it("keeps a pair's floor when its other member is focused", () => {
     const drawn = drawnOf({
       activeItemId: PAIR,
-      sections: sectionsWithPairIn("idle"),
+      sections: sectionsWithPairIn("to-review"),
       items: [pairFocusing("left")],
     });
-    drawn.set({ sections: sectionsWithPairIn("to-review") });
     drawn.set({ items: [pairFocusing("right")] });
-    drawn.set({ items: swapped(pairFocusing("right")) });
 
     drawn.set({ sections: sectionsWithPairIn("idle") });
 
@@ -165,15 +314,11 @@ describe("useOpenedSectionHold", () => {
 
   describe("when a member of a held pair is closed", () => {
     function heldPair(): Drawn {
-      const drawn = drawnOf({
+      return drawnOf({
         activeItemId: PAIR,
-        sections: sectionsWithPairIn("idle"),
-        items: [pairFocusing("left")],
+        sections: sectionsWithPairIn("to-review"),
+        items: [pairFocusing("right")],
       });
-      drawn.set({ sections: sectionsWithPairIn("to-review") });
-      drawn.set({ items: [pairFocusing("right")] });
-      drawn.set({ sections: sectionsWithPairIn("idle") });
-      return drawn;
     }
 
     function closed(ref: TabRef): {
@@ -191,29 +336,23 @@ describe("useOpenedSectionHold", () => {
       );
     }
 
-    it("keeps the hold on the surviving tab when the focused member stays", () => {
+    it("carries the hold to the surviving tab when the other member is closed", () => {
       const drawn = heldPair();
       const layout = closed(REF_A);
 
-      drawn.set({
-        ...layout,
-        sections: sectionsWith(tabItemId(REF_B), "idle"),
-      });
+      drawn.set({ ...layout, sections: sectionsWith(ID_B, "idle") });
 
-      expect(layout.activeItemId).toBe(tabItemId(REF_B));
+      expect(layout.activeItemId).toBe(ID_B);
       expect(drawn.section()).toBe("to-review");
     });
 
-    it("does not give the surviving tab the hold when the focused member is closed", () => {
+    it("starts the surviving tab afresh when the focused member is closed", () => {
       const drawn = heldPair();
       const layout = closed(REF_B);
 
-      drawn.set({
-        ...layout,
-        sections: sectionsWith(tabItemId(REF_A), "idle"),
-      });
+      drawn.set({ ...layout, sections: sectionsWith(ID_A, "idle") });
 
-      expect(layout.activeItemId).toBe(tabItemId(REF_A));
+      expect(layout.activeItemId).toBe(ID_A);
       expect(drawn.section()).toBe("idle");
     });
   });
