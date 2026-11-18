@@ -52,6 +52,14 @@ export type WindowNarrationCause = "no-usable-host" | "cold-start";
  */
 export type WindowNarrationVariant =
   | { readonly kind: "offline" }
+  /**
+   * ∅ because this account's host list could not be READ - the registry read
+   * failed, or the fleet it should have reached the selection authority with
+   * did not - rather than because its hosts were read and none can serve.
+   * `offline` would tell this reader their machines are down; nothing has
+   * said so. Retry re-reads the registry, and so does the 60 s poll.
+   */
+  | { readonly kind: "host-list-unavailable" }
   | { readonly kind: "team-membership-checking" }
   | { readonly kind: "team-membership-required" }
   | { readonly kind: "team-membership-unavailable" }
@@ -163,6 +171,13 @@ export interface WindowNarrationInput {
    * being spent once per process.
    */
   readonly discoveryConcluded: boolean;
+  /**
+   * Whether that conclusion was a FAILURE to read the host list (see
+   * `HostDirectoryService.hasFailedDiscovery`). Turns an `offline` ∅ verdict
+   * into `host-list-unavailable`; never read before discovery concludes, and
+   * never over a variant the fleet scan made actionable.
+   */
+  readonly discoveryFailed: boolean;
   /**
    * THIS MACHINE's host id, or null when there is none.
    *
@@ -383,6 +398,20 @@ function localTeamAdmissionVariant(
 }
 
 /**
+ * The ∅ verdict's variant: the fleet scan's answer, except that an `offline`
+ * reached because the host list could not be read says so. An actionable
+ * variant (a version fix) is never replaced.
+ */
+function verdictVariant(
+  scanned: WindowNarrationVariant,
+  discoveryFailed: boolean,
+): WindowNarrationVariant {
+  return scanned.kind === "offline" && discoveryFailed
+    ? { kind: "host-list-unavailable" }
+    : scanned;
+}
+
+/**
  * The whole window-narrator verdict.
  *
  * Note there is no dismissal input, and that is the design: visibility is
@@ -496,7 +525,7 @@ export function deriveWindowNarration(
     return {
       kind: "narrating",
       cause: "no-usable-host",
-      variant: noHostVariant,
+      variant: verdictVariant(noHostVariant, input.discoveryFailed),
     };
   }
   if (input.hasBeenServed) return { kind: "silent" };
