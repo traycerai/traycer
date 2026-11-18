@@ -1847,9 +1847,7 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
       await waitFor(() => expect(reads).toBe(2));
-      expect(screen.getByText("NEW_VAR · Adding").textContent).toContain(
-        "NEW_VAR",
-      );
+      expect(screen.queryByText(/NEW_VAR · /)).toBeNull();
       expect(screen.getByLabelText("New variable name")).toHaveProperty(
         "disabled",
         true,
@@ -1860,11 +1858,10 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
         await freshRead;
       });
       await waitFor(() =>
-        expect(screen.queryByText("NEW_VAR · Adding")).toBeNull(),
+        expect(
+          screen.getByRole("button", { name: "Add a variable" }),
+        ).toHaveProperty("disabled", false),
       );
-      expect(
-        screen.getByRole("button", { name: "Add a variable" }),
-      ).toHaveProperty("disabled", false);
       if (outcome === "removed") {
         expect(panel.queryClient.getQueryData(listKey)).toBe(before);
         expect(screen.queryByLabelText("Value for NEW_VAR")).toBeNull();
@@ -1931,7 +1928,7 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
       await supersededRead;
     });
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByText("NEW_VAR · Adding")).toBeTruthy();
+    expect(screen.queryByText(/NEW_VAR · /)).toBeNull();
     expect(screen.getByLabelText("New variable name")).toHaveProperty(
       "disabled",
       true,
@@ -1943,11 +1940,10 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
       await freshRead;
     });
     await waitFor(() =>
-      expect(screen.queryByText("NEW_VAR · Adding")).toBeNull(),
-    );
-    expect(screen.getByLabelText("Value for NEW_VAR")).toHaveProperty(
-      "value",
-      "NORMALIZED",
+      expect(screen.getByLabelText("Value for NEW_VAR")).toHaveProperty(
+        "value",
+        "NORMALIZED",
+      ),
     );
     expect(screen.queryByLabelText("New variable name")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
@@ -2019,9 +2015,7 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
       releaseStale();
       await staleRead;
     });
-    expect(screen.getByText("NEW_VAR · Adding").textContent).toContain(
-      "NEW_VAR",
-    );
+    expect(screen.queryByText(/NEW_VAR · /)).toBeNull();
     expect(screen.getByLabelText("New variable name")).toHaveProperty(
       "disabled",
       true,
@@ -2034,11 +2028,10 @@ describe("<ShellSettingsPanel /> an accepted variable write", () => {
       await staleRefetch;
     });
     await waitFor(() =>
-      expect(screen.queryByText("NEW_VAR · Adding")).toBeNull(),
-    );
-    expect(screen.getByLabelText("Value for NEW_VAR")).toHaveProperty(
-      "value",
-      "NORMALIZED",
+      expect(screen.getByLabelText("Value for NEW_VAR")).toHaveProperty(
+        "value",
+        "NORMALIZED",
+      ),
     );
     expect(
       screen.getByRole("button", { name: "Add a variable" }),
