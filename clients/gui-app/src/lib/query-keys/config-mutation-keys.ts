@@ -23,8 +23,6 @@ export const configMutationKeys = {
   browserSet: () => ["config.browser.set"] as const,
   agentMemoriesSet: () => ["config.agentMemories.set"] as const,
   worktreesSet: () => ["config.worktrees.set"] as const,
-  worktreesRecoverMissingSet: () =>
-    ["config.worktrees.set", "recoverMissing"] as const,
   sessionNamesSet: () => ["config.sessionNames.set"] as const,
   // Host-scoped: the Model list rows read "a write is outstanding on this
   // host" from the mutation cache (`useIsMutating`) by this key, which counts a

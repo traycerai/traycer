@@ -33,9 +33,7 @@ import {
   configShellAddRequestSchemaV10,
   configWorktreesGetRequestSchema,
   configWorktreesResponseSchema,
-  configWorktreesResponseSchemaV10,
   configWorktreesSetRequestSchema,
-  configWorktreesSetRequestSchemaV10,
   configWorktreesSetResponseSchema,
   configVisualizationGetRequestSchema,
   configVisualizationResponseSchema,
@@ -230,59 +228,15 @@ export const configWorktreesGetV10 = defineRpcContract({
   method: "config.worktrees.get",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configWorktreesGetRequestSchema,
-  responseSchema: configWorktreesResponseSchemaV10,
-});
-
-// v1.1 adds `recoverMissing`. The extra key is strippable, so a 1.1 host
-// answering a 1.0 client drops it on the wire.
-export const configWorktreesGetV11 = defineRpcContract({
-  method: "config.worktrees.get",
-  schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: configWorktreesGetRequestSchema,
   responseSchema: configWorktreesResponseSchema,
-});
-
-// A 1.0 host refuses a run whose bound folder is gone, so it recovers nothing.
-export const configWorktreesGetUpgradeV10ToV11 = defineUpgradePath<
-  typeof configWorktreesGetV10,
-  typeof configWorktreesGetV11
->({
-  from: configWorktreesGetV10.schemaVersion,
-  to: configWorktreesGetV11.schemaVersion,
-  upgradeRequest: (request) => request,
-  upgradeResponse: (response) => ({ ...response, recoverMissing: false }),
 });
 
 /** Writes the machine-user-global policy for worktrees agents create. */
 export const configWorktreesSetV10 = defineRpcContract({
   method: "config.worktrees.set",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: configWorktreesSetRequestSchemaV10,
-  responseSchema: configWorktreesResponseSchemaV10,
-});
-
-// v1.1 writes either setting on its own; the response grows `recoverMissing`
-// as `config.worktrees.get` does.
-export const configWorktreesSetV11 = defineRpcContract({
-  method: "config.worktrees.set",
-  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: configWorktreesSetRequestSchema,
   responseSchema: configWorktreesSetResponseSchema,
-});
-
-// A 1.0 body only ever wrote the agent-create policy, so it leaves
-// `recoverMissing` as it is.
-export const configWorktreesSetUpgradeV10ToV11 = defineUpgradePath<
-  typeof configWorktreesSetV10,
-  typeof configWorktreesSetV11
->({
-  from: configWorktreesSetV10.schemaVersion,
-  to: configWorktreesSetV11.schemaVersion,
-  upgradeRequest: (request) => ({
-    agentCreate: request.agentCreate,
-    recoverMissing: null,
-  }),
-  upgradeResponse: (response) => ({ ...response, recoverMissing: false }),
 });
 
 /** Reads whether agents get the page tools. */

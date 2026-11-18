@@ -1,5 +1,4 @@
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { z } from "zod";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,9 +56,6 @@ import {
   readVisualizationConfig,
   readVisualizationConfigSync,
   readWorktreesConfig,
-  setWorktreeRecoverMissing,
-  readWorktreeRecoveryConfigSync,
-  readWorktreeRecoveryConfig,
   readWorktreesConfigSync,
   readCatalogConfig,
   readCatalogConfigSync,
@@ -702,74 +698,6 @@ describe("visualization config (agent pages)", () => {
       }),
     );
     expect(readVisualizationConfigSync()).toEqual({ agentPages: false });
-  });
-});
-
-describe("worktree recovery setting", () => {
-  // An older binary knows the `worktrees` block as `{ agentCreate }` and
-  // strips any other key inside it when it rewrites the file; only unknown
-  // TOP-LEVEL blocks survive its write.
-  async function rewriteAsOlderWriter(): Promise<void> {
-    const raw = JSON.parse(await readFile(cliConfigPath(), "utf8"));
-    const worktrees = z
-      .object({ agentCreate: z.enum(["allow", "ask", "never"]) })
-      .parse(raw.worktrees ?? { agentCreate: "allow" });
-    await writeRaw(JSON.stringify({ ...raw, worktrees }));
-  }
-
-  it("keeps Stop when an older binary rewrites the worktrees block", async () => {
-    await setWorktreeRecoverMissing(false);
-    await rewriteAsOlderWriter();
-    expect(readWorktreeRecoveryConfigSync()).toEqual({ recoverMissing: false });
-  });
-
-  it("reads on with no file and when the block is absent", async () => {
-    expect(readWorktreeRecoveryConfigSync()).toEqual({ recoverMissing: true });
-    await writeRaw(JSON.stringify({ version: 1 }));
-    expect(readWorktreeRecoveryConfigSync()).toEqual({ recoverMissing: true });
-    expect(await readWorktreeRecoveryConfig()).toEqual({
-      recoverMissing: true,
-    });
-  });
-
-  it("reads off for a value or block that is not what it should be, and leaves the agent-create policy alone", async () => {
-    for (const worktreeRecovery of [
-      { recoverMissing: "false" },
-      { recoverMissing: null },
-      "off",
-    ]) {
-      await writeRaw(
-        JSON.stringify({
-          version: 1,
-          worktrees: { agentCreate: "never" },
-          worktreeRecovery,
-        }),
-      );
-      expect(readWorktreeRecoveryConfigSync()).toEqual({
-        recoverMissing: false,
-      });
-      expect(await readWorktreeRecoveryConfig()).toEqual({
-        recoverMissing: false,
-      });
-      expect(readWorktreesConfigSync()).toEqual({ agentCreate: "never" });
-    }
-  });
-
-  it("fails closed when the file cannot be parsed", async () => {
-    await writeRaw("{ not json");
-    expect(readWorktreeRecoveryConfigSync()).toEqual({ recoverMissing: false });
-  });
-
-  it("writes its own block and leaves the agent-create policy, and the reverse", async () => {
-    await setAgentWorktreeCreatePolicy("ask");
-    await setWorktreeRecoverMissing(false);
-    expect(await readWorktreesConfig()).toEqual({ agentCreate: "ask" });
-    const raw = JSON.parse(await readFile(cliConfigPath(), "utf8"));
-    expect(raw.worktreeRecovery).toEqual({ recoverMissing: false });
-    expect(raw.worktrees).toEqual({ agentCreate: "ask" });
-
-    await setAgentWorktreeCreatePolicy("never");
-    expect(readWorktreeRecoveryConfigSync()).toEqual({ recoverMissing: false });
   });
 });
 
