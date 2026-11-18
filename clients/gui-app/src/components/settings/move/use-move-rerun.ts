@@ -5,12 +5,13 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import type {
   EnvironmentSetupRetryRequest,
   EnvironmentSetupRetryResponse,
+  EnvironmentStatusResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
-import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import {
   useHostScopedMutationForClient,
   type HostScopedMutationContext,
 } from "@/hooks/host/use-host-scoped-mutation";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -43,10 +44,32 @@ export interface MoveRerun {
   readonly planReadable: boolean;
   /** A Retry's re-run went on with the accepted move instead of asking again. */
   readonly resumed: boolean;
+  /** The refusal shown before the Retry, again once its re-run stopped before asking. */
+  readonly stoppedAgain: string | null;
   /** The move stopped: a stopped move refuses every plan until it runs again. */
   readonly stopped: boolean;
   readonly pending: boolean;
-  readonly rerun: (started: () => void) => void;
+  readonly rerun: (refusal: string, started: () => void) => void;
+}
+
+interface Rerun {
+  readonly attemptId: string;
+  readonly refusal: string;
+  readonly answeredAt: number;
+}
+
+/**
+ * The read in hand when the Retry answers is the stopped move's own; only one
+ * answered after it says what the re-run did.
+ */
+function stoppedAgainRefusal(
+  rerun: Rerun | null,
+  status: EnvironmentStatusResponseV11 | null,
+  readAt: number,
+): string | null {
+  if (rerun === null || status === null || readAt <= rerun.answeredAt)
+    return null;
+  return moveHasStopped(status) ? rerun.refusal : null;
 }
 
 /**
@@ -58,32 +81,44 @@ export function useMoveRerun(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string,
 ): MoveRerun {
-  const status = useEnvironmentStatusRead(client, hostId, true);
+  const statusServed = useHostMethodSupport(hostId, "environment.status");
+  const statusRead = useHostQuery<HostRpcRegistry, "environment.status">({
+    cacheKeyIdentity: undefined,
+    client,
+    method: "environment.status",
+    params: {},
+    options: { enabled: statusServed === true, poll: true },
+  });
+  const status = statusRead.data ?? null;
   const retryable =
     useHostMethodSupport(hostId, "environment.setup.retry") === true;
   const retry = useMoveRetryMutation(client);
-  const [attemptId, setAttemptId] = useState<string | null>(null);
+  const [rerun, setRerun] = useState<Rerun | null>(null);
   return {
-    planKey: attemptId === null ? undefined : [attemptId],
+    planKey: rerun === null ? undefined : [rerun.attemptId],
     planReadable:
-      attemptId === null ||
-      (status.data !== null && moveAwaitsConsent(status.data)),
+      rerun === null || (status !== null && moveAwaitsConsent(status)),
     // Asked only of a stopped move, so any read after it that neither waits
     // for the person nor has stopped is the move going on, or already done.
     resumed:
-      attemptId !== null &&
-      status.data !== null &&
-      !moveAwaitsConsent(status.data) &&
-      !moveHasStopped(status.data),
-    stopped: retryable && status.data !== null && moveHasStopped(status.data),
+      rerun !== null &&
+      status !== null &&
+      !moveAwaitsConsent(status) &&
+      !moveHasStopped(status),
+    stoppedAgain: stoppedAgainRefusal(rerun, status, statusRead.dataUpdatedAt),
+    stopped: retryable && status !== null && moveHasStopped(status),
     pending: retry.isPending,
-    rerun: (started) => {
+    rerun: (refusal, started) => {
       retry.mutate(
         {},
         {
           onSuccess: (answer) => {
             started();
-            setAttemptId(answer.attemptId);
+            setRerun({
+              attemptId: answer.attemptId,
+              refusal,
+              answeredAt: Date.now(),
+            });
           },
         },
       );

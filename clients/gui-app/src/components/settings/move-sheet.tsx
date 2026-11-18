@@ -34,7 +34,6 @@ import { dataHandlingNoticeText } from "@/components/settings/members/data-handl
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { moveRowLabel } from "@/components/settings/personal/personal-page-status";
 import { useMoveRerun } from "@/components/settings/move/use-move-rerun";
-import type { PersonalForMove } from "@traycer-clients/shared/environment/personal-for-move";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -135,12 +134,11 @@ function MoveSheetBody(props: {
       personal: personalItems,
     },
     options: {
-      enabled: planAsked(
-        supported,
-        personal.environmentId,
-        personalRead.data,
+      enabled:
+        supported === true &&
+        personal.environmentId !== null &&
+        personalRead.data !== undefined &&
         rerun.planReadable,
-      ),
       refetchOnWindowFocus: false,
     },
   });
@@ -206,9 +204,11 @@ function MoveSheetBody(props: {
   // A plan refused for want of Personal is asked again only with Personal
   // read again: rows read now give the plan a new request, which it reads by
   // itself; a read that fails again asks the same plan again.
+  // A re-run that stopped again before asking is the refused plan it came from.
+  const refusal = plan.isError ? plan.error.message : rerun.stoppedAgain;
   const retryPlan = (): void => {
-    if (rerun.stopped) {
-      rerun.rerun(() => {
+    if (rerun.stopped && refusal !== null) {
+      rerun.rerun(refusal, () => {
         setChoices(new Map());
         setNotAwaiting(false);
       });
@@ -231,7 +231,7 @@ function MoveSheetBody(props: {
   const shownPlan = planOnceReachKnown(
     runningPersonal,
     plan.data,
-    plan.isError,
+    refusal !== null,
   );
   const environmentId = personal.environmentId;
   const versionDiffers = disclosureDiffers(shownPlan);
@@ -259,27 +259,20 @@ function MoveSheetBody(props: {
             {needsUpdateSubtitle(target.hostName)}
           </p>
         ) : null}
-        {plan.isError ? (
-          <div
-            role="status"
-            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
-          >
-            <span className="min-w-0">{plan.error.message}</span>
-            <PlanRetryButton pending={rerun.pending} onRetry={retryPlan} />
-          </div>
-        ) : null}
+        <PlanRefusedLine
+          refusal={refusal}
+          pending={rerun.pending}
+          onRetry={retryPlan}
+        />
         <HostListReadFailed running={runningPersonal} />
-        {supported === true &&
-        shownPlan === null &&
-        runningPersonal.state !== "failed" &&
-        !plan.isError ? (
-          <AgentSpinningDots
-            className={undefined}
-            testId="move-sheet-loading"
-            variant={undefined}
-            tone="muted"
-          />
-        ) : null}
+        <PlanLoading
+          shown={
+            supported === true &&
+            shownPlan === null &&
+            runningPersonal.state !== "failed" &&
+            refusal === null
+          }
+        />
         {planChanged ? (
           <p
             role="status"
@@ -384,17 +377,33 @@ function planOnceReachKnown(
     : null;
 }
 
-function planAsked(
-  supported: boolean | null,
-  environmentId: string | null,
-  personal: PersonalForMove | null | undefined,
-  readable: boolean,
-): boolean {
+/** A refused plan's line and its Retry. */
+function PlanRefusedLine(props: {
+  readonly refusal: string | null;
+  readonly pending: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  if (props.refusal === null) return null;
   return (
-    supported === true &&
-    environmentId !== null &&
-    personal !== undefined &&
-    readable
+    <div
+      role="status"
+      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
+    >
+      <span className="min-w-0">{props.refusal}</span>
+      <PlanRetryButton pending={props.pending} onRetry={props.onRetry} />
+    </div>
+  );
+}
+
+function PlanLoading(props: { readonly shown: boolean }): ReactNode {
+  if (!props.shown) return null;
+  return (
+    <AgentSpinningDots
+      className={undefined}
+      testId="move-sheet-loading"
+      variant={undefined}
+      tone="muted"
+    />
   );
 }
 
