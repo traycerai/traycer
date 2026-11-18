@@ -1724,9 +1724,13 @@ const providerProfileProjectionSchemaV1010 = lazySchema(() =>
 );
 
 /**
- * A future row is one disabled, explained row, never a lost inventory. The four 10.11
- * keys live only here, so mutation echoes and released lines never carry them; each
- * falls back at its own field.
+ * Read projection: a future row is one disabled, explained row, never a lost
+ * inventory.
+ *
+ * The four 10.11 keys live here and nowhere else: not on `providerProfileSchema`,
+ * which every provider-state response shares, so the mutation echoes and the
+ * released lines never carry them. Each falls back at its own field, so an
+ * unknown value costs that key, not the row.
  */
 export const providerProfileProjectionSchema = lazySchema(() =>
   providerProfileProjectionObjectSchemaV1010
@@ -3822,7 +3826,11 @@ export type ProvidersSetEnabledRequestV22 = z.infer<
   typeof providersSetEnabledRequestSchemaV22
 >;
 
-// No released `providers.setEnabled@2.2` carries a `mode`: one that did was withdrawn.
+// A `providers.setEnabled@2.2` was once opened to carry an optional tri-state
+// `mode` for a three-way Auto/On/Off settings control, and withdrawn before
+// any release; no released baseline carries it. `enabled` - a required
+// boolean since 2.0 - stays the whole enable request. The 2.2 above adds
+// only the environment profile a rename or recolor is for.
 
 export const providersSetApiKeyRequestSchema = lazySchema(() =>
   z.object({

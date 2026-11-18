@@ -45,9 +45,10 @@ export interface SessionDoorObserver {
 /**
  * Authentication plug for a relay client session.
  *
- * A client presents its host-only token through the reserved `authz` slot, and a
- * host-side dialer a grant. The attach grant is supplied because host-principal
- * deployments may deliberately reuse it as the in-channel proof.
+ * Browser clients can present their user bearer with `authz: null`; a host-side
+ * dialer can instead present a grant through the reserved `authz` slot without
+ * importing any client bearer machinery. The attach grant is supplied because
+ * host-principal deployments may deliberately reuse it as the in-channel proof.
  */
 export interface RemoteSessionAuth extends SessionCredentialPlane {
   readonly readOpenAuth: (
@@ -66,7 +67,7 @@ export interface PoolSessionOpenAuth {
  * Authentication plug for a session to the server pool.
  *
  * It has no `authz` to give, by construction: the reserved slot carries a
- * host-only token or grant, and the pool is trusted
+ * session grant for an untrusted sandbox, and the pool is trusted
  * infrastructure whose authority IS the viewer's bearer. A pool `open` always
  * writes `authz: null`.
  */

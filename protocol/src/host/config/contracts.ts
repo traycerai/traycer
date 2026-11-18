@@ -462,9 +462,19 @@ export const configEnvSetUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// A 1.1 caller's request is upgraded with `not_stated`. A 1.0 `config.shell.get`
-// host has no remembered arguments, so the app states `defaultShellArgs(path)` and
-// a difference waits in the review list.
+// ── v1.2 (`config.shell.get` v1.1): the item a shell save becomes ───────────
+//
+// A save made in a host's settings is proposed to the host's environment, and
+// the app recognises its own hold by the item it states it expects
+// (`selection`, read by `settingsSaveItemEdit`). `config.shell.get@1.1` gives
+// the app the remembered arguments it needs to state it.
+//
+// A 1.1 caller states no selection, so its request is upgraded with
+// `not_stated`; a 1.2 request to a 1.1 host is re-parsed onto the 1.1
+// request, whose non-strict object strips the key. A 1.0 `config.shell.get`
+// host answers with no remembered arguments, so the app falls back to
+// `defaultShellArgs(path)`; when that differs from what the host computes,
+// the change waits in the review list.
 
 const NOT_STATED = { kind: "not_stated" } as const;
 

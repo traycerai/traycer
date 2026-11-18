@@ -13,14 +13,17 @@ import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
  * optional manifest and the GUI meets `E_HOST_UNSUPPORTED`. Shapes:
  * `environment-schemas.ts`.
  *
- * No method here carries an executable-write grant.
+ * Which carry the executable-write grant: `config.env.localOverride.set`,
+ * `environment.agentDefinitions.put`, `environment.setup.put` and
+ * `environment.undo`, the writes that reach an execution sink.
+ * `environment.setup.retry` reruns content already authorised, and Review's
+ * Apply goes through the dashboard, so neither takes one here.
  *
  * `@1.1` MINORs, each with its upgrade from `@1.0`: every
  * `environment.secrets.*` request names the environment it addresses (null
  * for the host's own) and `versions` answers a secret's removal;
  * `environment.status` answers the move's consent and planes;
- * `environment.review` answers the retrospective sheet's record. Each is a
- * MINOR because every addition is additive and an
+ * `environment.review` answers the retrospective sheet's record. Each is a MINOR because every addition is additive and an
  * older peer is served directly: both lines HAVE shipped - `cli-v1.5.2` and
  * `cli-v1.5.3` carry them - so a removal here would need a MAJOR, which is
  * why the fields those releases require are filled from

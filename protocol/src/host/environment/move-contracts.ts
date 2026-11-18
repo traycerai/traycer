@@ -624,7 +624,12 @@ export const environmentMoveStopPreviewUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-/** Two folders of one account stay separate entries; credential kind decides whether sign-in is offered. */
+/**
+ * One Personal folder retained at leave. Its own id may be a visible row's
+ * id or an alias in the providers list; two folders of one account stay
+ * separate entries. Credential kind determines whether sign-in is offered,
+ * which cannot be inferred from that list's row status.
+ */
 export const environmentMovePersonalProfileSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,

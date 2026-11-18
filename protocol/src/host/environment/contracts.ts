@@ -551,6 +551,7 @@ export const environmentMembersV10 = defineRpcContract({
   responseSchema: environmentMembersResponseSchema,
 });
 
+/** A team member's role. */
 export const environmentMemberRoleSchema = lazySchema(() =>
   z.enum(["admin", "editor", "viewer"]),
 );

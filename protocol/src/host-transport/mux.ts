@@ -218,8 +218,8 @@ export interface EncodeMuxFrameInput {
 /**
  * `OPEN.authz.v` values. `1`: a host-agent attach grant (a host dialing another
  * of its owner's hosts; `bearer` is empty). `2`: a session grant minted beside
- * a client attach grant; `bearer` is empty, so no user credential reaches the
- * host.
+ * a client attach grant for a `kind: sandbox` target; `bearer` is empty, so no
+ * user credential reaches the sandbox.
  */
 export const OPEN_AUTHZ_HOST_AGENT_GRANT_VERSION = 1;
 export const OPEN_AUTHZ_SESSION_GRANT_VERSION = 2;
