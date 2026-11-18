@@ -220,9 +220,15 @@ export function sectionSegmentsOf(
 /**
  * How many tasks a section lists: a split pair once, as it is one row, and a
  * task with no row once. Every count of a section in the sidebar is this one.
+ * Needs you counts the tasks waiting on the person, not a row only held there.
  */
 export function sectionTaskCount(group: StripSectionGroup): number {
-  return group.entries.length;
+  if (group.section !== "needs-you") return group.entries.length;
+  return group.entries.filter(
+    (entry) =>
+      entry.kind === "prompt" ||
+      entry.members.some((member) => member.row.section === "needs-you"),
+  ).length;
 }
 
 /** How many tasks need the person: the Needs you section's count, 0 without one. */
