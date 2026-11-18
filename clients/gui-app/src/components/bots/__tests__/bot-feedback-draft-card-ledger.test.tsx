@@ -340,6 +340,7 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
       await until(() =>
         expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull(),
       );
+      await untilIdle(queryClient);
 
       expect(decideCalls).toHaveLength(1);
     },
