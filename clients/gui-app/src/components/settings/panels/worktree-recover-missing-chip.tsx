@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { resolveAutoCleanupGate } from "@/components/settings/panels/worktree-auto-cleanup-gate";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
@@ -48,13 +50,15 @@ const RECOVER_OPTIONS: ReadonlyArray<{
  * whose bound worktree or folder is gone, beside the host's other two worktree
  * policies.
  *
- * Renders nothing on a host that has not negotiated the setting: such a host
- * refuses those runs whatever a control here said.
+ * Renders nothing unless the host is reachable and has negotiated the
+ * setting: an older host refuses those runs whatever a control here said.
  */
 export function WorktreeRecoverMissingChip(props: {
   readonly scope: HostScope;
 }): ReactNode {
   const { scope } = props;
+  const hostId = scope.hostId;
+  const reachability = useHostReachability(hostId ?? "");
   const getVersion = useHostNegotiatedMethodVersion(
     scope.client,
     WORKTREES_GET,
@@ -63,19 +67,26 @@ export function WorktreeRecoverMissingChip(props: {
     scope.client,
     WORKTREES_SET,
   );
-  if (
-    scope.hostId === null ||
-    !isHostScopeUsable(scope.status) ||
-    !hostNegotiatedAtLeast(getVersion, 1) ||
-    !hostNegotiatedAtLeast(setVersion, 1)
-  ) {
-    return null;
-  }
+  // The neighbouring chips' gate ladder: a host seen on 1.1 keeps its
+  // negotiated versions while offline or starting, and reading the setting
+  // then would report the failure as a broken config file.
+  const gate = resolveAutoCleanupGate({
+    hostId,
+    scopeUsable: isHostScopeUsable(scope.status),
+    reachabilityStatus: reachability.status,
+    hasClient: scope.client !== null,
+    supported:
+      getVersion === null || setVersion === null
+        ? null
+        : hostNegotiatedAtLeast(getVersion, 1) &&
+          hostNegotiatedAtLeast(setVersion, 1),
+  });
+  if (gate !== "ready" || hostId === null) return null;
   // Keyed by host, like its neighbours: a switch between two usable hosts must
   // not carry an open menu across.
   return (
     <RecoverMissingChip
-      key={scope.hostId}
+      key={hostId}
       client={scope.client}
       hostLabel={scope.hostLabel}
     />

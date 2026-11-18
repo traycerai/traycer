@@ -30,6 +30,22 @@ const negotiated = vi.hoisted(
   }),
 );
 
+const reachability = vi.hoisted(
+  (): { status: "reachable" | "offline" | "host-starting" } => ({
+    status: "reachable",
+  }),
+);
+
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
+  useHostReachability: () => ({
+    status: reachability.status,
+    hostLabel: "Host A",
+  }),
+}));
+
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersion: (_client: unknown, method: string) =>
     method === "config.worktrees.set" ? negotiated.set : negotiated.get,
@@ -46,6 +62,7 @@ function createHarness(initial: boolean) {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   let stored = initial;
+  let gets = 0;
   const sets: ConfigWorktreesSetRequest[] = [];
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -56,10 +73,10 @@ function createHarness(initial: boolean) {
       registry: hostRpcRegistry,
       requestId: () => `req-${Math.random().toString(36).slice(2)}`,
       handlers: {
-        "config.worktrees.get": () => ({
-          agentCreate: "allow",
-          recoverMissing: stored,
-        }),
+        "config.worktrees.get": () => {
+          gets += 1;
+          return { agentCreate: "allow", recoverMissing: stored };
+        },
         "config.worktrees.set": (params) => {
           sets.push(params);
           if (params.recoverMissing !== null) stored = params.recoverMissing;
@@ -86,10 +103,11 @@ function createHarness(initial: boolean) {
     />,
     { wrapper: Wrapper },
   );
-  return { sets: () => sets };
+  return { sets: () => sets, gets: () => gets };
 }
 
 beforeEach(() => {
+  reachability.status = "reachable";
   negotiated.get = { major: 1, minor: 1 };
   negotiated.set = { major: 1, minor: 1 };
 });
@@ -110,6 +128,19 @@ describe("WorktreeRecoverMissingChip", () => {
     negotiated.set = { major: 1, minor: 0 };
     createHarness(true);
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  // A host seen on 1.1 keeps its negotiated versions while it is offline or
+  // starting; reading the setting then would report the failure as a broken
+  // config file.
+  it("renders nothing and reads nothing while a 1.1 host is offline or starting", () => {
+    for (const status of ["offline", "host-starting"] as const) {
+      reachability.status = status;
+      const harness = createHarness(true);
+      expect(screen.queryByRole("button")).toBeNull();
+      expect(harness.gets()).toBe(0);
+      cleanup();
+    }
   });
 
   it("states Recover when the host answers recoverMissing true", async () => {
