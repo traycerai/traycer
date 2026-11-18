@@ -654,6 +654,27 @@ describe("provider API-key change Settings flow", () => {
     ).toBe(true);
   });
 
+  it("answers a broker refusal with the established permission copy and settles nothing", async () => {
+    const rig = makeRig("installed", null, null);
+    teamProviderKeyHttpBoundary.status = 403;
+    mocks.mobileApp = false;
+    renderSettings(false, ENVIRONMENT_ID, "Personal");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        mocks.toastError.mock.calls.some(
+          ([shown]) => shown === "You don't have permission to do that.",
+        ),
+      ).toBe(true),
+    );
+    expect(apiKeyDraft()).toBe(API_KEY);
+    expect(hasProviderKeyRequest("set", true)).toBe(true);
+    expect(hostMethodCalls(rig, "providers.settleApiKeyChange")).toBe(0);
+    expect(hostMethodCalls(rig, "providers.setApiKey")).toBe(0);
+  });
+
   it("keeps the draft on environment drift and invalidates the host list and status", async () => {
     const rig = makeRig("installed", null, null);
     const queryClient = renderSettings(false, EXPECTED_ENVIRONMENT_ID, "Team");
