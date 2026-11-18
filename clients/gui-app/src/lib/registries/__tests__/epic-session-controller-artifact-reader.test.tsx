@@ -4,7 +4,8 @@
  * epic join one charged entry.
  */
 import { QueryClient } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { act } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getEpicSessionController,
@@ -40,6 +41,8 @@ import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
 import { useAuthStore, type AuthState } from "@/stores/auth/auth-store";
 import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
+import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { DEFAULT_MAX_LIVE_EPICS } from "@/stores/replica-memory/budget-limits";
 
 let previousWorkerFactory: (() => RuntimeWorkerLike) | null;
@@ -70,6 +73,8 @@ function openShownTab(tabId: string, epicId: string): void {
 
 const queryClient = new QueryClient();
 const NO_HANDLERS = {};
+/** While false, the directory no longer resolves any host's client. */
+let hostClientsResolve = true;
 const quietStream: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
   awareness: () => undefined,
@@ -86,13 +91,16 @@ beforeEach(() => {
   __resetEpicParkingForTests();
   __setAgentActivityPlaneAnsweringForTests();
   resetFakeDurableStreamTransports();
+  hostClientsResolve = true;
   const resolveHostClient = (hostId: string) =>
-    createTestHostClient(
-      hostId,
-      AUTHENTICATED_USER_FIXTURE_ID,
-      queryClient,
-      NO_HANDLERS,
-    );
+    hostClientsResolve
+      ? createTestHostClient(
+          hostId,
+          AUTHENTICATED_USER_FIXTURE_ID,
+          queryClient,
+          NO_HANDLERS,
+        )
+      : null;
   installTestEpicSessionEnvironment({
     ...defaultTestEpicSessionEnvironment(),
     resolveHostClient,
@@ -128,6 +136,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const detach of detaches.splice(0)) detach();
   for (const token of held.splice(0)) token.release();
   __resetAgentActivityStoreForTests();
@@ -225,6 +234,73 @@ describe("a construction that fails", () => {
     const token = reader("host-a", "epic-1", "row-1");
 
     expect(token.read().kind).toBe("failed");
+  });
+});
+
+/** One reconcile pass over every entry: unrelated churn the controller listens to. */
+function reconcile(): void {
+  act(() => {
+    useEpicCanvasStore.setState((state) => ({ ...state }));
+    setTestEffectiveHost("host-a", true);
+  });
+}
+
+describe("a ready reader whose host client stops resolving", () => {
+  it("goes back to acquiring on the next pass, and is ready again with a new generation once the client resolves", async () => {
+    const token = reader("host-a", "epic-1", "row-1");
+    await waitForKind(token, "ready");
+    const first = token.read();
+
+    hostClientsResolve = false;
+    reconcile();
+
+    // Attached, not revoked or refused, and no longer the old ready.
+    const gap = token.read();
+    expect(gap.kind).toBe("acquiring");
+    expect(gap.generation).toBeGreaterThan(first.generation);
+
+    hostClientsResolve = true;
+    reconcile();
+
+    await waitForKind(token, "ready");
+    expect(token.read().generation).toBeGreaterThan(gap.generation);
+  });
+
+  it("fails at the establishing deadline when the client never returns, and Retry attaches again", async () => {
+    const token = reader("host-a", "epic-1", "row-1");
+    await waitForKind(token, "ready");
+    vi.useFakeTimers();
+    hostClientsResolve = false;
+    reconcile();
+    expect(token.read().kind).toBe("acquiring");
+
+    vi.advanceTimersByTime(ESTABLISHING_DEADLINE_MS - 1);
+
+    expect(token.read().kind).toBe("acquiring");
+
+    vi.advanceTimersByTime(1);
+
+    expect(token.read().kind).toBe("failed");
+
+    token.retry();
+
+    expect(token.read().kind).toBe("acquiring");
+  });
+
+  it("leaves no deadline behind when the client returns in time (control)", async () => {
+    const token = reader("host-a", "epic-1", "row-1");
+    await waitForKind(token, "ready");
+    vi.useFakeTimers();
+    hostClientsResolve = false;
+    reconcile();
+    expect(token.read().kind).toBe("acquiring");
+    hostClientsResolve = true;
+    reconcile();
+    await waitForKind(token, "ready");
+
+    vi.advanceTimersByTime(ESTABLISHING_DEADLINE_MS * 2);
+
+    expect(token.read().kind).toBe("ready");
   });
 });
 

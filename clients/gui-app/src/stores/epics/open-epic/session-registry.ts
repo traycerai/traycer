@@ -249,7 +249,11 @@ interface EpicRegistrySession {
    * A reader's own acquisition built this session and no tab has joined it.
    * It holds no tab to return to and no chat of its own, so once its last
    * reader leaves only the data-loss guards keep it: the activity arms do not
-   * apply. Cleared for good when a tab joins.
+   * apply. Cleared for good when a tab joins. A reader-only entry is pinned
+   * to its card's host and never re-points, so no re-point replaces a handle
+   * that carries it ("a reader-only entry is pinned to its card's host and
+   * never re-points when the window's host moves", in
+   * `artifact-reader-card-bound.test.tsx`).
    */
   readerBuilt: boolean;
   /**

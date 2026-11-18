@@ -461,6 +461,8 @@ interface ArtifactReaderDemand {
   entry: ControllerEntry | null;
   /** An authority probe is in flight; a second Retry does not issue another. */
   probing: boolean;
+  /** Ends a host-client gap that never closes (see `syncReaderSnapshots`). */
+  clientGapDeadline: number | null;
 }
 
 /**
@@ -715,7 +717,32 @@ function createEpicSessionController(): EpicSessionController {
    * back its mount unit: the release can prune and notify synchronously, and
    * that notification must find nothing here left to act on.
    */
+  function cancelClientGap(reader: ArtifactReaderDemand): void {
+    if (reader.clientGapDeadline === null) return;
+    window.clearTimeout(reader.clientGapDeadline);
+    reader.clientGapDeadline = null;
+  }
+
+  /**
+   * The directory stopped resolving the session's host: nothing reads through
+   * the dropped requester. The reader steps back to `acquiring`, attached, and
+   * comes back with a fresh generation when the client resolves again, or
+   * fails at the establishing deadline so Retry can ask again.
+   */
+  function stepBackForClientGap(reader: ArtifactReaderDemand): void {
+    setReaderSnapshot(reader, {
+      kind: "acquiring",
+      generation: ++readerGeneration,
+    });
+    cancelClientGap(reader);
+    reader.clientGapDeadline = window.setTimeout(() => {
+      reader.clientGapDeadline = null;
+      if (reader.snapshot.kind === "acquiring") retireReader(reader, "failed");
+    }, ESTABLISHING_DEADLINE_MS);
+  }
+
   function detachReader(reader: ArtifactReaderDemand): void {
+    cancelClientGap(reader);
     const entry = reader.entry;
     reader.entry = null;
     if (entry === null) return;
@@ -986,7 +1013,12 @@ function createEpicSessionController(): EpicSessionController {
       }
       const handle = entry.published;
       const client = entry.sessionHostClient;
-      if (handle === null || client === null) continue;
+      if (handle === null) continue;
+      if (client === null) {
+        if (reader.snapshot.kind === "ready") stepBackForClientGap(reader);
+        continue;
+      }
+      cancelClientGap(reader);
       if (
         handle.hostId !== reader.key.hostId ||
         client.getRequestContextUserId() !== readUserId()
@@ -1086,6 +1118,7 @@ function createEpicSessionController(): EpicSessionController {
         entry: null,
         snapshot: { kind: "reserved", generation: ++readerGeneration },
         probing: false,
+        clientGapDeadline: null,
       };
       readers.set(mapKey, reader);
       attachReader(reader);
@@ -2441,7 +2474,8 @@ function createEpicSessionController(): EpicSessionController {
     const unsubscribeStore = warm.store.subscribe(wake);
     const unsubscribeRows = subscribeAnyHostRowChanged(wake);
     // An owner that never proves itself fails rather than admits, within the
-    // bound the re-point arm gives a candidate; Retry asks again.
+    // bound the re-point arm gives a candidate. The run stays subscribed, so a
+    // later owner reading or host move asks again.
     const deadline = window.setTimeout(() => {
       if (run.cancelled) return;
       retireEntryReaders(entry, "failed");

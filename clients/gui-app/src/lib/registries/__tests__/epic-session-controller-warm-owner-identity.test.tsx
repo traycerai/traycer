@@ -9,7 +9,7 @@
  * identity includes the host's public key: the same host id under a different
  * key is a key rotation.
  */
-import { waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tanstack/react-router", () => ({
@@ -169,6 +169,38 @@ describe("a warm handle on a remote host", () => {
     token.retry();
 
     expect(token.read().kind).toBe("acquiring");
+    expect(seen.constructions).toBe(constructionsBefore);
+  });
+
+  it("is admitted by the next run once its owner can be read, with no Retry, after the deadline had failed it", () => {
+    seen.remotePublicKey = "key-before";
+    const handle = warmHandleOf("row-1");
+    seen.clientUser = null;
+    const constructionsBefore = seen.constructions;
+    vi.useFakeTimers();
+    openShownTaskTab();
+    const controller = getEpicSessionController();
+    expect(controller.readEntryStatusForTests(EPIC_ID)?.presentation.kind).toBe(
+      "establishing",
+    );
+
+    vi.advanceTimersByTime(ESTABLISHING_DEADLINE_MS);
+
+    expect(controller.readEntryStatusForTests(EPIC_ID)?.presentation.kind).toBe(
+      "failed",
+    );
+
+    // The host now supplies its owner, and the warm store's next update wakes
+    // the waiting run: the run, not a Retry, admits the handle.
+    seen.clientUser = "user-fixture-1";
+    act(() => {
+      handle.store.setState((state) => ({ ...state }));
+    });
+
+    const status = controller.readEntryStatusForTests(EPIC_ID);
+    expect(status?.presentation.kind).toBe("ready");
+    expect(status?.hasSession).toBe(true);
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(handle);
     expect(seen.constructions).toBe(constructionsBefore);
   });
 });

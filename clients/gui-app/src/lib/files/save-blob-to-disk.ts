@@ -180,7 +180,8 @@ function buildSaveFilePickerTypes(
  * Persist a Blob, picking the best mechanism for the current runtime:
  *   1. A shell with a native save capability (`IRunnerHost.fileSave`) →
  *      Traycer Desktop's save dialog, the phone's share sheet.
- *   2. Browsers with the File System Access API → `showSaveFilePicker`.
+ *   2. Browsers with the File System Access API → `showSaveFilePicker`, for
+ *      a save that cannot retire (no `beforeSave`).
  *   3. Everything else (and recoverable FSA write failures) → `<a download>`.
  * Returns the saved file (name always; path where the mechanism reports one),
  * or `null` when the user dismissed the picker.
@@ -215,18 +216,19 @@ export async function saveBlobToDisk(
     return saved;
   }
 
-  if (typeof window.showSaveFilePicker === "function") {
+  // The picker empties a chosen existing file before it returns (File System
+  // Access: "the existing file is cleared"), so a save that can still retire
+  // never reaches it: the anchor download below writes nothing once the
+  // source is gone and never touches an existing file.
+  if (beforeSave === null && typeof window.showSaveFilePicker === "function") {
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName,
         types: buildSaveFilePickerTypes(blob, suggestedName),
       });
-      beforeSave?.();
       const writable = await handle.createWritable();
       try {
-        beforeSave?.();
         await writable.write(blob);
-        beforeSave?.();
         await writable.close();
       } catch (error) {
         // Cleanup must not replace the write or cancellation failure.

@@ -30,20 +30,26 @@ vi.mock(
   }),
 );
 
-import type { RenderResult } from "@testing-library/react";
-import { openTestEpicTab } from "@/lib/registries/test-support/epic-session-controller-test-support";
+import { act, waitFor, type RenderResult } from "@testing-library/react";
+import {
+  openTestEpicTab,
+  setTestEffectiveHost,
+} from "@/lib/registries/test-support/epic-session-controller-test-support";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   EPIC_ID,
+  HOST_ID,
   deliverSnapshot,
   deliverSnapshotTo,
   detachTaskSurfaces,
   installReaderCardHarness,
   intersectIn,
+  lastToken,
   openShownTabs,
   openShownTaskTab,
   presentCardOn,
   registry,
+  seen,
 } from "@/components/bots/__tests__/artifact-reader-card-harness-support";
 import {
   __resetAgentActivityStoreForTests,
@@ -51,6 +57,7 @@ import {
   agentActivityPlaneAnswers,
   agentActivityPlaneReportsEpicTurn,
 } from "@/stores/agent-activity-store";
+import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
 import { DEFAULT_MAX_LIVE_EPICS } from "@/stores/replica-memory/budget-limits";
 
 installReaderCardHarness();
@@ -279,6 +286,65 @@ describe("a hidden tab joining a warm, demand-free session", () => {
 
     expect(acquired).not.toHaveBeenCalled();
     expect(released).not.toHaveBeenCalled();
+    expect(registry().isEligibleForCapEviction(EPIC_ID)).toBe(true);
+  });
+});
+
+describe("a session a tab holds, then re-pointed to another host", () => {
+  it("keeps the activity arm after the tab and the card both let go", async () => {
+    planeReportingTurnsOn([EPIC_ID]);
+    // A tab builds the session and a card joins it: the arms apply to it.
+    openShownTaskTab();
+    const card = await presentCardOn(EPIC_ID, "row-1");
+    deliverSnapshotTo(EPIC_ID);
+    const joined = registry().peek(EPIC_ID);
+    expect(seen.constructions).toBe(1);
+
+    // The window's host moves and the tab's session re-points: the candidate
+    // on the new host loads and replaces the joined one.
+    act(() => setTestEffectiveHost("host-b", true));
+    await waitFor(() => expect(seen.constructions).toBe(2));
+    deliverSnapshotTo(EPIC_ID);
+    await waitFor(() =>
+      expect(registry().peek(EPIC_ID)?.hostId).toBe("host-b"),
+    );
+    expect(registry().peek(EPIC_ID)).not.toBe(joined);
+
+    detachTaskSurfaces();
+    intersectIn(card.container, false);
+
+    expect(registry().hasReaderDemand(EPIC_ID)).toBe(false);
+    expect(registry().peek(EPIC_ID)).not.toBeNull();
+    expect(registry().isEligibleForCapEviction(EPIC_ID)).toBe(false);
+  });
+});
+
+describe("a reader-only entry", () => {
+  it("is pinned to its card's host and never re-points when the window's host moves", async () => {
+    planeReportingTurnsOn([EPIC_ID]);
+    const card = await presentCardOn(EPIC_ID, "row-1");
+    deliverSnapshotTo(EPIC_ID);
+    const token = lastToken();
+    await waitFor(() => expect(token.read().kind).toBe("ready"));
+    const handle = registry().peek(EPIC_ID);
+    const constructionsBefore = seen.constructions;
+
+    act(() => setTestEffectiveHost("host-b", true));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Nothing was built for the new host; the entry still serves the card's.
+    expect(seen.constructions).toBe(constructionsBefore);
+    expect(
+      getEpicSessionController().readEntryStatusForTests(EPIC_ID)?.presentation,
+    ).toMatchObject({ kind: "ready", targetHostId: HOST_ID });
+    expect(token.read().kind).toBe("ready");
+    expect(registry().peek(EPIC_ID)).toBe(handle);
+
+    // Still the reader-built session the bound applies to: under a reported
+    // turn the cap may take it the moment the card lets go.
+    intersectIn(card.container, false);
     expect(registry().isEligibleForCapEviction(EPIC_ID)).toBe(true);
   });
 });
