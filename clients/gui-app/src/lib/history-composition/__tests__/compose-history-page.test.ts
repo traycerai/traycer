@@ -290,6 +290,47 @@ describe("composeHistoryPage", () => {
     expect(ids(composed)).toEqual(["p", "n", "b", "a"]);
   });
 
+  it("orders the created-desc view pinned first, then createdAt, ignoring activity", () => {
+    const created = (
+      id: string,
+      createdAt: number,
+      pinned: boolean | undefined,
+    ): ListTaskLight => {
+      const base = row(id, {
+        role: "owner",
+        updatedAt: 1,
+        recentAt: undefined,
+        pinned,
+      });
+      const epic = base.epic;
+      if (epic === undefined || epic === null || !epic.light) {
+        throw new Error("no light");
+      }
+      return {
+        ...base,
+        epic: { ...epic, light: { ...epic.light, createdAt } },
+      };
+    };
+    // The oldest-created pool row has the newest activity: creation decides.
+    const active = {
+      ...created("active", 10, undefined),
+      recentAt: 900,
+    };
+
+    const composed = composeHistoryPage({
+      page: pageOf([created("pinned", 5, true), active], {}),
+      contribution: readOf({
+        localHomeRows: [created("local-new", 100, undefined)],
+        localRows: "present",
+      }),
+      sort: "created-desc",
+      query: undefined,
+      placement: "admit",
+    });
+
+    expect(ids(composed)).toEqual(["pinned", "local-new", "active"]);
+  });
+
   it("leaves rows where composed when the sort is not recent", () => {
     const composed = composeHistoryPage({
       page: pageOf([plain("a", 1)], {}),

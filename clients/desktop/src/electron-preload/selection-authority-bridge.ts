@@ -42,6 +42,7 @@ import {
   RunnerHostSync,
   SelectionAuthorityChannels,
 } from "../ipc-contracts/ipc-channels";
+import type { FleetRefreshOutcome } from "../ipc-contracts/selection-authority-ipc";
 import { readSyncNumber } from "./sync-bootstrap";
 
 /** No issued generation: main declined the sync read (unknown sender). */
@@ -85,11 +86,24 @@ function subscribeParsed<T>(
  * that only exists where the authority runs in another process. A shell whose
  * authority is in-window refreshes its own directory and needs no channel.
  */
-export function buildSelectionFleetRefresh(): () => Promise<void> {
+export function buildSelectionFleetRefresh(): () => Promise<FleetRefreshOutcome> {
+  // Never rejects, per the shell contract: a failed invoke (main gone, the
+  // window closing) and an answer this preload cannot read are both a read
+  // that published nothing.
   return () =>
-    ipcRenderer.invoke(
-      SelectionAuthorityChannels.invoke.refreshFleet,
-    ) as Promise<void>;
+    ipcRenderer
+      .invoke(SelectionAuthorityChannels.invoke.refreshFleet)
+      .then(readFleetRefreshOutcome, (): FleetRefreshOutcome => UNAVAILABLE);
+}
+
+const UNAVAILABLE: FleetRefreshOutcome = { kind: "unavailable" };
+
+function readFleetRefreshOutcome(value: unknown): FleetRefreshOutcome {
+  if (typeof value === "object" && value !== null && "kind" in value) {
+    const kind = value.kind;
+    if (kind === "published" || kind === "superseded") return { kind };
+  }
+  return UNAVAILABLE;
 }
 
 function createIpcTransport(): SelectionAuthorityClientTransport {

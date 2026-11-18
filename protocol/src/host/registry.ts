@@ -29,6 +29,7 @@ import {
   chatSubscribeV142,
   chatSubscribeV143,
   chatSubscribeV144,
+  chatSubscribeV145,
 } from "./agent/gui/subscribe";
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
 import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
@@ -50,7 +51,9 @@ import {
   organizationCommandV10,
   organizationHistoryV10,
   organizationHistoryV11,
+  organizationHistoryV12,
   organizationHistoryUpgradeV10ToV11,
+  organizationHistoryUpgradeV11ToV12,
   organizationSubscribeV10,
   organizationSubscribeV11,
 } from "./organization/contracts";
@@ -674,7 +677,9 @@ import {
 import {
   hostAgentCreateFromRemoteSenderV10,
   hostAgentCreateFromRemoteSenderV11,
+  hostAgentCreateFromRemoteSenderV12,
   hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
+  hostAgentCreateFromRemoteSenderUpgradeV11ToV12,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
@@ -982,6 +987,7 @@ import {
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
+  epicGetChatTitleV10,
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
@@ -992,6 +998,7 @@ import {
   epicListTasksV17,
   epicListTasksV18,
   epicListTasksV19,
+  epicListTasksV110,
   epicListTasksUpgradeV10ToV11,
   epicListTasksUpgradeV11ToV12,
   epicListTasksUpgradeV12ToV13,
@@ -1001,6 +1008,7 @@ import {
   epicListTasksUpgradeV16ToV17,
   epicListTasksUpgradeV17ToV18,
   epicListTasksUpgradeV18ToV19,
+  epicListTasksUpgradeV19ToV110,
   epicMentionArtifactsV10,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
@@ -1192,7 +1200,9 @@ import {
   simulatorScreenshotV10,
   simulatorSetKeepRunningV10,
   simulatorShutdownV10,
+  simulatorStatusUpgradeV10ToV11,
   simulatorStatusV10,
+  simulatorStatusV11,
 } from "@traycer/protocol/host/simulator/contracts";
 import {
   simulatorActionV10,
@@ -1261,7 +1271,6 @@ import {
   hostNotificationsClearAllUpgradeV10ToV11,
   hostNotificationsClearAllV11,
   hostNotificationsGetConfig,
-  hostNotificationsGetLongTurnAlert,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateUpgradeV11ToV12,
   hostNotificationsIndicatorStateV10,
@@ -1289,7 +1298,6 @@ import {
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
-  hostNotificationsSetLongTurnAlert,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
@@ -6482,7 +6490,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "organization.history": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: organizationHistoryV10,
@@ -6491,6 +6499,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: organizationHistoryV11,
           upgradeFromPreviousVersion: organizationHistoryUpgradeV10ToV11,
+        },
+        2: {
+          contract: organizationHistoryV12,
+          upgradeFromPreviousVersion: organizationHistoryUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -7121,11 +7133,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "simulator.status": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorStatusV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: simulatorStatusV11,
+          upgradeFromPreviousVersion: simulatorStatusUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7822,32 +7838,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: hostNotificationsSetConfig,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.notifications.getLongTurnAlert": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsGetLongTurnAlert,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.notifications.setLongTurnAlert": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsSetLongTurnAlert,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -8756,7 +8746,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 9,
+      latestMinor: 10,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -8801,6 +8791,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         9: {
           contract: epicListTasksV19,
           upgradeFromPreviousVersion: epicListTasksUpgradeV18ToV19,
+        },
+        10: {
+          contract: epicListTasksV110,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV19ToV110,
         },
       },
       downgradePathsFromLatest: {},
@@ -10714,6 +10708,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  "epic.getChatTitle": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatTitleV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "epic.readCloudChatPart": {
     1: {
       latestMinor: 0,
@@ -12005,7 +12012,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "host.agent.createFromRemoteSender": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostAgentCreateFromRemoteSenderV10,
@@ -12015,6 +12022,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: hostAgentCreateFromRemoteSenderV11,
           upgradeFromPreviousVersion:
             hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostAgentCreateFromRemoteSenderV12,
+          upgradeFromPreviousVersion:
+            hostAgentCreateFromRemoteSenderUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -16650,7 +16662,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 44,
+      latestMinor: 45,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -16873,6 +16885,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         43: { contract: chatSubscribeV143 },
         // @1.44 adds dispatch provenance; older subscribers receive the frozen event.
         44: { contract: chatSubscribeV144 },
+        45: { contract: chatSubscribeV145 },
       },
     },
   },

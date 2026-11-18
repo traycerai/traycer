@@ -122,7 +122,7 @@ export function useRevalidateStaleWorktreeActivity(
         enriched === undefined ||
         enriched.resolvedAt === null ||
         // Cold PR facts already have a bounded retry ledger. Re-invalidating
-        // them on each inventory revision would continually renew its budget.
+        // them on each inventory revision would re-probe them every time.
         worktreeHasColdPrState(enriched) ||
         enriched.resolvedAt >= entry.resolvedAt ||
         (requested.get(entry.worktreePath) ?? -Infinity) >= entry.resolvedAt
@@ -206,10 +206,10 @@ function createViewportRetryStore(scopeToken: object): ViewportRetryStore {
 interface SweepRetryState {
   readonly attempts: number;
   readonly nextEligibleAt: number;
-  // True when this entry's budget was already reset for the invalidation the
-  // path is CURRENTLY under. `isInvalidated` only clears on a SUCCESSFUL
-  // refetch, so without this marker a permanently rejecting path would get a
-  // fresh budget on every sweep pass - an unbounded probe spin.
+  // True when this entry already took its probe for the invalidation the path
+  // is CURRENTLY under. `isInvalidated` only clears on a SUCCESSFUL refetch,
+  // so without this marker a permanently rejecting path would get a fresh
+  // probe on every sweep pass - an unbounded probe spin.
   readonly sawInvalidated: boolean;
 }
 
@@ -290,18 +290,29 @@ function sweepRetryGate(
   return { kind: "eligible" };
 }
 
-// A deliberate refresh grants ONE fresh retry budget for a path whose budget
-// was already spent. The grant is remembered on the entry because
-// `isInvalidated` stays true until a refetch SUCCEEDS - re-granting on every
-// pass would let a permanently rejecting path bypass its budget and probe
-// forever.
-function grantInvalidationBudgetOnce(
+// An invalidation (a `worktree.changed` frame, or any other method-scope
+// invalidation) makes a path the ledger is still tracking eligible for ONE
+// probe now, without renewing its budget: an exhausted path's probe is its
+// last unless it resolves. A path the host can never resolve therefore stays
+// settled as unavailable, instead of re-entering a full retry run on every
+// frame the host publishes. Refresh grants a whole new budget by replacing the
+// ledger (`prepareEnrichmentRefresh`). The grant is remembered on the entry
+// because `isInvalidated` stays true until a refetch SUCCEEDS - granting on
+// every pass would let a permanently rejecting path probe forever.
+function grantInvalidationProbeOnce(
   ledger: Map<string, SweepRetryState>,
   path: string,
 ): void {
   const prior = ledger.get(path);
   if (prior === undefined || prior.sawInvalidated) return;
-  ledger.set(path, { attempts: 0, nextEligibleAt: 0, sawInvalidated: true });
+  ledger.set(path, {
+    attempts: Math.min(
+      prior.attempts,
+      WORKTREE_COLD_PR_REFETCH_MAX_ATTEMPTS - 1,
+    ),
+    nextEligibleAt: 0,
+    sawInvalidated: true,
+  });
 }
 
 // Drops ledger entries for paths that left the listing (deleted worktrees):
@@ -371,7 +382,7 @@ function isTerminalEnrichmentError(args: {
  * (`prState: null`) leg. Merely time-stale entries are NOT re-swept - steady
  * state stays quiet; refresh invalidation is the deliberate re-probe path.
  * Prunes the ledger as a side effect: settled and de-listed paths drop their
- * bookkeeping, and a fresh invalidation grants a path ONE new retry budget.
+ * bookkeeping, and a fresh invalidation grants a tracked path one probe now.
  */
 function selectSweepChunk(args: {
   readonly queryClient: QueryClient;
@@ -407,7 +418,7 @@ function selectSweepChunk(args: {
       continue;
     }
     if (state?.isInvalidated === true) {
-      grantInvalidationBudgetOnce(ledger, path);
+      grantInvalidationProbeOnce(ledger, path);
     }
     const gate = sweepRetryGate(ledger.get(path), now);
     if (gate.kind === "exhausted") continue;
@@ -1101,9 +1112,9 @@ export function useWorktreeActivityEnrichment(
           }
           const attempts = (ledger.get(path)?.attempts ?? 0) + 1;
           // `sawInvalidated` mirrors the LIVE flag: a rejected refetch leaves
-          // `isInvalidated` set (→ true: this invalidation's one budget grant
-          // stays consumed), while a successful-but-cold refetch clears it
-          // (→ false: the NEXT refresh may grant a fresh budget again).
+          // `isInvalidated` set (→ true: this invalidation's one probe stays
+          // consumed), while a successful-but-cold refetch clears it (→ false:
+          // the NEXT invalidation may grant one probe again).
           const stateNow =
             queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
               perPathEnrichmentQueryKey(sweepHostId, path),

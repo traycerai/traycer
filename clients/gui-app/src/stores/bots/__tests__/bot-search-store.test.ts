@@ -102,7 +102,8 @@ describe("the recent searches", () => {
     const store = useBotSearchStore.getState();
     store.remember(recent("release", IN_A));
     store.remember(recent("deploy", ALL));
-    openBotSearch(SEARCH_BOT_A, IN_A, "half typed");
+    openBotSearch(SEARCH_BOT_A, IN_A);
+    useBotSearchStore.getState().setQuery("half typed");
     useBotSearchStore.getState().setFilters({ from: "me", date: "7d" });
 
     const written = localStorage.getItem(RECENTS_KEY) ?? "";
@@ -156,7 +157,7 @@ describe("opening and closing the search in a bot's rail", () => {
       );
     useBotSearchStore.getState().remember(recent("release", ALL));
 
-    openBotSearch(SEARCH_BOT_A, IN_A, "ship");
+    openBotSearch(SEARCH_BOT_A, IN_A);
     expect(railOf(SEARCH_BOT_A)).toEqual({
       kind: "search",
       back: { kind: "thread", ...OPEN_THREAD },
@@ -164,9 +165,10 @@ describe("opening and closing the search in a bot's rail", () => {
     });
     expect(useBotSearchStore.getState()).toMatchObject({
       scope: IN_A,
-      query: "ship",
+      query: "",
     });
 
+    useBotSearchStore.getState().setQuery("ship");
     useBotSearchStore.getState().setFilters({ where: "posts" });
     closeBotSearch(SEARCH_BOT_A);
 
@@ -180,7 +182,7 @@ describe("opening and closing the search in a bot's rail", () => {
   });
 
   it("leaves no rail behind when it displaced nothing", () => {
-    openBotSearch(SEARCH_BOT_A, ALL, null);
+    openBotSearch(SEARCH_BOT_A, ALL);
     expect(railOf(SEARCH_BOT_A)).toEqual({
       kind: "search",
       back: null,
@@ -192,25 +194,48 @@ describe("opening and closing the search in a bot's rail", () => {
     expect(railOf(SEARCH_BOT_A)).toBeNull();
   });
 
-  it("opened again while open keeps its query and filters unless it is asked for another query", () => {
-    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+  it("opened again while open keeps its query and filters", () => {
+    openBotSearch(SEARCH_BOT_A, ALL);
+    useBotSearchStore.getState().setQuery("ship");
     useBotSearchStore.getState().setFilters({ from: "me", sort: "newest" });
 
-    openBotSearch(SEARCH_BOT_A, IN_A, null);
+    openBotSearch(SEARCH_BOT_A, IN_A);
     expect(useBotSearchStore.getState()).toMatchObject({
       scope: IN_A,
       query: "ship",
     });
     expect(useBotSearchStore.getState().filters.from).toBe("me");
 
-    openBotSearch(SEARCH_BOT_A, ALL, "deploy");
-    expect(useBotSearchStore.getState().query).toBe("deploy");
+    openBotSearch(SEARCH_BOT_A, ALL);
+    expect(useBotSearchStore.getState().query).toBe("ship");
     expect(useBotSearchStore.getState().filters.sort).toBe("newest");
     expect(useBotSearchStore.getState().opens).toBe(3);
   });
 
+  it("opened where no search is in the rail starts empty, whatever the last one held", () => {
+    openBotSearch(SEARCH_BOT_A, ALL);
+    useBotSearchStore.getState().setQuery("ship");
+    useBotSearchStore.getState().setFilters({ sort: "newest" });
+    useBotOpenThreadStore
+      .getState()
+      .setRail(
+        SEARCH_BOT_A,
+        { kind: "thread", ...OPEN_THREAD },
+        currentBotLifetime(),
+      );
+    expect(useBotSearchStore.getState().query).toBe("ship");
+
+    openBotSearch(SEARCH_BOT_A, IN_A);
+
+    expect(useBotSearchStore.getState()).toMatchObject({
+      scope: IN_A,
+      query: "",
+      filters: BOT_SEARCH_NO_FILTERS,
+    });
+  });
+
   it("brings the results back from a thread or the channel it showed in their place", () => {
-    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    openBotSearch(SEARCH_BOT_A, ALL);
     const open = railOf(SEARCH_BOT_A);
     if (open?.kind !== "search") throw new Error("the search did not open");
     useBotOpenThreadStore.getState().setRail(
@@ -302,7 +327,7 @@ describe("the rail a search shares with a pair's log and the memory", () => {
     openLog(SEARCH_BOT_A);
     const log = railOf(SEARCH_BOT_A);
 
-    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    openBotSearch(SEARCH_BOT_A, ALL);
     expect(railOf(SEARCH_BOT_A)).toEqual({
       kind: "search",
       back: log,
@@ -326,7 +351,7 @@ describe("the rail a search shares with a pair's log and the memory", () => {
       .getState()
       .setRail(SEARCH_BOT_A, memory, currentBotLifetime());
 
-    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    openBotSearch(SEARCH_BOT_A, ALL);
     closeBotSearch(SEARCH_BOT_A);
 
     expect(railOf(SEARCH_BOT_A)).toEqual({
@@ -336,7 +361,8 @@ describe("the rail a search shares with a pair's log and the memory", () => {
   });
 
   it("under a pair's log: closing the log brings the results back", () => {
-    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    openBotSearch(SEARCH_BOT_A, ALL);
+    useBotSearchStore.getState().setQuery("ship");
     const results = railOf(SEARCH_BOT_A);
 
     openLog(SEARCH_BOT_A);
@@ -352,7 +378,7 @@ describe("the rail a search shares with a pair's log and the memory", () => {
   });
 
   it("under the memory: its back is the thread the search displaced while it shows results, then the thread it shows", () => {
-    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    openBotSearch(SEARCH_BOT_A, ALL);
     const results = railOf(SEARCH_BOT_A);
     if (results?.kind !== "search") throw new Error("the search did not open");
 
@@ -369,10 +395,10 @@ describe("the rail a search shares with a pair's log and the memory", () => {
   });
 
   it("opened while a pair's log sits over an older search: the older search leaves the chain, so closing the new one and then the log ends with no search", () => {
-    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    openBotSearch(SEARCH_BOT_A, ALL);
     openLog(SEARCH_BOT_A);
 
-    openBotSearch(SEARCH_BOT_A, ALL, "deploy");
+    openBotSearch(SEARCH_BOT_A, ALL);
     expect(railOf(SEARCH_BOT_A)).toEqual({
       kind: "search",
       back: { kind: "exchange", peerBotId: PEER_BOT_ID, back: thread },
@@ -452,7 +478,8 @@ describe("a result on its way to the channel or thread that shows it", () => {
         { kind: "thread", ...OPEN_THREAD },
         currentBotLifetime(),
       );
-    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    openBotSearch(SEARCH_BOT_A, ALL);
+    useBotSearchStore.getState().setQuery("ship");
 
     const moved = jumpToBotSearchHit(
       SEARCH_BOT_A,
@@ -479,7 +506,7 @@ describe("a result on its way to the channel or thread that shows it", () => {
     useBotOpenThreadStore
       .getState()
       .setRail(SEARCH_BOT_B, threadInB, currentBotLifetime());
-    openBotSearch(SEARCH_BOT_A, ALL, "ship");
+    openBotSearch(SEARCH_BOT_A, ALL);
 
     jumpToBotSearchHit(SEARCH_BOT_A, searchHit({ botId: SEARCH_BOT_B }), false);
 

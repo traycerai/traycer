@@ -29,6 +29,7 @@ import {
   endCase,
   lastSend,
   mountBox,
+  settledBoxInput,
   RESPONSE,
   restartApp,
   scriptedSendMutation,
@@ -76,9 +77,8 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
     await mountBox(CHANNEL);
     expect(boxText()).toBe("Is CI green?");
 
-    vi.useRealTimers();
     ui.rtl.act(() => ui.rtl.screen.getByTestId("switch-conversation").click());
-    await ui.box.findBoxInput(OWNER_LABEL);
+    await settledBoxInput();
     expect(boxText()).toBe("");
   });
 
@@ -147,7 +147,6 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
   });
 
   it("adds each of two answers that moved into the box once, when the second moves in before the box acknowledged the first", async () => {
-    vi.useRealTimers();
     const answer = (typed: string) => ({
       chosen: [],
       typed,
@@ -172,7 +171,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
         }
       />,
     );
-    await ui.box.findBoxInput(OWNER_LABEL);
+    await settledBoxInput();
 
     ui.rtl.act(() => {
       const drafts = app.drafts.getState();
@@ -217,7 +216,6 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
   });
 
   it("composes the edit of a failed post and the answer waiting for the box in the box's first render, the edit's text first, still editing, with the answer left in the store", async () => {
-    vi.useRealTimers();
     ui.rtl.act(() => {
       const drafts = app.drafts.getState();
       drafts.setAnswer(BOT_ID, "first", {
@@ -244,7 +242,7 @@ describe("<BotMessageComposer /> and its draft on the device", () => {
         }}
       />,
     );
-    await ui.box.findBoxInput(OWNER_LABEL);
+    await settledBoxInput();
 
     expect(boxText()).toBe("Failed post\n\nHold the migration");
     expect(

@@ -131,6 +131,12 @@ import {
 import { PersonAvatar } from "@/components/bots/bot-avatars";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { memberPost } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  expectPlainLineOutsideQuote,
+  PLAIN_LINE,
+  QUOTE_LINE,
+} from "@/components/bots/__tests__/bot-channel-rows-test-support";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -318,7 +324,7 @@ describe("<BotChatTranscript /> in the channel", () => {
 
   function channelSurface(
     openAnnouncementThread: ((announcementId: string) => void) | null,
-    chooseOption: ((choice: string) => void) | null,
+    chooseOption: ((messageId: string | null, choice: string) => void) | null,
   ): BotTranscriptSurface {
     return {
       kind: "channel",
@@ -400,7 +406,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
   }
 
   function channel(
-    chooseOption: ((choice: string) => void) | null,
+    chooseOption: ((messageId: string | null, choice: string) => void) | null,
     threadLine: (postMessageId: string) => ChatBotThreadLine | null,
   ): BotTranscriptSurface {
     return {
@@ -470,6 +476,48 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     expect(rowFill).toBe(byId);
   });
 
+  it("keeps a plain line typed under a quote out of the quote, as the post is stored in two paragraphs", () => {
+    mountTranscript(
+      [
+        memberPost({
+          messageId: POST_ID,
+          requestId: "req-1",
+          lines: [QUOTE_LINE, PLAIN_LINE],
+          timestamp: 1_000,
+          resolvedBy: null,
+        }),
+      ],
+      channel(null, () => null),
+    );
+
+    expectPlainLineOutsideQuote(
+      within(scrollStub()).getByTestId("bot-member-row"),
+    );
+  });
+
+  it("draws a post stored in two paragraphs as two paragraphs", () => {
+    mountTranscript(
+      [
+        memberPost({
+          messageId: POST_ID,
+          requestId: "req-1",
+          lines: ["First paragraph.", "Second paragraph."],
+          timestamp: 1_000,
+          resolvedBy: null,
+        }),
+      ],
+      channel(null, () => null),
+    );
+
+    const row = within(scrollStub()).getByTestId("bot-member-row");
+    expect(
+      Array.from(
+        row.querySelectorAll("p"),
+        (paragraph) => paragraph.textContent,
+      ),
+    ).toEqual(["First paragraph.", "Second paragraph."]);
+  });
+
   it("draws no link to a direct post's answer two rows below it, and keeps the post's thread line", () => {
     const line: ChatBotThreadLine = {
       participants: [],
@@ -502,9 +550,10 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     expect(screen.queryByTestId("conversation-request")).toBeNull();
   });
 
-  it("posts the option a person clicks under a direct reply through the channel surface", async () => {
+  it("posts the option a person clicks under a direct reply through the channel surface, naming the reply's own message", async () => {
     const user = userEvent.setup();
-    const chooseOption = vi.fn<(choice: string) => void>();
+    const chooseOption =
+      vi.fn<(messageId: string | null, choice: string) => void>();
     mountTranscript(
       [directPost(DIRECT_REQUEST), directReply(["Staging", "Production"])],
       channel(chooseOption, () => null),
@@ -513,7 +562,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     await user.click(screen.getByRole("button", { name: "Production" }));
 
     expect(chooseOption).toHaveBeenCalledTimes(1);
-    expect(chooseOption).toHaveBeenCalledWith("Production");
+    expect(chooseOption).toHaveBeenCalledWith(REPLY_ID, "Production");
   });
 
   it("badges a reply with its post's writer and first line when another row sits between them", () => {

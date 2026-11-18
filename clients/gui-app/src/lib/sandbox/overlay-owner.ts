@@ -22,7 +22,10 @@ import { useLayoutEffect, useSyncExternalStore } from "react";
  * While the claim is held the transcript row behind it is kept mounted by the
  * virtualized list ({@link useFullscreenPinnedRowKeys}): unmounting it would
  * destroy the app's document, and would take an expanded artifact's surface
- * down with its row.
+ * down with its row. A row can also be held with no claim at all
+ * ({@link holdTranscriptRow}): a comment draft's composer is the only copy of
+ * the reader's unsent text, and it outlasts the claim when a blocker lowers
+ * the surface it was written in.
  */
 
 export interface FullscreenClaim {
@@ -60,12 +63,42 @@ let current: FullscreenClaim | null = null;
 let pinnedRowKeys: readonly string[] = NO_PINNED_ROWS;
 let stopWatching: (() => void) | null = null;
 const blockers = new Set<object>();
+const heldRows = new Map<object, string>();
 const listeners = new Set<() => void>();
 
 function emit(): void {
-  const key = current?.pinnedRowKey ?? null;
-  pinnedRowKeys = key === null ? NO_PINNED_ROWS : [key];
+  const keys = new Set(heldRows.values());
+  const claimed = current?.pinnedRowKey ?? null;
+  if (claimed !== null) keys.add(claimed);
+  pinnedRowKeys = keys.size === 0 ? NO_PINNED_ROWS : [...keys];
   for (const listener of listeners) listener();
+}
+
+/**
+ * The transcript row `element` sits in, by the LIST key, so a long turn drawn
+ * as several items names the one the element is in. `null` outside the
+ * transcript (a tile).
+ */
+export function transcriptRowKeyOf(element: Element | null): string | null {
+  const row = element?.closest("[data-message-id]") ?? null;
+  return (
+    row?.getAttribute("data-row-key") ??
+    row?.getAttribute("data-message-id") ??
+    null
+  );
+}
+
+/**
+ * Keep the transcript row `key` mounted until the returned release runs,
+ * whatever holds the top layer. Releasing twice is harmless.
+ */
+export function holdTranscriptRow(key: string): () => void {
+  const token = {};
+  heldRows.set(token, key);
+  emit();
+  return () => {
+    if (heldRows.delete(token)) emit();
+  };
 }
 
 /** An open dialog that `surface` does not contain. `contains` counts itself. */
@@ -103,6 +136,14 @@ export function isFullscreenBlocked(): boolean {
 
 function surfaceOf(claim: FullscreenClaim): HTMLElement | null {
   return claim.surface?.() ?? null;
+}
+
+/**
+ * The surface raised over the task right now, when its claim named one. Keys
+ * pressed while it is up are its own: what sits behind it is inert.
+ */
+export function fullscreenSurface(): HTMLElement | null {
+  return current === null ? null : surfaceOf(current);
 }
 
 function watch(): () => void {

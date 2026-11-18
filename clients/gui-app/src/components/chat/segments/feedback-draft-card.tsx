@@ -20,7 +20,9 @@ import { Label } from "@/components/ui/label";
 import {
   type FeedbackDraftBlockRef,
   useChatFeedbackDraftDecideMutation,
+  useChatFeedbackDraftDecisionState,
   useChatFeedbackDraftPreviewQuery,
+  useSettleFeedbackDraftDecision,
   useChatFeedbackDraftSupported,
 } from "@/hooks/chats/use-chat-feedback-draft";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -56,9 +58,12 @@ function feedbackDraftCategoryLabel(category: string): string {
 export type FeedbackDraftReadOnlyReason =
   | "no-chat"
   | "not-allowed"
-  | "host-unsupported";
+  | "host-unsupported"
+  | "source-unavailable";
 
 const READ_ONLY_COPY: Record<FeedbackDraftReadOnlyReason, string> = {
+  "source-unavailable":
+    "This feedback draft is unavailable. Try again when its computer is connected.",
   "no-chat": "Open this chat in the desktop app to send it.",
   "not-allowed": "Only someone who can act in this chat can send it.",
   "host-unsupported": "Update Traycer on this computer to send it.",
@@ -125,13 +130,25 @@ function LiveFeedbackDraftCard(
   );
   const supported = useChatFeedbackDraftSupported(hostId);
   const client = useHostClientForHostId(hostId);
-  const decide = useChatFeedbackDraftDecideMutation(client, blockRef.blockId);
+  const draftRef = { ...blockRef, hostId };
+  const decide = useChatFeedbackDraftDecideMutation(client, draftRef);
+  const decision = useChatFeedbackDraftDecisionState(client, draftRef);
+  useSettleFeedbackDraftDecision(
+    client,
+    draftRef,
+    "card",
+    props.draft.state === "sent" || props.draft.state === "skipped",
+  );
   const readOnly = liveReadOnlyReason(canAct, supported);
   // The settled stamp also arrives as a row update; until it does, the
-  // response is what the card shows.
-  const settled = decide.data === undefined ? null : decide.data.feedbackDraft;
+  // answer to a decision made here or on the draft's notification row is
+  // what the card shows.
+  const settled = decision.settled;
   const draft =
-    settled !== null && props.draft.state === "pending" ? settled : props.draft;
+    settled !== null &&
+    (props.draft.state === "pending" || props.draft.state === "failed")
+      ? settled
+      : props.draft;
   return (
     <FeedbackDraftView
       id={props.id}
@@ -142,8 +159,9 @@ function LiveFeedbackDraftCard(
         client,
         readOnly,
         // Unknown standing (the chat is still connecting) holds the buttons
-        // without claiming the reader may not act.
-        isPending: decide.isPending || canAct === null,
+        // without claiming the reader may not act. So does a decision the
+        // draft's notification row has out.
+        isPending: decision.isPending || canAct === null,
         decide: (decision, includeDiagnostics) => {
           decide.mutate({
             ...blockRef,
@@ -166,7 +184,7 @@ function liveReadOnlyReason(
   return null;
 }
 
-interface LiveDraftActions {
+export interface LiveDraftActions {
   readonly blockRef: FeedbackDraftBlockRef;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly readOnly: FeedbackDraftReadOnlyReason | null;
@@ -177,7 +195,7 @@ interface LiveDraftActions {
   ) => void;
 }
 
-function FeedbackDraftView(
+export function FeedbackDraftView(
   props: FeedbackDraftCardProps & { readonly live: LiveDraftActions | null },
 ): ReactNode {
   const { draft, live } = props;
@@ -279,7 +297,6 @@ function FeedbackDraftActions(props: {
   const [includeDiagnostics, setIncludeDiagnostics] = useState(
     draft.suggestDiagnostics,
   );
-  const [viewing, setViewing] = useState(false);
   const checkboxId = useId();
   const sessionReadOnly = useContext(ChatStatusReadOnlyContext);
   const readOnly: FeedbackDraftReadOnlyReason | null =
@@ -308,13 +325,7 @@ function FeedbackDraftActions(props: {
             {draft.suggestDiagnostics
               ? "The agent suggested this. You can untick it."
               : "Logs from this machine and app and host details, as in Report an issue."}{" "}
-            <Button
-              variant="link"
-              size="inline-xs"
-              onClick={() => setViewing(true)}
-            >
-              View
-            </Button>
+            <FeedbackDraftPreviewLink live={live} />
           </span>
         </div>
       </div>
@@ -342,12 +353,29 @@ function FeedbackDraftActions(props: {
           Skip
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Owns whether the preview is open, so the preview closes with the actions:
+ * it opens again only from a View click, never on the actions returning.
+ */
+function FeedbackDraftPreviewLink(props: {
+  readonly live: LiveDraftActions;
+}): ReactNode {
+  const [viewing, setViewing] = useState(false);
+  return (
+    <>
+      <Button variant="link" size="inline-xs" onClick={() => setViewing(true)}>
+        View
+      </Button>
       <FeedbackDraftPreviewDialog
         open={viewing}
         onOpenChange={setViewing}
-        live={live}
+        live={props.live}
       />
-    </div>
+    </>
   );
 }
 

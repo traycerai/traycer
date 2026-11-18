@@ -33,6 +33,7 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  *   target is. Never a sandbox and never the pool, so audio and on-device
  *   models never leave the person's machines.
  * - `pool-only` - the account-wide families: History (`epic.listTasks`),
+ *   the title a reference to a chat is drawn with (`epic.getChatTitle`),
  *   the notification cloud feed (`host.notifications.cloudFeed.*`),
  *   `environment.list` and `environment.binding.read`, `organization.*` and
  *   `autoPolicy.*`, a configuration's own cloud state (its records, secrets,
@@ -562,6 +563,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "epic.finishArtifactImage": "target-host",
   "epic.getChatRunSettings": "target-host",
   "epic.getChatRunSettingsBatch": "target-host",
+  "epic.getChatTitle": "pool-only",
   "epic.getTaskContexts": "target-host",
   "epic.getWorkspaceContext": "target-host",
   "epic.grantAccess": "target-host",
@@ -649,14 +651,12 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.notifications.cloudFeed.markRead": "pool-only",
   "host.notifications.cloudFeed.resolve": "pool-only",
   "host.notifications.getConfig": "target-host",
-  "host.notifications.getLongTurnAlert": "target-host",
   "host.notifications.indicatorState": "target-host",
   "host.notifications.list": "target-host",
   "host.notifications.markAllRead": "target-host",
   "host.notifications.markRead": "target-host",
   "host.notifications.resolve": "target-host",
   "host.notifications.setConfig": "target-host",
-  "host.notifications.setLongTurnAlert": "target-host",
   "host.oneOffShell.run": "target-host",
   "host.portForward.acquireLease": "target-host",
   "host.portForward.leaseEnded": "target-host",

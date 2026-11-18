@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { retireAtBotLifetimeEdge } from "@/lib/bots/bot-lifetime";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
@@ -56,7 +57,10 @@ interface TracySurfaceState {
    * place and Threads left. The rail beside it stays as it is.
    */
   readonly showChannel: () => void;
-  /** Moves an open surface to `hostId`. */
+  /**
+   * Moves an open surface to `hostId`. Every landing asked of it was asked of
+   * the host it leaves, and is withdrawn.
+   */
   readonly rebind: (hostId: string) => void;
   readonly markVisited: (botId: string) => void;
   /**
@@ -142,6 +146,7 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
       rebind: (hostId) => {
         const state = get();
         if (!state.open || state.hostId === hostId) return;
+        retireTracyLandings();
         set({ hostId });
       },
       markVisited: (botId) => {
@@ -178,9 +183,7 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
       },
       closeSurface: () => {
         const state = get();
-        for (const [botId, landing] of [...stagedLandings]) {
-          releaseTracyLanding(botId, landing);
-        }
+        retireTracyLandings();
         for (const botId of state.visitedBotIds) closeBotState(botId);
         useMobileTabOriginStore.getState().clearAll();
         useTracyPlaceStore.getState().closeSurface();
@@ -215,12 +218,48 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
 /**
  * Landings the surface asked for, by bot id, for channels that have not shown
  * since: a channel that shows owns its landing from then on
- * (`handTracyLandingToChannel`), one whose navigation never landed is
- * released (`releaseTracyLanding`), and closing the surface releases every
- * one left. A visited channel is no exception: its pane is not mounted while
- * another channel shows, so nothing else would withdraw it. Session-only.
+ * (`handTracyLandingToChannel`), and one whose navigation never landed is
+ * released (`releaseTracyLanding`). A visited channel is no exception: its
+ * pane is not mounted while another channel shows, so nothing else would
+ * withdraw it. Session-only.
  */
 const stagedLandings = new Map<string, BotTabLanding>();
+
+/**
+ * How many times the surface has withdrawn its landings. An opening asked
+ * for at one count has lost its landing at any later one, whether or not the
+ * surface is on the same host again.
+ *
+ * Eight writes set the surface's host, and two of them withdraw: `rebind` to
+ * another host and `closeSurface`. Another account signing in withdraws too
+ * and writes no host. The other six move the host and withdraw nothing:
+ * `openSurface`, the store's own hydration (its migration included),
+ * `adoptLegacyActiveBotTab`, `bindTracySurfaceToWindow` reading the window's
+ * record back, `bindTracySurfaceToWindow` writing the closed surface, and
+ * `settleTracySurfaceAdoption`. Whoever holds an opening across those
+ * compares `tracySurfaceHostId` as well as this count.
+ */
+let landingsRetired = 0;
+
+export function tracyLandingsRetired(): number {
+  return landingsRetired;
+}
+
+/**
+ * Withdraws every landing asked of the surface, staged or already its
+ * channel's to spend. Each was asked for under one account, of one surface
+ * host: once the account changes, the surface moves to another host or it
+ * closes, a channel that shows or reads its thread list afterwards has
+ * nothing of them to land. So does an opening of the surface that was held
+ * and then refused: the surface may still show its channel.
+ */
+export function retireTracyLandings(): void {
+  landingsRetired += 1;
+  stagedLandings.clear();
+  useBotTabLandingStore.getState().clearAll();
+}
+
+retireAtBotLifetimeEdge(retireTracyLandings);
 
 /**
  * Asks `botId`'s channel to land at `landing` when it shows, before the
@@ -245,8 +284,8 @@ export function handTracyLandingToChannel(
 
 /**
  * Withdraws a staged `landing` whose channel never showed: its navigation was
- * refused or superseded, or the surface closed. A newer request for the same
- * channel, staged or not, is left alone.
+ * refused or superseded. A newer request for the same channel, staged or
+ * not, is left alone.
  */
 export function releaseTracyLanding(
   botId: string,

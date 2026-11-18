@@ -137,6 +137,8 @@ export const mocks = {
     listAppearance: new Map<string, BotAppearance>(),
     mainBotIds: null as Record<string, string> | null,
     support: null as boolean | null,
+    /** Whether the host advertises `bot.thread.list`; `"inherit"` follows `support`, `null` is unknown. */
+    threadListSupport: "inherit" as boolean | null | "inherit",
     /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
     onboardingSupport: true,
     /** The line the host negotiated for `bot.onboarding.read`. */
@@ -186,6 +188,11 @@ export const hostSupportsMethodMock = {
     mocks.supportQueries.push({ hostId, method });
     if (method === "environment.members") return mocks.state.membersSupport;
     if (method === "bot.onboarding.read") return mocks.state.onboardingSupport;
+    if (
+      method === "bot.thread.list" &&
+      mocks.state.threadListSupport !== "inherit"
+    )
+      return mocks.state.threadListSupport;
     return mocks.state.support;
   },
   useHostMethodSchemaVersion: () => mocks.state.onboardingVersion,
@@ -199,6 +206,8 @@ export const hostSupportsMethodMock = {
 // the titles of the stream's tasks, and Home's task list.
 const taskContextsRead = () => ({
   tasksById: mocks.taskContexts,
+  resolutionsById: new Map(),
+  pendingTaskIds: new Set<string>(),
   isPending: mocks.taskReads.contextsPending,
   error: null,
 });

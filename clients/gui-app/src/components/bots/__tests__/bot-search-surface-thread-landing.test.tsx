@@ -7,11 +7,13 @@
  * transcript is the suite's stub, whose `data-land-on` is the `landOn` the
  * panel handed it.
  */
+import "./bot-search-surface-stubs";
 import {
   mocks,
   SEARCH_RESULT_A,
   answerWith,
   settle,
+  searchAllBots,
   changeLists,
   thread,
   THREAD_HIT,
@@ -61,10 +63,7 @@ async function openThreadFromSearch(): Promise<BotRail> {
     searchResponse({ hits: [THREAD_HIT, SEARCH_RESULT_A], total: 2 }),
   );
   render(<Surface />);
-  fireEvent.change(screen.getByTestId("bot-column-search"), {
-    target: { value: "release" },
-  });
-  await settle();
+  await searchAllBots("release");
   fireEvent.click(hitRows()[0]);
   await settle();
 

@@ -11,7 +11,7 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
@@ -64,7 +64,16 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import { toast } from "sonner";
 
 import type {
   BotThreadSummary,
@@ -76,7 +85,6 @@ import type { BotOpenSession } from "@/components/bots/bot-session-view";
 import type {
   BotOpenMemory,
   BotOpenThread,
-  BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import {
@@ -238,7 +246,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     openMemory: BotOpenMemory | null;
     onOpenMemory: (open: BotOpenMemory | null) => void;
     onOpenTurn: BotTurnOpen;
-    onOpenSession: BotSessionOpen;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
@@ -273,15 +280,8 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       />
       <button
         type="button"
-        data-testid="stub-channel-open-thread-session"
-        onClick={() =>
-          props.onOpenSession({
-            chatId: "session-thread-1",
-            threadId: "thread-1",
-            messageId: null,
-            sendPostId: null,
-          })
-        }
+        data-testid="stub-channel-open-thread-turn"
+        onClick={() => props.onOpenTurn(THREAD_TURN, null)}
       />
       {props.setupHistory}
       <MentionsProbe />
@@ -410,6 +410,7 @@ import {
   routeNotificationForHost,
 } from "@/lib/notifications/payload";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
@@ -436,13 +437,34 @@ const REPLY_TURN: BotTurnRef = {
   requestIds: [],
 };
 
+/** The thread's turn behind a reply in the thread panel. */
+const THREAD_TURN: BotTurnRef = {
+  chatId: "session-thread-1",
+  turnIds: ["turn-thread"],
+  userMessageId: "prompt-thread",
+  threadId: "thread-1",
+  startedAt: 1_000,
+  endedAt: 2_000,
+  summary: null,
+  messageIds: ["thread-reply-1"],
+  requestIds: [],
+};
+
 let queryClient = new QueryClient();
+
+/** The picker's sheet reads the resolved theme the app's provider supplies. */
+const RESOLVED_THEME = {
+  resolvedTheme: "dark",
+  themePreset: "neutral",
+} as const;
 
 function surfaceFor(botId: string | null): ReactNode {
   return (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BotTabSurface botId={botId} hostId={TAB_HOST} />
+        <ResolvedThemeContext.Provider value={RESOLVED_THEME}>
+          <BotTabSurface botId={botId} hostId={TAB_HOST} />
+        </ResolvedThemeContext.Provider>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -559,10 +581,10 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     ];
     render(surface());
 
-    await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+    await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
     expect(sessionShown().dataset.chatId).toBe("session-thread-1");
     expect(sessionShown().dataset.threadId).toBe("thread-1");
-    expect(sessionShown().dataset.landOn).toBe("none");
+    expect(sessionShown().dataset.landOn).toBe("prompt-thread");
 
     await user.click(screen.getByTestId("stub-session-thread"));
 
@@ -595,7 +617,7 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     ];
     render(surface());
 
-    await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+    await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
     await user.click(screen.getByTestId("stub-session-thread-post"));
 
     const channel = screen.getByTestId("stub-channel");
@@ -631,11 +653,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       render(surface());
       expect(openThreadBeside()).toBe("post-other");
 
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
       await user.click(screen.getByTestId("stub-session-channel"));
       expect(openThreadBeside()).toBe("post-other");
 
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
       await user.click(screen.getByTestId("stub-session-post"));
       expect(openThreadBeside()).toBe("none");
     });
@@ -645,7 +667,7 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       mocks.state.threads = [];
       render(surface());
 
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
       await user.click(screen.getByTestId("stub-session-thread"));
 
       expect(openThreadBeside()).toBe("none");
@@ -694,7 +716,9 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expect(openThreadBeside()).toBe("none");
     });
 
-    it("is closed by a requested landing on a thread the list does not name", () => {
+    it("is kept open, and the landing refused and spent, when a requested landing names a message of a thread the settled list does not name", () => {
+      const toastError = vi.spyOn(toast, "error").mockReturnValue("toast");
+      onTestFinished(() => toastError.mockRestore());
       mocks.state.threads = [];
       useBotTabLandingStore.getState().request(BOT_ID, {
         kind: "thread",
@@ -703,7 +727,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       });
       render(surface());
 
-      expect(openThreadBeside()).toBe("none");
+      expect(openThreadBeside()).toBe("post-other");
+      expect(toastError).toHaveBeenCalledTimes(1);
+      expect(
+        Object.hasOwn(useBotTabLandingStore.getState().byBotId, BOT_ID),
+      ).toBe(false);
     });
   });
 
@@ -1990,7 +2018,7 @@ describe("<BotTabSurface /> a history step never lands on a message again", () =
       const user = userEvent.setup();
       mocks.state.threads = [LISTED_THREAD];
       render(surface());
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
       await user.click(screen.getByTestId("stub-session-thread-post"));
       const channel = screen.getByTestId("stub-channel");
       expect(channel.getAttribute("data-open-thread")).toBe("post-7");

@@ -433,7 +433,6 @@ function Channel(
               openThread={props.openThread}
               onOpenThread={() => undefined}
               onOpenTurn={() => undefined}
-              onOpenSession={() => undefined}
               landOn={null}
               openMemory={null}
               onOpenMemory={() => undefined}

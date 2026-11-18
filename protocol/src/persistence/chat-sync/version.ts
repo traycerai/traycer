@@ -204,9 +204,15 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // floor: an older reader draws the row without its badge.
 // 1.14 adds optional providerSelection to interpreted chat events. Old readers
 // retain it in raw event envelopes; no reader floor changes.
+// 1.14 also carries `images` on an `autonomous_resume` trigger's
+// `conversationMessage` (the images a bot conversation delivery carried - a
+// `chat.subscribe@1.44` field that lands in a publication), on the same
+// unreleased line. No reader floor: an older reader keeps the raw block, which
+// its preserved variant re-emits verbatim, and only its interpreted view lacks
+// the key, so a re-publication through it keeps the images.
 // The same unreleased line carries optional profileBinding in core.settings;
 // older readers retain the unmodeled key in the core settings residual bag.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 14 } as const;
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 15 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

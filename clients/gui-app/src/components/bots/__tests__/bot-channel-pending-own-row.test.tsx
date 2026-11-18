@@ -365,7 +365,6 @@ function RailChannel(props: { readonly replyMode: BotReplyMode }): ReactNode {
       appConversationChatId={CHANNEL_ID}
       trunkChatId="trunk-chat"
       onOpenTurn={vi.fn()}
-      onOpenSession={vi.fn()}
       landOn={null}
       openMemory={null}
       onOpenMemory={vi.fn()}
@@ -831,7 +830,7 @@ describe("<BotChannelView /> what a pending row offers", () => {
     const bodyOf = (): string | undefined =>
       within(screen.getByTestId("chat-messages-stub"))
         .getByText(/First line/)
-        .closest("p")?.outerHTML;
+        .closest("[data-quotable]")?.outerHTML;
     const pendingBody = bodyOf();
     expect(pendingBody).toContain("Second line");
 

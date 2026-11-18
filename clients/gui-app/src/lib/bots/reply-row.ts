@@ -2,10 +2,8 @@ import type { BotThreadAnchor } from "@traycer/protocol/host/bot/conversation-sc
 import type { AutonomousResumeConversationMessage } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
-import {
-  buildAttachmentsFromJSONContent,
-  extractPlainTextFromComposerJSONContent,
-} from "@/lib/composer/tiptap-json-content";
+import { botMemberText } from "@/lib/bots/bot-member-text";
+import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
@@ -63,7 +61,7 @@ export function sendCardFor(
 export function postTextOf(post: OpenMessage | null): string | null {
   if (post === null) return null;
   if (post.role === "user") {
-    return extractPlainTextFromComposerJSONContent(post.message.content);
+    return botMemberText(post.message.content);
   }
   return post.blocks
     .flatMap((block) => (block.type === "text" ? [block.text] : []))

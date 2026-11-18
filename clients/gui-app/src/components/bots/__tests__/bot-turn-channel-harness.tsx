@@ -19,7 +19,10 @@ import {
   BotMemoryContext,
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
-import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  BotChannelView,
+  type BotChannelLanding,
+} from "@/components/bots/bot-channel-view";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import {
@@ -43,7 +46,9 @@ const IDENTITY: BotIdentity = {
  * and a thread or the memory is set in it the way the tab's setters do; a
  * session it opens is recorded (`openedSessions`).
  */
-function Channel(): ReactNode {
+function Channel(props: {
+  readonly landOn: BotChannelLanding | null;
+}): ReactNode {
   const rail = useBotRail(BOT_ID);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
   const openThread = rail?.kind === "thread" ? rail : null;
@@ -75,10 +80,7 @@ function Channel(): ReactNode {
       onOpenTurn={(ref, sendPostId) => {
         openedSessions.push(sessionTargetOfTurn(ref, sendPostId));
       }}
-      onOpenSession={(target) => {
-        openedSessions.push(target);
-      }}
-      landOn={null}
+      landOn={props.landOn}
       openMemory={openMemory}
       onOpenMemory={(open) =>
         setRail(
@@ -102,7 +104,7 @@ function Channel(): ReactNode {
  * memory: the bot's name opens its card, whose memory row opens the
  * memory over the rail the way the tab's opener does (`memoryRailOver`).
  */
-function KnowingChannel(): ReactNode {
+export function KnowingChannel(): ReactNode {
   const rail = useBotRail(BOT_ID);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
   const memory = useMemo(
@@ -117,7 +119,7 @@ function KnowingChannel(): ReactNode {
   return (
     <BotIdentityContext value={IDENTITY}>
       <BotMemoryContext value={memory}>
-        <Channel />
+        <Channel landOn={null} />
       </BotMemoryContext>
     </BotIdentityContext>
   );
@@ -148,7 +150,24 @@ export function MountedChannel(): ReactNode {
       <QueryClientProvider client={new QueryClient()}>
         <BotTestRunnerHost>
           <TooltipProvider>
-            <Channel />
+            <Channel landOn={null} />
+          </TooltipProvider>
+        </BotTestRunnerHost>
+      </QueryClientProvider>
+    </StrictMode>
+  );
+}
+
+/** {@link MountedChannel} opened on a message, as a permalink or a search result opens it. */
+export function MountedLandingChannel(props: {
+  readonly landOn: BotChannelLanding;
+}): ReactNode {
+  return (
+    <StrictMode>
+      <QueryClientProvider client={new QueryClient()}>
+        <BotTestRunnerHost>
+          <TooltipProvider>
+            <Channel landOn={props.landOn} />
           </TooltipProvider>
         </BotTestRunnerHost>
       </QueryClientProvider>

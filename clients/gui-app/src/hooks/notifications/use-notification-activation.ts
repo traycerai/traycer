@@ -1,12 +1,17 @@
 import { useCallback, useMemo } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
+import { botListEntryKey } from "@/hooks/bots/use-bot-list-query";
 import { useHostBinding } from "@/lib/host";
 import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { readEffectiveHostIdSnapshot } from "@/stores/host/selection-authority-store";
 import { toast } from "sonner";
 import { NO_DEVICE_AVAILABLE } from "@/lib/composer/landing-placement";
+import { NOTIFICATION_OTHER_COMPUTER } from "@/lib/notifications/destination-copy";
 import {
+  botNotificationDestination,
   isBotChatWithoutDevice,
   routeNotificationForHost,
   type NotificationNavigate,
@@ -66,6 +71,62 @@ function hostFeedStayedOnOrigin(input: {
 }
 
 /**
+ * Whether a bot's row names the host it came from while the host its Tracy
+ * surface reads through is another one, known not to have that bot: nothing
+ * there would open it. Known means that host's bot list has answered and
+ * still stands. A list not read yet, being read again or invalidated says
+ * nothing, and the row opens as any other does.
+ */
+function surfaceHostLacksNamedBot(
+  queryClient: QueryClient,
+  payload: NotificationPayload,
+  originHostId: string | null,
+  effectiveHostId: string | null,
+): boolean {
+  if (originHostId === null) return false;
+  const destination = botNotificationDestination(payload, effectiveHostId);
+  if (destination === null || destination.hostId === originHostId) return false;
+  const listed = queryClient.getQueryState<BotListResponse>(
+    botListEntryKey(destination.hostId, readEffectiveHostIdSnapshot()),
+  );
+  if (
+    listed === undefined ||
+    listed.status !== "success" ||
+    listed.isInvalidated ||
+    listed.fetchStatus !== "idle" ||
+    listed.data === undefined
+  ) {
+    return false;
+  }
+  return !listed.data.bots.some((bot) => bot.botId === destination.botId);
+}
+
+/**
+ * What to tell the person when a bot's row can open nothing here, `null` when
+ * it can be routed. A bot's chat opens only as the bot's tab, which needs a
+ * device: with none, routing would open nothing. A row naming another host,
+ * for a bot this surface's host is known not to have, opens nothing either.
+ */
+function botRowRefusal(
+  queryClient: QueryClient,
+  payload: NotificationPayload,
+  originHostId: string | null,
+  effectiveHostId: string | null,
+): string | null {
+  if (isBotChatWithoutDevice(payload, effectiveHostId)) {
+    return NO_DEVICE_AVAILABLE;
+  }
+  return surfaceHostLacksNamedBot(
+    queryClient,
+    payload,
+    originHostId,
+    effectiveHostId,
+  )
+    ? NOTIFICATION_OTHER_COMPUTER
+    : null;
+}
+
+/**
  * Opens feed-backed notifications through the default host scope.
  *
  * Routes synchronously exactly once per `activate()` call, then completes
@@ -115,6 +176,7 @@ export function useNotificationActivationWithNavigate(
   navigate: NotificationNavigate,
 ): NotificationActivationController {
   const binding = useHostBinding();
+  const queryClient = useQueryClient();
   const effectiveHostId = useEffectiveHostId();
   // APP-WIDE BY INTENT, and it must stay that way if this ever mounts under a
   // host-scoped subtree. `beforeRouteHostId`/`afterRouteHostId` below record
@@ -144,11 +206,18 @@ export function useNotificationActivationWithNavigate(
       // would already be stale before routing even starts).
       const beforeRouteHostId =
         client === null ? null : readEffectiveHostIdSnapshot();
-      // A bot's chat opens only as the bot's tab, which needs a device. With
-      // none, routing would open nothing: say so, and leave the row unread so
-      // it can be opened once a device is up.
-      if (isBotChatWithoutDevice(input.payload, beforeRouteHostId)) {
-        toast.error(NO_DEVICE_AVAILABLE);
+      const originHostId = input.originHostId ?? null;
+      // Said, and the row left unread so it can be opened later, before
+      // anything is staged or navigated and without moving the surface or the
+      // app-wide selection to the host the row names.
+      const refusal = botRowRefusal(
+        queryClient,
+        input.payload,
+        originHostId,
+        beforeRouteHostId,
+      );
+      if (refusal !== null) {
+        toast.error(refusal);
         input.onResult?.("failure");
         return;
       }
@@ -176,7 +245,6 @@ export function useNotificationActivationWithNavigate(
       const requiresOriginHost = notificationPayloadRequiresOriginHost(
         input.payload,
       );
-      const originHostId = input.originHostId ?? null;
       const routedToOriginBoundTarget = routeNotificationForHost(
         navigate,
         input.payload,
@@ -235,7 +303,7 @@ export function useNotificationActivationWithNavigate(
       }
       input.onResult?.("success");
     },
-    [client, navigate],
+    [client, navigate, queryClient],
   );
 
   return { activate };

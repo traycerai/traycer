@@ -68,9 +68,11 @@ import {
 } from "@/hooks/workspace/use-workspace-folder-actions";
 import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
 import {
+  useLandingDraftNamedHostId,
   useLandingDraftStore,
   type LandingDraftWorkspaceSnapshot,
 } from "@/stores/home/landing-draft-store";
+import { landingDraftSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { locateReplaceBoundFolder } from "./locate-replace-bound-folder";
 import {
@@ -398,12 +400,21 @@ interface HomeSurfaceProps {
 }
 
 function HomeSurface(props: HomeSurfaceProps) {
-  // Must be the SAME host `ActiveHostWorkspaceControls` resolves for an
-  // "active" scope below - the staged slot and the folder rows it stages into
-  // have to agree on which machine they describe. That resolution is the
-  // composer surface pin (pin ?? effective), so read the same primitive.
-  const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
-  const surfaceKey = useComposerSurfaceHostKey();
+  // Must be the SAME host `ActiveHostWorkspaceControls` resolves for the
+  // scope below - the staged slot and the folder rows it stages into have to
+  // agree on which machine they describe. That resolution is the composer
+  // surface pin (pin ?? effective), so read the same primitive; a draft opened
+  // for one machine is fixed to it instead, as its composer's placement is.
+  const namedHostId = useLandingDraftNamedHostId(props.draftId);
+  const namedHostClient = useHostClientForHostId(namedHostId);
+  const pinnedHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const landingHostId = namedHostId ?? pinnedHostId;
+  // The same staging surface as its composer.
+  const surfaceKey = landingDraftSurfaceKey(
+    useComposerSurfaceHostKey(),
+    props.draftId,
+    namedHostId,
+  );
   const openTerminalInstead = useOpenLandingStagedTerminal(surfaceKey);
   // The landing composer creates the task, so there is none yet.
   const sandboxStaging = useMemo<SandboxStagingSurface>(
@@ -426,7 +437,11 @@ function HomeSurface(props: HomeSurfaceProps) {
       workspaceSeed={null}
       seedIntent={null}
       seedIntentOverride={null}
-      hostScope={{ kind: "active" }}
+      hostScope={
+        namedHostId === null
+          ? { kind: "active" }
+          : { kind: "fixed", hostId: namedHostId, hostClient: namedHostClient }
+      }
       disabled={props.disabled}
     />
   );
@@ -1250,8 +1265,20 @@ function HomeWorkspaceRows(props: {
   } = recentWorkspaces;
   const items = useMemo<ReadonlyArray<WorkspaceRunItem>>(
     () =>
-      baseItems.map((item) => {
+      baseItems.map((item, index) => {
         if (!recentWorkspacesSupported || item.onRemove === null) return item;
+        // Recent is the selected host's list. A row this host has not
+        // confirmed (another machine's path, or metadata still loading) is
+        // removed without being recorded there. A local-only row is projected
+        // without asking the host, so its summary is its only confirmation.
+        if (
+          item.unresolved ||
+          item.metadataPending ||
+          (resolvedFolders[index].kind === "local-only" &&
+            item.summary === null)
+        ) {
+          return { ...item, removeSkipsRecent: true };
+        }
         const removeFromActive = item.onRemove;
         return {
           ...item,
@@ -1270,6 +1297,7 @@ function HomeWorkspaceRows(props: {
       moveWorkspaceToRecent,
       recentWorkspacesMovingPath,
       recentWorkspacesSupported,
+      resolvedFolders,
     ],
   );
   const recentWorkspacesSection = recentWorkspaces.supported ? (

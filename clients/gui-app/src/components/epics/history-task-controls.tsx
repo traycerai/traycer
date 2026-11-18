@@ -60,6 +60,7 @@ export interface HistoryTaskControlsProps {
   readonly selection: PanelSelectionControls;
   readonly sort: HistorySortOption;
   readonly onSortChange: (next: HistorySortOption) => void;
+  readonly createdSortAvailable: boolean;
   readonly availableRepos: ReadonlyArray<string>;
   readonly availableWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
   readonly search: HistorySearchState;
@@ -93,7 +94,11 @@ export function HistoryTaskControls(
         <>
           <div className="flex shrink-0 items-center gap-1">
             {props.showSelection ? <OrganizationHistoryOverflow /> : null}
-            <EpicsSortMenu value={props.sort} onChange={props.onSortChange} />
+            <EpicsSortMenu
+              value={props.sort}
+              onChange={props.onSortChange}
+              createdSortAvailable={props.createdSortAvailable}
+            />
             <EpicsFilterPopover
               availableRepos={props.availableRepos}
               availableWorkspaces={props.availableWorkspaces}

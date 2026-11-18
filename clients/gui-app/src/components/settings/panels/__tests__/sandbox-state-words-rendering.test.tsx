@@ -100,6 +100,13 @@ vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/lib/relative-time", () => ({
   useSampledNow: () => 1_791_100_000_000,
 }));
+vi.mock("@/stores/auth/auth-store", () => ({
+  useAuthStore: Object.assign(
+    (selector: (state: { contextMetadata: null }) => unknown) =>
+      selector({ contextMetadata: null }),
+    { subscribe: () => () => undefined },
+  ),
+}));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ close: vi.fn() }),
 }));

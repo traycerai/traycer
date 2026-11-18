@@ -15,6 +15,10 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
+  BotIdentityContext,
+  type BotIdentity,
+} from "@/components/bots/bot-identity-context";
+import {
   afterEach,
   beforeEach,
   describe,
@@ -101,18 +105,43 @@ function channelPresentation(
   };
 }
 
+/** The bot the channel's surface draws, as `bot-tab-surface` provides it. */
+const SURFACE_BOT: BotIdentity = {
+  botId: "bot_0YVZD4PHYFAZS1MCR0D9GABAGV",
+  title: "Release bot",
+  owner: null,
+};
+
 function renderRow(
   message: ChatMessageModel,
   presentation: ChatBotPresentation | null,
+): void {
+  renderRowAs(message, presentation, null);
+}
+
+/** A row under a bot's surface, whose name opens the bot's popover. */
+function renderRowInBotSurface(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation | null,
+): void {
+  renderRowAs(message, presentation, SURFACE_BOT);
+}
+
+function renderRowAs(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation | null,
+  identity: BotIdentity | null,
 ): void {
   function Providers(props: { readonly children: ReactNode }) {
     return (
       <StrictMode>
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <ChatBotPresentationContext.Provider value={presentation}>
-              {props.children}
-            </ChatBotPresentationContext.Provider>
+            <BotIdentityContext.Provider value={identity}>
+              <ChatBotPresentationContext.Provider value={presentation}>
+                {props.children}
+              </ChatBotPresentationContext.Provider>
+            </BotIdentityContext.Provider>
           </ChatExpansionTestProviders>
         </TooltipProvider>
       </StrictMode>
@@ -414,7 +443,7 @@ describe("<ChatMessage /> in a bot channel", () => {
   });
 
   it("stacks who is in the thread: the post's writer as a circle, the bot as a squircle", () => {
-    renderRow(
+    renderRowInBotSurface(
       memberPost(undefined),
       channelPresentation(
         () => ({
@@ -964,7 +993,7 @@ describe("<ChatMessage /> bot rows", () => {
   });
 
   it("draws a bot's picture one size under a person's, inside the same 40px box", () => {
-    renderRow(botRow(undefined), presentation);
+    renderRowInBotSurface(botRow(undefined), presentation);
     renderRow(memberPost(undefined), presentation);
 
     const botAvatar = within(screen.getByTestId("bot-reply-row")).getByTestId(
@@ -1084,7 +1113,9 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
     readonly openAnnouncementThread:
       | ((announcementId: string, anchorKind: string | null) => void)
       | null;
-    readonly chooseOption: ((choice: string) => void) | null;
+    readonly chooseOption:
+      | ((messageId: string | null, choice: string) => void)
+      | null;
   }): ChatBotPresentation {
     return {
       botTitle: "Release Bot",
@@ -1155,11 +1186,16 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
     ]);
   });
 
-  it("draws a reply's options as buttons and posts the clicked choice", async () => {
+  it("draws a reply's options as buttons and posts the clicked choice, naming the reply that offered it", async () => {
     const user = userEvent.setup();
-    const chooseOption = vi.fn<(choice: string) => void>();
+    const chooseOption =
+      vi.fn<(messageId: string | null, choice: string) => void>();
     renderRow(
-      { ...botRow(undefined), options: OPTIONS },
+      {
+        ...botRow(undefined),
+        persistentMessageId: "reply-row-1",
+        options: OPTIONS,
+      },
       withActions({
         threadLine: null,
         openAnnouncementThread: null,
@@ -1175,7 +1211,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
     await user.click(within(group).getByRole("button", { name: "Hold" }));
 
     expect(chooseOption).toHaveBeenCalledTimes(1);
-    expect(chooseOption).toHaveBeenCalledWith("Hold");
+    expect(chooseOption).toHaveBeenCalledWith("reply-row-1", "Hold");
   });
 
   it("shows a reply's options disabled where nothing can post them", () => {
@@ -1543,9 +1579,10 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     );
   });
 
-  it("posts the clicked option of a direct reply as a new post", async () => {
+  it("posts the clicked option of a direct reply not stored yet as a new post naming no message", async () => {
     const user = userEvent.setup();
-    const chooseOption = vi.fn<(choice: string) => void>();
+    const chooseOption =
+      vi.fn<(messageId: string | null, choice: string) => void>();
     renderRow(
       {
         ...botRow(undefined),
@@ -1558,7 +1595,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     await user.click(screen.getByRole("button", { name: "Hold" }));
 
     expect(chooseOption).toHaveBeenCalledTimes(1);
-    expect(chooseOption).toHaveBeenCalledWith("Hold");
+    expect(chooseOption).toHaveBeenCalledWith(null, "Hold");
   });
 
   it("disables a direct reply's options while a pick is being sent", () => {

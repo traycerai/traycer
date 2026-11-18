@@ -1,12 +1,17 @@
 import {
+  BotReadPresenceContext,
+  BotVisitPresenceContext,
+} from "@/components/bots/bot-read-presence-context";
+import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -50,10 +55,7 @@ import {
 import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
 import { useBotThreadFollows } from "@/hooks/bots/use-bot-thread-follow";
 import { useBotReadCursors } from "@/hooks/bots/use-bot-read-cursor";
-import {
-  useAdvanceWhilePresented,
-  usePresented,
-} from "@/hooks/bots/use-bot-read-while-presented";
+import { usePresented } from "@/hooks/bots/use-bot-read-while-presented";
 import { threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
 import {
   BotMemoryPanel,
@@ -61,9 +63,12 @@ import {
 } from "@/components/bots/bot-memory-panel";
 import {
   BotMessageComposer,
+  BotMessageComposerReading,
   type BotComposerEdit,
   type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
+import { useHeldDropPicker } from "@/components/bots/bot-box-drops";
+import { useComposerDropScope } from "@/components/chat/composer/composer-drop-scope";
 import type { QuoteTextSnapshot } from "@/components/chat/quote/append-quote-to-draft";
 import { clearBrowserSelection } from "@/components/chat/quote/quote-snapshot-into-draft";
 import {
@@ -71,7 +76,10 @@ import {
   type QuoteSink,
 } from "@/components/chat/quote/quote-sink-context";
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
-import { BotReadFailure } from "@/components/bots/bot-read-failure";
+import {
+  BotReadNoticeView,
+  type BotReadNotice,
+} from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
@@ -94,6 +102,7 @@ import {
   BotThreadPanel,
   type BotThreadPanelThread,
 } from "@/components/bots/bot-thread-panel";
+import { BotThreadBoxWaitsContext } from "@/components/bots/bot-thread-box-waits-context";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -143,7 +152,6 @@ import {
   type BotOpenMemory,
   type BotOpenSearch,
   type BotOpenThread,
-  type BotSessionOpen,
   type BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import {
@@ -154,8 +162,14 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import { cn } from "@/lib/utils";
-import { useChannelBackground } from "@/hooks/bots/use-bot-appearance";
-import { isTransientCloudFailure } from "@/lib/host/transient-cloud-failure";
+import {
+  sendWaitsOn,
+  staleFailureOf,
+  type BotReadFailing,
+  type BotReadStaleKind,
+  type BotReadView,
+} from "@/lib/bots/bot-read-view";
+import { useBotReadView } from "@/hooks/bots/use-bot-read-view";
 
 const EMPTY_THREADS: ReadonlyArray<BotThreadSummary> = [];
 const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
@@ -191,24 +205,6 @@ function channelConversation(
 export type BotChannelLanding = BotTranscriptLanding & {
   readonly threadId: string | null;
 };
-
-/**
- * Whether a read's failure is drawn. A read that holds an answer keeps
- * showing it when a refetch fails only because the host could not reach the
- * cloud: the host's cloud-recovery doorbell asks it again
- * (`cloud-recovery-doorbell-mount.tsx`). Any other failure, or one with
- * nothing to show, is drawn.
- */
-function readShowsFailure(read: {
-  readonly isError: boolean;
-  readonly data: unknown;
-  readonly error: unknown;
-}): boolean {
-  return (
-    read.isError &&
-    (read.data === undefined || !isTransientCloudFailure(read.error))
-  );
-}
 
 /**
  * The listed thread whose panel is drawn: none while the channel's own read
@@ -247,6 +243,19 @@ function useThreadPanelLanding(
       ? { landing: landOn, handed: false }
       : null,
   );
+  const spend = useCallback(() => setHeld(null), []);
+  // A landing asked of a channel that is already shown arrives as a new prop,
+  // not a mount: it is held as the mount's would be. The render that adopts
+  // it ends there, so the landing it replaces is never spent against it: that
+  // spend would be queued after the adoption and clear the new landing.
+  const [asked, setAsked] = useState(landOn);
+  if (landOn !== asked) {
+    setAsked(landOn);
+    if (landOn !== null && landOn.threadId !== null) {
+      setHeld({ landing: landOn, handed: false });
+      return { landing: null, spend };
+    }
+  }
   const showing = held !== null && drawnThreadId === held.landing.threadId;
   if (held !== null && showing && !held.handed) {
     setHeld({ landing: held.landing, handed: true });
@@ -257,8 +266,45 @@ function useThreadPanelLanding(
   ) {
     setHeld(null);
   }
-  const spend = useCallback(() => setHeld(null), []);
   return { landing: showing ? held.landing : null, spend };
+}
+
+/**
+ * The landing the channel's own list takes: the one the channel mounted with,
+ * then each the tab asks of it while it is shown (a tapped notification),
+ * which arrives as a new `landOn` that no mount reads. Each is a new visit,
+ * numbered past the memory links' own. One that reports its miss is the
+ * tab's to withdraw: once the tab asks for nothing, or for a message of a
+ * thread instead, the list is shown none, so an answer arriving afterwards
+ * says nothing, and the visit it took stays counted.
+ */
+function useChannelLanding(
+  landOn: BotChannelLanding | null,
+): [
+  BotTranscriptLanding | null,
+  Dispatch<SetStateAction<BotTranscriptLanding | null>>,
+] {
+  const [landing, setLanding] = useState<BotTranscriptLanding | null>(() =>
+    landOn !== null && landOn.threadId === null ? landOn : null,
+  );
+  const [asked, setAsked] = useState(landOn);
+  if (landOn !== asked) {
+    setAsked(landOn);
+    if (landOn !== null && landOn.threadId === null) {
+      const { messageId, sendPostId } = landOn;
+      const reportsMiss = landOn.reportsMiss === true;
+      setLanding((previous) => ({
+        messageId,
+        sendPostId,
+        visit: (previous?.visit ?? 0) + 1,
+        reportsMiss,
+      }));
+    }
+  }
+  const withdrawn =
+    (landOn === null || landOn.threadId !== null) &&
+    landing?.reportsMiss === true;
+  return [withdrawn ? null : landing, setLanding];
 }
 
 /**
@@ -340,8 +386,6 @@ export function BotChannelView(props: {
   readonly onOpenThread: (open: BotOpenThread | null) => void;
   /** Opens a reply's turn: its session, in place of the channel. */
   readonly onOpenTurn: BotTurnOpen;
-  /** Opens one of the bot's sessions in place of the channel: the open thread's, from its panel. */
-  readonly onOpenSession: BotSessionOpen;
   /** A message the channel, or the thread open beside it, lands on as it opens; `null` keeps where it opens. */
   readonly landOn: BotChannelLanding | null;
   /** The bot's memory open beside the channel in the thread's place; `null` for none. */
@@ -382,7 +426,6 @@ export function BotChannelView(props: {
     openThread: open,
     onOpenThread,
     onOpenTurn,
-    onOpenSession,
     openMemory,
     onOpenMemory,
     environmentId,
@@ -395,8 +438,13 @@ export function BotChannelView(props: {
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
-  const background = useChannelBackground(botId);
   const conversations = useBotConversationListQuery(client, botId, true);
+  // What the channel's read draws: its rows; its rows under a line saying why
+  // they may be out of date; or the failure in their place, with no rows.
+  const channelRead = useBotReadView(conversations);
+  const channelFailed = channelRead.kind === "failed";
+  const channelStale = staleFailureOf(channelRead);
+  const channelSendWaits = sendWaitsOn(channelRead);
   const channel = useMemo(
     () =>
       channelConversation(
@@ -414,17 +462,24 @@ export function BotChannelView(props: {
     keptDraft: channelKeptDraft,
     moved: channelMoved,
     notice: channelNotice,
+    reading: channelReading,
+    hold: channelHold,
   } = useKeptBoxDraft(botId, channelId);
+  // The channel is one drop zone for its box (T386), and the box's slot keeps
+  // the picker its reading view opens, so a pick outlives the read.
+  const channelDrop = useComposerDropScope();
+  const channelPicker = useHeldDropPicker(channelHold);
 
   const {
     supported: threadListSupported,
     threadList,
+    threadRead,
+    listed,
     threadsByPost,
     isUnread,
     unreadCountOf,
     threadAnchorKinds,
     follows,
-    readCursors,
     newRepliesOf,
   } = useChannelThreads({
     client,
@@ -451,8 +506,15 @@ export function BotChannelView(props: {
   const sentAs = useBotSentAs();
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
+  // Whether a send here can reply to a message (T166). A pick replies to the
+  // reply that offered it where it can, and is a plain post where it cannot.
+  const replyReach = useBotReplyReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
+  });
   const chooseOption = useCallback(
-    (choice: string) => {
+    (messageId: string | null, choice: string) => {
       if (channelId === null) return;
       clearSendFailure();
       send(
@@ -466,6 +528,9 @@ export function BotChannelView(props: {
             redeliver: null,
             supersedes: null,
             answer: null,
+            ...(replyReach === "delivered" && messageId !== null
+              ? { replyTo: messageId }
+              : {}),
           },
           sentAs,
         },
@@ -477,7 +542,7 @@ export function BotChannelView(props: {
         },
       );
     },
-    [botId, channelId, clearSendFailure, failSend, send, sentAs],
+    [botId, channelId, clearSendFailure, failSend, replyReach, send, sentAs],
   );
   // A question card's answer or Skip, on a question the bot asked at the
   // channel's top level: the person's message goes to the bot itself and
@@ -544,11 +609,6 @@ export function BotChannelView(props: {
   // Reply on a row of the channel names it in the channel's box, which takes
   // the focus; none while the box edits a failed message, whose send replaces
   // it and replies to nothing (T166).
-  const replyReach = useBotReplyReach({
-    hostId,
-    boundHostId,
-    boundHostTakes: threadAnchorKinds,
-  });
   const { setReplyTarget } = useBotDraftActions();
   const [replyChosen, setReplyChosen] = useState(0);
   const replyInChannel = useMemo(
@@ -702,11 +762,7 @@ export function BotChannelView(props: {
   // each follow a new visit, so the same link followed again lands again. The
   // channel opens where the tab asked it to: it mounts afresh each time a
   // session shown in its place closes.
-  const [landing, setLanding] = useState<BotTranscriptLanding | null>(() =>
-    props.landOn !== null && props.landOn.threadId === null
-      ? props.landOn
-      : null,
-  );
+  const [landing, setLanding] = useChannelLanding(props.landOn);
   const memoryNavigation = useMemo(
     (): BotMemoryNavigation => ({
       openThread: (anchorMessageId) =>
@@ -726,7 +782,7 @@ export function BotChannelView(props: {
         }));
       },
     }),
-    [onOpenMemory, onOpenThread],
+    [onOpenMemory, onOpenThread, setLanding],
   );
   const surface = useMemo<BotTranscriptSurface>(
     () => ({
@@ -834,7 +890,7 @@ export function BotChannelView(props: {
     tiles,
     section: channelSection,
     threadListSupported,
-    threadList,
+    threadList: { data: listed, isError: threadList.isError },
     railHeld: railHolds(threadOpen, openMemory, openExchange),
     setLanding,
   });
@@ -858,17 +914,19 @@ export function BotChannelView(props: {
     openPair: exchangeRail.open,
     openThread,
   });
-  const threadLanding = useThreadPanelLanding(
-    props.landOn,
-    drawnPanelThreadId({
-      channelReadFailed: readShowsFailure(conversations),
-      channel,
-      threadOpen,
-      openThread,
-    }),
+  const drawnThreadId = drawnPanelThreadId({
+    channelReadFailed: channelFailed,
+    channel,
+    threadOpen,
+    openThread,
+  });
+  const threadLanding = useThreadPanelLanding(props.landOn, drawnThreadId);
+  const { refetch: refetchThreads, isFetching: threadsFetching } = threadList;
+  // The channel's box and the thread's take the same host: a box waits while
+  // either read says a send would not arrive.
+  const threadBoxWaits = [channelRead, threadRead].some((view) =>
+    sendWaitsOn(view),
   );
-  const { refetch: refetchThreads } = threadList;
-  const threadListShowsFailure = readShowsFailure(threadList);
   // The row the open thread hangs off, as the channel's session has it: the
   // panel's own read of it fetches it when cold. Read beside the panel, not
   // around it, so the panel keeps its place while the session comes and goes.
@@ -879,13 +937,26 @@ export function BotChannelView(props: {
     messageId: railThreadPostId,
   });
   const panelThread = useMemo((): BotThreadPanelThread => {
+    const noticeOf = (view: BotReadFailing): BotReadNotice => ({
+      view,
+      retry: () => void refetchThreads(),
+      retrying: threadsFetching,
+    });
+    // The person must see nothing of the thread, or no re-ask can show it.
+    if (threadRead.kind === "failed" && threadRead.rowsWithheld) {
+      return { kind: "failed", retry: noticeOf(threadRead) };
+    }
     const sendable = anchorSendable({
       open,
       listed: openThread,
       post: anchorRow,
       threadAnchorKinds,
     });
-    const retry = threadListShowsFailure ? () => void refetchThreads() : null;
+    // One line per cause: the channel's line already says the list's.
+    const retry =
+      threadRead.kind === "ok" || threadRead.failure === channelStale
+        ? null
+        : noticeOf(threadRead);
     // A listed thread, one its post opened and a box that starts one keep
     // what the list last said, the box and its draft through a failed read.
     if (openThread !== null) {
@@ -897,32 +968,37 @@ export function BotChannelView(props: {
     if (open?.announcement === true) {
       return { kind: "unopened", retry, sendable };
     }
-    // No thread to show: any failure of the list is drawn.
-    if (threadList.isError) {
-      return { kind: "failed", retry: () => void refetchThreads() };
+    // No thread to show: any failure of the list is drawn in its place.
+    if (threadRead.kind !== "ok") {
+      return {
+        kind: "failed",
+        retry: noticeOf({
+          kind: "failed",
+          failure: threadRead.failure,
+          rowsWithheld: false,
+        }),
+      };
     }
     return { kind: "pending" };
   }, [
     anchorRow,
+    channelStale,
     open,
     openThread,
     refetchThreads,
     threadAnchorKinds,
-    threadList.isError,
-    threadListShowsFailure,
+    threadRead,
+    threadsFetching,
   ]);
-  const presentedThreadId = useReadThreadWhilePresented({
-    client,
-    botId,
-    thread: openThread,
-    readCursors,
+  // Only rows the person can see are presented, and so read: none behind the
+  // channel's failure, and none of a thread whose rows the panel does not draw.
+  const presentedThreadId = usePresentedThread({
+    threadId: threadWithRowsDrawn(drawnThreadId, panelThread),
     shown: threadOpen,
   });
-  const presentedChannelId = useReadChannelWhilePresented({
-    client,
-    botId,
+  const { presentedChannelId, shown: channelShown } = useChannelPresence({
     channelId,
-    readCursors,
+    rowsDrawn: !channelFailed,
     threadOpen: railOpen,
     section: channelSection,
   });
@@ -940,15 +1016,15 @@ export function BotChannelView(props: {
     [resolveMember, viewer],
   );
 
-  if (readShowsFailure(conversations)) {
+  if (channelFailed) {
     return (
-      <div className="p-4">
-        <BotReadFailure
-          message="Couldn't load this bot's channel."
-          onRetry={() => void conversations.refetch()}
-          testId="bot-channel-error"
-        />
-      </div>
+      <ChannelReadNotice
+        view={channelRead}
+        read={conversations}
+        threads={null}
+        hostId={hostId}
+        className="p-4"
+      />
     );
   }
   if (conversations.data === undefined) {
@@ -983,89 +1059,127 @@ export function BotChannelView(props: {
   return (
     <BotSurfaceCardsContext.Provider value={surfaceCards}>
       <QuoteSinkContext value={quoteIntoChannelBox}>
-        <div className="@container flex min-h-0 flex-1">
-          <div className="flex min-h-0 w-full">
+        <div className="@container flex min-h-0 flex-1 flex-col">
+          {/* Above the channel and the rail, not in either: on a narrow pane
+              one covers the other, and a waiting box is never shown without
+              the line saying why, with Retry. A thread's own line says only
+              a cause this one does not, so where the thread list fails for
+              this one's cause, this one's Retry asks it again too. */}
+          <ChannelReadNotice
+            view={channelRead}
+            read={conversations}
+            threads={threadsRetriedWithChannel({
+              threadRead,
+              channelStale,
+              refetch: refetchThreads,
+              fetching: threadsFetching,
+            })}
+            hostId={hostId}
+            className="shrink-0 px-4 pt-2"
+          />
+          <div className="flex min-h-0 w-full flex-1">
             <section
               ref={setChannelSection}
               aria-label={botTitle}
               data-testid="bot-channel"
               data-conversation-id={channel.conversationId}
               className={cn(
-                "min-h-0 min-w-0 flex-1 flex-col",
+                "relative min-h-0 min-w-0 flex-1 flex-col",
                 railOpen ? channelBesideRailClass(tiles) : "flex",
               )}
+              {...channelDrop.zoneProps}
             >
-              {/* The message area: where a chosen background tints the
-                  channel. The dock below it (the replying strip, the
-                  routing card and the box) keeps the page's own. */}
-              <div
-                data-testid="bot-channel-messages"
-                data-channel-background={background.index}
-                style={{ "--channel-tint": background.color } as CSSProperties}
-                className={cn(
-                  "flex min-h-0 flex-1 flex-col",
-                  background.className,
-                )}
-              >
-                <ChannelSearchBack
-                  botId={botId}
-                  shown={search.showing}
-                  on="channel"
-                />
-                <BotExchangeLinesContext value={exchangeLines.channel}>
-                  <BotChatTranscript
-                    botId={botId}
-                    chatId={channel.conversationId}
-                    hostId={hostId}
-                    title={botTitle}
-                    instanceId={`bot-channel:${botId}`}
-                    surface={surface}
-                    resolveMember={resolveMember}
-                    showConnecting
-                    header={null}
-                    landOn={landing}
-                    flow={null}
-                    sendBinding={sendBinding}
+              {channelDrop.provide(
+                <>
+                  <div
+                    data-testid="bot-channel-messages"
+                    className="flex min-h-0 flex-1 flex-col"
+                  >
+                    <ChannelSearchBack
+                      botId={botId}
+                      shown={search.showing}
+                      on="channel"
+                    />
+                    <BotVisitPresenceContext value={channelShown}>
+                      <BotReadPresenceContext
+                        value={presentedChannelId !== null}
+                      >
+                        <BotExchangeLinesContext value={exchangeLines.channel}>
+                          <BotChatTranscript
+                            botId={botId}
+                            chatId={channel.conversationId}
+                            hostId={hostId}
+                            title={botTitle}
+                            instanceId={`bot-channel:${botId}`}
+                            surface={surface}
+                            resolveMember={resolveMember}
+                            showConnecting
+                            header={null}
+                            landOn={landing}
+                            flow={null}
+                            sendBinding={sendBinding}
+                          />
+                        </BotExchangeLinesContext>
+                      </BotReadPresenceContext>
+                    </BotVisitPresenceContext>
+                  </div>
+                  <BotReplyingStrip
+                    botTitle={botTitle}
+                    activity={trunkReply}
+                    turn={trunkReplyTurn}
+                    testId="bot-channel-replying"
                   />
-                </BotExchangeLinesContext>
-              </div>
-              <BotReplyingStrip
-                botTitle={botTitle}
-                activity={trunkReply}
-                turn={trunkReplyTurn}
-                testId="bot-channel-replying"
-              />
-              <BotRoutingCard
-                botId={botId}
-                hostId={hostId}
-                sessionChatId={trunkChatId}
-              />
-              <BotMessageComposer
-                // Its draft is the conversation's, kept by it (`channelKeptDraft`).
-                key={channel.conversationId}
-                botId={botId}
-                botTitle={botTitle}
-                conversationId={channel.conversationId}
-                threadId={null}
-                announcementId={null}
-                sendable
-                imageReach={imageReach}
-                placeholder={`Message ${botTitle}`}
-                label={`Message ${botTitle}`}
-                testId="bot-channel-composer"
-                failure={sendFailure}
-                edit={edit}
-                onEditEnd={endEdit}
-                onEditResume={setEdit}
-                seed={channelSeed}
-                keptDraft={channelKeptDraft}
-                quote={quoteFor(null)}
-                reply={{ reach: replyReach, chosen: replyChosen }}
-                moved={channelMoved}
-                notice={channelNotice}
-                onSent={openPostedThread}
-                pending={channelPending}
-              />
+                  <BotRoutingCard
+                    botId={botId}
+                    hostId={hostId}
+                    sessionChatId={trunkChatId}
+                  />
+                  {channelReading === null ? (
+                    <BotMessageComposer
+                      // Its draft is the conversation's, kept by it (`channelKeptDraft`).
+                      key={channel.conversationId}
+                      botId={botId}
+                      botTitle={botTitle}
+                      conversationId={channel.conversationId}
+                      threadId={null}
+                      announcementId={null}
+                      sendable={!channelSendWaits}
+                      imageReach={imageReach}
+                      placeholder={`Message ${botTitle}`}
+                      label={`Message ${botTitle}`}
+                      testId="bot-channel-composer"
+                      failure={sendFailure}
+                      edit={edit}
+                      onEditEnd={endEdit}
+                      onEditResume={setEdit}
+                      seed={channelSeed}
+                      keptDraft={channelKeptDraft}
+                      quote={quoteFor(null)}
+                      reply={{ reach: replyReach, chosen: replyChosen }}
+                      moved={channelMoved}
+                      notice={channelNotice}
+                      hold={channelHold}
+                      onSent={openPostedThread}
+                      pending={channelPending}
+                    />
+                  ) : (
+                    <BotMessageComposerReading
+                      key={channel.conversationId}
+                      placeholder={`Message ${botTitle}`}
+                      label={`Message ${botTitle}`}
+                      reading={channelReading}
+                      replyReach={replyReach}
+                      imageReach={imageReach}
+                      attach={channelPicker.open}
+                      testId="bot-channel-composer"
+                    />
+                  )}
+                  <span hidden data-testid="bot-channel-composer-picker">
+                    {channelPicker.input}
+                  </span>
+                </>,
+              )}
+              {channelDrop.overlay}
             </section>
             <ChannelMemoryPane
               tiles={tiles}
@@ -1078,7 +1192,7 @@ export function BotChannelView(props: {
                   botTitle={botTitle}
                   channelId={channel.conversationId}
                   trunkChatId={trunkChatId}
-                  threads={threadList.data?.threads ?? null}
+                  threads={listed?.threads ?? null}
                   botNameOf={botNameOf}
                   back={memory.back}
                   onBack={
@@ -1115,47 +1229,53 @@ export function BotChannelView(props: {
                 />
               }
               render={(postId) => (
-                <BotExchangeLinesContext value={exchangeLines.thread}>
-                  <QuoteSinkContext value={quoteIntoThreadBox}>
-                    <BotThreadPanel
-                      key={postId}
-                      botId={botId}
-                      hostId={hostId}
-                      boundHostId={boundHostId}
-                      boundHostEpoch={boundHostEpoch}
-                      onBindingMoved={onBindingMoved}
-                      botTitle={botTitle}
-                      imageReach={imageReach}
-                      answerReach={answerReach}
-                      replyReach={replyReach}
-                      conversationId={channel.conversationId}
-                      originMessageId={postId}
-                      // An announcement's thread opens on the bot's row: the
-                      // first reply that opened it is drawn in the thread,
-                      // never as its post (T249).
-                      sent={
-                        open?.announcement === true
-                          ? null
-                          : (open?.sent ?? null)
-                      }
-                      thread={panelThread}
-                      tasks={tasks}
-                      anchorSenderLabel={anchorSenderLabel}
-                      resolveMember={resolveMember}
-                      landOn={
-                        threadLanding.landing ?? search.threadLandingOn(postId)
-                      }
-                      onClose={() => {
-                        threadLanding.spend();
-                        onOpenThread(null);
-                      }}
-                      onEditPost={editPostFromThread}
-                      onOpenTurn={onOpenTurn}
-                      onOpenSession={onOpenSession}
-                      quote={quoteFor(postId)}
-                    />
-                  </QuoteSinkContext>
-                </BotExchangeLinesContext>
+                <BotVisitPresenceContext value={threadOpen}>
+                  <BotReadPresenceContext value={presentedThreadId !== null}>
+                    <BotExchangeLinesContext value={exchangeLines.thread}>
+                      <QuoteSinkContext value={quoteIntoThreadBox}>
+                        <BotThreadBoxWaitsContext value={threadBoxWaits}>
+                          <BotThreadPanel
+                            key={postId}
+                            botId={botId}
+                            hostId={hostId}
+                            boundHostId={boundHostId}
+                            boundHostEpoch={boundHostEpoch}
+                            onBindingMoved={onBindingMoved}
+                            botTitle={botTitle}
+                            imageReach={imageReach}
+                            answerReach={answerReach}
+                            replyReach={replyReach}
+                            conversationId={channel.conversationId}
+                            originMessageId={postId}
+                            // An announcement's thread opens on the bot's row: the
+                            // first reply that opened it is drawn in the thread,
+                            // never as its post (T249).
+                            sent={
+                              open?.announcement === true
+                                ? null
+                                : (open?.sent ?? null)
+                            }
+                            thread={panelThread}
+                            tasks={tasks}
+                            anchorSenderLabel={anchorSenderLabel}
+                            resolveMember={resolveMember}
+                            landOn={
+                              threadLanding.landing ??
+                              search.threadLandingOn(postId)
+                            }
+                            onClose={() => {
+                              threadLanding.spend();
+                              onOpenThread(null);
+                            }}
+                            onEditPost={editPostFromThread}
+                            onOpenTurn={onOpenTurn}
+                            quote={quoteFor(postId)}
+                          />
+                        </BotThreadBoxWaitsContext>
+                      </QuoteSinkContext>
+                    </BotExchangeLinesContext>
+                  </BotReadPresenceContext>
+                </BotVisitPresenceContext>
               )}
             />
             <ChannelExchangePane
@@ -1547,6 +1667,10 @@ function useChannelThreads(args: {
 }): {
   readonly supported: boolean;
   readonly threadList: UseQueryResult<BotThreadListResponse, HostRpcError>;
+  /** What the list draws (`botReadView`). */
+  readonly threadRead: BotReadView;
+  /** What the list says for the person to see: nothing behind its failure. */
+  readonly listed: BotThreadListResponse | undefined;
   readonly threadsByPost: ReadonlyMap<string, BotThreadSummary>;
   readonly isUnread: (threadId: string) => boolean;
   /** `null` where the host does not count. */
@@ -1565,7 +1689,9 @@ function useChannelThreads(args: {
   const threadList = useBotThreadListQuery(client, botId, {
     enabled: supported,
   });
-  const threads = threadList.data?.threads ?? EMPTY_THREADS;
+  const threadRead = useBotReadView(threadList);
+  const listed = threadRead.kind === "failed" ? undefined : threadList.data;
+  const threads = listed?.threads ?? EMPTY_THREADS;
   const threadsByPost = useMemo(() => {
     const byPost = new Map<string, BotThreadSummary>();
     for (const thread of threads) {
@@ -1606,7 +1732,7 @@ function useChannelThreads(args: {
   // under an earlier binding - cached, or answered after the bot moved -
   // says nothing for this one until it is read again. A direct reply then
   // opens its post's thread, and any other row of the bot none.
-  const anchors = threadList.data?.threadAnchors ?? null;
+  const anchors = listed?.threadAnchors ?? null;
   const threadAnchorKinds = useMemo(
     () =>
       supported
@@ -1640,6 +1766,8 @@ function useChannelThreads(args: {
   return {
     supported,
     threadList,
+    threadRead,
+    listed,
     threadsByPost,
     isUnread,
     unreadCountOf,
@@ -1712,56 +1840,103 @@ function useDisplayed(element: HTMLElement | null): boolean {
   return element !== null && displayed;
 }
 
-/**
- * Advances the channel's read cursor while the person can see it: the channel
- * transcript presented in the pane on screen, in a window they are in, has been
- * read. The channel it presents, or `null`.
- */
-function useReadChannelWhilePresented(args: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly botId: string;
-  readonly channelId: string | null;
-  readonly readCursors: BotReadCursorReadResponse | undefined;
-  readonly threadOpen: boolean;
-  /** The channel's section: beside an open thread a container query hides it on a narrow pane, which only its size tells. */
-  readonly section: HTMLElement | null;
-}): string | null {
-  const { client, botId, channelId, threadOpen, section } = args;
-  const displayed = useDisplayed(section);
-  const presented = usePresented(!threadOpen || displayed);
-  useAdvanceWhilePresented({
-    client,
-    botId,
-    conversationId: channelId,
-    readCursors: args.readCursors,
-    presented,
-  });
-  return presented ? channelId : null;
+interface ThreadsRetriedWithChannel {
+  readonly refetch: () => Promise<unknown>;
+  readonly fetching: boolean;
 }
 
 /**
- * Advances the open thread's read cursor while the person can see it: its panel
- * is shown in the pane on screen, in a window they are in. The thread it
- * presents, or `null`.
+ * The thread list, where it fails for the channel line's cause: the thread's
+ * own line leaves that cause to the channel's (`panelThread`), so the
+ * channel's Retry asks the list again too. `null` otherwise.
  */
-function useReadThreadWhilePresented(args: {
-  readonly client: HostClient<HostRpcRegistry> | null;
-  readonly botId: string;
-  readonly thread: BotThreadSummary | null;
-  readonly readCursors: BotReadCursorReadResponse | undefined;
+function threadsRetriedWithChannel(args: {
+  readonly threadRead: BotReadView;
+  readonly channelStale: BotReadStaleKind | null;
+  readonly refetch: () => Promise<unknown>;
+  readonly fetching: boolean;
+}): ThreadsRetriedWithChannel | null {
+  const { threadRead, channelStale } = args;
+  if (threadRead.kind === "ok" || threadRead.failure !== channelStale) {
+    return null;
+  }
+  return { refetch: args.refetch, fetching: args.fetching };
+}
+
+/**
+ * The channel's read failing, said in place: the line over its rows, or the
+ * state in their place. Nothing while the read is not failing.
+ */
+function ChannelReadNotice(props: {
+  readonly view: BotReadView;
+  readonly read: UseQueryResult<unknown, HostRpcError>;
+  /** The thread list its Retry asks again too (`threadsRetriedWithChannel`). */
+  readonly threads: ThreadsRetriedWithChannel | null;
+  readonly hostId: string;
+  /** Where it sits: its box's spacing. */
+  readonly className: string;
+}): ReactNode {
+  const { view, read, threads } = props;
+  if (view.kind === "ok") return null;
+  return (
+    <div className={props.className}>
+      <BotReadNoticeView
+        notice={{
+          view,
+          retry: () => {
+            void read.refetch();
+            if (threads !== null) void threads.refetch();
+          },
+          retrying: read.isFetching || (threads !== null && threads.fetching),
+        }}
+        surface="channel"
+        hostId={props.hostId}
+      />
+    </div>
+  );
+}
+
+/**
+ * The listed thread whose replies the panel draws: the one drawn beside the
+ * channel, unless a refusal draws its state in place of the replies.
+ */
+function threadWithRowsDrawn(
+  drawnThreadId: string | null,
+  panelThread: BotThreadPanelThread,
+): string | null {
+  return panelThread.kind === "listed" ? drawnThreadId : null;
+}
+
+/**
+ * Reports channel presence. The transcript separately qualifies actual reading.
+ */
+function useChannelPresence(args: {
+  readonly channelId: string | null;
+  /** The channel's rows are drawn: not while its failure shows in their place. */
+  readonly rowsDrawn: boolean;
+  readonly threadOpen: boolean;
+  /** The channel's section: beside an open thread a container query hides it on a narrow pane, which only its size tells. */
+  readonly section: HTMLElement | null;
+}): { readonly presentedChannelId: string | null; readonly shown: boolean } {
+  const { threadOpen, section } = args;
+  const channelId = args.rowsDrawn ? args.channelId : null;
+  const displayed = useDisplayed(section);
+  const shown = !threadOpen || displayed;
+  const presented = usePresented(shown);
+  return { presentedChannelId: presented ? channelId : null, shown };
+}
+
+/**
+ * Reports thread presence. Opening the panel alone acknowledges no messages.
+ */
+function usePresentedThread(args: {
+  /** The listed thread whose replies the panel draws; `null` for none. */
+  readonly threadId: string | null;
   /** The thread panel is rendered. */
   readonly shown: boolean;
 }): string | null {
-  const { client, botId, thread, shown } = args;
+  const { threadId, shown } = args;
   const presented = usePresented(shown);
-  const threadId = thread?.threadId ?? null;
-  useAdvanceWhilePresented({
-    client,
-    botId,
-    conversationId: threadId,
-    readCursors: args.readCursors,
-    presented,
-  });
   return presented ? threadId : null;
 }
 

@@ -14,6 +14,7 @@ import type {
   BotRecord,
   BotReplyMode,
 } from "@traycer/protocol/host/bot/schemas";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/index";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -56,11 +57,14 @@ import {
 } from "@/components/bots/bot-settings-group";
 import { BotSlackSettings } from "@/components/bots/bot-slack-settings";
 import { BotAppearanceSettings } from "@/components/bots/bot-appearance-settings";
+import { BotCallVoiceSettings } from "@/components/bots/bot-call-voice-settings";
+import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
 import {
   BotMemoryContext,
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
 import { useBotMemory } from "@/hooks/bots/use-bot-memory";
+import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 
 const BOT_TITLE_MAX = 500;
 
@@ -72,6 +76,8 @@ const BOT_TITLE_MAX = 500;
  *   channel's background, who manages it and who may message it, how a
  *   personal bot answers posts, and a team's members;
  * - Model: the harness, model, effort and profile the bot runs on;
+ * - Voice: the voice calls speak in on this device, for every bot (the
+ *   device's setting, not the bot's), where the deployment offers voice;
  * - Notifications: what the bell raises for this channel;
  * - Bots in this channel: the team's bots;
  * - Slack: the bot's own Slack app, from its manifest to its install, on
@@ -155,6 +161,7 @@ export function BotChannelSettingsPanel(props: {
           {personal ? null : <BotTeamMembers />}
         </SettingsGroup>
         <BotRunSettingsForm bot={bot} />
+        <BotCallVoiceGroup />
         {channelId === null ? null : (
           <BotNotificationsSection botId={bot.botId} channelId={channelId} />
         )}
@@ -162,10 +169,35 @@ export function BotChannelSettingsPanel(props: {
           <BotsInChannel bots={environmentBots} />
         )}
         <BotSlackSettings botId={bot.botId} />
-        <BotUsageSection botId={bot.botId} onClose={onClose} />
+        <BotUsageSection bot={bot} onClose={onClose} />
         <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
       </div>
     </aside>
+  );
+}
+
+/**
+ * The voice calls speak in on this device, from the voices the deployment
+ * offers; not drawn where the deployment offers no voice at all.
+ */
+function BotCallVoiceGroup(): ReactNode {
+  const availability = useVoiceAvailabilityQuery(true);
+  if (availability.isPending) {
+    return <BotCallVoiceSettings catalogue={{ kind: "loading" }} />;
+  }
+  if (availability.isError) {
+    return <BotCallVoiceSettings catalogue={{ kind: "failed" }} />;
+  }
+  const { available, voiceSelection } = availability.data;
+  if (!available) return null;
+  return (
+    <BotCallVoiceSettings
+      catalogue={
+        voiceSelection === null
+          ? { kind: "unsupported" }
+          : { kind: "ready", catalogue: voiceSelection }
+      }
+    />
   );
 }
 
@@ -175,16 +207,16 @@ export function BotChannelSettingsPanel(props: {
  * inside a bot tab, what the bot knows.
  */
 function BotUsageSection(props: {
-  readonly botId: string;
+  readonly bot: BotRecord;
   /** Closes the settings, which the memory pane opens in place of. */
   readonly onClose: () => void;
 }): ReactNode {
   const memory = useContext(BotMemoryContext);
   if (memory === null)
-    return <BotUsageGroup botId={props.botId} memoryEntry={null} />;
+    return <BotUsageGroup bot={props.bot} memoryEntry={null} />;
   return (
     <BotUsageWithMemory
-      botId={props.botId}
+      bot={props.bot}
       access={memory}
       onClose={props.onClose}
     />
@@ -193,7 +225,7 @@ function BotUsageSection(props: {
 
 /** The Usage group with the memory entry, where the host serves the memory. */
 function BotUsageWithMemory(props: {
-  readonly botId: string;
+  readonly bot: BotRecord;
   readonly access: BotMemoryAccess;
   readonly onClose: () => void;
 }): ReactNode {
@@ -202,7 +234,7 @@ function BotUsageWithMemory(props: {
   const count = reading.kind === "ready" ? reading.memory.entries.length : null;
   return (
     <BotUsageGroup
-      botId={props.botId}
+      bot={props.bot}
       memoryEntry={
         reading.kind === "unsupported" ? null : (
           <BotMemoryEntry
@@ -220,13 +252,18 @@ function BotUsageWithMemory(props: {
 
 /** The group, drawn only when it holds a button. */
 function BotUsageGroup(props: {
-  readonly botId: string;
+  readonly bot: BotRecord;
   readonly memoryEntry: ReactNode;
 }): ReactNode {
+  const { bot } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
   const supported = useUsageSummarySupported(hostId);
   const [open, setOpen] = useState(false);
+  // Read while the dialog is open, for the by-chat table's thread names.
+  const threads = useBotThreadListQuery(client, bot.botId, {
+    enabled: supported && open,
+  });
   if (!supported && props.memoryEntry === null) return null;
   return (
     <SettingsGroup title="Usage" testId="bot-settings-usage">
@@ -246,14 +283,30 @@ function BotUsageGroup(props: {
       </div>
       {supported ? (
         <EpicUsageDialog
-          epicId={props.botId}
+          epicId={bot.botId}
           client={client}
           open={open}
           onOpenChange={setOpen}
+          chatTitles={botUsageChatTitles(bot, threads.data?.threads ?? [])}
         />
       ) : null}
     </SettingsGroup>
   );
+}
+
+/**
+ * The usage table's names for a bot's chats, which no epic tree holds: the
+ * trunk by the bot's name, each thread's session by the post it answers.
+ */
+function botUsageChatTitles(
+  bot: BotRecord,
+  threads: readonly BotThreadSummary[],
+): ReadonlyMap<string, string> {
+  const titles = new Map<string, string>([[bot.trunkChatId, bot.title]]);
+  for (const thread of threads) {
+    titles.set(thread.sessionChatId, thread.anchor?.excerpt ?? "Thread");
+  }
+  return titles;
 }
 
 /**

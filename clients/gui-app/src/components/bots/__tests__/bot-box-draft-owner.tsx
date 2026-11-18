@@ -56,6 +56,7 @@ function Box(props: {
         onEditResume={(resumed) => setEdit(resumed)}
         seed={kept.seed}
         keptDraft={kept.keptDraft}
+        hold={kept.hold}
         quote={null}
         reply={NO_BOT_REPLY}
         moved={kept.moved}

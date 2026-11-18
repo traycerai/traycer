@@ -26,6 +26,7 @@ import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-polic
 import { createAppQueryClient } from "@/lib/query-client";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import {
@@ -49,6 +50,12 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaults: () => new Map(),
 }));
+
+/** The picker's sheet reads the resolved theme the app's provider supplies. */
+const RESOLVED_THEME = {
+  resolvedTheme: "dark",
+  themePreset: "neutral",
+} as const;
 
 const MAIN_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
 /** `ON_SCREEN_FIXED_POLL`'s interval. */
@@ -115,9 +122,11 @@ function rig(): Rig {
   const client = spine.createRequester(mockLocalHostEntry);
   const channel = (visible: boolean): ReactNode => (
     <QueryClientProvider client={queryClient}>
-      <PaneVisibilityContext value={visible}>
-        <SetupWithLevel2Form client={client} />
-      </PaneVisibilityContext>
+      <ResolvedThemeContext.Provider value={RESOLVED_THEME}>
+        <PaneVisibilityContext value={visible}>
+          <SetupWithLevel2Form client={client} />
+        </PaneVisibilityContext>
+      </ResolvedThemeContext.Provider>
     </QueryClientProvider>
   );
   return {

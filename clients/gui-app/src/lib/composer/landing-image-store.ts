@@ -402,7 +402,8 @@ export async function getImageBytes(
 /**
  * Answers "is `hash` referenced by anything you know about, right now?" - live
  * for the whole reclaim, not a snapshot. `reclaimImageBytes` calls it several
- * times and the LAST call is the one that decides.
+ * times and the LAST call is the one that decides. A call that throws answers
+ * "referenced".
  */
 export type ImageRootProbe = () => boolean;
 
@@ -600,7 +601,15 @@ export async function deleteImageBytesUnchecked(hash: string): Promise<void> {
  * during a sweep is visible here before its bytes are.
  */
 function stillRooted(hash: string, isRooted: ImageRootProbe): boolean {
-  return session.has(hash) || isRooted();
+  if (session.has(hash)) return true;
+  // A probe that cannot say has not said "unreferenced": before the delete
+  // the bytes stay, and after it they are written back, or held in custody
+  // while that write is refused.
+  try {
+    return isRooted();
+  } catch {
+    return true;
+  }
 }
 
 /** Every hash with bytes persisted in this runtime's partition. */

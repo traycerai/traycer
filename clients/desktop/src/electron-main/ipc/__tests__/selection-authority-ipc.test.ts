@@ -2057,9 +2057,9 @@ describe("selection authority IPC binding", () => {
       // through the un-wrapped handler into `bridge.handleInvoke`'s generic
       // wrapper, which re-throws - reaching the caller as a rejected invoke
       // on an operation (e.g. a deregistration) that had already succeeded.
-      // The handler now wraps `fleet.refresh()` in its own try/catch, so
-      // containment lives at the one seam that owns this promise, rather
-      // than relying on every future caller remembering to `.catch()`.
+      // `DesktopHostFleetSource.refresh()` now contains it at the source,
+      // where the promise is owned, and answers `unavailable`, so no caller
+      // has to remember a `.catch()`.
       electronLogWarnMock.mockClear();
 
       fetchRegisteredHostsMock.mockResolvedValue({
@@ -2085,9 +2085,86 @@ describe("selection authority IPC binding", () => {
       const refreshFleet = refreshFleetHandler();
       // Contained: the invoke resolves rather than rejecting on a caller
       // that already completed a real operation (e.g. a deregistration).
-      await expect(refreshFleet(sender(101))).resolves.toBeUndefined();
+      await expect(refreshFleet(sender(101))).resolves.toEqual({
+        kind: "unavailable",
+      });
       // Not silently swallowed into nothing: the warn path ran.
       expect(electronLogWarnMock).toHaveBeenCalledTimes(1);
+
+      bridge.dispose();
+    });
+
+    it("G4: the invoke resolves published when the explicit refresh was adopted", async () => {
+      fetchRegisteredHostsMock.mockResolvedValue({
+        kind: "ok",
+        response: { hosts: [] },
+      });
+      const { bridge, registry } = await buildBridge({
+        signedIn: { userId: "user-a", token: "token-1" },
+      });
+      registry.add("window-a", 101, buildWindow());
+      bridge.install();
+      await settledSeedFetchCount();
+
+      await expect(refreshFleetHandler()(sender(101))).resolves.toEqual({
+        kind: "published",
+      });
+
+      bridge.dispose();
+    });
+
+    it("G5: the invoke resolves unavailable, not rejected, when the registry refuses the read", async () => {
+      fetchRegisteredHostsMock.mockResolvedValue({
+        kind: "ok",
+        response: { hosts: [] },
+      });
+      const { bridge, registry } = await buildBridge({
+        signedIn: { userId: "user-a", token: "token-1" },
+      });
+      registry.add("window-a", 101, buildWindow());
+      bridge.install();
+      await settledSeedFetchCount();
+
+      fetchRegisteredHostsMock.mockResolvedValueOnce({ kind: "network-error" });
+
+      await expect(refreshFleetHandler()(sender(101))).resolves.toEqual({
+        kind: "unavailable",
+      });
+
+      bridge.dispose();
+    });
+
+    it("G6: the invoke resolves superseded when the account signs out while the read is in flight", async () => {
+      fetchRegisteredHostsMock.mockResolvedValue({
+        kind: "ok",
+        response: { hosts: [] },
+      });
+      const { bridge, registry, authSession } = await buildBridge({
+        signedIn: { userId: "user-a", token: "token-1" },
+      });
+      registry.add("window-a", 101, buildWindow());
+      bridge.install();
+      await settledSeedFetchCount();
+
+      let releaseRead: (result: HostListFetchResult) => void = () => undefined;
+      const readStarted = fetchRegisteredHostsMock.mock.calls.length;
+      fetchRegisteredHostsMock.mockImplementationOnce(
+        () =>
+          new Promise<HostListFetchResult>((resolve) => {
+            releaseRead = resolve;
+          }),
+      );
+
+      const refreshing = refreshFleetHandler()(sender(101));
+      await vi.waitFor(() => {
+        expect(fetchRegisteredHostsMock.mock.calls.length).toBe(
+          readStarted + 1,
+        );
+      });
+      authSession.set({ status: "signed-out", token: null, profile: null });
+      releaseRead({ kind: "ok", response: { hosts: [] } });
+
+      await expect(refreshing).resolves.toEqual({ kind: "superseded" });
 
       bridge.dispose();
     });

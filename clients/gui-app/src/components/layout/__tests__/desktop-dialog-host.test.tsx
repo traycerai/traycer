@@ -305,7 +305,7 @@ function createBaseRunnerHost(): IRunnerHost {
     browserView: null,
     sandboxArtifacts: null,
     selectionAuthority: createInertSelectionAuthorityClient(),
-    refreshHostFleet: () => Promise.resolve(),
+    refreshHostFleet: () => Promise.resolve({ kind: "published" as const }),
     onRegisteredHostsChange: () => null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
@@ -440,7 +440,11 @@ function createBaseRunnerHost(): IRunnerHost {
     onVoiceTrayAction: () => ({ dispose: () => undefined }),
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
     getVoiceAvailability: () =>
-      Promise.resolve({ kind: "ok" as const, available: false }),
+      Promise.resolve({
+        kind: "ok" as const,
+        available: false,
+        voiceSelection: null,
+      }),
     mintVoiceSession: () => Promise.resolve({ kind: "dormant" as const }),
     endVoiceSession: () =>
       Promise.resolve({ kind: "ok" as const, closedAt: null }),

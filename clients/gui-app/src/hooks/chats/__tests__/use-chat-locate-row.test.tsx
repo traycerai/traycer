@@ -1,5 +1,6 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ChatLocateRowResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
   useChatLocateRow,
@@ -39,9 +40,14 @@ const captured = vi.hoisted<{ value: CapturedHostQuery | null }>(() => ({
   value: null,
 }));
 /** What the query reports besides its data: a request in flight, a rejection. */
-const status = vi.hoisted<{ fetching: boolean; rejected: boolean }>(() => ({
+const status = vi.hoisted<{
+  fetching: boolean;
+  rejected: boolean;
+  error: Error | null;
+}>(() => ({
   fetching: false,
   rejected: false,
+  error: null,
 }));
 
 // No directory entry and no witness: the chat stays on its own host, which
@@ -57,6 +63,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
       data: answer.value,
       isFetching: status.fetching,
       isError: status.rejected,
+      error: status.error,
     };
   },
 }));
@@ -86,6 +93,7 @@ beforeEach(() => {
   captured.value = null;
   status.fetching = false;
   status.rejected = false;
+  status.error = null;
 });
 
 describe("useChatLocateRow", () => {
@@ -150,11 +158,12 @@ describe("useChatLocateRowAnswer", () => {
 
   it("keeps the difference between a miss and no answer yet", () => {
     answer.value = { found: false };
-    expect(answerNow(7)).toEqual({ status: "missing" });
+    expect(answerNow(7)).toEqual({ status: "missing", cause: "absent" });
 
     answer.value = undefined;
     status.rejected = true;
-    expect(answerNow(7)).toEqual({ status: "missing" });
+    status.error = new Error("the connection dropped");
+    expect(answerNow(7)).toEqual({ status: "missing", cause: "failed" });
 
     status.rejected = false;
     expect(answerNow(7)).toEqual({ status: "waiting" });
@@ -166,7 +175,33 @@ describe("useChatLocateRowAnswer", () => {
     expect(answerNow(7)).toEqual({ status: "waiting" });
 
     status.fetching = false;
-    expect(answerNow(7)).toEqual({ status: "missing" });
+    expect(answerNow(7)).toEqual({ status: "missing", cause: "absent" });
+  });
+
+  it("reads a host that does not locate rows as unsupported, which says nothing about the row", () => {
+    answer.value = undefined;
+    status.rejected = true;
+    status.error = new HostRpcError({
+      code: "E_HOST_UNSUPPORTED",
+      message: "the host does not locate rows",
+      requestId: "request-1",
+      method: "chat.locateRow",
+      fatalDetails: null,
+    });
+    expect(answerNow(7)).toEqual({ status: "missing", cause: "unsupported" });
+  });
+
+  it("reads any other host rejection as failed", () => {
+    answer.value = undefined;
+    status.rejected = true;
+    status.error = new HostRpcError({
+      code: "RPC_ERROR",
+      message: "the host could not read the chat",
+      requestId: "request-2",
+      method: "chat.locateRow",
+      fatalDetails: null,
+    });
+    expect(answerNow(7)).toEqual({ status: "missing", cause: "failed" });
   });
 
   it("reads a found row as found whether or not a request runs", () => {

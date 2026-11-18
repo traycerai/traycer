@@ -18,6 +18,7 @@ import type {
   ChatRunSettings,
   PendingFallback,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import { QUEUED_MESSAGE_PAUSED_LABEL } from "@/components/chat/queued-message-surface";
 
 /**
  * The queue pill's tooltip, end to end through the tile: the tile feeds the
@@ -478,7 +479,7 @@ function pillTooltips(): readonly (string | null)[] {
 
 function expectOneRoutingSentence() {
   for (const row of rows()) {
-    expect(badgeOf(row).textContent).toBe("Paused after an error");
+    expect(badgeOf(row).textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
   }
   const tooltips = pillTooltips();
   expect(tooltips).toEqual([ROUTING_SENTENCE, ROUTING_SENTENCE]);
@@ -562,7 +563,7 @@ describe("queue pill tooltip through the tile, turn_error pause", () => {
     setFallbackState(state);
 
     for (const row of rows()) {
-      expect(badgeOf(row).textContent).toBe("Paused after an error");
+      expect(badgeOf(row).textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
     }
     expect(pillTooltips()).toEqual([TURN_ERROR_SENTENCE, TURN_ERROR_SENTENCE]);
   });

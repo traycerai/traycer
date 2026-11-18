@@ -248,6 +248,33 @@ export type ResolveCloudChatHeadResponse = z.infer<
   typeof resolveCloudChatHeadResponseSchema
 >;
 
+// ---- One chat's title --------------------------------------------------- //
+
+/**
+ * A chat named by task and chat id alone, with no owner expectation: the
+ * caller is a reference written into a message, which carries no more.
+ */
+export const getChatTitleRequestSchema = lazySchema(() =>
+  z.object({
+    taskId: z.string().min(1),
+    chatId: z.string().min(1),
+  }),
+);
+export type GetChatTitleRequest = z.infer<typeof getChatTitleRequestSchema>;
+
+/**
+ * The title of the row the cloud picks for this viewer, by the precedence
+ * every read by `(taskId, chatId)` uses. `chat` is null when the cloud holds
+ * no row the viewer may read; an absent chat and an unreadable one are the
+ * same answer.
+ */
+export const getChatTitleResponseSchema = lazySchema(() =>
+  z.object({
+    chat: z.object({ title: z.string().nullable() }).nullable(),
+  }),
+);
+export type GetChatTitleResponse = z.infer<typeof getChatTitleResponseSchema>;
+
 // ---- Read one part ----------------------------------------------------- //
 
 export const readCloudChatPartRequestSchema = lazySchema(() =>

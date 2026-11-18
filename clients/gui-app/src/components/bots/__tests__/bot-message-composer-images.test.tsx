@@ -206,6 +206,7 @@ function Box(props: {
         }}
         seed={props.keepDraft ? kept.seed : null}
         keptDraft={props.keepDraft ? kept.keptDraft : null}
+        hold={props.keepDraft ? kept.hold : null}
         quote={null}
         reply={NO_BOT_REPLY}
         moved={null}

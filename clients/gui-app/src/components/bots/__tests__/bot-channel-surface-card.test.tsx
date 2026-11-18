@@ -551,7 +551,6 @@ function mountChannel(input: {
                 openThread={null}
                 onOpenThread={vi.fn()}
                 onOpenTurn={vi.fn()}
-                onOpenSession={vi.fn()}
                 landOn={null}
                 openMemory={null}
                 onOpenMemory={vi.fn()}

@@ -629,6 +629,16 @@ function modalCopy(
       reportCode: "HOST_INCOMPATIBLE",
     };
   }
+  if (variant.kind === "host-list-unavailable") {
+    return {
+      title: "Couldn't load your hosts",
+      description:
+        "Traycer couldn't get this account's list of hosts. It tries again every minute, or you can retry now.",
+      reportTitle: "Host list unavailable",
+      reportMessage: "This account's host list could not be read.",
+      reportCode: "HOST_LIST_UNAVAILABLE",
+    };
+  }
   if (cause === "cold-start") {
     return {
       title: "Setting up Traycer",

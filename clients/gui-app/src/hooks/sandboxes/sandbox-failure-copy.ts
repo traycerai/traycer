@@ -47,6 +47,11 @@ const SHAPE_REASON_COPY: Record<string, string> = {
 function insufficientCreditCopy(
   failure: Extract<SandboxControlFailure, { kind: "refused" }>,
 ): string {
+  // A refusal the server words itself (a team seat waiting on payment) is
+  // about the person, not the sandbox's cost.
+  if (failure.message !== null && failure.message.length > 0) {
+    return failure.message;
+  }
   if (failure.reason === "unverified") {
     return "Traycer couldn't confirm your credit balance. Try again in a moment.";
   }

@@ -126,8 +126,8 @@ function withoutOptimisticQueuedItems(
  * drops each new one without the compiler noticing. But `pausedReason` is the
  * reason a PAUSED queue is paused, so a rebuild that lands on any other status
  * clears it - a spread alone would carry a paused queue's reason onto the idle
- * or running queue it became, and the pill would say "Paused after an error"
- * about a queue that is not paused. A queue that never carried the key (an
+ * or running queue it became, and the pill's tooltip would say the queue is
+ * held after an error when it is not paused. A queue that never carried the key (an
  * older host) is left without one.
  */
 function queueWithStatus(

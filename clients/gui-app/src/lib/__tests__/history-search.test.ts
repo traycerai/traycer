@@ -77,6 +77,36 @@ describe("history search params", () => {
     });
   });
 
+  it("round-trips the created-desc sort", () => {
+    const search = parseHistorySearch({ historySort: "created-desc" });
+
+    expect(search.sort).toBe("created-desc");
+    expect(historySearchToParams(search)).toMatchObject({
+      historySort: "created-desc",
+    });
+  });
+
+  it("keeps a persisted oldest sort and its filters instead of resetting to defaults", () => {
+    expect(parseHistorySearch({ historySort: "oldest" }).sort).toBe("oldest");
+    expect(
+      normalizePersistedHistorySearch({
+        query: "api",
+        repos: ["traycer/gui-app"],
+        repoMode: "all",
+        workspaces: [],
+        workspaceMode: "any",
+        ownershipScopes: ["shared"],
+        sort: "oldest",
+        sortExplicit: true,
+      }),
+    ).toMatchObject({
+      query: "api",
+      repos: ["traycer/gui-app"],
+      ownershipScopes: ["shared"],
+      sort: "oldest",
+    });
+  });
+
   it("clears only history params and keeps unrelated route search state", () => {
     expect(
       clearHistorySearchParams({

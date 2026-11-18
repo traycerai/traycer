@@ -72,6 +72,7 @@ import type { OrganizationDialog } from "@/components/organization/organization-
 import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -129,7 +130,8 @@ interface StagedOrganization {
    * the account has an answer to put behind them, so a staged context that
    * carries no view is one that draws nothing.
    */
-  readonly view: OrganizationView;
+  readonly readView: () => OrganizationView | undefined;
+  readonly subscribeView: (listener: () => void) => () => void;
   readonly openDialog: (dialog: OrganizationDialog) => void;
 }
 
@@ -158,15 +160,22 @@ const testState = vi.hoisted(() => ({
   openOrganizationDialog: vi.fn<(dialog: OrganizationDialog) => void>(),
 }));
 
-vi.mock(
-  "@/hooks/organization/organization-context",
-  async (importOriginal) => ({
-    ...(await importOriginal<
+vi.mock("@/hooks/organization/organization-context", async (importOriginal) => {
+  const actual =
+    await importOriginal<
       typeof import("@/hooks/organization/organization-context")
-    >()),
+    >();
+  const { organizationViewHookOverrides } =
+    await import("@/__tests__/organization-view-source");
+  return {
+    ...actual,
     useOrganization: () => testState.organization,
-  }),
-);
+    ...organizationViewHookOverrides(
+      () => testState.organization?.readView(),
+      actual.taskOrganization,
+    ),
+  };
+});
 
 // The desktop scope bar names the host through the directory, which needs a
 // runtime provider this fixture does not mount.
@@ -175,7 +184,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
+  useHistoryQuery: (params: UseHistoryQueryParams) => ({
     data: {
       items: testState.items,
       availableRepos: [],
@@ -185,6 +194,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
       worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
       completeness: testState.completeness,
     },
+    sort: params.search.sort,
+    createdSortAvailable: true,
     isPending: false,
     isFetching: false,
     error: null,
@@ -295,6 +306,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     taskType: "epic",
     title: "Open from landing",
     initialUserPrompt: "",
+    createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
     updatedLabel: "about 2 hours ago",
     updatedBucket: "today",
@@ -325,7 +337,7 @@ function supportedOrganization(
     supported: true,
     hostSupport: true,
     userId: "user-test",
-    view: {
+    readView: () => ({
       catalog: [],
       groups: {
         version: "1",
@@ -342,7 +354,8 @@ function supportedOrganization(
       authenticationRequired: false,
       pending: [],
       failures: [],
-    },
+    }),
+    subscribeView: () => () => undefined,
     openDialog: testState.openOrganizationDialog,
   };
 }

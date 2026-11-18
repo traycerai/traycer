@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 14
+              "const": 15
             }
           },
           "required": [
@@ -540,7 +540,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 14
+              "const": 15
             }
           },
           "required": [
@@ -1425,7 +1425,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 14
+              "const": 15
             }
           },
           "required": [
@@ -1500,7 +1500,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 14
+              "const": 15
             }
           },
           "required": [
@@ -4197,6 +4197,102 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "null"
                                                 }
                                               ]
+                                            },
+                                            "feedbackDraftOrigin": {
+                                              "oneOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "const": "channel"
+                                                    },
+                                                    "botId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 255
+                                                    },
+                                                    "hostEpoch": {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "conversationId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 255
+                                                    },
+                                                    "initiatingMessageId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 255
+                                                    },
+                                                    "initiatingRequestId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 255
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "botId",
+                                                    "hostEpoch",
+                                                    "conversationId",
+                                                    "initiatingMessageId",
+                                                    "initiatingRequestId"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "const": "thread"
+                                                    },
+                                                    "botId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 255
+                                                    },
+                                                    "hostEpoch": {
+                                                      "type": "integer",
+                                                      "minimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "conversationId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 255
+                                                    },
+                                                    "initiatingMessageId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 255
+                                                    },
+                                                    "initiatingRequestId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 255
+                                                    },
+                                                    "channelId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 255
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "botId",
+                                                    "hostEpoch",
+                                                    "conversationId",
+                                                    "initiatingMessageId",
+                                                    "initiatingRequestId",
+                                                    "channelId"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
                                             }
                                           },
                                           "required": [
@@ -5613,6 +5709,38 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                           },
                                                           "postedAt": {
                                                             "type": "number"
+                                                          },
+                                                          "images": {
+                                                            "default": [],
+                                                            "type": "array",
+                                                            "items": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "attachmentHash": {
+                                                                  "type": "string",
+                                                                  "pattern": "^[0-9a-f]{64}$"
+                                                                },
+                                                                "mediaType": {
+                                                                  "type": "string",
+                                                                  "enum": [
+                                                                    "image/png",
+                                                                    "image/jpeg",
+                                                                    "image/gif",
+                                                                    "image/webp",
+                                                                    "image/svg+xml"
+                                                                  ]
+                                                                },
+                                                                "fileName": {
+                                                                  "type": "string"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "attachmentHash",
+                                                                "mediaType",
+                                                                "fileName"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
                                                           }
                                                         },
                                                         "required": [
@@ -5620,7 +5748,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                           "messageId",
                                                           "requestId",
                                                           "senderUserId",
-                                                          "postedAt"
+                                                          "postedAt",
+                                                          "images"
                                                         ],
                                                         "additionalProperties": false
                                                       },
@@ -7251,6 +7380,130 @@ export const chatSyncSchemaSurfaceBaseline = {
                                 "additionalProperties": false
                               }
                             ]
+                          },
+                          "feedbackDraft": {
+                            "type": "object",
+                            "properties": {
+                              "source": {
+                                "type": "object",
+                                "properties": {
+                                  "hostId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "epicId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "chatId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "blockId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  }
+                                },
+                                "required": [
+                                  "hostId",
+                                  "epicId",
+                                  "chatId",
+                                  "blockId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "draft": {
+                                "type": "object",
+                                "properties": {
+                                  "category": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "toolName": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "goal": {
+                                    "type": "string"
+                                  },
+                                  "observed": {
+                                    "type": "string"
+                                  },
+                                  "suggestion": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "suggestDiagnostics": {
+                                    "type": "boolean"
+                                  },
+                                  "state": {
+                                    "default": "unknown",
+                                    "type": "string",
+                                    "enum": [
+                                      "pending",
+                                      "sent",
+                                      "skipped",
+                                      "failed",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "decidedAt": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "failureReason": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "category",
+                                  "toolName",
+                                  "goal",
+                                  "observed",
+                                  "suggestion",
+                                  "suggestDiagnostics",
+                                  "state",
+                                  "decidedAt",
+                                  "failureReason"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "source",
+                              "draft"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [

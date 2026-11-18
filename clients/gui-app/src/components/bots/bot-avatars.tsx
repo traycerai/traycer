@@ -14,30 +14,23 @@ import {
 import { computeInitials } from "@/lib/auth/compute-initials";
 import { resolveProfileAccentColor } from "@/lib/providers/profile-accent-color";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
+import { TracyGlyph } from "@/components/bots/tracy-glyph";
+import {
+  BotMascotFrame,
+  type IdentityAvatarSize,
+} from "@/components/bots/bot-mascot-frame";
 import {
   MASCOT_AT_REST,
   MASCOT_WORKING_BEATS,
   type MascotExpression,
   type MascotLook,
-  type MascotMarkSize,
-  type MascotPose,
   botMascot,
-  drawMascotMark,
 } from "@/lib/bots/mascot-mark";
 import {
   botExpressionOn,
   useBotActivityForHost,
 } from "@/hooks/bots/use-bot-activity";
 import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
-
-type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
-
-const MASCOT_SIZE: Readonly<Record<IdentityAvatarSize, MascotMarkSize>> = {
-  xs: 16,
-  sm: 24,
-  default: 32,
-  lg: 40,
-};
 
 /**
  * Who a picture is of, in a bot's channel and everywhere a bot appears:
@@ -183,29 +176,6 @@ function useWorkingBeat(working: boolean): number {
 }
 
 /**
- * A mascot in a bot's box, drawn straight on the page: no fill behind it and
- * no clip over it, so the figure's own outline is its shape.
- */
-function BotMascotFrame(props: {
-  readonly mascot: MascotLook;
-  readonly pose: MascotPose;
-  readonly size: IdentityAvatarSize;
-  readonly testId: string;
-}): ReactElement {
-  const { mascot, pose, size, testId } = props;
-  return (
-    <Avatar
-      shape="squircle"
-      size={size}
-      data-testid={testId}
-      data-identity="bot"
-    >
-      <MascotMarkSvg mascot={mascot} pose={pose} size={MASCOT_SIZE[size]} />
-    </Avatar>
-  );
-}
-
-/**
  * A person's clipped picture: an image when there is one, over its fallback,
  * filled with one colour in each theme.
  */
@@ -241,32 +211,6 @@ function AvatarFrame(props: {
 }
 
 /**
- * The mascot, one path per colour, drawn in whole pixels of the avatar's own
- * size and scaled with it only where the root font is not 16px.
- */
-function MascotMarkSvg(props: {
-  readonly mascot: MascotLook;
-  readonly pose: MascotPose;
-  readonly size: MascotMarkSize;
-}): ReactElement {
-  const drawing = drawMascotMark(props.mascot, props.size, props.pose);
-  return (
-    <svg
-      viewBox={drawing.viewBox}
-      aria-hidden="true"
-      focusable="false"
-      shapeRendering="crispEdges"
-      className="size-full"
-      data-slot="bot-mascot"
-    >
-      {drawing.layers.map((layer) => (
-        <path key={layer.fill} d={layer.path} fill={layer.fill} />
-      ))}
-    </svg>
-  );
-}
-
-/**
  * One mascot a bot's settings offer, as the bot would draw it if chosen,
  * looking ahead.
  */
@@ -286,7 +230,7 @@ export function BotMascotPreview(props: {
 
 /**
  * The bot's picture: the surface's bot (`BotIdentityContext`) by its id, or
- * a plain bot outside one.
+ * the Tracy glyph outside one.
  */
 export function BotAvatar(props: {
   readonly size: IdentityAvatarSize;
@@ -303,10 +247,13 @@ export function ExpressiveBotAvatar(props: {
   readonly expression: MascotExpression;
 }): ReactElement {
   const identity = useBotIdentity();
+  if (identity === null) {
+    return <TracyGlyph size={props.size} className={undefined} />;
+  }
   return (
     <IdentityAvatar
       kind="bot"
-      botId={identity?.botId ?? "bot"}
+      botId={identity.botId}
       expression={props.expression}
       size={props.size}
       testId="bot-avatar"

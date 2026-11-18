@@ -103,6 +103,8 @@ const mocks = vi.hoisted(() => {
       bots: [] as BotRecord[],
       /** `bot.list` has not answered: no data, as while it loads or fails. */
       botListPending: false,
+      /** `bot.list` failed: its last ask answered with an error. */
+      botListFailed: false,
       mainBotIds: null as Record<string, string> | null,
       connectable: { hostIds: [] as string[], resolved: true },
       epics,
@@ -126,6 +128,7 @@ const mocks = vi.hoisted(() => {
       activity,
     },
     readRequests,
+    refetchBotList: vi.fn<() => void>(),
   };
 });
 
@@ -289,6 +292,8 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
     data: mocks.state.botListPending
       ? undefined
       : { bots: mocks.state.bots, mainBotIds: mocks.state.mainBotIds },
+    isError: mocks.state.botListFailed,
+    refetch: mocks.refetchBotList,
   }),
 }));
 vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
@@ -489,6 +494,8 @@ beforeEach(() => {
   }
   mocks.readRequests.length = 0;
   mocks.state.botListPending = false;
+  mocks.state.botListFailed = false;
+  mocks.refetchBotList.mockClear();
   localStorage.clear();
   useBotColumnLayoutStore.setState({
     sectionOrder: [],
@@ -680,6 +687,36 @@ describe("<BotChannelSidebar /> read-cursor bold", () => {
     expect(
       within(row("bot-release")).queryByTestId("bot-channel-row-unread-count"),
     ).toBeNull();
+  });
+
+  it("keeps a channel's bold name when it is the one in view, with the selected highlight and no count", () => {
+    mocks.state.readCursor = {
+      cursors: { "chan-release": OLD_ROW },
+      latest: { "chan-release": NEW_ROW },
+    };
+    mount("bot-release", null);
+
+    const selected = row("bot-release");
+    expect(selected.getAttribute("aria-current")).toBe("page");
+    expect(selected.getAttribute("data-unread")).toBe("true");
+    expect(selected.className).toContain("font-semibold");
+    expect(selected.className).toContain("bg-accent");
+    expect(
+      within(selected).queryByTestId("bot-channel-row-unread-count"),
+    ).toBeNull();
+  });
+
+  it("does not bold the channel in view once its cursor has caught up", () => {
+    mocks.state.readCursor = {
+      cursors: { "chan-release": NEW_ROW },
+      latest: { "chan-release": NEW_ROW },
+    };
+    mount("bot-release", null);
+
+    const selected = row("bot-release");
+    expect(selected.getAttribute("aria-current")).toBe("page");
+    expect(selected.getAttribute("data-unread")).toBe("false");
+    expect(selected.className).not.toContain("font-semibold");
   });
 
   it("does not bold a channel at Nothing, though a new row has landed", () => {
@@ -1022,7 +1059,7 @@ describe("<BotChannelSidebar /> Threads", () => {
     return screen.getByTestId("bot-channel-threads-row");
   }
 
-  it("stands above the first section and counts the followed threads with new replies across every bot", () => {
+  it("stands first in the column, above the first section, and counts the followed threads with new replies across every bot", () => {
     // Two followed threads with new replies on two bots count; a caught-up
     // one and an unfollowed one with new replies do not.
     mocks.state.threadReads = {
@@ -1054,11 +1091,9 @@ describe("<BotChannelSidebar /> Threads", () => {
     };
     mount("bot-release", view(false));
 
-    // The search box stands first in the column; Threads is the first row.
     const nav = screen.getByTestId("bot-channel-sidebar");
-    const searchBox = screen.getByTestId("bot-column-search");
-    expect(nav.firstElementChild).toBe(searchBox);
-    expect(threadsRow().previousElementSibling).toBe(searchBox);
+    expect(nav.firstElementChild).toBe(threadsRow());
+    expect(within(nav).queryByRole("textbox")).toBeNull();
     expect(threadsRow().textContent).toBe("Threads2 with new replies");
     expect(threadsRow().getAttribute("aria-current")).toBeNull();
     expect(row("bot-release").getAttribute("aria-current")).toBe("page");
@@ -1810,5 +1845,24 @@ describe("<BotChannelSidebar /> a channel's mascot", () => {
 
     expect(parked.after).toEqual(parked.before);
     expect(parked.before).toEqual(mascotPaths("bot-release"));
+  });
+});
+
+describe("<BotChannelSidebar /> when the bot list fails with nothing loaded", () => {
+  it("says so with Retry in place of the sections, offers no New bot, and asks the list again on Retry", async () => {
+    const user = userEvent.setup();
+    mocks.state.botListPending = true;
+    mocks.state.botListFailed = true;
+    mount("bot-release", null);
+
+    const failure = screen.getByTestId("bot-channel-sidebar-error");
+    expect(failure.textContent).toBe("Couldn't load your bots.Retry");
+    expect(screen.queryByText("New bot")).toBeNull();
+    expect(screen.queryByRole("button", { name: /new bot/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Collapse Acme" })).toBeNull();
+
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+
+    expect(mocks.refetchBotList).toHaveBeenCalledTimes(1);
   });
 });

@@ -3666,11 +3666,12 @@ function worktreeDeleteClass(entry: WorktreeHostEntryV14): WorktreeDeleteClass {
   if (tier === "unreferenced") return "clean";
   if (tier === "orphaned") return "orphaned";
   // An unreadable row reaches `review` through the classifier's own
-  // gitUnreadable rule, but its git facts are FABRICATED (the host reports
-  // `branch: null` and `uncommittedCount: 0` for a worktree it could not read).
-  // Handing it to the loss sub-classifier would bucket it as `detached` and the
-  // confirmation would report a git state nobody observed - the exact
-  // false-precision this row exists to avoid. Name the unknown instead.
+  // gitUnreadable rule, but its git facts are incomplete: placeholders
+  // (`branch: null`, `uncommittedCount: 0`) for a worktree git could not read,
+  // or counts that leave out a submodule git could not read. Handing it to the
+  // loss sub-classifier would report a git state nobody observed (`detached`,
+  // or a clean count) - the exact false-precision this row exists to avoid.
+  // Name the unknown instead.
   if (gitUnreadableOf(entry)) return "unreadable";
   return worktreeReviewLossClass(entry);
 }
