@@ -43,6 +43,13 @@ function settle(sha256: string, picture: BotPictureBytes | null): void {
   settleBotPictureRead({ sha256, botId: BOT, round: roundNow() }, picture);
 }
 
+/** The pictures listed bots wear: the n-th hash is worn by the n-th of a fixed run of bots. */
+function wears(...hashes: readonly string[]): ReadonlyMap<string, string> {
+  return new Map(
+    hashes.map((sha256, i) => [`bot_wearing_${String(i)}`, sha256]),
+  );
+}
+
 /** Subscribes `listener` for the rest of the test, so it leaks into no other. */
 function subscribe(listener: () => void): void {
   withdrawals.push(subscribeBotPictures(listener));
@@ -50,7 +57,7 @@ function subscribe(listener: () => void): void {
 
 /** Holds `sha256` as a read of it would, kept by a listed bot wearing it. */
 function holdWorn(...hashes: readonly string[]): void {
-  keepBotPictures(new Set(hashes));
+  keepBotPictures(wears(...hashes));
   for (const sha256 of hashes) settle(sha256, PNG);
 }
 
@@ -207,7 +214,7 @@ describe("settling a read", () => {
   });
 
   it("holds a picture only a listed bot wears", () => {
-    keepBotPictures(new Set([HASH]));
+    keepBotPictures(wears(HASH));
 
     settle(HASH, PNG);
 
@@ -284,7 +291,7 @@ describe("retrying the pictures", () => {
     want(OTHER, BOT);
     const stale = nextWantedBotPicture();
     if (stale === null) throw new Error("nothing was next");
-    keepBotPictures(new Set([OTHER]));
+    keepBotPictures(wears(OTHER));
     retryBotPictures();
     settle(OTHER, PNG);
     createLink.mockClear();
@@ -321,7 +328,7 @@ describe("withdrawing a want", () => {
 
   it("keeps the link of a picture a listed bot wears", () => {
     const withdraw = want(HASH, BOT);
-    keepBotPictures(new Set([HASH]));
+    keepBotPictures(wears(HASH));
     settle(HASH, PNG);
 
     withdraw();
@@ -429,7 +436,7 @@ describe("keeping only the pictures still in use", () => {
     const listener = vi.fn();
     subscribe(listener);
 
-    keepBotPictures(new Set());
+    keepBotPictures(wears());
 
     expect(botPictureLink(HASH)).toBeNull();
     expect(revokeLink).toHaveBeenCalledWith("blob:picture-1");
@@ -443,7 +450,7 @@ describe("keeping only the pictures still in use", () => {
     const listener = vi.fn();
     subscribe(listener);
 
-    keepBotPictures(new Set([HASH]));
+    keepBotPictures(wears(HASH));
 
     expect(botPictureLink(HASH)).not.toBeNull();
     expect(botPictureLink(OTHER)).not.toBeNull();
@@ -457,7 +464,7 @@ describe("keeping only the pictures still in use", () => {
     const listener = vi.fn();
     subscribe(listener);
 
-    keepBotPictures(new Set([HASH]));
+    keepBotPictures(wears(HASH));
 
     expect(listener).not.toHaveBeenCalled();
     expect(revokeLink).not.toHaveBeenCalled();
@@ -467,15 +474,15 @@ describe("keeping only the pictures still in use", () => {
 describe("a hash that becomes worn again", () => {
   it("is offered again in the same round when a read found none, the listing moved to another picture, and a later listing names it again", () => {
     want(HASH, BOT);
-    keepBotPictures(new Set([HASH]));
+    keepBotPictures(wears(HASH));
     settle(HASH, null);
     expect(nextWantedBotPicture()).toBeNull();
-    keepBotPictures(new Set([OTHER]));
+    keepBotPictures(wears(OTHER));
     expect(nextWantedBotPicture()).toBeNull();
     const listener = vi.fn();
     subscribe(listener);
 
-    keepBotPictures(new Set([HASH]));
+    keepBotPictures(wears(HASH));
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(nextWantedBotPicture()).toMatchObject({ sha256: HASH });
@@ -483,13 +490,56 @@ describe("a hash that becomes worn again", () => {
 
   it("is not offered again when it never left the worn set", () => {
     want(HASH, BOT);
-    keepBotPictures(new Set([HASH]));
+    keepBotPictures(wears(HASH));
     settle(HASH, null);
 
-    keepBotPictures(new Set([HASH, OTHER]));
-    keepBotPictures(new Set([HASH]));
+    keepBotPictures(wears(HASH, OTHER));
+    keepBotPictures(wears(HASH));
 
     expect(nextWantedBotPicture()).toBeNull();
+  });
+
+  it("is offered again when the bot that draws it wears it again, though another listed bot kept wearing it all along", () => {
+    keepBotPictures(
+      new Map([
+        [BOT, HASH],
+        [OTHER_BOT, HASH],
+      ]),
+    );
+    const withdraw = want(HASH, BOT);
+    const read = nextWantedBotPicture();
+    if (read === null) throw new Error("nothing was next");
+    keepBotPictures(new Map([[OTHER_BOT, HASH]]));
+    settleBotPictureRead(read, null);
+    withdraw();
+    expect(nextWantedBotPicture()).toBeNull();
+
+    keepBotPictures(
+      new Map([
+        [BOT, HASH],
+        [OTHER_BOT, HASH],
+      ]),
+    );
+    want(HASH, BOT);
+
+    expect(nextWantedBotPicture()).toMatchObject({ sha256: HASH, botId: BOT });
+  });
+
+  it("is offered again when a listed bot that does not draw it newly wears it, and only then: a keep showing the same bot with the same hash changes nothing", () => {
+    want(HASH, BOT);
+    keepBotPictures(new Map([[BOT, HASH]]));
+    settleBotPictureRead({ sha256: HASH, botId: BOT, round: roundNow() }, null);
+
+    keepBotPictures(new Map([[BOT, HASH]]));
+    expect(nextWantedBotPicture()).toBeNull();
+    keepBotPictures(
+      new Map([
+        [BOT, HASH],
+        [OTHER_BOT, HASH],
+      ]),
+    );
+
+    expect(nextWantedBotPicture()).toMatchObject({ sha256: HASH });
   });
 });
 
@@ -520,7 +570,7 @@ describe("clearing the pictures", () => {
   });
 
   it("forgets which pictures listed bots wear, so a later settle of one holds nothing", () => {
-    keepBotPictures(new Set([HASH]));
+    keepBotPictures(wears(HASH));
     clearBotPictures();
 
     settle(HASH, PNG);

@@ -123,13 +123,13 @@ export function useBotPictureLoads(
   useEffect(() => {
     // No list yet says nothing of what the bots wear, so nothing is dropped.
     if (model === null) return;
-    const worn = new Set<string>();
+    const wornBy = new Map<string, string>();
     for (const group of model.groups) {
       for (const bot of group.bots) {
         const sha256 = pictureHashOf(bot.appearance ?? null);
-        if (sha256 !== null) worn.add(sha256);
+        if (sha256 !== null) wornBy.set(bot.botId, sha256);
       }
     }
-    keepBotPictures(worn);
+    keepBotPictures(wornBy);
   }, [model]);
 }

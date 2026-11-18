@@ -930,14 +930,18 @@ describe("a bot's picture when it wears an uploaded one", () => {
     expect(picture().getAttribute("src")).toBe("blob:picture-2");
   });
 
-  it("fades the picture with an opacity transition only for a person who has not asked for reduced motion", () => {
+  it("fades the picture with a transition and duration only for a person who has not asked for reduced motion", () => {
     render(wearing(null, "idle"));
     holdPicture();
+    const classes = [...picture().classList];
 
-    expect(picture().classList.contains("motion-safe:transition-opacity")).toBe(
-      true,
-    );
-    expect(picture().classList.contains("transition-opacity")).toBe(false);
+    expect(classes).toContain("motion-safe:transition-opacity");
+    expect(classes).toContain("motion-safe:duration-500");
+    expect(
+      classes.filter(
+        (name) => name.startsWith("transition") || name.startsWith("duration-"),
+      ),
+    ).toEqual([]);
   });
 
   it("keeps the mascot when the answer that was read is no picture, drawing the shape kept beside it", () => {

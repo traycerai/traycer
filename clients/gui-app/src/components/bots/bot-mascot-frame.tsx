@@ -74,7 +74,7 @@ export function BotPictureFrame(props: {
         data-slot="bot-picture"
         onError={onError}
         className={cn(
-          "size-full object-cover duration-500 motion-safe:transition-opacity [clip-path:var(--avatar-clip)]",
+          "size-full object-cover motion-safe:transition-opacity motion-safe:duration-500 [clip-path:var(--avatar-clip)]",
           expression === "away" && "opacity-55 grayscale",
           expression === "working" && dimmed && "opacity-55",
         )}

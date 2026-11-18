@@ -27,7 +27,9 @@ const tried = new Set<string>();
  * a new round reads afresh and takes nothing from the one before.
  */
 let round = 0;
-/** The hashes the listed bots wear, as the loader last said. */
+/** The picture each listed bot wears, by bot, as the loader last said. */
+let wornBy: ReadonlyMap<string, string> = new Map();
+/** The hashes of {@link wornBy}. */
 let worn: ReadonlySet<string> = new Set();
 /** The last answer of {@link nextWantedBotPicture}, kept so it is stable. */
 let next: BotPictureRead | null = null;
@@ -191,15 +193,18 @@ export function retryBotPictures(): void {
  * Says which pictures the listed bots wear, and drops the links none of
  * them wears and nothing drawn wants: a replaced picture's link does not
  * outlive the bot's change. A picture a bot has come to wear since the last
- * say may be read again: a read that found none was of a bot that did not
- * wear it yet, or no longer did.
+ * say may be read again, whoever else wore it meanwhile: a read that found
+ * none was of a bot that did not wear it yet, or no longer did. Only a change
+ * of a listed bot's look reopens a read this way; a list that still shows the
+ * same bot wearing the same picture reopens none.
  */
-export function keepBotPictures(wornNow: ReadonlySet<string>): void {
+export function keepBotPictures(wornByNow: ReadonlyMap<string, string>): void {
   let retried = false;
-  for (const sha256 of wornNow) {
-    if (!worn.has(sha256) && tried.delete(sha256)) retried = true;
+  for (const [botId, sha256] of wornByNow) {
+    if (wornBy.get(botId) !== sha256 && tried.delete(sha256)) retried = true;
   }
-  worn = wornNow;
+  wornBy = wornByNow;
+  worn = new Set(wornByNow.values());
   if (prune() || retried) changed();
 }
 
@@ -212,6 +217,7 @@ export function clearBotPictures(): void {
   links.clear();
   tried.clear();
   round += 1;
+  wornBy = new Map();
   worn = new Set();
   changed();
 }

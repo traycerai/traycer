@@ -436,6 +436,104 @@ describe("reading the pictures that drawn bots want", () => {
     });
   });
 
+  it("reads a picture again in the same round when the bot that draws it wears it again, though another listed bot kept wearing it", async () => {
+    const host = pictureHost();
+    const lists = (first: BotAppearance): HomeBotsModel =>
+      modelOf(
+        [PICTURE_BOT, "env-1", first],
+        [SECOND_PICTURE_BOT, "env-2", pictureLook(HASH)],
+      );
+    const { rerender } = renderHook(
+      ({ model }: { readonly model: HomeBotsModel | null }) => {
+        useBotPictureLoads(host.client, true, true, model);
+      },
+      {
+        wrapper,
+        initialProps: {
+          model: lists(pictureLook(HASH)),
+        },
+      },
+    );
+    const drawer = drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    expect(host.reads[0].request.botId).toBe(PICTURE_BOT);
+    rerender({ model: lists(MASCOT_LOOK) });
+    host.reads[0].answerNone();
+    await settled();
+    drawer.unmount();
+
+    rerender({ model: lists(pictureLook(HASH)) });
+    const again = drawn(PICTURE_BOT, pictureLook(HASH));
+
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(2);
+    });
+    expect(host.reads[1].request).toEqual({ botId: PICTURE_BOT, sha256: HASH });
+    host.reads[1].answer();
+    await waitFor(() => {
+      expect(again.result.current).toBe("blob:picture-1");
+    });
+  });
+
+  it("does not read a picture again when a none answer is followed by a refetched listing of new objects showing the same bots wearing the same pictures", async () => {
+    const host = pictureHost();
+    const lists = (): HomeBotsModel =>
+      modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
+    const { rerender } = renderHook(
+      ({ model }: { readonly model: HomeBotsModel | null }) => {
+        useBotPictureLoads(host.client, true, true, model);
+      },
+      { wrapper, initialProps: { model: lists() } },
+    );
+    drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    host.reads[0].answerNone();
+    await settled();
+
+    rerender({ model: lists() });
+    rerender({ model: lists() });
+
+    await waitFor(() => {
+      expect(readsInFlight()).toBe(0);
+    });
+    expectNoRequestInFlight();
+    expect(host.reads).toHaveLength(1);
+  });
+
+  it("keeps the pairs it last saw across a render with no listing yet, so the same listing afterwards clears nothing", async () => {
+    const host = pictureHost();
+    const lists = (): HomeBotsModel =>
+      modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
+    const listed: { readonly model: HomeBotsModel | null } = {
+      model: lists(),
+    };
+    const { rerender } = renderHook(
+      ({ model }: { readonly model: HomeBotsModel | null }) => {
+        useBotPictureLoads(host.client, true, true, model);
+      },
+      { wrapper, initialProps: listed },
+    );
+    drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    host.reads[0].answerNone();
+    await settled();
+
+    rerender({ model: null });
+    rerender({ model: lists() });
+
+    await waitFor(() => {
+      expect(readsInFlight()).toBe(0);
+    });
+    expectNoRequestInFlight();
+    expect(host.reads).toHaveLength(1);
+  });
+
   it("does not read a picture again when a none answer is followed by a listing that still names it", async () => {
     const host = pictureHost();
     const { rerender } = renderHook(

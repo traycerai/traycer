@@ -639,7 +639,7 @@ describe("<EpicSessionLifecycleBridge />", () => {
         .spyOn(URL, "revokeObjectURL")
         .mockImplementation(() => undefined);
       const hash = "d".repeat(64);
-      keepBotPictures(new Set([hash]));
+      keepBotPictures(new Map([["bot_alice", hash]]));
       const withdraw = wantBotPicture(hash, "bot_alice");
       const read = nextWantedBotPicture();
       if (read === null) throw new Error("no picture is wanted");
