@@ -331,8 +331,8 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * fleet until the host's next read supersedes it.
    */
   private readonly watermarks: Record<RegistryScope, ScopeWatermark> = {
-    personal: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY },
-    team: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY },
+    personal: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY, generation: null },
+    team: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY, generation: null },
   };
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
@@ -518,6 +518,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
           readAtMs,
         ),
         generation,
+        REGISTRY_SCOPES,
       );
     }
     // Stamped BEFORE the read, so ordering follows what each read OBSERVED.
@@ -566,6 +567,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
           readAtMs,
         ),
         generation,
+        PUSH_SCOPES,
       );
     }
     let result: HostListFetchResult;
@@ -606,6 +608,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
         readAtMs,
       ),
       generation,
+      REGISTRY_SCOPES,
     );
   }
 
@@ -862,6 +865,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // completion declined above - or one that never reached this method -
       // must not raise it and lock out the read that should win.
       watermark.readAtMs = Math.max(watermark.readAtMs, readAtMs);
+      watermark.generation = generation;
       this.rows[scope] = scoped[scope] ?? [];
     }
     // The ID is fenced SEPARATELY from the rows: this refresh's row projection
@@ -884,22 +888,34 @@ export class DesktopHostFleetSource implements HostFleetSource {
   /**
    * What a read this port adopted or declined did to the authority's fleet.
    *
-   * A declined read for the identity that is STILL current lost only to a
-   * newer read of the same identity - the watermarks advance on adoption
-   * alone - so the authority already holds a fleet at least as fresh as this
-   * one: `published`, which is what a caller waiting on that fleet needs to
-   * hear. Declined for a retired identity, or by a disposed source, nothing
-   * current was published: `superseded`.
+   * Declined by a disposed source, or for a retired identity: nothing current
+   * came of it, `superseded`. Declined for the CURRENT identity, it is
+   * `published` only when every scope it spoke for is serving rows this same
+   * generation adopted - it then lost to a newer read of this identity, and
+   * the authority already holds that fleet. The current generation alone is
+   * not that proof: the seq and read-time fences outlive an identity change
+   * while the rows are cleared, so a new account's read can be declined
+   * against the previous account's marks (a wall clock that stepped back)
+   * with nothing of its own adopted. That is `unavailable`: no current fleet
+   * covers the read, and the caller keeps its obligation to re-ask.
    */
   private adoptionOutcome(
     adopted: boolean,
     generation: number,
+    scopes: readonly RegistryScope[],
   ): FleetRefreshOutcome {
     if (adopted) return { kind: "published" };
-    return !this.disposed &&
-      generation === this.options.identity.current().generation
+    if (
+      this.disposed ||
+      generation !== this.options.identity.current().generation
+    ) {
+      return { kind: "superseded" };
+    }
+    return scopes.every(
+      (scope) => this.watermarks[scope].generation === generation,
+    )
       ? { kind: "published" }
-      : { kind: "superseded" };
+      : { kind: "unavailable" };
   }
 
   /** Publishes under the generation that is current right now. */
@@ -980,6 +996,13 @@ type ScopedRows = Readonly<
 interface ScopeWatermark {
   seq: number;
   readAtMs: number;
+  /**
+   * The identity generation whose read this scope's served rows were adopted
+   * under, or null before any adoption. The two fences above outlive an
+   * identity change while the rows do not, so only this says whether the
+   * scope is serving the CURRENT identity's rows.
+   */
+  generation: number | null;
 }
 
 /**

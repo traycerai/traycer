@@ -1417,10 +1417,6 @@ export interface IPushPermissionHost {
 }
 
 /**
- * One shell-owned registry read, delivered to a consumer that would otherwise
- * have fetched it itself. See `IRunnerHost.onRegisteredHostsChange`.
- */
-/**
  * What one {@link IRunnerHost.refreshHostFleet} call did to the selection
  * authority's fleet.
  *
@@ -1438,6 +1434,10 @@ export type FleetRefreshOutcome =
   | { readonly kind: "unavailable" }
   | { readonly kind: "superseded" };
 
+/**
+ * One shell-owned registry read, delivered to a consumer that would otherwise
+ * have fetched it itself. See `IRunnerHost.onRegisteredHostsChange`.
+ */
 export interface RegisteredHostsChange {
   /** The account these rows were FETCHED under; `null` when signed out. */
   readonly identityKey: string | null;

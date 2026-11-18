@@ -1569,6 +1569,56 @@ describe("DesktopHostFleetSource.refresh outcome", () => {
     fleet.dispose();
   });
 
+  it("reports unavailable, not published, when a new identity's read is declined against the previous identity's read-time marks", async () => {
+    const dir = await makeTempDir();
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-a"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = await writeEnrollment(dir, "local-host");
+    const registry = recordingRegistryFetch();
+    const { fleet, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    setNow(200);
+    const first = fleet.refresh();
+    await registry.started(0);
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-a")] },
+    });
+    await expect(first).resolves.toEqual({ kind: "published" });
+
+    // The wall clock steps back, then the account changes. The watermarks
+    // outlive the identity change while the rows are cleared, so account B's
+    // read, observed at 100, is older than account A's mark at 200.
+    setNow(100);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    // The identity change starts its own refresh (call 1); the explicit
+    // refresh below is call 2. Both observe time 100 and both are declined.
+    identity.set("user-b", 1);
+    await registry.started(1);
+    const second = fleet.refresh();
+    await registry.started(2);
+    const bResponse: HostListFetchResult = {
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-b")] },
+    };
+    registry.calls[1]?.resolve(bResponse);
+    registry.calls[2]?.resolve(bResponse);
+
+    await expect(second).resolves.toEqual({ kind: "unavailable" });
+    expect(fleet.snapshot()).toMatchObject({
+      identityGeneration: 1,
+      hosts: [],
+    });
+    fleet.dispose();
+  });
+
   it("reports superseded once the source is disposed", async () => {
     const { fleet } = await signedInFleet(
       async () => ({ kind: "ok", response: { hosts: [] } }),
