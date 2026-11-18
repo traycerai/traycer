@@ -206,6 +206,10 @@ vi.mock("@/hooks/providers/use-refresh-providers", () => ({
 }));
 
 import { ProfileEditDialog } from "@/components/settings/panels/provider-profile-edit-dialog";
+import {
+  profilePersonActionCopy,
+  profilePersonActionLabel,
+} from "@/components/settings/panels/profile-person-action-copy";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 type CredentialHome = NonNullable<ProviderProfile["credentialHome"]>;
@@ -703,7 +707,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       },
     ]);
   });
-  it("names the account-wide effect and waits for confirmation before signing out", async () => {
+  it("words an environment account with no record as a record's Sign out and waits for confirmation", async () => {
     fixture.supportsSignOut = true;
     const messenger = installSignOutClient();
     renderDialog(
@@ -712,18 +716,23 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
         credentialHome("brokered"),
       ),
     );
+    const copy = profilePersonActionCopy(
+      "sign-out",
+      "record",
+      "Work account",
+      null,
+    );
     fireEvent.click(
-      screen.getByRole("button", { name: "Sign out on every host" }),
+      screen.getByRole("button", {
+        name: profilePersonActionLabel("sign-out", "record"),
+      }),
     );
     expect(messenger.calls).toEqual([]);
-    expect(
-      screen.getByText("Sign this account out on every host?"),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(
-        "You’ll need to sign in again to use this account on any host.",
-      ),
-    ).toBeTruthy();
+    expect(screen.getByText(copy.title)).toBeTruthy();
+    expect(screen.getByText(copy.description)).toBeTruthy();
+    expect(screen.getByTestId("confirm-action").textContent).toBe(
+      copy.actionLabel,
+    );
     fireEvent.click(screen.getByTestId("confirm-action"));
     await waitFor(() => expect(messenger.calls).toHaveLength(1));
     expect(messenger.calls[0]?.params).toEqual({
@@ -895,7 +904,9 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
 
     function confirmSignOut(): void {
       fireEvent.click(
-        screen.getByRole("button", { name: "Sign out on every host" }),
+        screen.getByRole("button", {
+          name: profilePersonActionLabel("sign-out", "record"),
+        }),
       );
       fireEvent.click(screen.getByTestId("confirm-action"));
     }
