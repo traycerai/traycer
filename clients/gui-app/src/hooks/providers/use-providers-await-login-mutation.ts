@@ -162,8 +162,20 @@ async function awaitWithRecording(
   // step ends here rather than recording or asking once more.
   const askedAgain =
     signInRequestToRecord(next)?.operationId === recording.recordedOperationId;
+  // A recorded sign-in the computer has not yet taken in is on its way, not ended.
+  const notYetTakenIn =
+    !askedAgain &&
+    (next.profileOutcome ?? null) === null &&
+    (next.signInRequest ?? null) === null &&
+    (next.installation ?? null) === null &&
+    (next.refusal ?? null) === null &&
+    !next.codeRejected &&
+    (next.state ?? null) === null;
   return {
     ...next,
+    ...(notYetTakenIn
+      ? { profileOutcome: { kind: "waiting-for-profile" as const } }
+      : {}),
     signInRecordingEnded: askedAgain ? "already-recorded" : null,
   };
 }
