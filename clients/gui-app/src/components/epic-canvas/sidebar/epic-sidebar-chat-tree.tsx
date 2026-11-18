@@ -166,10 +166,7 @@ import {
   useEpicSidebarEffectiveExpanded,
   useEpicSidebarExpansionStore,
 } from "@/stores/epics/epic-sidebar-expansion-store";
-import {
-  clearSidebarNodeRevealRequest,
-  useSidebarNodeRevealRequest,
-} from "@/stores/epics/sidebar-node-reveal-store";
+import { useSidebarNodeRevealRequest } from "@/stores/epics/sidebar-node-reveal-store";
 import {
   useAncestorIds,
   useEpicAgentRoleClaims,
@@ -261,7 +258,6 @@ import {
   SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   anyMutationPending,
   chatRowClassName,
-  revealSidebarNode,
   useNodeIconDisplay,
   useTreeRowMotion,
 } from "./epic-sidebar-tree-shared";
@@ -1065,17 +1061,13 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     },
     [tabId, panelId, expandAction, collapseAction],
   );
+  // A reveal opens the row's ancestors here; the list scrolls to the row,
+  // flashes it and clears the request (`useChatTreeReveal`).
   useLayoutEffect(() => {
     if (revealRequest === null) return;
-    const region = treeRegionRef.current;
-    if (region === null) return;
     for (const ancestorId of ancestorIdsOfReveal) {
       expandAction(tabId, panelId, ancestorId);
     }
-    if (!revealSidebarNode(region, revealRequest.nodeId, revealRequest.nonce)) {
-      return;
-    }
-    clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
   }, [
     ancestorIdsOfReveal,
     expandAction,
