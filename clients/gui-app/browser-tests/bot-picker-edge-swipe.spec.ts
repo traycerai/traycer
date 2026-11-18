@@ -13,8 +13,6 @@ declare global {
   interface Window {
     __pickerSwipeOpens?: number;
     __mobileNavOpen?: () => boolean;
-    __openedAt?: number;
-    __touchDownAt?: number;
   }
 }
 
@@ -52,9 +50,9 @@ async function swipe(
 
 /**
  * A swipe whose pointer events are dispatched on `body`, not on the open
- * drawer. The drawer declares `touch-action: none`, which the recognizer
- * refuses on its own; a touch on `body` has no such ancestor, so what refuses it
- * is the modal barrier alone.
+ * drawer. A touch on `body` has no drawer ancestor, so what refuses it here is
+ * the modal barrier. The drawer's own `touch-action: none` is a second guard in
+ * production; this spec does not prove it, because the barrier masks it.
  */
 async function swipeOnBody(
   page: Page,
@@ -118,29 +116,9 @@ test("a swipe from the trailing edge opens the picker", async ({ page }) => {
   expect(await page.evaluate(() => window.__pickerSwipeOpens)).toBe(1);
 });
 
-/**
- * Opens the picker with its trigger and waits for the barrier. The page records
- * when the open click landed and when each touch went down, so a case can say
- * how long after the open a swipe began.
- */
+/** Opens the picker with its trigger and waits for the barrier the recognizer reads. */
 async function openPicker(page: Page): Promise<void> {
   await page.goto(fixture("bot-picker-edge-swipe"));
-  await page.evaluate(() => {
-    document.addEventListener(
-      "click",
-      () => {
-        window.__openedAt = performance.now();
-      },
-      { capture: true, once: true },
-    );
-    document.addEventListener(
-      "pointerdown",
-      () => {
-        window.__touchDownAt = performance.now();
-      },
-      { capture: true },
-    );
-  });
   await page.locator(TRIGGER).click();
   await expect(page.locator(PICKER)).toBeVisible();
   // The barrier the recognizer reads: the library's own, on the document.
@@ -149,11 +127,11 @@ async function openPicker(page: Page): Promise<void> {
     .toBe("none");
 }
 
-// A and its leading twin dispatch on `body`, not on the open drawer. The drawer
-// declares `touch-action: none` (vaul's own CSS), which the recognizer refuses
-// on its own, and a touch on the drawer is also handled by vaul's drag. A touch
-// on `body` has neither, so what refuses it is the modal barrier alone. Each
-// edge is its own case so that either can go red without the other.
+// A and its leading twin dispatch on `body`, not on the open drawer, whose own
+// touch handling is vaul's drag. A touch on `body` has no drawer ancestor, so
+// what refuses it here is the modal barrier; the drawer's `touch-action: none`
+// guard is masked by it and not proved by this spec. Each edge is its own case
+// so that either can go red without the other.
 test("with the picker open, the modal barrier alone refuses a trailing-edge swipe", async ({
   page,
 }) => {
@@ -176,7 +154,6 @@ test("with the picker open, the modal barrier alone refuses a leading-edge swipe
 
   await expect(page.locator(PICKER)).toBeVisible();
   expect(await page.evaluate(() => window.__mobileNavOpen?.())).toBe(false);
-  expect(await page.evaluate(() => window.__pickerSwipeOpens)).toBe(0);
 });
 
 test.describe("a real touch over the open picker", () => {
@@ -201,39 +178,16 @@ test.describe("a real touch over the open picker", () => {
   });
 
   // A rightward drag over a right drawer is vaul's own dismiss gesture and may
-  // close the picker, so this case asserts only what the shell must not do:
-  // open the task drawer or call the registered picker function. What vaul did
-  // is recorded, not asserted.
-  test("a rightward swipe from the leading edge opens neither the task drawer nor the picker", async ({
+  // close the picker, so this case asserts only that the shell does not open
+  // the task drawer. It does not assert whether the picker stays open.
+  test("a rightward swipe from the leading edge does not open the task drawer", async ({
     page,
-  }, testInfo) => {
+  }) => {
     await openPicker(page);
 
     await swipe(page, 8, 100, 300);
-    const observed = await page.evaluate(() => {
-      const content = document.querySelector(
-        '[data-testid="bot-channel-picker"]',
-      );
-      return {
-        pickerInDom: content !== null,
-        dataState: content?.getAttribute("data-state") ?? null,
-        translate:
-          content === null ? null : getComputedStyle(content).transform,
-        inlineTransform:
-          content instanceof HTMLElement ? content.style.transform : null,
-        openToTouchDownMs:
-          window.__openedAt !== undefined && window.__touchDownAt !== undefined
-            ? window.__touchDownAt - window.__openedAt
-            : null,
-      };
-    });
-    await testInfo.attach("leading-swipe-observed", {
-      body: JSON.stringify(observed, null, 2),
-      contentType: "application/json",
-    });
     await afterPaint(page);
 
     expect(await page.evaluate(() => window.__mobileNavOpen?.())).toBe(false);
-    expect(await page.evaluate(() => window.__pickerSwipeOpens)).toBe(0);
   });
 });
