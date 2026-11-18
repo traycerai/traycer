@@ -96,6 +96,7 @@ export type EnvironmentEffectiveRole = z.infer<
   typeof environmentEffectiveRoleSchema
 >;
 
+/** An environment role somebody HOLDS. */
 export type GrantedEnvironmentRole = "owner" | "admin" | "editor" | "viewer";
 
 export function grantedEnvironmentRole(
@@ -556,6 +557,7 @@ export const environmentMemberRoleSchema = lazySchema(() =>
 );
 export type EnvironmentMemberRole = z.infer<typeof environmentMemberRoleSchema>;
 
+/** A team-member role somebody HOLDS. */
 export type GrantedTeamMemberRole = "admin" | "editor" | "viewer";
 
 export function grantedTeamMemberRole(
