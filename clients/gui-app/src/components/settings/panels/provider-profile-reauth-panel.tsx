@@ -47,7 +47,6 @@ import {
   differentAccountText,
   profileNotChangedText,
   SIGN_IN_UNPROVEN_TEXT,
-  WAITING_FOR_PROFILE_TEXT,
 } from "@/components/providers/profile-sync-copy";
 
 function noop(): void {}
@@ -284,18 +283,7 @@ function ProviderProfileReauthOutcome({
   ) => void;
   readonly onDone: () => void;
 }): ReactNode {
-  if (flowState.kind === "waiting-for-profile") {
-    return (
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <p role="status" className="min-w-0 flex-1 text-ui-sm text-foreground">
-          {WAITING_FOR_PROFILE_TEXT}
-        </p>
-        <Button type="button" size="sm" onClick={onDone}>
-          Done
-        </Button>
-      </div>
-    );
-  }
+  if (flowState.kind === "waiting-for-profile") return <MutedAgentSpinner />;
   if (flowState.kind !== "not-changed") return null;
   const mismatch = flowState.reason === "account-mismatch";
   return (

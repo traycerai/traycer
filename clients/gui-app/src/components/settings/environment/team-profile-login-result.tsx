@@ -6,7 +6,6 @@ import type {
 import {
   alreadySignedInAsText,
   signedInAsText,
-  WAITING_FOR_PROFILE_TEXT,
   differentAccountText,
   profileNotChangedText,
   SIGN_IN_UNPROVEN_TEXT,
@@ -16,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { DialogFooter } from "@/components/ui/dialog";
 import { useTeamProfileColor } from "@/hooks/environment/team/use-team-profile-color";
+import { AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS } from "@/lib/providers/provider-ambient-auth";
 import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import type { SignInRecordingEnd } from "@/hooks/providers/use-providers-await-login-mutation";
 import type { ProviderTargetLoginControls } from "@/components/settings/panels/add-provider-profile-dialog";
@@ -73,14 +73,6 @@ export function TeamProfileLoginResult(
       return (
         <ResultFooter
           message={teamSignInRefusalText(outcome.reason, props.teamName)}
-          onDone={props.onClose}
-          action={null}
-        />
-      );
-    case "waiting-for-profile":
-      return (
-        <ResultFooter
-          message={WAITING_FOR_PROFILE_TEXT}
           onDone={props.onClose}
           action={null}
         />
@@ -251,6 +243,25 @@ function TeamNamedLoginResult(props: {
     profileId,
   );
   const profile = liveProfile ?? read?.profile ?? null;
+  // The signed-in profile is held for, never ended on: the list is read again
+  // until it shows the row.
+  const holding = read !== null && !read.failed && profile === null;
+  useEffect(() => {
+    if (!holding || reread === undefined) return;
+    const timer = window.setTimeout(() => {
+      void reread().then((providers) => {
+        if (!mounted.current) return;
+        setRead({
+          profile:
+            providers
+              ?.find((provider) => provider.providerId === providerId)
+              ?.profiles.find((row) => row.profileId === profileId) ?? null,
+          failed: providers === null,
+        });
+      });
+    }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [holding, read, reread, providerId, profileId]);
   const done = (): void => {
     if (mounted.current && profile !== null) {
       if (props.switchSourceProfileId !== profileId) props.onSignedIn(profile);
@@ -317,11 +328,9 @@ function TeamNamedLoginResult(props: {
     );
   if (profile === null)
     return (
-      <ResultFooter
-        message={WAITING_FOR_PROFILE_TEXT}
-        onDone={props.onClose}
-        action={null}
-      />
+      <DialogFooter>
+        <MutedAgentSpinner />
+      </DialogFooter>
     );
   if (saveFailed)
     return (

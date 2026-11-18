@@ -36,8 +36,6 @@ export const SIGN_IN_AGAIN_DIALOG_TITLE = "Sign in again";
 export const SIGN_IN_TO_USE_EVERYWHERE_TEXT = "Sign in to use everywhere";
 export const AVAILABLE_ON_THIS_COMPUTER_TEXT = "Available on this computer";
 export const NOT_ON_THIS_COMPUTER_YET_TEXT = "Not on this computer yet";
-export const WAITING_FOR_PROFILE_TEXT =
-  "Waiting for Traycer. Your sign-in is complete.";
 export const USE_PROFILE_TEXT = "Use";
 export const SIGN_IN_WITH_ANOTHER_TEXT = "Sign in with another";
 export const ADD_AS_NEW_PROFILE_TEXT = "Add as a new profile";

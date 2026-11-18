@@ -32,7 +32,6 @@ import {
   SIGN_IN_WITH_ANOTHER_TEXT,
   signedInAsText,
   USE_PROFILE_TEXT,
-  WAITING_FOR_PROFILE_TEXT,
 } from "@/components/providers/profile-sync-copy";
 import {
   useCachedProviderProfilesReader,
@@ -668,8 +667,6 @@ function dialogShowsCloseButton(
     flowState.kind === "start" ||
     flowState.kind === "already-signed-in" ||
     flowState.kind === "waiting-for-profile" ||
-    (flowState.kind === "target-outcome" &&
-      flowState.profileOutcome?.kind === "waiting-for-profile") ||
     flowState.kind === "list-unread"
   );
 }
@@ -1048,10 +1045,7 @@ function AddProfileOutcomeFooter({
   if (flowState.kind === "waiting-for-profile") {
     return (
       <DialogFooter>
-        <Button type="button" size="sm" onClick={onDone}>
-          Done
-        </Button>
-        <FooterSentence>{WAITING_FOR_PROFILE_TEXT}</FooterSentence>
+        <MutedAgentSpinner />
       </DialogFooter>
     );
   }
