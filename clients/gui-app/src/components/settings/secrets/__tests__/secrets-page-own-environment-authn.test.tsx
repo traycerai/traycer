@@ -95,19 +95,22 @@ const SECOND_ACCOUNT_DIRECTORY = {
   ],
 };
 
-const SECRET: EnvironmentSecretV12 = {
-  ...RETIRED_SECRET_ROW_FIELDS,
-  providerVariables: [...RETIRED_PROVIDER_VARIABLES],
-  secretId: SECRET_ID,
-  name: "STRIPE_KEY",
-  kind: "api_key",
-  protocol: "https",
-  destinations: ["api.stripe.com"],
-  currentVersionId: VERSION_ID,
-  revoked: false,
-  updatedAt: 1,
-  variables: [],
-};
+function ownSecret(): EnvironmentSecretV12 {
+  return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
+    secretId: SECRET_ID,
+    name: "STRIPE_KEY",
+    kind: "api_key",
+    protocol: "https",
+    destinations: ["api.stripe.com"],
+    currentVersionId: VERSION_ID,
+    revoked: false,
+    updatedAt: 1,
+    variables: [],
+  };
+}
+const SECRET = ownSecret();
 
 const AUTHN_SECRET = authnSecretRowFixture({
   id: SECRET_ID,
