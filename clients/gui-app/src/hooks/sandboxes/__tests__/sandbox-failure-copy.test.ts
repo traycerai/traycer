@@ -171,6 +171,17 @@ describe("sandboxFailureMessage", () => {
     ).toBe("That size is outside what's offered.");
   });
 
+  it("gives a shape reason named like an inherited member the fallback sentence", () => {
+    expect(
+      sandboxFailureMessage(
+        refused("shape_not_offered", {
+          reason: "constructor",
+          shortfallMc: null,
+        }),
+      ),
+    ).toBe("That size is outside what's offered.");
+  });
+
   it("gives the two recognized 403 refusals their permission and owner remedies", () => {
     expect(
       sandboxFailureMessage(refused("pod_add_admin_only", NO_DETAIL)),

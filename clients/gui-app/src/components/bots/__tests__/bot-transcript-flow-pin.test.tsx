@@ -84,6 +84,7 @@ function transcript(fold: BotTranscriptFold | null): ReactNode {
             botId="bot_01ARZ3NDEKTSV4RRFFQ69G5FAV"
             chatId="thread-1"
             hostId="host-1"
+            boundHostId={null}
             title="Release Bot"
             instanceId="thread-card"
             surface={null}

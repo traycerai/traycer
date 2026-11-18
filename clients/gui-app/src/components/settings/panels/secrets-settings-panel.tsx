@@ -21,6 +21,7 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 
 /**
@@ -60,8 +61,9 @@ function TeamSecretsSettingsPanel(): ReactNode {
         hostId={client.getActiveHostId()}
         emptyText={personal ? SECRETS_EMPTY_TEXT : teamDescription}
         hostName={(hostId) =>
-          scope.hosts.data?.hosts.find((host) => host.hostId === hostId)
-            ?.hostLabel ?? "a host"
+          environmentReadData(scope.hosts)?.hosts.find(
+            (host) => host.hostId === hostId,
+          )?.hostLabel ?? "a host"
         }
       />
     </SecretsListPanelShell>

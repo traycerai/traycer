@@ -1,10 +1,22 @@
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
-import type {
-  TeamComputersResult,
-  SetEnvironmentBotHostResult,
-} from "@traycer-clients/shared/host-client/team-computers";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import type { HostTokensBridgeSurface } from "../ipc-contracts/host-token-types";
+import { createDesktopHostTokenSource } from "./desktop-host-tokens";
+import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { WindowCaptureRect } from "../ipc-contracts/window-capture-types";
 import type { SandboxArtifactBridge } from "@traycer-clients/shared/platform/sandbox-artifacts";
@@ -175,6 +187,8 @@ import type {
   VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -191,7 +205,15 @@ import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
@@ -267,12 +289,6 @@ export interface DesktopPreloadBridge {
     bearer: string,
     environmentId: string,
   ): Promise<TeamComputersResult>;
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult>;
   mintTeamComputerInstallToken(
     bearerToken: string,
     environmentId: string,
@@ -289,6 +305,15 @@ export interface DesktopPreloadBridge {
     hostId: string,
   ): Promise<DeregisterHostFetchResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult>;
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
@@ -362,6 +387,18 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -375,6 +412,10 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult>;
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult>;
   getEnvironmentProviders(
     bearerToken: string,
     environmentId: string,
@@ -385,13 +426,10 @@ export interface DesktopPreloadBridge {
     requestId: string,
     decision: SecretRequestDecision,
   ): Promise<SecretRequestDecideFetchResult>;
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult>;
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
   tokenStore: ITokenStore;
+  hostTokens: HostTokensBridgeSurface;
   listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
   revokeUserSession(
     bearerToken: string,
@@ -505,6 +543,17 @@ export interface DesktopPreloadBridge {
    */
   selectionAuthority: SelectionAuthorityClient;
   refreshSelectionFleet: () => Promise<FleetRefreshOutcome>;
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 export interface DesktopFileDropsBridge {
@@ -530,7 +579,6 @@ export interface DesktopFileDropsBridge {
  * `buildHostManagementBridge()`.
  */
 export interface DesktopHostManagementBridge {
-  readonly invalidateLocalTeamAdmission?: (hostId: string) => Promise<void>;
   getHostControllerStatus(): Promise<HostControllerStatus>;
   convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
   applyStaged(
@@ -937,6 +985,7 @@ export interface DesktopRunnerHostOptions {
 export class DesktopRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  readonly environmentTransport = fetchEnvironmentTransport;
   readonly relayBaseUrl: string;
   readonly poolBaseUrl: string;
   // False for a launch booted in the `none` lifecycle mode: main runs no
@@ -951,6 +1000,7 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   readonly secureStorage: ISecureStorage;
   readonly tokenStore: ITokenStore;
+  readonly hostTokens: HostTokenSource;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState;
   readonly workspaceFolders: IWorkspaceFoldersHost;
@@ -1079,6 +1129,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     // CLI and read by the host, reached here over IPC. The old renderer-local
     // encrypted-localStorage token slots are retired (their migration is §6).
     this.tokenStore = options.bridge.tokenStore;
+    this.hostTokens = createDesktopHostTokenSource(options.bridge.hostTokens);
 
     this.notifications = {
       systemSettings: this.bridge.notifications.systemSettings,
@@ -1330,19 +1381,6 @@ export class DesktopRunnerHost implements IRunnerHost {
   ): Promise<TeamComputersResult> {
     return this.bridge.listTeamComputers(bearer, environmentId);
   }
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult> {
-    return this.bridge.setEnvironmentBotHost(
-      bearer,
-      environmentId,
-      hostId,
-      sharingGeneration,
-    );
-  }
   mintTeamComputerInstallToken(
     bearerToken: string,
     environmentId: string,
@@ -1367,6 +1405,24 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
     return this.bridge.listSandboxes(bearerToken);
+  }
+
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult> {
+    return this.bridge.listEnvironments(bearerToken);
+  }
+
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult> {
+    return this.bridge.saveAutoPolicy(bearerToken, body);
+  }
+
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return this.bridge.attachTaskEnvironment(bearerToken, request);
   }
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
@@ -1514,6 +1570,27 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.setSlackAppDms(bearerToken, request);
   }
 
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    return this.bridge.updateBotRunSettings(bearerToken, request);
+  }
+
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    return this.bridge.updateBotReplyMode(bearerToken, request);
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return this.bridge.deleteBot(bearerToken, request);
+  }
+
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -1527,6 +1604,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult> {
     return this.bridge.getTeamEnvironment(bearerToken, teamId);
+  }
+
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult> {
+    return this.bridge.replaceEnvironmentApiKey(bearerToken, request);
   }
 
   getEnvironmentProviders(
@@ -1548,13 +1632,6 @@ export class DesktopRunnerHost implements IRunnerHost {
       requestId,
       decision,
     );
-  }
-
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult> {
-    return this.bridge.mintExecutableWriteGrant(bearerToken, hostId);
   }
 
   beginAuthAttempt(): void {
@@ -1636,6 +1713,21 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.localHostHandlers.clear();
     this.systemResumedHandlers.clear();
   }
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    return this.bridge.getTeamChatAutoArchive(bearerToken, teamId);
+  }
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    return this.bridge.setTeamChatAutoArchive(bearerToken, teamId, request);
+  }
 }
 
 /**
@@ -1711,9 +1803,6 @@ function buildDesktopHostManagement(
     getRemovalState: () => managementBridge.getRemovalState(),
     clearRemoval: () => managementBridge.clearRemoval(),
     restartHost: () => managementBridge.restartHost(),
-    invalidateLocalTeamAdmission: (hostId) =>
-      managementBridge.invalidateLocalTeamAdmission?.(hostId) ??
-      Promise.resolve(),
     getHostLogs: (input) => managementBridge.getHostLogs(input),
     runDoctor: (input) => managementBridge.runDoctor(input),
     availableVersions: (input) => managementBridge.availableVersions(input),

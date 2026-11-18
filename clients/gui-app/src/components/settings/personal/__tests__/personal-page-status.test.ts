@@ -106,6 +106,7 @@ describe("personalPageStatusLine", () => {
     ["timed_out", "LOG_LEVEL didn't apply on dev-box: it timed out."],
     ["some_future_code", "LOG_LEVEL didn't apply on dev-box."],
     ["script_failed", "LOG_LEVEL didn't apply on dev-box."],
+    ["constructor", "LOG_LEVEL didn't apply on dev-box."],
   ])("a failed item with code %s reads: %s", (code, text) => {
     const state = ready({
       items: [variable("LOG_LEVEL", { status: "failed", code })],
@@ -204,6 +205,18 @@ describe("personalPageStatusLine", () => {
         "github-mcp didn't apply on dev-box. It couldn't be written for Codex.",
       );
     });
+
+    it.each([
+      ["constructor", "name"],
+      ["unsupported_kind", "constructor"],
+    ])(
+      "reads no case from a name every object inherits (code %s, case %s)",
+      (code, kind) => {
+        expect(
+          personalPageStatusLine(mcpServer(code, kind), MCP_KINDS, HOST)?.text,
+        ).toBe("github-mcp didn't apply on dev-box.");
+      },
+    );
 
     it("keeps the generic reason for a kind it does not know", () => {
       expect(
@@ -380,6 +393,7 @@ describe("itemLabel", () => {
     [{ kind: "auto_policy", key: "x" }, "Permissions"],
     [{ kind: "managed_profile", key: "p1" }, "A profile"],
     [{ kind: "something_new", key: "x" }, "A setting"],
+    [{ kind: "constructor", key: "x" }, "A setting"],
   ])("labels %j as %s", (item, label) => {
     expect(itemLabel(item)).toBe(label);
   });
@@ -395,6 +409,7 @@ describe("itemPageName", () => {
     ["variable", null],
     ["mcp_server", null],
     ["something_new", null],
+    ["constructor", null],
   ])("names %s as %s", (kind, name) => {
     expect(itemPageName(kind)).toBe(name);
   });
@@ -404,6 +419,10 @@ describe("moveRowLabel", () => {
   it.each([
     [{ kind: "variable", key: "EDITOR", label: "EDITOR" }, "EDITOR"],
     [{ kind: "mcp_server", key: "gh", label: "github-mcp" }, "github-mcp"],
+    [
+      { kind: "constructor", key: "k", label: "its own label" },
+      "its own label",
+    ],
     [{ kind: "env_override", key: "no-such:X", label: "X" }, "X"],
     [
       {

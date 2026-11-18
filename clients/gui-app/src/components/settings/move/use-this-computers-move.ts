@@ -30,6 +30,10 @@ import { moveIsPastTheAccept } from "@/lib/environment/move-in-progress";
  * this invitation stays quiet: the Overview is already asking that person to
  * Retry, and two surfaces asking differently for the same thing is noise.
  *
+ * A move waiting for consent reads `not_moved` whatever its planes say: a
+ * failed upload can leave every plane moved while the host waits to be
+ * asked, and this invitation is the one surface that asks.
+ *
  * A re-read that fails keeps the last answer, which is what the status read
  * does: otherwise one failed read would take an unpressed invitation away.
  */
@@ -56,5 +60,12 @@ export function useThisComputersMove(
   const planes = planesFromStatus(status.data);
   if (planes === null) return "unknown";
   if (moveIsPastTheAccept(status.data)) return "moved";
+  const setup = status.data.setup;
+  if (
+    setup !== null &&
+    setup.stage === "moving_settings" &&
+    setup.state === "awaiting_consent"
+  )
+    return "not_moved";
   return planesHaveLocal(planes) ? "not_moved" : "moved";
 }

@@ -1,37 +1,27 @@
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCallback, useMemo, useState } from "react";
 import {
+  useQueries,
   useQueryClient,
-  type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentMember,
-  EnvironmentMembersResponse,
+  EnvironmentMembersResponseV12,
 } from "@traycer/protocol/host/environment/contracts";
-import type { HostRpcRegistry } from "@/lib/host";
-import { queryKeys } from "@/lib/query-keys";
-import {
-  useHostQueries,
-  type HostRequestSpec,
-} from "@/hooks/host/use-host-queries";
-import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useEnvironmentMembersPages } from "@/hooks/environment/use-environment-members-list";
 import {
   UNRESOLVED_BOT_MEMBERS,
   type BotMember,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
 
-const METHOD = "environment.members";
-
 const FIRST_PAGE: ReadonlyArray<string | null> = [null];
 
 /** The pages asked for, and whose list they were asked of. */
 type Requested = {
   readonly environmentId: string | null;
-  readonly hostId: string | null;
+  readonly viewerUserId: string;
   /** The cursor of every page asked for, the first page's null. */
   readonly cursors: ReadonlyArray<string | null>;
 };
@@ -55,18 +45,17 @@ type Requested = {
  * walk, so a warm cache of any number of pages - on mount, or exposed later
  * by an answer - is asked for in one render rather than one per page.
  *
- * A member no answered page lists - the list still loading, a page refused
- * or failed - resolves to null, and the conversation shows their user id.
- * `enabled` is the capability gate the caller resolved with
- * `useHostMethodSupport` on the same client's host; while it is false nobody
- * resolves, whatever an earlier answer left in the cache.
+ * The pages are the ones Members reads ({@link useEnvironmentMembersPages}),
+ * under the same keys. A member no answered page lists - the list still
+ * loading, a page refused or failed - resolves to null, and the conversation
+ * shows their user id. While `enabled` is false nobody resolves, whatever an
+ * earlier answer left in the cache.
  */
 export function useEnvironmentMembers(
-  client: HostClient<HostRpcRegistry> | null,
   environmentId: string | null,
   enabled: boolean,
 ): BotMemberResolver {
-  return useEnvironmentMemberDirectory(client, environmentId, enabled).resolve;
+  return useEnvironmentMemberDirectory(environmentId, enabled).resolve;
 }
 
 /**
@@ -80,11 +69,10 @@ interface EnvironmentMemberDirectory {
 }
 
 export function useEnvironmentMemberDirectory(
-  client: HostClient<HostRpcRegistry> | null,
   environmentId: string | null,
   enabled: boolean,
 ): EnvironmentMemberDirectory {
-  return useMemberPages(client, environmentId, enabled, enabled);
+  return useMemberPages(environmentId, enabled, enabled);
 }
 
 /**
@@ -94,79 +82,65 @@ export function useEnvironmentMemberDirectory(
  * while it is false nobody resolves, whatever the cache holds.
  */
 export function useLoadedEnvironmentMembers(
-  client: HostClient<HostRpcRegistry> | null,
   environmentId: string | null,
   readable: boolean,
 ): BotMemberResolver {
-  return useMemberPages(client, environmentId, false, readable).resolve;
+  return useMemberPages(environmentId, false, readable).resolve;
 }
 
 function useMemberPages(
-  client: HostClient<HostRpcRegistry> | null,
   environmentId: string | null,
   fetchPages: boolean,
   readable: boolean,
 ): EnvironmentMemberDirectory {
-  const servingClient = usePoolTierHostClient(client);
   const queryClient = useQueryClient();
-  // The same host id the batch below keys its queries with.
-  const hostId = useReactiveHostReadiness(servingClient).hostId;
+  const { viewerUserId, pageKey, pageOptions } = useEnvironmentMembersPages(
+    environmentId,
+    fetchPages,
+  );
   const [requested, setRequested] = useState<Requested>({
     environmentId,
-    hostId,
+    viewerUserId,
     cursors: FIRST_PAGE,
   });
   let cursors = requested.cursors;
   if (
     requested.environmentId !== environmentId ||
-    requested.hostId !== hostId
+    requested.viewerUserId !== viewerUserId
   ) {
     // Another list starts from its first page.
     cursors = FIRST_PAGE;
-    setRequested({ environmentId, hostId, cursors });
+    setRequested({ environmentId, viewerUserId, cursors });
   }
-  const requests = useMemo(
-    (): ReadonlyArray<HostRequestSpec<HostRpcRegistry, typeof METHOD>> =>
-      environmentId === null
-        ? []
-        : cursors.map((cursor) => ({
-            method: METHOD,
-            params: { environmentId, cursor },
-          })),
-    [environmentId, cursors],
-  );
   const combine = useCallback(
     (
-      results: Array<UseQueryResult<EnvironmentMembersResponse, HostRpcError>>,
-    ): ReadonlyArray<EnvironmentMembersResponse | undefined> =>
+      results: Array<
+        UseQueryResult<EnvironmentMembersResponseV12, HostRpcError>
+      >,
+    ): ReadonlyArray<EnvironmentMembersResponseV12 | undefined> =>
       results.map((result) => result.data),
     [],
   );
-  const pages = useHostQueries<
-    HostRpcRegistry,
-    typeof METHOD,
-    ReadonlyArray<EnvironmentMembersResponse | undefined>
-  >({
-    client: servingClient,
-    requests,
-    cacheKeyIdentity: undefined,
-    options: {
-      enabled: fetchPages && environmentId !== null,
-      refetchOnWindowFocus: false,
-    },
+  const pages = useQueries({
+    queries:
+      environmentId === null
+        ? []
+        : cursors.map((cursor) => pageOptions(environmentId, cursor)),
     combine,
   });
   if (environmentId !== null && pages.length === cursors.length) {
     const walked = cursorsNamedByPages(cursors, pages, (cursor) =>
-      cachedPage(queryClient, hostId, environmentId, cursor),
+      queryClient.getQueryData<EnvironmentMembersResponseV12>(
+        pageKey(environmentId, cursor),
+      ),
     );
     if (!sameCursors(walked, cursors)) {
-      setRequested({ environmentId, hostId, cursors: walked });
+      setRequested({ environmentId, viewerUserId, cursors: walked });
     }
   }
   return useMemo((): EnvironmentMemberDirectory => {
-    // A host that cannot answer now names nobody, whatever it answered
-    // before: the gate, not the cache, decides.
+    // A closed gate names nobody, whatever was answered before: the gate,
+    // not the cache, decides.
     if (!readable) return { resolve: UNRESOLVED_BOT_MEMBERS, members: null };
     const byUserId = new Map<string, BotMember>();
     const members: EnvironmentMember[] = [];
@@ -207,28 +181,13 @@ function useMemberPages(
  */
 function cursorsNamedByPages(
   asked: ReadonlyArray<string | null>,
-  pages: ReadonlyArray<EnvironmentMembersResponse | undefined>,
-  cached: (cursor: string | null) => EnvironmentMembersResponse | undefined,
+  pages: ReadonlyArray<EnvironmentMembersResponseV12 | undefined>,
+  cached: (cursor: string | null) => EnvironmentMembersResponseV12 | undefined,
 ): ReadonlyArray<string | null> {
   return walkChain((cursor) => {
     const index = asked.indexOf(cursor);
     return index === -1 ? cached(cursor) : pages[index];
   });
-}
-
-/** One page as the cache holds it, under the key `useHostQueries` uses. */
-function cachedPage(
-  queryClient: QueryClient,
-  hostId: string | null,
-  environmentId: string,
-  cursor: string | null,
-): EnvironmentMembersResponse | undefined {
-  return queryClient.getQueryData<EnvironmentMembersResponse>(
-    queryKeys.hostMethod<HostRpcRegistry, typeof METHOD>(hostId, METHOD, {
-      environmentId,
-      cursor,
-    }),
-  );
 }
 
 /**
@@ -237,7 +196,7 @@ function cachedPage(
  * cursor already on the chain.
  */
 function walkChain(
-  pageFor: (cursor: string | null) => EnvironmentMembersResponse | undefined,
+  pageFor: (cursor: string | null) => EnvironmentMembersResponseV12 | undefined,
 ): ReadonlyArray<string | null> {
   const chain: Array<string | null> = [null];
   for (;;) {

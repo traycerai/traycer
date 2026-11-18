@@ -1,13 +1,32 @@
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
+import {
+  captureSettingsSaveOrigin,
+  type SettingsSaveOrigin,
+} from "@/lib/environment/settings-save-origin";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { Query, UseMutationResult } from "@tanstack/react-query";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useQueryClient } from "@tanstack/react-query";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProvidersMcpMutateAction,
   ProviderNativeScope,
+  ProviderMcpServerTransportWrite,
 } from "@traycer/protocol/host/provider-native-schemas";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
-import { useHostClient } from "@/lib/host";
+import type { SettingsSave } from "@traycer/protocol/host/environment/settings-save-mapping";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
+import {
+  useSettingsSave,
+  type PrepareSettingsSave,
+} from "@/hooks/environment/use-settings-save";
+import {
+  everyAnswerProposes,
+  sendFollowedSave,
+} from "@/lib/environment/settings-save-follow";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   isProviderNativeRpcError,
   mapNativeMutateToMcpMutate,
@@ -17,6 +36,8 @@ import {
 import { providersMutationKeys } from "@/lib/query-keys";
 import { providersNativeQueryKeys } from "@/lib/query-keys/providers-native-query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+
+const SAVED_KINDS = ["mcp_server"] as const;
 
 // Count only mutation completions, including writes that structural sharing
 // makes referentially identical. Keep this out of shared list data and let the
@@ -33,7 +54,10 @@ export type McpMutateVariables = {
   readonly providerId: ProviderId;
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
-  readonly mutation: ProvidersMcpMutateAction;
+  readonly mutation:
+    | Exclude<ProvidersMcpMutateAction, { action: "add" | "update" }>
+    | { readonly action: "add"; readonly name: string }
+    | { readonly action: "update"; readonly name: string };
   /**
    * When true, the hook skips the global toast so the caller can render a
    * row-local native error. Default toast still fires for non-native errors
@@ -51,6 +75,13 @@ interface McpMutateSnapshot {
     readonly scope: ProviderNativeScope;
     readonly workspaceRoot: string | null;
   };
+}
+
+interface PressedMcpMutation {
+  readonly prepare: PrepareSettingsSave;
+  readonly origin: SettingsSaveOrigin;
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly hostId: string | null;
 }
 
 interface McpMutateContext {
@@ -83,7 +114,10 @@ function listChangedDuringMutation(
  * optimistic list writes would clear refresh errors, and rolling them back
  * could overwrite a newer full-list response or another server's discovery.
  */
-export function useProvidersMcpMutate(): UseMutationResult<
+export function useProvidersMcpMutate(
+  readTransport: (() => ProviderMcpServerTransportWrite) | null,
+  clearTransportInput: (() => void) | null,
+): UseMutationResult<
   McpMutateResult,
   HostRpcError,
   McpMutateVariables,
@@ -91,133 +125,168 @@ export function useProvidersMcpMutate(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  // What this installs can run on the host, so it carries the grant.
-  const grant = useExecutableWriteGrant();
-  return useMutation<
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
+  return usePressCapturedMutation<
     McpMutateResult,
     HostRpcError,
     McpMutateVariables,
+    PressedMcpMutation,
     McpMutateContext
-  >({
-    // Settings mounts this hook under a host-keyed subtree with a pinned
-    // requester. Keep the observer attached while that host's readiness changes.
-    mutationKey: providersMutationKeys.mcpMutate(),
-    onMutate: () => ({ hostId: client.getActiveHostId() }),
-    mutationFn: async (variables) => {
-      const hostId = client.getActiveHostId();
-      const listParams = {
-        providerId: variables.providerId,
-        scope: variables.scope,
-        workspaceRoot: variables.workspaceRoot,
-      };
-      const listKey = providersNativeQueryKeys.mcpList(hostId, listParams);
-      const listQuery = queryClient.getQueryCache().find({
-        queryKey: listKey,
-        exact: true,
-      });
-      // This snapshot only decides whether to reconcile after applying the
-      // confirmed response; it must never suppress a successful mutation.
-      const snapshot: McpMutateSnapshot = {
-        listQuery,
-        mutationCompletionRevision: getMutationCompletionRevision(listQuery),
-        listParams,
-        listData: queryClient.getQueryData<McpListData>(listKey),
-      };
-      const response = await client.request(
-        "providers.nativeMutate",
-        await grant(
-          {
-            providerId: variables.providerId,
-            executableWriteGrant: null,
-            expectedEnvironmentId: null,
-            mutation: {
-              kind: "mcp",
-              scope: variables.scope,
-              workspaceRoot: variables.workspaceRoot,
-              mutation: variables.mutation,
-            },
-          },
-          client,
-        ),
-      );
-      return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
-    },
-    onSuccess: ({ data, snapshot }, _variables, ctx) => {
-      if (ctx.hostId === null) return;
-      const listKey = providersNativeQueryKeys.mcpList(
-        ctx.hostId,
-        snapshot.listParams,
-      );
-      const listQuery = queryClient.getQueryCache().find({
-        queryKey: listKey,
-        exact: true,
-      });
-      const mutationCompletionRevision =
-        getMutationCompletionRevision(listQuery);
-      const {
-        fetchStatus,
-        data: currentData,
-        error,
-      } = queryClient.getQueryState<McpListData, HostRpcError>(listKey) ?? {};
-      const refreshError = error ?? currentData?.refreshError ?? null;
-      // Full mutation responses are applied in completion order. A late
-      // response can replace newer rows until a complete read reconciles them.
-      // A confirmed config write does not clear a failed list-read warning.
-      queryClient.setQueryData<McpListData>(listKey, { ...data, refreshError });
-      const writtenQuery = queryClient.getQueryCache().find({
-        queryKey: listKey,
-        exact: true,
-      });
-      if (writtenQuery !== undefined) {
-        mcpMutationCompletionRevisions.set(
-          writtenQuery,
-          getMutationCompletionRevision(writtenQuery) + 1,
-        );
-      }
-      if (refreshError !== null) {
-        void queryClient.invalidateQueries({
+  >(
+    () => ({
+      prepare: prepareSave,
+      origin: captureSettingsSaveOrigin(cloudSource),
+      client,
+      hostId: client.getActiveHostId(),
+    }),
+    {
+      // Settings mounts this hook under a host-keyed subtree with a pinned
+      // requester. Keep the observer attached while that host's readiness changes.
+      mutationKey: providersMutationKeys.mcpMutate(),
+      onMutate: () => ({ hostId: client.getActiveHostId() }),
+      mutationFn: async (variables, pressed) => {
+        const { client: pressedClient, hostId } = pressed;
+        const listParams = {
+          providerId: variables.providerId,
+          scope: variables.scope,
+          workspaceRoot: variables.workspaceRoot,
+        };
+        const listKey = providersNativeQueryKeys.mcpList(hostId, listParams);
+        const listQuery = queryClient.getQueryCache().find({
           queryKey: listKey,
           exact: true,
-          refetchType: "none",
         });
-      }
-      if (
-        fetchStatus === "fetching" ||
-        data.coverage?.sources.some(
-          (source) => source.outcome === "unrefreshed",
-        ) === true ||
-        listChangedDuringMutation(currentData, snapshot) ||
-        listQuery !== snapshot.listQuery ||
-        mutationCompletionRevision !== snapshot.mutationCompletionRevision
-      ) {
-        // The cache now has full data even if an initial read was pending,
-        // so default invalidation can replace that read. Do not hold mutation
-        // settlement (or the row's pending UI) open for another host round trip.
-        void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
-      }
-    },
-    onError: (error, variables, ctx) => {
-      if (
-        isProviderNativeRpcError(error) &&
-        error.nativeCode === "server_not_found" &&
-        ctx !== undefined &&
-        ctx.hostId !== null
-      ) {
-        void queryClient.invalidateQueries({
-          queryKey: providersNativeQueryKeys.mcpList(ctx.hostId, {
-            providerId: variables.providerId,
+        // This snapshot only decides whether to reconcile after applying the
+        // confirmed response; it must never suppress a successful mutation.
+        const snapshot: McpMutateSnapshot = {
+          listQuery,
+          mutationCompletionRevision: getMutationCompletionRevision(listQuery),
+          listParams,
+          listData: queryClient.getQueryData<McpListData>(listKey),
+        };
+        const target = variables.mutation;
+        let mutation: ProvidersMcpMutateAction;
+        if (target.action === "add" || target.action === "update") {
+          if (readTransport === null) {
+            throw new Error("MCP transport input is unavailable.");
+          }
+          mutation = { ...target, transport: readTransport() };
+        } else {
+          mutation = target;
+        }
+        const request: RequestOfMethod<
+          HostRpcRegistry,
+          "providers.nativeMutate"
+        > = {
+          providerId: variables.providerId,
+          executableWriteGrant: null,
+          expectedEnvironmentId: null,
+          mutation: {
+            kind: "mcp",
             scope: variables.scope,
             workspaceRoot: variables.workspaceRoot,
-          }),
+            mutation,
+          },
+        };
+        const save: SettingsSave = {
+          method: "providers.nativeMutate",
+          request,
+        };
+        const response = await sendFollowedSave(
+          await pressed.prepare(save, hostId, pressed.origin),
+          () => pressedClient.request("providers.nativeMutate", request),
+          everyAnswerProposes,
+        );
+        return { data: mapNativeMutateToMcpMutate({ response }), snapshot };
+      },
+      onSuccess: ({ data, snapshot }, _variables, ctx) => {
+        if (ctx.hostId === null) return;
+        const listKey = providersNativeQueryKeys.mcpList(
+          ctx.hostId,
+          snapshot.listParams,
+        );
+        const listQuery = queryClient.getQueryCache().find({
+          queryKey: listKey,
           exact: true,
         });
-      }
-      if (variables.suppressToast === true && isProviderNativeRpcError(error)) {
-        return;
-      }
-      toastFromHostError(error, "Couldn't update MCP server.");
+        const mutationCompletionRevision =
+          getMutationCompletionRevision(listQuery);
+        const {
+          fetchStatus,
+          data: currentData,
+          error,
+        } = queryClient.getQueryState<McpListData, HostRpcError>(listKey) ?? {};
+        const refreshError = error ?? currentData?.refreshError ?? null;
+        // Full mutation responses are applied in completion order. A late
+        // response can replace newer rows until a complete read reconciles them.
+        // A confirmed config write does not clear a failed list-read warning.
+        queryClient.setQueryData<McpListData>(listKey, {
+          ...data,
+          refreshError,
+        });
+        const writtenQuery = queryClient.getQueryCache().find({
+          queryKey: listKey,
+          exact: true,
+        });
+        if (writtenQuery !== undefined) {
+          mcpMutationCompletionRevisions.set(
+            writtenQuery,
+            getMutationCompletionRevision(writtenQuery) + 1,
+          );
+        }
+        if (refreshError !== null) {
+          void queryClient.invalidateQueries({
+            queryKey: listKey,
+            exact: true,
+            refetchType: "none",
+          });
+        }
+        if (
+          fetchStatus === "fetching" ||
+          data.coverage?.sources.some(
+            (source) => source.outcome === "unrefreshed",
+          ) === true ||
+          listChangedDuringMutation(currentData, snapshot) ||
+          listQuery !== snapshot.listQuery ||
+          mutationCompletionRevision !== snapshot.mutationCompletionRevision
+        ) {
+          // The cache now has full data even if an initial read was pending,
+          // so default invalidation can replace that read. Do not hold mutation
+          // settlement (or the row's pending UI) open for another host round trip.
+          void queryClient.invalidateQueries({
+            queryKey: listKey,
+            exact: true,
+          });
+        }
+      },
+      onSettled: () => clearTransportInput?.(),
+      onError: (error, variables, ctx) => {
+        if (
+          isProviderNativeRpcError(error) &&
+          error.nativeCode === "server_not_found" &&
+          ctx !== undefined &&
+          ctx.hostId !== null
+        ) {
+          void queryClient.invalidateQueries({
+            queryKey: providersNativeQueryKeys.mcpList(ctx.hostId, {
+              providerId: variables.providerId,
+              scope: variables.scope,
+              workspaceRoot: variables.workspaceRoot,
+            }),
+            exact: true,
+          });
+        }
+        if (
+          variables.suppressToast === true &&
+          isProviderNativeRpcError(error)
+        ) {
+          return;
+        }
+        toastFromHostError(error, "Couldn't update MCP server.");
+      },
     },
-  });
+  );
 }
 
 /** Give confirmations their own Query observer and pending state. */
@@ -227,5 +296,5 @@ export function useProvidersMcpApplyRemedy(): UseMutationResult<
   McpMutateVariables,
   McpMutateContext
 > {
-  return useProvidersMcpMutate();
+  return useProvidersMcpMutate(null, null);
 }

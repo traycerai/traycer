@@ -651,6 +651,7 @@ export function registerBrowserViewIpc(
       },
       cloudAuthorized: () => jarPlanePrincipal() !== null,
       appVersion: app.getVersion(),
+      hostTokens: bridge.hostTokens,
     });
   const sessions = new BrowserSessionsRegistry({
     directory: browserSessionsDirectory,

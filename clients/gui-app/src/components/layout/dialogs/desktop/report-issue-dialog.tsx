@@ -84,6 +84,7 @@ import {
   toastFromRunnerError,
   toastFromRunnerErrorWithOptions,
 } from "@/lib/runner-error-toast";
+import { ownValue } from "@/lib/own-value";
 
 // "opened" is the honest terminal state for a public-draft open when nothing
 // was ever privately delivered (no-DSN Case B, or a definite failure) - never
@@ -170,7 +171,10 @@ const ROUTE_TEMPLATE_LABEL_LOOKUP: Readonly<
 const ROUTE_TEMPLATE_FALLBACK_LABEL = "This screen";
 
 function humanRouteLabel(template: string): string {
-  return ROUTE_TEMPLATE_LABEL_LOOKUP[template] ?? ROUTE_TEMPLATE_FALLBACK_LABEL;
+  return (
+    ownValue(ROUTE_TEMPLATE_LABEL_LOOKUP, template) ??
+    ROUTE_TEMPLATE_FALLBACK_LABEL
+  );
 }
 
 const CURRENT_LOCATION_VALUE = "__current__";

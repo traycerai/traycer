@@ -668,6 +668,7 @@ function Transcript(): ReactNode {
           taskId={CHAT_ID}
           epicId={EPIC_ID}
           hostId={null}
+          payerHostId={null}
           messages={messages}
           transcriptWindow={null}
           onVisibleOrdinalRangeChange={() => undefined}
@@ -683,6 +684,7 @@ function Transcript(): ReactNode {
           systemOverlayActive={false}
           scrollRequest={null}
           onScrollRequestSettled={null}
+          onReaderMoved={null}
           composerOverlayHeight={0}
           subagentDrillIn={subagentDrillIn}
         />

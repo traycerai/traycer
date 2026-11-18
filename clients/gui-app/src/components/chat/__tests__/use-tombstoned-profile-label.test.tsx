@@ -92,6 +92,7 @@ function wrapper(profileIds: readonly string[]) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <TombstonedProfileProvider
+        removedProfiles={[]}
         providers={[claudeState(profileIds)]}
         hostId={THIS_HOST}
       >
@@ -169,6 +170,7 @@ describe("useTombstonedProfileLabel", () => {
       {
         wrapper: ({ children }) => (
           <TombstonedProfileProvider
+            removedProfiles={[]}
             providers={[{ ...claudeState([]), profiles: [] }]}
             hostId={THIS_HOST}
           >
@@ -239,6 +241,7 @@ describe("useTombstonedProfileLabel", () => {
       {
         wrapper: ({ children }) => (
           <TombstonedProfileProvider
+            removedProfiles={[]}
             providers={[{ ...claudeState([]), profiles: [] }]}
             hostId={THIS_HOST}
           >

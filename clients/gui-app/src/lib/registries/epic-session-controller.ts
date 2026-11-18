@@ -126,7 +126,12 @@ import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { SESSION_SILENCE_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/remote/config";
 import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { remoteAwareOwnerIdentityKey } from "@/lib/host/transport-key";
+import { streamPresentsSignIn } from "@/lib/host/stream-presents-sign-in";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -309,9 +314,13 @@ function readOwnerIdentityVerdict(
   current: MountedSessionState | null,
   ownerIdentityKey: string | null,
   ownerIdentityKeyHostId: string | null,
+  ownerFloorAdmitted: boolean,
 ): OwnerIdentityVerdict {
   if (current === null) return OWNER_IDENTITY_STABLE;
   if (ownerIdentityKeyHostId !== current.hostId) return OWNER_IDENTITY_STABLE;
+  // An older host cannot own the session: below the version floor releases it
+  // like a rotation does.
+  if (!ownerFloorAdmitted) return { kind: "rotated" };
   if (ownerIdentityKey === null) return OWNER_IDENTITY_STABLE;
   if (current.ownerIdentityKey === null) {
     return { kind: "completed", session: { ...current, ownerIdentityKey } };
@@ -399,6 +408,7 @@ interface ReconcileInputs {
   readonly mounted: boolean;
   readonly ownerIdentityKey: string | null;
   readonly ownerIdentityKeyHostId: string | null;
+  readonly ownerFloorAdmitted: boolean;
 }
 
 /** The inputs a run was started for. */
@@ -407,6 +417,7 @@ interface RunInputs {
   readonly targetHostId: string;
   readonly ownerIdentityKey: string | null;
   readonly ownerIdentityKeyHostId: string | null;
+  readonly ownerFloorAdmitted: boolean;
   readonly mounted: boolean;
 }
 
@@ -617,6 +628,15 @@ function readOwnerIdentityKey(
   return remoteAwareOwnerIdentityKey(
     client?.getActiveHost() ?? null,
     client?.getRequestContextUserId() ?? null,
+  );
+}
+
+function readOwnerFloorAdmitted(
+  client: HostClient<HostRpcRegistry> | null,
+): boolean {
+  const row = client?.getActiveHost() ?? null;
+  return (
+    row === null || !hostDirectoryEntryNeedsUpdate(row, MINIMUM_HOST_VERSION)
   );
 }
 
@@ -2015,6 +2035,7 @@ function createEpicSessionController(): EpicSessionController {
       // with the host the reading DESCRIBES, so the two cannot drift.
       ownerIdentityKey: readOwnerIdentityKey(entry.sessionHostClient),
       ownerIdentityKeyHostId: sessionOrTargetHostId,
+      ownerFloorAdmitted: readOwnerFloorAdmitted(entry.sessionHostClient),
     };
   }
 
@@ -2072,6 +2093,7 @@ function createEpicSessionController(): EpicSessionController {
       String(entry.retryGeneration),
       inputs.ownerIdentityKey ?? "",
       inputs.ownerIdentityKeyHostId ?? "",
+      inputs.ownerFloorAdmitted ? "" : "below-floor",
       inputs.mounted ? "mounted" : "hidden",
       // Taking demand is an acquisition, so the key has to move when a
       // surface starts wanting a session the controller holds no unit on.
@@ -2108,6 +2130,7 @@ function createEpicSessionController(): EpicSessionController {
           targetHostId: inputs.targetHostId,
           ownerIdentityKey: inputs.ownerIdentityKey,
           ownerIdentityKeyHostId: inputs.ownerIdentityKeyHostId,
+          ownerFloorAdmitted: inputs.ownerFloorAdmitted,
           mounted: inputs.mounted,
         });
       }
@@ -2197,7 +2220,7 @@ function createEpicSessionController(): EpicSessionController {
           };
         },
         onAuthError: () => {
-          environment?.revalidateAuth();
+          if (streamPresentsSignIn(targetHostId)) environment?.revalidateAuth();
         },
         adoptLegacyPersistKey: (adoptForUserId) => {
           adoptLegacyOpenEpicKey(epicId, adoptForUserId);
@@ -2265,6 +2288,7 @@ function createEpicSessionController(): EpicSessionController {
       { epicId: entry.epicId },
       error instanceof Error ? error : new Error(String(error)),
     );
+    const floorAdmitted = readOwnerFloorAdmitted(entry.sessionHostClient);
     forgetSession(entry, "failed");
     entry.constructionFailed = true;
     present(entry, {
@@ -2272,6 +2296,11 @@ function createEpicSessionController(): EpicSessionController {
       targetHostId,
       originalHostId: entry.originalHostId,
     });
+    // No ladder, and none left pending: rising above the floor moves the run key, and that run acquires.
+    if (!floorAdmitted) {
+      entry.backoff.cancel();
+      return;
+    }
     entry.backoff.request({}, () => undefined);
     entry.backoff.request({}, () => {
       bumpRetry(entry);
@@ -2400,6 +2429,7 @@ function createEpicSessionController(): EpicSessionController {
       entry.session,
       inputs.ownerIdentityKey,
       inputs.ownerIdentityKeyHostId,
+      inputs.ownerFloorAdmitted,
     );
     if (verdict.kind === "completed") {
       // A write, not a terminal arm: control continues to the host

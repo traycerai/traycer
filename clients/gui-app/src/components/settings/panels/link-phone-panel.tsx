@@ -17,6 +17,7 @@ import {
   type LinkLoginDeadKind,
   type LiveClaim,
 } from "@/hooks/auth/use-link-login-watch";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useRespondLinkLoginMutation } from "@/hooks/auth/use-respond-link-login-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { startVisibleInterval } from "@/lib/dom/visible-interval";
@@ -604,7 +605,6 @@ export function LinkPhonePanel() {
   const [decidedElsewhere, setDecidedElsewhere] = useState<
     "approved" | "rejected" | null
   >(null);
-  const respond = useRespondLinkLoginMutation();
   const {
     claim: watchedClaim,
     code,
@@ -627,6 +627,16 @@ export function LinkPhonePanel() {
     watchedClaim !== null && watchedClaim.code === decidedCode
       ? null
       : watchedClaim;
+  const submittedCode = useSubmittedSecretInput<string>(
+    "Link claim input is unavailable.",
+  );
+  const submittedDecision = useSubmittedSecretInput<string>(
+    "Link decision input is unavailable.",
+  );
+  const respond = useRespondLinkLoginMutation(
+    submittedCode.read,
+    submittedCode.clear,
+  );
   const minted = code.data ?? null;
   // `claim-pending` is a state, not an error: the user's single live claim
   // is awaiting the decision on ANOTHER surface. Rendered only when this
@@ -674,11 +684,13 @@ export function LinkPhonePanel() {
     }
     setRespondFailedCode(null);
     setDecidedElsewhere(null);
-    const decidedOn = claim.code;
+    submittedCode.set(claim.code);
+    submittedDecision.set(claim.code);
     respond.mutate(
-      { code: decidedOn, approve },
+      { approve },
       {
         onSuccess: (outcome) => {
+          const decidedOn = submittedDecision.read();
           if (approve && outcome === "ok") {
             setApprovedDone(true);
             return;
@@ -710,8 +722,9 @@ export function LinkPhonePanel() {
           restartCode();
         },
         onError: () => {
-          setRespondFailedCode(decidedOn);
+          setRespondFailedCode(submittedDecision.read());
         },
+        onSettled: submittedDecision.clear,
       },
     );
   };

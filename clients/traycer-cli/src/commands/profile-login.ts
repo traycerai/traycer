@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import {
   PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+  providerLoginProfileOutcomeSchema,
   type ProviderCliState,
   type ProviderId,
+  type ProviderLoginProfileOutcome,
   type ProviderLoginRefusal,
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -11,7 +13,13 @@ import type {
   RequestOfMethod,
   ResponseOfMethod,
 } from "../../../shared/host-transport/host-messenger";
+import {
+  recordSignInRequestOnce,
+  recordSignInRequestViaHttp,
+  type SignInRequestClient,
+} from "../../../shared/host-client/provider-sign-in-request";
 import { openInBrowser } from "../auth/login-flow";
+import { resolveHostAuth } from "../internal/host-auth";
 import {
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
@@ -20,11 +28,14 @@ import {
 } from "../internal/host-rpc";
 import {
   describeProvider,
+  findProfileByIdOrAlias,
   isAmbientProfileId,
   parseProfileArgument,
   parseProviderArgument,
   printable,
   readProviderStates,
+  readProvidersList,
+  type ProviderListState,
 } from "../internal/profile-target";
 import { providerPackReasonRetryable } from "../../../shared/providers/provider-pack-retry";
 import {
@@ -59,7 +70,7 @@ type AwaitLoginResult = ResponseOfMethod<
 /** What the command is signing in: a new managed profile, or an existing row. */
 export type ProfileLoginTarget =
   | { readonly kind: "create"; readonly label: string | null }
-  | { readonly kind: "existing"; readonly profile: string };
+  | { readonly kind: "existing" | "switch"; readonly profile: string };
 
 /**
  * The process edges of a sign-in, named so a test can drive the flow without
@@ -86,6 +97,7 @@ export interface ProfileLoginIo {
     onLine: (line: string) => void,
     onInterrupt: () => void,
   ) => (() => void) | null;
+  readonly signInRequests: SignInRequestClient;
 }
 
 export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
@@ -130,6 +142,18 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
       stopped = true;
       lines.close();
     };
+  },
+  signInRequests: {
+    recordSignInRequest: async (request, signal) => {
+      const auth = await resolveHostAuth();
+      if (auth === null) return { kind: "unauthorized" };
+      return recordSignInRequestViaHttp(
+        auth.authnBaseUrl,
+        auth.token,
+        request,
+        signal,
+      );
+    },
   },
 };
 
@@ -228,39 +252,85 @@ export function buildProfileLoginCommand(
 ): CommandFn {
   return async (ctx) => {
     const providerId = parseProviderArgument(opts.provider);
-    const target = resolveTarget(opts.target);
+    const typed = resolveTarget(opts.target, opts.provider);
     assertPersonPresent(ctx);
-    const state = await readProviderState(providerId);
+    const list = await readProvidersList();
+    const state = requireProviderState(list.providers, providerId);
     assertCanTakeCode(io, state);
-    if (
-      target.profileId !== null &&
-      !state.profiles.some((p) => p.profileId === target.profileId)
-    ) {
+    const row =
+      typed.profileId === null
+        ? null
+        : findProfileByIdOrAlias(state.profiles, typed.profileId);
+    if (typed.profileId !== null && row === null) {
       throw cliError({
         code: CLI_ERROR_CODES.NOT_FOUND,
-        message: `traycer: ${describeProvider(providerId)} has no profile '${printable(target.profileId)}' - run 'traycer profile list ${printable(opts.provider)}' to see them.`,
+        message: `traycer: ${describeProvider(providerId)} has no profile '${printable(typed.profileId)}' - run 'traycer profile list ${printable(opts.provider)}' to see them.`,
         details: null,
         exitCode: 1,
       });
     }
-    const outcome = await runLogin(ctx, io, providerId, target, state);
-    return resultOf(providerId, outcome);
+    // An id folded into another row signs that row in; ambient is addressed
+    // as no profile, as `resolveTarget` does for the typed sentinel.
+    const target: ResolvedTarget =
+      row === null
+        ? typed
+        : {
+            ...typed,
+            profileId: isAmbientProfileId(row.profileId) ? null : row.profileId,
+          };
+    const switchSource =
+      opts.target.kind === "switch"
+        ? findProfileByIdOrAlias(
+            state.profiles,
+            parseProfileArgument(opts.target.profile),
+          )
+        : null;
+    const switching = list.offersSignIns === true && switchSource !== null;
+    const loginTarget: ResolvedTarget = switching
+      ? {
+          create: { label: null },
+          profileId: null,
+          switchHint: null,
+          switchSource: {
+            profileId: switchSource.profileId,
+            label: switchSource.label,
+          },
+        }
+      : target;
+    return await runLogin(
+      ctx,
+      io,
+      providerId,
+      loginTarget,
+      state,
+      list.offersSignIns === true,
+    );
   };
 }
 
 interface ResolvedTarget {
+  readonly switchSource: {
+    readonly profileId: string;
+    readonly label: string;
+  } | null;
+  readonly switchHint: string | null;
   readonly create: { readonly label: string | null } | null;
   /** The existing row to sign in; null for a create and for ambient. */
   readonly profileId: string | null;
 }
 
-function resolveTarget(target: ProfileLoginTarget): ResolvedTarget {
+function resolveTarget(
+  target: ProfileLoginTarget,
+  providerArgument: string,
+): ResolvedTarget {
   if (target.kind === "create") {
     return {
       create: {
         label: target.label === null ? null : parseProfileLabel(target.label),
       },
       profileId: null,
+      switchHint: null,
+      switchSource: null,
     };
   }
   const profileId = parseProfileArgument(target.profile);
@@ -268,8 +338,17 @@ function resolveTarget(target: ProfileLoginTarget): ResolvedTarget {
   // row sentinel the profile mutations take.
   return {
     create: null,
+    switchSource: null,
+    switchHint: switchAccountHint(providerArgument, target.profile),
     profileId: isAmbientProfileId(profileId) ? null : profileId,
   };
+}
+
+function switchAccountHint(
+  providerArgument: string,
+  profileArgument: string,
+): string {
+  return `To add it as its own profile, run: traycer profile login ${printable(providerArgument)} ${printable(profileArgument)} --switch-account`;
 }
 
 /**
@@ -310,10 +389,15 @@ function notInteractive(): CliError {
 
 async function readProviderState(
   providerId: ProviderId,
-): Promise<ProviderCliState> {
-  const state = (await readProviderStates()).find(
-    (p) => p.providerId === providerId,
-  );
+): Promise<ProviderListState> {
+  return requireProviderState(await readProviderStates(), providerId);
+}
+
+function requireProviderState(
+  providers: readonly ProviderListState[],
+  providerId: ProviderId,
+): ProviderListState {
+  const state = providers.find((p) => p.providerId === providerId);
   if (state === undefined) {
     throw cliError({
       code: CLI_ERROR_CODES.NOT_FOUND,
@@ -330,8 +414,9 @@ async function runLogin(
   io: ProfileLoginIo,
   providerId: ProviderId,
   target: ResolvedTarget,
-  state: ProviderCliState,
-): Promise<LoginOutcome> {
+  state: ProviderListState,
+  offersSignIns: boolean,
+): Promise<CommandResult> {
   const holderId = io.newHolderId();
   const abort = new AbortController();
   // The first Ctrl+C cancels this sign-in; it also stops listening, so a
@@ -344,6 +429,7 @@ async function runLogin(
   // The profile a login on the host is held under: the caller's own for an
   // existing row, the host-minted one for a create once an answer names it.
   let heldProfileId = target.profileId;
+  let signInSettled = false;
   // Best effort and bounded: the person is waiting to leave, and a release
   // that does not land in time leaves the login to the host's own deadline.
   const release = async (): Promise<void> => {
@@ -365,6 +451,7 @@ async function runLogin(
       {
         providerId,
         holderId,
+        target: null,
         profileId: target.profileId,
         createProfile:
           target.create === null
@@ -387,7 +474,7 @@ async function runLogin(
     const holdsLogin = answer.started || answer.pending === "starting";
     if (abort.signal.aborted) {
       if (holdsLogin) await release();
-      return { status: "cancelled" };
+      return resultOf(providerId, { status: "cancelled" });
     }
     const notStarted = notStartedMessage(
       answer,
@@ -395,7 +482,10 @@ async function runLogin(
     );
     if (notStarted !== null) {
       if (holdsLogin) await release();
-      return { status: "not-started", message: notStarted };
+      return resultOf(providerId, {
+        status: "not-started",
+        message: notStarted,
+      });
     }
     const acceptsPastedCode = declares(state.loginCapability?.codePaste);
     const stopPaste = acceptsPastedCode
@@ -423,6 +513,7 @@ async function runLogin(
         io,
         providerId,
         heldProfileId,
+        target.create !== null,
         abort.signal,
       ).finally(() => {
         stopKeepalive();
@@ -430,30 +521,40 @@ async function runLogin(
       });
       if (result === null) {
         await release();
-        return { status: "cancelled" };
+        return resultOf(providerId, { status: "cancelled" });
       }
+      signInSettled = true;
       // The sign-in has ended; what is left is reading the row back and
       // naming a new profile. A Ctrl+C from here ends the process at once
       // rather than being taken as cancelling a sign-in that already happened.
       stopListening();
-      return await outcomeOf(providerId, target, heldProfileId, result);
+      const profileResult = await profileResultOf(
+        ctx,
+        providerId,
+        target,
+        state,
+        result,
+        offersSignIns,
+      );
+      if (profileResult !== null) return profileResult;
+      return resultOf(
+        providerId,
+        await outcomeOf(providerId, target, heldProfileId, result),
+      );
     } finally {
       stopKeepalive();
     }
   } catch (error) {
-    // A call failed partway: the start timed out after the host had begun
-    // it, the host went away mid-wait, or Ctrl+C aborted a start that was
-    // still in flight - whose answer, and any login it reports, this command
-    // will now never see. Nobody is waiting for this login any more, so give
-    // up the claim on it rather than leave it for the host's own deadline.
-    // The host remembers a released holder, so a start still on its way in
-    // finds the claim gone and spawns nothing.
+    // A failed start or wait can leave a sign-in running without its caller.
+    // Releasing the holder also catches a start still in flight: it finds
+    // the claim gone and spawns nothing.
     //
     // Read before the release, which is itself a call that can take a while:
     // a Ctrl+C pressed during it must not turn a real error into "cancelled".
     const interrupted = abort.signal.aborted;
-    await release();
-    if (interrupted) return { status: "cancelled" };
+    // A failed list read after completion must not cancel the completed sign-in.
+    if (!signInSettled) await release();
+    if (interrupted) return resultOf(providerId, { status: "cancelled" });
     throw error;
   } finally {
     stopListening();
@@ -666,21 +767,30 @@ function acceptPastedCode(
 /**
  * Waits for the host to say how the sign-in ended. Null when the wait was
  * interrupted. An ambient verdict the host reports as still in flight is
- * asked for again a few times rather than read as a failure.
+ * asked for again a few times rather than read as a failure. An unfinished
+ * answer carrying `signInRequest` is recorded at authn and asked again with
+ * `recordedOperationId`; a recording that ends returns that answer, which
+ * reads as "did not complete".
  */
 async function awaitUntilSettled(
   io: ProfileLoginIo,
   providerId: ProviderId,
   profileId: string | null,
+  creatingProfile: boolean,
   signal: AbortSignal,
 ): Promise<AwaitLoginResult | null> {
-  for (let repolls = 0; ; repolls += 1) {
+  const recorded = new Set<string>();
+  let recordedOperationId: string | null = null;
+  let repolls = 0;
+  for (;;) {
     let result: AwaitLoginResult;
     try {
       result = await toAgentCliError(
         callHostRpcWithDispatch(
           "providers.awaitLogin",
-          { providerId, profileId },
+          recordedOperationId === null
+            ? { providerId, profileId }
+            : { providerId, profileId, recordedOperationId },
           { ...AWAIT_LOGIN_DISPATCH, signal },
         ),
       );
@@ -689,6 +799,26 @@ async function awaitUntilSettled(
       throw error;
     }
     if (signal.aborted) return null;
+    if (readProfileOutcome(result.profileOutcome, creatingProfile) !== null)
+      return result;
+    // A final outcome is the answer whatever else it carries, including one
+    // this command does not read as settled.
+    const signInRequest =
+      (result.profileOutcome ?? null) === null
+        ? (result.signInRequest ?? null)
+        : null;
+    if (signInRequest !== null) {
+      const recording = await recordSignInRequestOnce(
+        io.signInRequests,
+        recorded,
+        signInRequest,
+        signal,
+      );
+      if (signal.aborted) return null;
+      if (recording.kind !== "recorded") return result;
+      recordedOperationId = recording.recordedOperationId;
+      continue;
+    }
     // Not settled only while neither ambient source has answered: a verdict
     // on the ambient row counts even while the provider's summary lags.
     const pending =
@@ -699,8 +829,115 @@ async function awaitUntilSettled(
       !isProviderAmbientAuthenticated(result.state) &&
       !isProviderAmbientSignedOut(result.state);
     if (!pending || repolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) return result;
+    repolls += 1;
     await io.wait(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS, signal);
     if (signal.aborted) return null;
+  }
+}
+
+function readProfileOutcome(
+  value: unknown,
+  creatingProfile: boolean,
+): ProviderLoginProfileOutcome | null {
+  const parsed = providerLoginProfileOutcomeSchema.safeParse(value);
+  if (!parsed.success) return null;
+  if (parsed.data.kind === "already-signed-in" && !creatingProfile) return null;
+  return parsed.data;
+}
+
+function unusableProfileOutcomeResult(providerId: ProviderId): CommandResult {
+  return resultOf(providerId, { status: "not-completed" });
+}
+
+function waitingForProfileResult(providerId: ProviderId): CommandResult {
+  return {
+    data: { providerId, status: "waiting-for-profile" },
+    human: "Waiting for Traycer. Your sign-in is complete.",
+    exitCode: 0,
+  };
+}
+
+async function profileResultOf(
+  ctx: CommandContext,
+  providerId: ProviderId,
+  target: ResolvedTarget,
+  state: ProviderListState,
+  result: AwaitLoginResult,
+  offersSignIns: boolean,
+): Promise<CommandResult | null> {
+  const outcome = readProfileOutcome(
+    result.profileOutcome,
+    target.create !== null,
+  );
+  if (outcome === null) return null;
+  switch (outcome.kind) {
+    case "target-refused":
+    case "staged-for-leave":
+      return unusableProfileOutcomeResult(providerId);
+    case "waiting-for-profile":
+      return waitingForProfileResult(providerId);
+    case "signed-in":
+    case "already-signed-in": {
+      const echoed = (result.state?.profiles ?? []).map(summarizeProfile);
+      let profile =
+        echoed.find((row) => row.profileId === outcome.profileId) ?? null;
+      if (profile === null) {
+        let providers: readonly ProviderListState[];
+        try {
+          providers = await readProviderStates();
+        } catch (error) {
+          ctx.output.humanRequired(signedInProviderLine(providerId));
+          throw error;
+        }
+        const listed = providers
+          .find((provider) => provider.providerId === providerId)
+          ?.profiles.find((row) => row.profileId === outcome.profileId);
+        profile = listed === undefined ? null : summarizeProfile(listed);
+      }
+      if (profile === null) return waitingForProfileResult(providerId);
+      const created = outcome.kind === "signed-in" && target.create !== null;
+      if (created) {
+        profile = await nameNewProfile(
+          providerId,
+          profile,
+          target.create.label,
+        );
+      }
+      const signInLine = `${outcome.kind === "signed-in" ? "Signed in" : "Already signed in"} as ${printable(profile.label)}`;
+      const switched =
+        target.switchSource !== null &&
+        outcome.profileId !== target.switchSource.profileId;
+      return {
+        data: {
+          providerId,
+          status: outcome.kind === "signed-in" ? "signed-in" : "already-exists",
+          profile,
+          created,
+        },
+        human: switched
+          ? `${signInLine}\nNothing was moved from ${printable(target.switchSource.label)}.`
+          : signInLine,
+        exitCode: 0,
+      };
+    }
+    case "account-mismatch":
+    case "account-unproven": {
+      const profile =
+        target.profileId === null
+          ? (state.profiles.find(
+              (row) => row.terminalOnThisComputer === true,
+            ) ?? findProfileByIdOrAlias(state.profiles, "ambient"))
+          : findProfileByIdOrAlias(state.profiles, target.profileId);
+      if (profile === null) return unusableProfileOutcomeResult(providerId);
+      return {
+        data: { providerId, status: outcome.kind },
+        human:
+          outcome.kind === "account-mismatch"
+            ? `That sign-in is a different account. ${printable(profile.label)} was not changed.${offersSignIns && target.switchHint !== null ? `\n${target.switchHint}` : ""}`
+            : `This sign-in can't be matched to the account this profile uses.\n${printable(profile.label)} was not changed.`,
+        exitCode: 1,
+      };
+    }
   }
 }
 
@@ -799,7 +1036,12 @@ async function nameNewProfile(
       {
         providerId,
         enabled: true,
-        profileAction: { type: "rename", profileId: profile.profileId, label },
+        profileAction: {
+          type: "rename",
+          profileId: profile.profileId,
+          label,
+          environmentProfileId: null,
+        },
       },
       {
         ...PLAIN_DISPATCH,
@@ -819,6 +1061,10 @@ function describeRow(row: ProfileListRow): string {
   return `${printable(row.profileId)} "${printable(row.label)}"`;
 }
 
+function signedInProviderLine(providerId: ProviderId): string {
+  return `Signed in to ${describeProvider(providerId)}.`;
+}
+
 function resultOf(
   providerId: ProviderId,
   outcome: LoginOutcome,
@@ -831,7 +1077,7 @@ function resultOf(
         data,
         human:
           outcome.profile === null
-            ? `Signed in to ${provider}.`
+            ? signedInProviderLine(providerId)
             : `${outcome.created ? "Added" : "Signed in"} ${provider} profile ${describeRow(outcome.profile)}${outcome.profile.email === null ? "" : ` (${printable(outcome.profile.email)})`}.`,
         exitCode: 0,
       };

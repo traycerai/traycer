@@ -27,3 +27,24 @@ export const attachEnvironmentResponseSchema = lazySchema(() =>
 export type AttachEnvironmentResponse = z.infer<
   typeof attachEnvironmentResponseSchema
 >;
+
+/**
+ * `epic.attachEnvironment@2.0`: the person's own host prepares the task and attaches
+ * nothing; it answers once the task has a cloud home, with `@1.0`'s share-gate
+ * refusals. The app then attaches on the person's sign-in.
+ */
+export const attachEnvironmentRequestSchemaV20 = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+  }),
+);
+export type AttachEnvironmentRequestV20 = z.infer<
+  typeof attachEnvironmentRequestSchemaV20
+>;
+
+export const attachEnvironmentResponseSchemaV20 = lazySchema(() =>
+  z.object({ prepared: z.literal(true) }),
+);
+export type AttachEnvironmentResponseV20 = z.infer<
+  typeof attachEnvironmentResponseSchemaV20
+>;

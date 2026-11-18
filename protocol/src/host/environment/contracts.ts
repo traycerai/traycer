@@ -88,17 +88,7 @@ export const environmentListV10 = defineRpcContract({
   responseSchema: environmentListResponseSchema,
 });
 
-/**
- * The caller's effective role in an environment as it DECODES; `owner` is a
- * personal one's.
- *
- * `viewer` is retired as a role anybody holds. It stays in this released
- * vocabulary because the `@1.0 → @1.1` upgrade below has to name a value for
- * an answer that names no role at all, and because a current client still
- * reads environments from hosts that predate the retirement. Both are
- * "no authority known", never read-only authority: resolve this value with
- * {@link grantedEnvironmentRole} before gating anything on it.
- */
+/** The caller's effective role in an environment; `owner` is a personal one's. */
 export const environmentEffectiveRoleSchema = lazySchema(() =>
   z.enum(["owner", "admin", "editor", "viewer"]),
 );
@@ -107,12 +97,8 @@ export type EnvironmentEffectiveRole = z.infer<
 >;
 
 /** An environment role somebody HOLDS. */
-export type GrantedEnvironmentRole = "owner" | "admin" | "editor";
+export type GrantedEnvironmentRole = "owner" | "admin" | "editor" | "viewer";
 
-/**
- * A decoded environment role as authority: the retired role and an unknown
- * one are both `null`, which every caller reads as none.
- */
 export function grantedEnvironmentRole(
   role: string,
 ): GrantedEnvironmentRole | null {
@@ -123,6 +109,8 @@ export function grantedEnvironmentRole(
       return "admin";
     case "editor":
       return "editor";
+    case "viewer":
+      return "viewer";
     default:
       return null;
   }
@@ -165,11 +153,8 @@ export const environmentListV11 = defineRpcContract({
 /**
  * A `@1.0` answer names no role, kind or count. It upgrades from what it does
  * say: the user-owned environment is the caller's personal one, which they
- * own; a team's role is unknown, so it reads as the retired `viewer`, which
- * {@link grantedEnvironmentRole} resolves to no authority, and its host count
- * as none, which a client re-reads rather than acts on. The unknown role must
- * stay this value: naming a live role here would hand an old host's answer
- * authority nobody granted.
+ * own; a team's role is unknown, so it reads as the least, `viewer`, and its
+ * host count as none, which a client re-reads rather than acts on.
  */
 export const environmentListUpgradeV10ToV11 = defineUpgradePath<
   typeof environmentListV10,
@@ -567,25 +552,15 @@ export const environmentMembersV10 = defineRpcContract({
   responseSchema: environmentMembersResponseSchema,
 });
 
-/**
- * A team member's role as it DECODES. `viewer` is retired as a role anybody
- * holds; it stays here for the same two reasons the environment's own role
- * keeps it - the `@1.0 → @1.1` upgrade has to name a value for a page that
- * names none, and a current client still reads members from hosts that
- * predate the retirement. Resolve it with {@link grantedTeamMemberRole}.
- */
+/** A team member's role as it DECODES. */
 export const environmentMemberRoleSchema = lazySchema(() =>
   z.enum(["admin", "editor", "viewer"]),
 );
 export type EnvironmentMemberRole = z.infer<typeof environmentMemberRoleSchema>;
 
 /** A team-member role somebody HOLDS. */
-export type GrantedTeamMemberRole = "admin" | "editor";
+export type GrantedTeamMemberRole = "admin" | "editor" | "viewer";
 
-/**
- * A decoded team-member role as authority: the retired role and an unknown
- * one are both `null` - no seat authority, and never read-only authority.
- */
 export function grantedTeamMemberRole(
   role: string,
 ): GrantedTeamMemberRole | null {
@@ -594,6 +569,8 @@ export function grantedTeamMemberRole(
       return "admin";
     case "editor":
       return "editor";
+    case "viewer":
+      return "viewer";
     default:
       return null;
   }
@@ -640,10 +617,9 @@ export const environmentMembersV11 = defineRpcContract({
 });
 
 /**
- * A `@1.0` page names no roles: each member upgrades as the retired `viewer`,
- * which {@link grantedTeamMemberRole} resolves to no seat authority, with no
- * plan and no invitation, and the page with no notice to show. The unknown
- * role must stay this value for the reason the environment list's does.
+ * A `@1.0` page names no roles: each member upgrades as the least role,
+ * `viewer`, with no plan and no invitation, and the page with no notice to
+ * show.
  */
 export const environmentMembersUpgradeV10ToV11 = defineUpgradePath<
   typeof environmentMembersV10,
@@ -862,6 +838,42 @@ export const environmentMembersRemovePreviewV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMembersRemovePreviewRequestSchema,
   responseSchema: environmentMembersRemovePreviewResponseSchema,
+});
+
+/**
+ * For `computer`, the work under its own owner, read before a claim or a give
+ * stops it. A count the computer cannot read is null, never zero; `terminals` is
+ * always null for a `plan`.
+ */
+export const environmentPreviewLocalFactsRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: z.string().min(1),
+    subject: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("plan"), profileId: z.string().min(1) }),
+      z.object({ kind: z.literal("member"), userId: z.string().min(1) }),
+      z.object({ kind: z.literal("computer") }),
+    ]),
+  }),
+);
+export type EnvironmentPreviewLocalFactsRequest = z.infer<
+  typeof environmentPreviewLocalFactsRequestSchema
+>;
+
+export const environmentPreviewLocalFactsResponseSchema = lazySchema(() =>
+  z.object({
+    activeTurns: z.number().int().nonnegative().nullable(),
+    terminals: z.number().int().nonnegative().nullable(),
+  }),
+);
+export type EnvironmentPreviewLocalFactsResponse = z.infer<
+  typeof environmentPreviewLocalFactsResponseSchema
+>;
+
+export const environmentPreviewLocalFactsV10 = defineRpcContract({
+  method: "environment.previewLocalFacts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentPreviewLocalFactsRequestSchema,
+  responseSchema: environmentPreviewLocalFactsResponseSchema,
 });
 
 /**

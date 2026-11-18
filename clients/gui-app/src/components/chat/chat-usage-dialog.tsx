@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -123,6 +124,7 @@ function ChatUsageDialogBody(props: {
       footer={null}
     >
       <ChatUsageDialogContent
+        hostId={target.hostId}
         query={query}
         drilldownOpen={drilldownOpen}
         onDrilldownOpenChange={setDrilldownOpen}
@@ -132,6 +134,7 @@ function ChatUsageDialogBody(props: {
 }
 
 function ChatUsageDialogContent(props: {
+  readonly hostId: string;
   readonly query: UsageSummaryQueryResult;
   readonly drilldownOpen: boolean;
   readonly onDrilldownOpenChange: (open: boolean) => void;
@@ -144,6 +147,7 @@ function ChatUsageDialogContent(props: {
       <UsageDialogErrorState
         error={query.error}
         onRetry={() => {
+          if (showHostUpdateNeededForGesture(props.hostId)) return;
           void query.refetch();
         }}
       />

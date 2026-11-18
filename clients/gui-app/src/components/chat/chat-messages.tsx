@@ -219,6 +219,7 @@ interface ChatMessagesProps {
   epicId: string;
   /** Host this chat tab is bound to for its full lifetime. */
   hostId: string | null;
+  payerHostId: string | null;
   /** The full derived, pinned-todo-stripped row history to hand to LegendList. */
   messages: ReadonlyArray<ChatMessageModel>;
   /**
@@ -284,6 +285,14 @@ interface ChatMessagesProps {
   onScrollRequestSettled:
     | ((requestId: number, outcome: ChatScrollRequestOutcome) => void)
     | null;
+  /**
+   * The reader moved the view themselves: a wheel, a touch drag, a scroll key
+   * or the scrollbar, which the viewport could answer. Never a click on a
+   * row, and never a navigation this component performs. An owner holding a
+   * scroll it has not issued yet drops it on this; `null` where there is
+   * nothing to drop.
+   */
+  onReaderMoved: (() => void) | null;
   /** Measured height of the overlaid composer/queue/pinned/agents dock
    *  (chat-tile.tsx), reserved as the transcript's bottom content inset. */
   composerOverlayHeight: number;
@@ -1143,8 +1152,12 @@ export function ChatMessages(props: ChatMessagesProps) {
     () =>
       props.hostId === null
         ? null
-        : { chatId: props.taskId, hostId: props.hostId },
-    [props.hostId, props.taskId],
+        : {
+            chatId: props.taskId,
+            hostId: props.hostId,
+            payerHostId: props.payerHostId,
+          },
+    [props.hostId, props.payerHostId, props.taskId],
   );
   // Opening a chat clears its own tombstone (a
   // prior deletion is over; this is the SAME chatId only if the host has
@@ -2196,6 +2209,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     nextStepActions,
     onFindReadOrdinalChange,
     onVisibleOrdinalRangeChange,
+    onReaderMoved,
     onScrollRequestSettled,
     scrollRequest,
     subagentDrillIn,
@@ -2438,6 +2452,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
    */
   const reissuingScrollRequestIdRef = useRef<number | null>(null);
   const onScrollRequestSettledRef = useRef(onScrollRequestSettled);
+  const onReaderMovedRef = useRef(onReaderMoved);
   const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
     EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
   );
@@ -2774,6 +2789,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // estimate-driven bootstrap that clamps to an estimated end.
         if (viewportCanAnswer) {
           readerPositionGenerationRef.current += 1;
+          onReaderMovedRef.current?.();
           pendingMeasuredFreeRestoreRef.current = null;
           pendingHydrationRestoreAnchorIdRef.current = null;
           forgetPendingHydrationRestore(identity);
@@ -3091,6 +3107,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(() => {
     onScrollRequestSettledRef.current = onScrollRequestSettled;
   }, [onScrollRequestSettled]);
+
+  useLayoutEffect(() => {
+    onReaderMovedRef.current = onReaderMoved;
+  }, [onReaderMoved]);
 
   const backgroundToolBlockIds = useMemo<ReadonlySet<string>>(() => {
     if (backgroundItems === undefined || backgroundItems.length === 0) {

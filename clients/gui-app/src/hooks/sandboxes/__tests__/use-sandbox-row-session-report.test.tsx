@@ -156,6 +156,7 @@ describe("a resumed row's first host report", () => {
       sandboxClockLine({
         summary,
         configuration: { kind: "personal" },
+        credits: { kind: "personal" },
         cost: null,
         wakeString: null,
         viewerUserId: null,
@@ -348,6 +349,7 @@ describe("a resumed row's first host report", () => {
       sandboxClockLine({
         summary: suspended,
         configuration: { kind: "personal" },
+        credits: { kind: "personal" },
         cost: null,
         wakeString: null,
         viewerUserId: null,
