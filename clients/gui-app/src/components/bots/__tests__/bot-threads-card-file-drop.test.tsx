@@ -54,12 +54,12 @@ import {
   until,
 } from "@/components/bots/__tests__/bot-drop-reading-support";
 import { mocks } from "./bot-threads-view-state";
+import { intersectTarget } from "@/components/bots/__tests__/bot-read-observer-test-support";
 import {
   card,
   FOLLOWING,
   drainEditorTimersAtTeardown,
   installBotThreadsViewCaseLifecycle,
-  intersectTarget,
   mount,
   queryClient,
   script,
