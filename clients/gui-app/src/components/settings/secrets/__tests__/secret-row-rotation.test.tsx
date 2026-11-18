@@ -35,6 +35,7 @@ vi.mock(
 
 import type { QueryClient } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -438,6 +439,36 @@ async function openVersions(): Promise<HTMLElement[]> {
   return screen.findAllByTestId("secret-version");
 }
 
+// `environment.secrets.rotation`'s fixed poll cadence, from the host method
+// policy table. A rotation read owed to a row comes at mount or on a tick of
+// this, so a negative claim about it is made after the clock has passed it.
+const ROTATION_POLL_MS = 3_000;
+
+/** Puts the timers on the fake clock, so only an advance moves them. */
+function useRotationClock(): void {
+  vi.useFakeTimers({
+    toFake: [
+      "Date",
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+    ],
+  });
+  vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
+}
+
+async function advanceClock(ms: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+/** Lets the fake clock pass two rotation polls, so a read still owed was made. */
+function passRotationPolls(): Promise<void> {
+  return advanceClock(2 * ROTATION_POLL_MS);
+}
+
 describe("the Replace dialog's copy", () => {
   it("says where a secret's value is used", async () => {
     renderPage(buildRotationHost({ rotation: enforcingRotation() }));
@@ -509,9 +540,13 @@ describe("Replace", () => {
         secrets: [secretFixture({ kind, name: "SYNTHETIC_SECRET" })],
         rotation: stalledRotation(),
       });
+      useRotationClock();
       renderPage(host);
-
-      await openVersions();
+      await advanceClock(1_000);
+      fireEvent.click(screen.getByRole("button", { name: "Details" }));
+      await advanceClock(1_000);
+      expect(screen.getByTestId("secret-details-controls")).toBeTruthy();
+      await passRotationPolls();
 
       expect(host.reads.versions).toBeGreaterThan(0);
       expect(host.reads.rotation).toBe(0);
@@ -554,9 +589,11 @@ describe("Replace", () => {
   });
 
   it("shows no rotation status before a value has been replaced", async () => {
+    useRotationClock();
     renderPage(buildRotationHost({}));
-
-    await screen.findByTestId("secret-row");
+    await advanceClock(1_000);
+    expect(screen.getByTestId("secret-row")).toBeTruthy();
+    await passRotationPolls();
 
     expect(screen.queryByTestId("secret-restart-line")).toBeNull();
     expect(screen.queryByTestId("secret-rotation-status")).toBeNull();
