@@ -125,6 +125,7 @@ function useDialogSessions(
   ).report;
 }
 
+/** `your credits` / `Acme's credits`: a team's sandbox is on the team's. */
 function storageCredits(
   configuration: SandboxPageConfiguration | null,
 ): string | null {

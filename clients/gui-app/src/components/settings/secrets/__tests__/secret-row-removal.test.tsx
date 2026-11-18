@@ -142,6 +142,7 @@ interface Host {
   removal: EnvironmentSecretRemovalV12 | null;
   finishesOnDestroy: boolean;
   destroyAnswer: EnvironmentSecretsDestroyResponseV11;
+  /** Runs when a destroy is answered, to change what the next versions read says. */
   onDestroy: (() => void) | null;
   /** The versions read fails: set by `onDestroy` to fail the read after destroy. */
   versionsFail: boolean;

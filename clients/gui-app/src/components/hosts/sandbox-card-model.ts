@@ -220,6 +220,7 @@ export function sandboxCreatorName(
   return memberWords(creator, viewerUserId, CREATOR_WORDS);
 }
 
+/** A frozen team sandbox: the team's bundle ran out, whoever woke it last. */
 export function sandboxTeamFrozenLine(teamName: string): string {
   return `${HOST_FROZEN_WORD}: ${teamPossessive(teamName)} bundle is out.`;
 }

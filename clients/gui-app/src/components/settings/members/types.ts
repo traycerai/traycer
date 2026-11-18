@@ -64,6 +64,7 @@ export interface RemovePreviewModel {
   readonly workNow: MemberWorkNow | null;
 }
 
+/** A dialog's preview: still being read, read, or refused. */
 export type PreviewState<Preview> =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly preview: Preview }
