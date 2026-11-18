@@ -1091,6 +1091,7 @@ function chatScene(
           systemOverlayActive={false}
           scrollRequest={null}
           onScrollRequestSettled={null}
+          onReaderMoved={null}
           composerOverlayHeight={80}
         />
       </div>

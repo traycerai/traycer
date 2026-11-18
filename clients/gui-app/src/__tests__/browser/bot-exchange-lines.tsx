@@ -281,6 +281,7 @@ export function Channel(): ReactElement {
           systemOverlayActive={false}
           scrollRequest={null}
           onScrollRequestSettled={() => undefined}
+          onReaderMoved={null}
           composerOverlayHeight={0}
           subagentDrillIn={subagentDrillIn}
         />
