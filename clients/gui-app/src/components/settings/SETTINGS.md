@@ -1306,8 +1306,8 @@ and shared notes have no review workflow. Mount, window focus and this app's
 own settlement refresh review; no new poll or proposal push is promised.
 
 **Personal ▸ Notices and "needs you"** (`personal/personal-page-notices.tsx`).
-Under a Personal page's status line, for the item
-kinds the page edits: each convergence notice from `environment.notices`
+In a Personal page's header, for the item kinds the
+page edits: each convergence notice from `environment.notices`
 ("LOG_LEVEL from dev-box now applies everywhere.", or "from the dashboard")
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:

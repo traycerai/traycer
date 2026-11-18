@@ -224,7 +224,7 @@ describe("<PersonalPageFrame /> on a host that does not advertise environment.st
 });
 
 describe("<PersonalPageFrame /> on a host with a ready status", () => {
-  it("draws no delivery status for an item still applying, and the page is not inert", async () => {
+  it("draws no line for an item still applying, and leaves the page as it was", async () => {
     renderFrame({
       section: "shell",
       methods: STATUS_METHODS,
@@ -237,78 +237,19 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
           }),
         ],
       }),
-      overrides: [],
-      target: VARIABLE_TARGET,
-    });
-    const heading = await screen.findByRole("heading", { name: "Shell" });
-    const header = heading.closest("header");
-    if (header === null) throw new Error("the heading is not inside a header");
-    expect(header.closest("[data-settings-panel-shell]")).not.toBeNull();
-    expect(header.textContent).not.toMatch(/Applying|dev-box/);
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
-    ).toBeNull();
-  });
-
-  it("says nothing once every item applied, and leaves the page as it was", async () => {
-    renderFrame({
-      section: "shell",
-      methods: STATUS_METHODS,
-      status: environmentStatusFixture({
-        items: [itemStatusFixture({ kind: "variable", key: "LOG_LEVEL" })],
-      }),
       // The override's note appears only once the page has rendered the
       // status it read.
       overrides: [variableOverride("LOG_LEVEL")],
       target: VARIABLE_TARGET,
     });
     await screen.findByText("LOG_LEVEL: dev-box uses: local-value");
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
-    expect(screen.queryByText(/^Applied on/)).toBeNull();
+    expect(screen.queryByText("Applying LOG_LEVEL on dev-box.")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
   });
 
-  it("draws nothing for an item that failed to apply", async () => {
-    renderFrame({
-      section: "shell",
-      methods: STATUS_METHODS,
-      status: environmentStatusFixture({
-        items: [
-          itemStatusFixture({
-            kind: "variable",
-            key: "LOG_LEVEL",
-            status: "failed",
-            code: "permission_denied",
-          }),
-        ],
-      }),
-      overrides: [],
-      target: VARIABLE_TARGET,
-    });
-    await screen.findByRole("heading", { name: "Shell" });
-    expect(document.body.textContent).not.toMatch(
-      /didn't apply|permission denied/,
-    );
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
-  });
-
-  it("draws nothing while the host cannot reach the environment", async () => {
-    renderFrame({
-      section: "shell",
-      methods: STATUS_METHODS,
-      status: environmentStatusFixture({ reachability: "reconnecting" }),
-      overrides: [],
-      target: VARIABLE_TARGET,
-    });
-    await screen.findByRole("heading", { name: "Shell" });
-    expect(document.body.textContent).not.toMatch(/when it reconnects/);
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
-  });
-
-  it("shows no line when the host has no settings of the person's yet, and leaves the page as it was", async () => {
+  it("leaves the page as it was when the host has no settings of the person's yet", async () => {
     const calls = renderFrame({
       section: "shell",
       methods: STATUS_METHODS,
@@ -319,7 +260,6 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
     await vi.waitFor(() => {
       expect(calls.status).toBeGreaterThan(0);
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -333,7 +273,6 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -392,7 +331,6 @@ describe("<PersonalPageFrame /> around a page that is not a Personal page", () =
         screen.getByRole("button", { name: "Edit the page" }),
       ).toBeTruthy();
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();

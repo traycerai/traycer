@@ -14,7 +14,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 });
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -127,6 +127,12 @@ interface MountedPage {
   ) => Promise<void>;
 }
 
+function reachabilityOf(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const reachability: unknown = Reflect.get(data, "reachability");
+  return typeof reachability === "string" ? reachability : null;
+}
+
 function mountPageOver(first: EnvironmentStatusResponseV13): MountedPage {
   const answer: { current: EnvironmentStatusResponseV13 } = { current: first };
   const handlers: MockHandlerMap<HostRpcRegistry> = {
@@ -164,8 +170,23 @@ function mountPageOver(first: EnvironmentStatusResponseV13): MountedPage {
   );
   return {
     hostNowAnswers: async (status) => {
+      const changedAt = Date.now();
       answer.current = status;
       await queryClient.invalidateQueries();
+      // The page's own read now holds the new answer, and it has rendered.
+      await vi.waitFor(() => {
+        expect(
+          queryClient
+            .getQueryCache()
+            .getAll()
+            .some(
+              (query) =>
+                query.state.dataUpdatedAt >= changedAt &&
+                reachabilityOf(query.state.data) === status.reachability,
+            ),
+        ).toBe(true);
+      });
+      await act(async () => {});
     },
   };
 }
@@ -192,8 +213,6 @@ describe("an edit made while the host is out of reach", () => {
     await vi.waitFor(() => {
       expect(notes()).toEqual(["EDITED: pending"]);
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
-    expect(document.body.textContent).not.toMatch(/when it reconnects/);
 
     await page.hostNowAnswers(
       environmentStatusFixture({

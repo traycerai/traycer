@@ -1,7 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { EnvironmentCloudSend } from "@/lib/environment/environment-cloud-calls";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
 
 export interface DetailsSubject {
   readonly environmentId: string;
@@ -113,8 +111,6 @@ export interface DetailsEntry {
 }
 
 export interface DetailsProviderContext {
-  readonly hostId: string | null;
-  readonly client: HostClient<HostRpcRegistry>;
   /** Every read it makes goes on the sign-in current when this provider began. */
   readonly environmentCloud: EnvironmentCloudSend;
   readonly queryClient: QueryClient;

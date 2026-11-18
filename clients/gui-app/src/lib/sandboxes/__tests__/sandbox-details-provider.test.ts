@@ -7,8 +7,6 @@ import type {
   SandboxListResponse,
 } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
@@ -470,9 +468,6 @@ function loadSandboxDetails(queryClient: QueryClient, sandboxId: string) {
   return provider(
     { environmentId: "env-personal", kind: "sandbox", key: sandboxId },
     {
-      hostId: null,
-      // Unused: a sandbox's evidence is the control plane's, not a host's.
-      client: {} as HostClient<HostRpcRegistry>,
       environmentCloud: beginEnvironmentCloudOperation(null),
       queryClient,
     },
