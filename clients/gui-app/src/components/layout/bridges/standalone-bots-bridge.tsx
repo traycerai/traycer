@@ -68,9 +68,11 @@ export function StandaloneBotsBridge(): null {
       }),
     [environmentData, botData],
   );
+  const reachability = useHostReachability(hostKey);
   useBotPictureLoads(
     client,
     useHostMethodSupport(hostId, "bot.readPicture") === true,
+    reachability.status === "reachable",
     model,
   );
   // A signed-out viewer never reads the environments, and has no feed to name.
@@ -84,7 +86,6 @@ export function StandaloneBotsBridge(): null {
   const setups = teamSetups.setups;
   const readsSettled =
     hostId === null || support === false || (supported && teamSetups.settled);
-  const reachability = useHostReachability(hostKey);
   const directoryWait = useBoundedHostLoad({
     hostId: hostKey,
     hostLabel: null,

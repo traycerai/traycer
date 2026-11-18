@@ -14,8 +14,12 @@ import { base64ToBytes } from "@/lib/composer/image-base64";
  * reads what is wanted. A read that fails leaves nothing behind.
  */
 const links = new Map<string, string>();
-/** The bot each wanted hash is read through, and how many pictures want it. */
-const wanted = new Map<string, { botId: string; drawn: number }>();
+/**
+ * The bots each wanted hash is drawn for, and how many pictures of each
+ * want it. The hash is read through the first of them: a bot that no longer
+ * draws it may no longer wear it, and a read through that bot answers none.
+ */
+const wanted = new Map<string, Map<string, number>>();
 /** The hashes the loader has read once, held or not, since its last reset. */
 const tried = new Set<string>();
 /**
@@ -86,20 +90,30 @@ export function botPictureLink(sha256: string): string | null {
  * answer withdraws it; the last withdrawal drops a link no listed bot wears.
  */
 export function wantBotPicture(sha256: string, botId: string): () => void {
-  const entry = wanted.get(sha256);
-  if (entry === undefined) {
-    wanted.set(sha256, { botId, drawn: 1 });
+  const bots = wanted.get(sha256);
+  if (bots === undefined) {
+    wanted.set(sha256, new Map([[botId, 1]]));
     changed();
   } else {
-    entry.drawn += 1;
+    bots.set(botId, (bots.get(botId) ?? 0) + 1);
   }
   return () => {
     const held = wanted.get(sha256);
-    if (held === undefined) return;
-    held.drawn -= 1;
-    if (held.drawn > 0) return;
-    wanted.delete(sha256);
-    prune();
+    const drawn = held?.get(botId);
+    if (held === undefined || drawn === undefined) return;
+    if (drawn > 1) {
+      held.set(botId, drawn - 1);
+      return;
+    }
+    const wasReader = held.keys().next().value === botId;
+    held.delete(botId);
+    if (held.size === 0) {
+      wanted.delete(sha256);
+      prune();
+    } else if (wasReader) {
+      // A read through the bot that left says nothing of the bots that stay.
+      tried.delete(sha256);
+    }
     changed();
   };
 }
@@ -109,14 +123,16 @@ export function wantBotPicture(sha256: string, botId: string): () => void {
  * `null`. The same object for the same answer, so it can be subscribed to.
  */
 export function nextWantedBotPicture(): BotPictureRead | null {
-  for (const [sha256, entry] of wanted) {
+  for (const [sha256, bots] of wanted) {
     if (links.has(sha256) || tried.has(sha256)) continue;
+    const botId = bots.keys().next().value;
+    if (botId === undefined) continue;
     if (
       next?.sha256 !== sha256 ||
-      next.botId !== entry.botId ||
+      next.botId !== botId ||
       next.round !== round
     ) {
-      next = { sha256, botId: entry.botId, round };
+      next = { sha256, botId, round };
     }
     return next;
   }
@@ -161,8 +177,9 @@ function linkOf(picture: BotPictureBytes): string | null {
 }
 
 /**
- * Starts a new round: the loader has a new host to ask, so every picture
- * not held may be read again and no read of the round before counts.
+ * Starts a new round: the loader has a new host to ask, or its host is back,
+ * so every picture not held may be read again and no read of the round
+ * before counts.
  */
 export function retryBotPictures(): void {
   round += 1;
@@ -173,18 +190,28 @@ export function retryBotPictures(): void {
 /**
  * Says which pictures the listed bots wear, and drops the links none of
  * them wears and nothing drawn wants: a replaced picture's link does not
- * outlive the bot's change.
+ * outlive the bot's change. A picture a bot has come to wear since the last
+ * say may be read again: a read that found none was of a bot that did not
+ * wear it yet, or no longer did.
  */
 export function keepBotPictures(wornNow: ReadonlySet<string>): void {
+  let retried = false;
+  for (const sha256 of wornNow) {
+    if (!worn.has(sha256) && tried.delete(sha256)) retried = true;
+  }
   worn = wornNow;
-  if (prune()) changed();
+  if (prune() || retried) changed();
 }
 
-/** Drops every picture and revokes its link: the signed-in identity changed. */
+/**
+ * Drops every picture and revokes its link: the signed-in identity changed.
+ * A read begun before the change is of the round before, and is not held.
+ */
 export function clearBotPictures(): void {
   for (const link of links.values()) URL.revokeObjectURL(link);
   links.clear();
   tried.clear();
+  round += 1;
   worn = new Set();
   changed();
 }

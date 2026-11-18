@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { BotAppearance } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -60,19 +60,30 @@ const NO_READ = { botId: "", sha256: "" };
  * host's requests to the surface the person is using.
  *
  * Each picture is read once for this client and this answer to whether the
- * host serves the method; a new client or a changed answer reads again. A
- * host without the method is never asked. A picture the bot no longer wears
+ * host serves the method; a new client or a changed answer reads again, and
+ * so does the host coming back (`hostReady` turning true), so a read that
+ * failed while it was away does not stay failed. A host without the method
+ * is never asked. A picture the bot no longer wears
  * is answered as none, so the lists are read again.
  */
 export function useBotPictureLoads(
   client: HostClient<HostRpcRegistry> | null,
   supported: boolean,
+  hostReady: boolean,
   model: HomeBotsModel,
 ): void {
   const queryClient = useQueryClient();
+  // A round ends when its client or its answer about the method does, and
+  // when the loader leaves: mounting starts none, so a picture already
+  // wanted then is asked for once.
+  useEffect(() => retryBotPictures, [client, supported]);
+  // Only the host coming back starts a round here; staying ready across
+  // renders starts none.
+  const wasHostReady = useRef(hostReady);
   useEffect(() => {
-    retryBotPictures();
-  }, [client, supported]);
+    if (hostReady && !wasHostReady.current) retryBotPictures();
+    wasHostReady.current = hostReady;
+  }, [hostReady]);
 
   const next = useSyncExternalStore(
     subscribeBotPictures,

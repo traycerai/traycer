@@ -296,17 +296,18 @@ describe("retrying the pictures", () => {
 });
 
 describe("withdrawing a want", () => {
-  it("drops an unworn link at the last withdrawal and tells subscribers, but not at an earlier one", () => {
+  it("drops an unworn link only at the last withdrawal of every bot drawing it, and tells subscribers", () => {
     const first = want(HASH, BOT);
     const second = want(HASH, OTHER_BOT);
     settle(HASH, PNG);
     const listener = vi.fn();
     subscribeBotPictures(listener);
 
-    first();
-    expect(botPictureLink(HASH)).not.toBeNull();
-    expect(listener).not.toHaveBeenCalled();
     second();
+    expect(botPictureLink(HASH)).not.toBeNull();
+    expect(revokeLink).not.toHaveBeenCalled();
+    listener.mockClear();
+    first();
 
     expect(botPictureLink(HASH)).toBeNull();
     expect(revokeLink).toHaveBeenCalledWith("blob:picture-1");
@@ -346,6 +347,74 @@ describe("wanting a picture again in the same round", () => {
     want(HASH, BOT);
 
     expect(nextWantedBotPicture()).toBeNull();
+  });
+});
+
+describe("bots drawing the same picture", () => {
+  it("reads it through the bot that still draws it once the first has withdrawn before any read, as a new read", () => {
+    const withdrawA = want(HASH, BOT);
+    want(HASH, OTHER_BOT);
+    const before = nextWantedBotPicture();
+    expect(before).toMatchObject({ sha256: HASH, botId: BOT });
+
+    withdrawA();
+
+    const after = nextWantedBotPicture();
+    expect(after).toMatchObject({ sha256: HASH, botId: OTHER_BOT });
+    expect(after).not.toBe(before);
+  });
+
+  it("offers it again through the bot that stays when the read through the bot that left settled as none", () => {
+    const withdrawA = want(HASH, BOT);
+    want(HASH, OTHER_BOT);
+    settle(HASH, null);
+    expect(nextWantedBotPicture()).toBeNull();
+    const listener = vi.fn();
+    subscribeBotPictures(listener);
+
+    withdrawA();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(nextWantedBotPicture()).toMatchObject({
+      sha256: HASH,
+      botId: OTHER_BOT,
+    });
+  });
+
+  it("does not offer it again when the bot that withdrew was not the one it was read through", () => {
+    want(HASH, BOT);
+    const withdrawB = want(HASH, OTHER_BOT);
+    settle(HASH, null);
+
+    withdrawB();
+
+    expect(nextWantedBotPicture()).toBeNull();
+  });
+
+  it("counts drawers per bot: one of two drawers of the same bot leaving changes nothing", () => {
+    const first = want(HASH, BOT);
+    want(HASH, BOT);
+    want(HASH, OTHER_BOT);
+    settle(HASH, null);
+    const listener = vi.fn();
+    subscribeBotPictures(listener);
+
+    first();
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(nextWantedBotPicture()).toBeNull();
+  });
+
+  it("keeps reading it through the first bot until that bot's last drawer has left", () => {
+    const first = want(HASH, BOT);
+    const second = want(HASH, BOT);
+    want(HASH, OTHER_BOT);
+
+    first();
+    expect(nextWantedBotPicture()).toMatchObject({ botId: BOT });
+    second();
+
+    expect(nextWantedBotPicture()).toMatchObject({ botId: OTHER_BOT });
   });
 });
 
@@ -390,6 +459,35 @@ describe("keeping only the pictures still in use", () => {
   });
 });
 
+describe("a hash that becomes worn again", () => {
+  it("is offered again in the same round when a read found none, the listing moved to another picture, and a later listing names it again", () => {
+    want(HASH, BOT);
+    keepBotPictures(new Set([HASH]));
+    settle(HASH, null);
+    expect(nextWantedBotPicture()).toBeNull();
+    keepBotPictures(new Set([OTHER]));
+    expect(nextWantedBotPicture()).toBeNull();
+    const listener = vi.fn();
+    subscribeBotPictures(listener);
+
+    keepBotPictures(new Set([HASH]));
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(nextWantedBotPicture()).toMatchObject({ sha256: HASH });
+  });
+
+  it("is not offered again when it never left the worn set", () => {
+    want(HASH, BOT);
+    keepBotPictures(new Set([HASH]));
+    settle(HASH, null);
+
+    keepBotPictures(new Set([HASH, OTHER]));
+    keepBotPictures(new Set([HASH]));
+
+    expect(nextWantedBotPicture()).toBeNull();
+  });
+});
+
 describe("clearing the pictures", () => {
   it("revokes every link, drops them, and tells subscribers", () => {
     holdWorn(HASH, OTHER);
@@ -423,5 +521,21 @@ describe("clearing the pictures", () => {
     settle(HASH, PNG);
 
     expect(botPictureLink(HASH)).toBeNull();
+  });
+
+  it("starts a new round, so a read begun before it holds no link when it settles and the hash is offered again", () => {
+    want(HASH, BOT);
+    const before = nextWantedBotPicture();
+    if (before === null) throw new Error("nothing was next");
+
+    clearBotPictures();
+    settleBotPictureRead(before, PNG);
+
+    expect(botPictureLink(HASH)).toBeNull();
+    expect(createLink).not.toHaveBeenCalled();
+    expect(nextWantedBotPicture()).toMatchObject({
+      sha256: HASH,
+      round: before.round + 1,
+    });
   });
 });

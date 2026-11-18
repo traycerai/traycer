@@ -234,7 +234,7 @@ describe("reading the pictures that drawn bots want", () => {
     const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
     renderHook(
       () => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper },
     );
@@ -255,7 +255,7 @@ describe("reading the pictures that drawn bots want", () => {
     const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
     renderHook(
       () => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper },
     );
@@ -282,7 +282,7 @@ describe("reading the pictures that drawn bots want", () => {
     );
     renderHook(
       () => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper },
     );
@@ -312,7 +312,7 @@ describe("reading the pictures that drawn bots want", () => {
     );
     renderHook(
       () => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper },
     );
@@ -343,7 +343,7 @@ describe("reading the pictures that drawn bots want", () => {
     const model = modelOf([PICTURE_BOT, "env-1", MASCOT_LOOK]);
     renderHook(
       () => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper },
     );
@@ -369,13 +369,306 @@ describe("reading the pictures that drawn bots want", () => {
     });
   });
 
+  it("reads a picture again through the bot that still draws it when the bot it was read through leaves and the read found none", async () => {
+    const host = pictureHost();
+    const model = modelOf(
+      [PICTURE_BOT, "env-1", MASCOT_LOOK],
+      [SECOND_PICTURE_BOT, "env-2", pictureLook(HASH)],
+    );
+    renderHook(
+      () => {
+        useBotPictureLoads(host.client, true, true, model);
+      },
+      { wrapper },
+    );
+    const leaving = drawn(PICTURE_BOT, pictureLook(HASH));
+    const staying = drawn(SECOND_PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    expect(host.reads[0].request.botId).toBe(PICTURE_BOT);
+    host.reads[0].answerNone();
+    await settled();
+
+    leaving.unmount();
+
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(2);
+    });
+    expect(host.reads[1].request).toEqual({
+      botId: SECOND_PICTURE_BOT,
+      sha256: HASH,
+    });
+    host.reads[1].answer();
+    await waitFor(() => {
+      expect(staying.result.current).toBe("blob:picture-1");
+    });
+  });
+
+  it("reads a picture again in the same round when a member sets another picture and then sets it back, though the first read found none", async () => {
+    const host = pictureHost();
+    const lists = (sha256: string) =>
+      modelOf([PICTURE_BOT, "env-1", pictureLook(sha256)]);
+    const { rerender } = renderHook(
+      ({ model }) => {
+        useBotPictureLoads(host.client, true, true, model);
+      },
+      { wrapper, initialProps: { model: lists(HASH) } },
+    );
+    const drawer = drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    rerender({ model: lists(OTHER) });
+    host.reads[0].answerNone();
+    await settled();
+    expectNoRequestInFlight();
+
+    rerender({ model: lists(HASH) });
+
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(2);
+    });
+    expect(host.reads[1].request.sha256).toBe(HASH);
+    host.reads[1].answer();
+    await waitFor(() => {
+      expect(drawer.result.current).toBe("blob:picture-1");
+    });
+  });
+
+  it("does not read a picture again when a none answer is followed by a listing that still names it", async () => {
+    const host = pictureHost();
+    const { rerender } = renderHook(
+      ({ model }) => {
+        useBotPictureLoads(host.client, true, true, model);
+      },
+      {
+        wrapper,
+        initialProps: {
+          model: modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]),
+        },
+      },
+    );
+    drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    host.reads[0].answerNone();
+    await settled();
+
+    rerender({ model: modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]) });
+
+    expectNoRequestInFlight();
+    expect(host.reads).toHaveLength(1);
+  });
+
+  describe("when the host comes back", () => {
+    const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
+
+    it("reads a failed picture again exactly once when the host turns ready after not being, holds it, and sends nothing more while it stays ready", async () => {
+      const host = pictureHost();
+      const { rerender } = renderHook(
+        ({ ready, listing }) => {
+          useBotPictureLoads(host.client, true, ready, listing);
+        },
+        { wrapper, initialProps: { ready: true, listing: model } },
+      );
+      const drawer = drawn(PICTURE_BOT, pictureLook(HASH));
+      await waitFor(() => {
+        expect(host.reads).toHaveLength(1);
+      });
+      host.reads[0].fail(hostFailure("RPC_ERROR"));
+      await settled();
+
+      rerender({ ready: false, listing: model });
+      expectNoRequestInFlight();
+      expect(host.reads).toHaveLength(1);
+      rerender({ ready: true, listing: model });
+
+      await waitFor(() => {
+        expect(host.reads).toHaveLength(2);
+      });
+      host.reads[1].answer();
+      await waitFor(() => {
+        expect(drawer.result.current).toBe("blob:picture-1");
+      });
+      rerender({
+        ready: true,
+        listing: modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]),
+      });
+      expectNoRequestInFlight();
+      expect(host.reads).toHaveLength(2);
+    });
+
+    it("stays in one round while it stays ready across re-renders and changed listings, so a tried hash is not read again", async () => {
+      const host = pictureHost();
+      const { rerender } = renderHook(
+        ({ listing }) => {
+          useBotPictureLoads(host.client, true, true, listing);
+        },
+        { wrapper, initialProps: { listing: model } },
+      );
+      drawn(PICTURE_BOT, pictureLook(HASH));
+      await waitFor(() => {
+        expect(host.reads).toHaveLength(1);
+      });
+      host.reads[0].fail(hostFailure("RPC_ERROR"));
+      await settled();
+
+      for (let i = 0; i < 3; i += 1) {
+        rerender({
+          listing: modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]),
+        });
+      }
+
+      expectNoRequestInFlight();
+      expect(host.reads).toHaveLength(1);
+      expect(nextWantedBotPicture()).toBeNull();
+    });
+
+    it("sends nothing new for a tried hash when the host only turns unready", async () => {
+      const host = pictureHost();
+      const { rerender } = renderHook(
+        ({ ready }) => {
+          useBotPictureLoads(host.client, true, ready, model);
+        },
+        { wrapper, initialProps: { ready: true } },
+      );
+      drawn(PICTURE_BOT, pictureLook(HASH));
+      await waitFor(() => {
+        expect(host.reads).toHaveLength(1);
+      });
+      host.reads[0].fail(hostFailure("RPC_ERROR"));
+      await settled();
+
+      rerender({ ready: false });
+
+      expectNoRequestInFlight();
+      expect(host.reads).toHaveLength(1);
+      expect(nextWantedBotPicture()).toBeNull();
+    });
+
+    it("asks once for a picture already wanted when the loader mounts, and holds its answer", async () => {
+      const host = pictureHost();
+      const wanting = drawn(PICTURE_BOT, pictureLook(HASH));
+
+      renderHook(
+        () => {
+          useBotPictureLoads(host.client, true, true, model);
+        },
+        { wrapper },
+      );
+
+      await waitFor(() => {
+        expect(host.reads).toHaveLength(1);
+      });
+      host.reads[0].answer();
+      await waitFor(() => {
+        expect(wanting.result.current).toBe("blob:picture-1");
+      });
+      expectNoRequestInFlight();
+      expect(host.reads).toHaveLength(1);
+    });
+
+    it.each([true, false])(
+      "starts no round at mount, whether the host is ready (%s) or not",
+      (ready) => {
+        const host = pictureHost();
+        drawn(PICTURE_BOT, pictureLook(HASH));
+        const before = nextWantedBotPicture()?.round;
+
+        renderHook(
+          () => {
+            useBotPictureLoads(host.client, true, ready, model);
+          },
+          { wrapper },
+        );
+
+        expect(nextWantedBotPicture()?.round).toBe(before);
+      },
+    );
+  });
+
+  describe("when the loader unmounts", () => {
+    const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
+
+    it("starts a round, so a hash tried under the old loader is offered to a newly mounted one", async () => {
+      const host = pictureHost();
+      const old = renderHook(
+        () => {
+          useBotPictureLoads(host.client, true, true, model);
+        },
+        { wrapper },
+      );
+      const drawer = drawn(PICTURE_BOT, pictureLook(HASH));
+      await waitFor(() => {
+        expect(host.reads).toHaveLength(1);
+      });
+      host.reads[0].fail(hostFailure("RPC_ERROR"));
+      await settled();
+
+      old.unmount();
+      renderHook(
+        () => {
+          useBotPictureLoads(host.client, true, true, model);
+        },
+        { wrapper },
+      );
+
+      await waitFor(() => {
+        expect(host.reads).toHaveLength(2);
+      });
+      host.reads[1].answer();
+      await waitFor(() => {
+        expect(drawer.result.current).toBe("blob:picture-1");
+      });
+    });
+
+    it("holds nothing from a read still out at unmount when it settles, and the new loader's own read is the one held", async () => {
+      const host = pictureHost();
+      const old = renderHook(
+        () => {
+          useBotPictureLoads(host.client, true, true, model);
+        },
+        { wrapper },
+      );
+      const drawer = drawn(PICTURE_BOT, pictureLook(HASH));
+      await waitFor(() => {
+        expect(host.reads).toHaveLength(1);
+      });
+
+      old.unmount();
+      renderHook(
+        () => {
+          useBotPictureLoads(host.client, true, true, model);
+        },
+        { wrapper },
+      );
+      await waitFor(() => {
+        expect(host.reads).toHaveLength(2);
+      });
+      host.reads[0].answer();
+      await waitFor(() => {
+        expect(readsInFlight()).toBe(1);
+      });
+
+      expect(drawer.result.current).toBeNull();
+      expect(createLink).not.toHaveBeenCalled();
+      host.reads[1].answer();
+      await waitFor(() => {
+        expect(drawer.result.current).toBe("blob:picture-1");
+      });
+      expect(createLink).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("tries a failed hash again for a new client", async () => {
     const first = pictureHost();
     const second = pictureHost();
     const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
     const { rerender } = renderHook(
       ({ client }) => {
-        useBotPictureLoads(client, true, model);
+        useBotPictureLoads(client, true, true, model);
       },
       { wrapper, initialProps: { client: first.client } },
     );
@@ -399,7 +692,7 @@ describe("reading the pictures that drawn bots want", () => {
     const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
     const { rerender } = renderHook(
       ({ supported }) => {
-        useBotPictureLoads(host.client, supported, model);
+        useBotPictureLoads(host.client, supported, true, model);
       },
       { wrapper, initialProps: { supported: true } },
     );
@@ -426,8 +719,8 @@ describe("reading the pictures that drawn bots want", () => {
 
     renderHook(
       () => {
-        useBotPictureLoads(host.client, false, model);
-        useBotPictureLoads(null, true, model);
+        useBotPictureLoads(host.client, false, true, model);
+        useBotPictureLoads(null, true, true, model);
       },
       { wrapper },
     );
@@ -446,7 +739,7 @@ describe("reading the pictures that drawn bots want", () => {
     const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
     renderHook(
       () => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper },
     );
@@ -470,7 +763,7 @@ describe("reading the pictures that drawn bots want", () => {
       const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
       const { rerender } = renderHook(
         ({ client }) => {
-          useBotPictureLoads(client, true, model);
+          useBotPictureLoads(client, true, true, model);
         },
         { wrapper, initialProps: { client: first.client } },
       );
@@ -524,7 +817,7 @@ describe("reading the pictures that drawn bots want", () => {
     const model = modelOf([PICTURE_BOT, "env-1", MASCOT_LOOK]);
     renderHook(
       () => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper },
     );
@@ -556,7 +849,7 @@ describe("reading the pictures that drawn bots want", () => {
       );
       renderHook(
         () => {
-          useBotPictureLoads(host.client, true, model);
+          useBotPictureLoads(host.client, true, true, model);
         },
         { wrapper },
       );
@@ -603,7 +896,7 @@ describe("reading the pictures that drawn bots want", () => {
     const host = pictureHost();
     const { rerender } = renderHook(
       ({ model }) => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       {
         wrapper,
@@ -632,7 +925,7 @@ describe("reading the pictures that drawn bots want", () => {
     const host = pictureHost();
     const { rerender } = renderHook(
       ({ model }) => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       {
         wrapper,
@@ -663,7 +956,7 @@ describe("reading the pictures that drawn bots want", () => {
     );
     renderHook(
       () => {
-        useBotPictureLoads(host.client, true, model);
+        useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper },
     );
