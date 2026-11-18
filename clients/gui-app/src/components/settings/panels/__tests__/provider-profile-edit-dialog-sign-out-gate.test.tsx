@@ -745,7 +745,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Running work finishes first. The account stays in the list and needs a sign-in. This does not reach a computer that already left or has not updated, or a separate Terminal login.",
+        profilePersonActionCopy("sign-out", "Work account", null).description,
       ),
     ).toBeTruthy();
     fireEvent.click(screen.getByTestId("confirm-action"));
