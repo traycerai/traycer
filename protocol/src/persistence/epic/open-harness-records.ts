@@ -217,11 +217,7 @@ export const openContentBlockSchemaPreNotApplied = lazySchema(() =>
   ]),
 );
 
-/**
- * The content-block union with its three harness-bearing members reopened.
- * Every other member is the live schema; a NEW member has to be added here,
- * which `open-harness-wire.test.ts` enforces by comparing member sets.
- */
+/** Open blocks `chat.subscribe@1.44` ships: a tool call without 1.45's feedback draft origin. */
 export const openContentBlockSchemaPreFeedbackOrigin = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
@@ -241,6 +237,11 @@ export const openContentBlockSchemaPreFeedbackOrigin = lazySchema(() =>
     artifactOperationBlockSchema,
   ]),
 );
+/**
+ * The content-block union with its three harness-bearing members reopened.
+ * Every other member is the live schema; a NEW member has to be added here,
+ * which `open-harness-wire.test.ts` enforces by comparing member sets.
+ */
 export const openContentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
@@ -442,6 +443,7 @@ export const openAssistantMessageSchemaPreNotApplied = lazySchema(() =>
   }),
 );
 
+/** The open assistant row `chat.subscribe@1.44` ships: no 1.45 feedback draft projection. */
 export const openAssistantMessageSchemaPreFeedbackOrigin = lazySchema(() =>
   assistantMessageSchemaPreFeedbackOrigin.extend({
     sender: openAgentSenderSchema,
@@ -502,6 +504,7 @@ export const openMessageSchemaPreNotApplied = lazySchema(() =>
   ]),
 );
 
+/** The open row `chat.subscribe@1.44` ships: images on a resume trigger, no feedback draft leaves. */
 export const openMessageSchemaPreFeedbackOrigin = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchema,
