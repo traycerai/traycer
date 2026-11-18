@@ -55,37 +55,13 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => sandboxCredentialRefusal.current,
 }));
 
-/** What the pending SET label's host count reads: controlled per test. */
-const hostsRunningPersonalMock = vi.hoisted(
-  (): {
-    current: {
-      readonly hosts: readonly { readonly hostId: string }[];
-      readonly state: "loading" | "ready" | "failed";
-      readonly thisComputerUnread?: boolean;
-    };
-  } => ({
-    current: { hosts: [], state: "ready" },
-  }),
-);
-/** Records whether the section asked for the read at all, per call. */
-const useHostsRunningPersonalSpy = vi.hoisted(() =>
-  vi.fn<(enabled: boolean) => void>(),
-);
-vi.mock(
-  "@/components/settings/environment/use-hosts-running-configuration",
-  () => ({
-    useHostsRunningPersonal: (enabled: boolean) => {
-      useHostsRunningPersonalSpy(enabled);
-      return {
-        thisComputerUnread: false,
-        ...hostsRunningPersonalMock.current,
-        collisions: [],
-        retry: () => {},
-        reread: () => {},
-      };
-    },
-  }),
-);
+// The header spinner has no accessible name; a marker lets the cases read it.
+vi.mock("@/components/ui/agent-spinning-dots", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/components/ui/agent-spinning-dots")
+  >()),
+  MutedAgentSpinner: () => <span data-testid="variables-save-spinner" />,
+}));
 
 import { act, type ReactNode } from "react";
 import {
@@ -215,7 +191,6 @@ afterEach(() => {
   fakeAuthn?.restore();
   fakeAuthn = null;
   vi.clearAllMocks();
-  hostsRunningPersonalMock.current = { hosts: [], state: "ready" };
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
@@ -1016,83 +991,212 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       });
     });
 
-    describe("the pending SET label's host count", () => {
-      function pendingSetOverride(): () => void {
-        let resolveSave: (() => void) | undefined;
-        mocks.setOverrideMutate.mockImplementationOnce(
-          () =>
-            new Promise<void>((resolve) => {
-              resolveSave = resolve;
-            }),
-        );
-        return () => resolveSave?.();
+    describe("a variable's save", () => {
+      const REREAD_VARIABLE = "CURSOR_BASE_URL";
+
+      /** The Variables section: its header spinner and its editor. */
+      function variablesSection(): HTMLElement {
+        const section =
+          screen.getByText("Variables for the selected provider.").parentElement
+            ?.parentElement?.parentElement ?? null;
+        if (section === null) {
+          throw new Error("the Variables section is not mounted");
+        }
+        return section;
       }
 
-      it("names the real host count once the list is ready", async () => {
-        hostsRunningPersonalMock.current = {
-          hosts: [{ hostId: "host-a" }, { hostId: "host-b" }],
-          state: "ready",
-        };
-        pendingSetOverride();
-        renderProviderEnvTab("cursor", []);
-        await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
-
-        expect(screen.getByRole("status").textContent).toBe(
-          "CURSOR_BASE_URL · Applying on 2 hosts…",
+      function spinnerShown(): boolean {
+        return (
+          within(variablesSection()).queryByTestId("variables-save-spinner") !==
+          null
         );
-      });
+      }
 
-      it.each([
-        { label: "loading", state: "loading" as const },
-        { label: "failed", state: "failed" as const },
-        { label: "ready with none answered yet", state: "ready" as const },
-      ])(
-        "keeps the plain label while the host list is $label, never an understated count",
-        async ({ state }) => {
-          hostsRunningPersonalMock.current = { hosts: [], state };
-          pendingSetOverride();
-          renderProviderEnvTab("cursor", []);
-          await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
-
-          expect(screen.getByRole("status").textContent).toBe(
-            "CURSOR_BASE_URL · Adding",
-          );
-          expect(screen.queryByText(/Applying on/)).toBeNull();
-        },
-      );
-
-      it("keeps the plain label while another host is listed but this computer's own status is unread, never an understated count", async () => {
-        hostsRunningPersonalMock.current = {
-          hosts: [{ hostId: "host-a" }],
-          state: "ready",
-          thisComputerUnread: true,
-        };
-        pendingSetOverride();
-        renderProviderEnvTab("cursor", []);
-        await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
-
-        expect(screen.getByRole("status").textContent).toBe(
-          "CURSOR_BASE_URL · Adding",
+      function expectNoSaveLine(): void {
+        const section = within(variablesSection());
+        expect(section.queryByRole("status")).toBeNull();
+        expect(section.queryByText(/Applying on|Adding|Saving|Removing/)).toBe(
+          null,
         );
-        expect(screen.queryByText(/Applying on/)).toBeNull();
+      }
+
+      /** One write the section's mutation mock holds until it is released. */
+      function holdWrite(
+        mock: typeof mocks.setOverrideMutate,
+      ): () => Promise<void> {
+        const gate = Promise.withResolvers<void>();
+        mock.mockImplementationOnce(() => gate.promise);
+        return async () => {
+          await act(async () => {
+            gate.resolve();
+            await gate.promise;
+          });
+        };
+      }
+
+      interface OverridesRead {
+        readonly holdNext: () => () => Promise<void>;
+        readonly count: () => number;
+      }
+
+      /**
+       * The host's overrides read, already answered once, whose next answer
+       * (the section's re-read after a write) is held until released.
+       */
+      async function overridesRead(
+        queryClient: QueryClient,
+      ): Promise<OverridesRead> {
+        let held: Promise<null> | null = null;
+        let reads = 0;
+        await queryClient.fetchQuery({
+          queryKey: queryKeys.hostMethod(HOST_ID, "providers.list", {}),
+          queryFn: () => {
+            reads += 1;
+            return held ?? Promise.resolve(null);
+          },
+        });
+        return {
+          count: () => reads,
+          holdNext: () => {
+            const gate = Promise.withResolvers<null>();
+            held = gate.promise;
+            return async () => {
+              await act(async () => {
+                gate.resolve(null);
+                await gate.promise;
+              });
+            };
+          },
+        };
+      }
+
+      async function mountWithRead(
+        overrides: readonly EnvOverrideValue[],
+      ): Promise<OverridesRead> {
+        const queryClient = new QueryClient({
+          defaultOptions: { queries: { retry: false } },
+        });
+        const read = await overridesRead(queryClient);
+        mountOnPersonalPage(
+          [],
+          NO_FACTS,
+          <ProviderEnvOverridesSection
+            providerId="cursor"
+            overrides={overrides}
+            envOverrideScope="harness-and-native-config"
+          />,
+          queryClient,
+        );
+        return read;
+      }
+
+      const BASE_URL_ROW: EnvOverrideValue = {
+        key: REREAD_VARIABLE,
+        value: "https://example.invalid",
+      };
+
+      async function expectSpinnerThrough(input: {
+        readonly releaseReread: () => Promise<void>;
+        readonly rereadStarted: () => number;
+        readonly writes: readonly (() => Promise<void>)[];
+        readonly rowsDisabled: () => boolean;
+      }): Promise<void> {
+        for (const release of input.writes) {
+          expect(spinnerShown()).toBe(true);
+          expect(input.rowsDisabled()).toBe(true);
+          expectNoSaveLine();
+          await release();
+        }
+        // The writes are done; the overrides re-read is still out.
+        await waitFor(() => expect(input.rereadStarted()).toBeGreaterThan(1));
+        expect(spinnerShown()).toBe(true);
+        expect(input.rowsDisabled()).toBe(true);
+        expectNoSaveLine();
+
+        await input.releaseReread();
+        await waitFor(() => expect(spinnerShown()).toBe(false));
+        await waitFor(() => expect(input.rowsDisabled()).toBe(false));
+      }
+
+      it("keeps the spinner and the draft disabled through an added variable's write and re-read", async () => {
+        const read = await mountWithRead([]);
+        const releaseWrite = holdWrite(mocks.setOverrideMutate);
+        const releaseReread = read.holdNext();
+        await typeVariable(REREAD_VARIABLE, "https://example.invalid");
+
+        await expectSpinnerThrough({
+          releaseReread,
+          rereadStarted: read.count,
+          writes: [releaseWrite],
+          // The draft closes once the save has landed.
+          rowsDisabled: () =>
+            screen.queryByLabelText<HTMLInputElement>("New variable name")
+              ?.disabled ?? false,
+        });
       });
-    });
 
-    it("issues no host-list read on a Local row, which never shows a host count", async () => {
-      useSettingsEnvironmentPickStore.setState({
-        pick: { kind: "local", hostId: "host-a", hostName: "dev-box" },
+      it("keeps the spinner and the row disabled through a rename's two writes and the re-read", async () => {
+        const read = await mountWithRead([BASE_URL_ROW]);
+        const releaseSet = holdWrite(mocks.setOverrideMutate);
+        const releaseDelete = holdWrite(mocks.deleteOverrideMutate);
+        const releaseReread = read.holdNext();
+        const nameField = await screen.findByLabelText(
+          `Name for ${REREAD_VARIABLE}`,
+        );
+        fireEvent.change(nameField, { target: { value: "CURSOR_PROXY_URL" } });
+        fireEvent.blur(nameField);
+
+        await expectSpinnerThrough({
+          releaseReread,
+          rereadStarted: read.count,
+          writes: [releaseSet, releaseDelete],
+          rowsDisabled: () =>
+            screen.getByLabelText<HTMLInputElement>(
+              `Value for ${REREAD_VARIABLE}`,
+            ).disabled,
+        });
       });
-      renderProviderEnvTab("cursor", []);
-      await screen.findByRole("button", { name: "Add a variable" });
 
-      expect(useHostsRunningPersonalSpy).toHaveBeenLastCalledWith(false);
-    });
+      it("keeps the spinner and the row disabled through a removal's write and re-read", async () => {
+        const read = await mountWithRead([BASE_URL_ROW]);
+        const releaseDelete = holdWrite(mocks.deleteOverrideMutate);
+        const releaseReread = read.holdNext();
+        fireEvent.click(
+          await screen.findByRole("button", {
+            name: `Remove ${REREAD_VARIABLE}`,
+          }),
+        );
 
-    it("control: a configuration row (not Local) does ask for the read", async () => {
-      renderProviderEnvTab("cursor", []);
-      await screen.findByRole("button", { name: "Add a variable" });
+        await expectSpinnerThrough({
+          releaseReread,
+          rereadStarted: read.count,
+          writes: [releaseDelete],
+          rowsDisabled: () =>
+            screen.getByLabelText<HTMLInputElement>(
+              `Value for ${REREAD_VARIABLE}`,
+            ).disabled,
+        });
+      });
 
-      expect(useHostsRunningPersonalSpy).toHaveBeenLastCalledWith(true);
+      it("shows the red failure line, with no spinner, when the write fails, and drops it when the next save starts", async () => {
+        renderProviderEnvTab("cursor", []);
+        mocks.setOverrideMutate.mockRejectedValueOnce(
+          new Error("The host refused this variable."),
+        );
+        await typeVariable(REREAD_VARIABLE, "https://example.invalid");
+
+        const failure = await within(variablesSection()).findByRole("alert");
+        expect(failure.textContent).toBe("The host refused this variable.");
+        expect(spinnerShown()).toBe(false);
+        expectNoSaveLine();
+
+        const releaseRetry = holdWrite(mocks.setOverrideMutate);
+        fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+        await waitFor(() => expect(spinnerShown()).toBe(true));
+        expect(within(variablesSection()).queryByRole("alert")).toBeNull();
+        await releaseRetry();
+      });
     });
   });
 });

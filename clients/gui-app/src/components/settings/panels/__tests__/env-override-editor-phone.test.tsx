@@ -41,21 +41,16 @@ interface EditorInput {
   }[];
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
-  readonly applyingHostsCount: number | null;
   readonly staleRefusal: EnvStaleRefusal | null;
   readonly rowNotes: ReadonlyMap<string, ReactNode>;
   readonly renderDetails: ((key: string) => ReactNode) | undefined;
 }
 
 const NO_REFUSAL = {
-  applyingHostsCount: null,
   staleRefusal: null,
   rowNotes: NO_NOTES,
   renderDetails: undefined,
-} satisfies Pick<
-  EditorInput,
-  "applyingHostsCount" | "staleRefusal" | "rowNotes" | "renderDetails"
->;
+} satisfies Pick<EditorInput, "staleRefusal" | "rowNotes" | "renderDetails">;
 
 beforeEach(() => {
   installPhoneViewport(639);
@@ -76,7 +71,6 @@ function editorElement(input: EditorInput): ReactNode {
         staleRefusal={input.staleRefusal}
         namePlaceholder="OPENAI_API_KEY"
         emptyLabel="No environment variables."
-        applyingHostsCount={input.applyingHostsCount}
         onCommit={input.onCommit}
         onDelete={input.onDelete}
         renderDetails={input.renderDetails}
@@ -565,7 +559,7 @@ describe("EnvOverrideEditor on a phone", () => {
     expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("keeps Saving, then a refusal, inside the sheet", async () => {
+  it("keeps the sheet disabled and silent while saving, then shows a refusal inside it", async () => {
     const write = Promise.withResolvers<void>();
     const onCommit = vi.fn<EnvCommit>(() => write.promise);
     const view = renderEditor({
@@ -582,15 +576,11 @@ describe("EnvOverrideEditor on a phone", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     const saving = screen.getByRole("dialog");
-    expect(within(saving).getByRole("status")).toHaveProperty(
-      "textContent",
-      "NODE_ENV · Saving",
-    );
+    expect(screen.queryByRole("status")).toBeNull();
     expect(within(saving).getByLabelText("Value for NODE_ENV")).toHaveProperty(
       "disabled",
       true,
     );
-    expect(screen.getAllByRole("status")).toHaveLength(1);
     expect(previewButton("NODE_ENV", "development")).toBeTruthy();
     expect(onCommit).toHaveBeenCalledWith("NODE_ENV", "NODE_ENV", "production");
 
@@ -626,34 +616,6 @@ describe("EnvOverrideEditor on a phone", () => {
       "disabled",
       false,
     );
-  });
-
-  it("reads a provider save as Applying on n hosts inside the sheet", async () => {
-    const write = Promise.withResolvers<void>();
-    const onCommit = vi.fn<EnvCommit>(() => write.promise);
-    renderEditor({
-      ...NO_REFUSAL,
-      overrides: [{ key: "NODE_ENV", value: "development" }],
-      applyingHostsCount: 2,
-      onCommit,
-      onDelete: vi.fn<EnvDelete>(),
-    });
-    const dialog = await openPreview("NODE_ENV", "development");
-    fireEvent.change(within(dialog).getByLabelText("Value for NODE_ENV"), {
-      target: { value: "production" },
-    });
-
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-
-    expect(
-      within(screen.getByRole("dialog")).getByRole("status"),
-    ).toHaveProperty("textContent", "NODE_ENV · Applying on 2 hosts…");
-    expect(screen.getAllByRole("status")).toHaveLength(1);
-    expect(onCommit).toHaveBeenCalledWith("NODE_ENV", "NODE_ENV", "production");
-    await act(async () => {
-      write.resolve();
-      await write.promise;
-    });
   });
 
   it("keeps a saved key masked and remove-only", async () => {
