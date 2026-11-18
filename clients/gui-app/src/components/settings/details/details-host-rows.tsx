@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { SandboxRetryApplyingButton } from "@/components/sandboxes/sandbox-retry-applying-button";
 import type {
   DetailsHostStatus,
   DetailsRecovery,
@@ -95,13 +94,6 @@ function DetailsHostRecovery(props: {
 }): ReactNode {
   const recovery = props.host.recovery;
   if (recovery === null) return null;
-  if (recovery.kind === "apply")
-    return (
-      <SandboxRetryApplyingButton
-        hostId={props.host.hostId}
-        guestSetupFailed={recovery.guestSetupFailed}
-      />
-    );
   return (
     <Button
       type="button"

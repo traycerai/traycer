@@ -35,11 +35,6 @@ vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
 vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
   useHostProvisioningProgress: () => null,
 }));
-// The configuration status chip reads the host runtime this suite does not
-// mount, and none of these cases is about it.
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => null,
-}));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
@@ -217,20 +212,19 @@ describe("<PersonalPageFrame /> on a host that does not advertise environment.st
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    const line = await screen.findByTestId("personal-page-status");
+    const line = await screen.findByTestId("personal-page-read-only");
     expect(line.textContent).toBe(UPDATE_HOST_TEXT);
     // Outside the inert region, so assistive technology still reads it.
     expect(line.closest("[inert]")).toBeNull();
     // The page body is inside it: no edits until the host is updated.
     const edit = screen.getByRole("button", { name: "Edit the page" });
     expect(edit.closest("[inert]")).not.toBeNull();
-    // The shell skips its own copy of the line in this state.
-    expect(screen.getAllByTestId("personal-page-status")).toHaveLength(1);
+    expect(screen.getAllByTestId("personal-page-read-only")).toHaveLength(1);
   });
 });
 
 describe("<PersonalPageFrame /> on a host with a ready status", () => {
-  it("draws the status line inside the panel shell's header, and the page is not inert", async () => {
+  it("draws no delivery status for an item still applying, and the page is not inert", async () => {
     renderFrame({
       section: "shell",
       methods: STATUS_METHODS,
@@ -246,13 +240,12 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe("Applying LOG_LEVEL on dev-box.");
-    const header = line.closest("header");
-    if (header === null) throw new Error("the line is not inside a header");
+    const heading = await screen.findByRole("heading", { name: "Shell" });
+    const header = heading.closest("header");
+    if (header === null) throw new Error("the heading is not inside a header");
     expect(header.closest("[data-settings-panel-shell]")).not.toBeNull();
-    expect(within(header).getByRole("heading", { name: "Shell" })).toBeTruthy();
-    expect(line.closest("[inert]")).toBeNull();
+    expect(header.textContent).not.toMatch(/Applying|dev-box/);
+    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -278,7 +271,7 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
     ).toBeNull();
   });
 
-  it("says a failed item did not apply, naming the host", async () => {
+  it("draws nothing for an item that failed to apply", async () => {
     renderFrame({
       section: "shell",
       methods: STATUS_METHODS,
@@ -295,13 +288,14 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe(
-      "LOG_LEVEL didn't apply on dev-box: permission denied.",
+    await screen.findByRole("heading", { name: "Shell" });
+    expect(document.body.textContent).not.toMatch(
+      /didn't apply|permission denied/,
     );
+    expect(screen.queryByTestId("personal-page-status")).toBeNull();
   });
 
-  it("says changes wait for a reconnect while the host cannot reach the environment", async () => {
+  it("draws nothing while the host cannot reach the environment", async () => {
     renderFrame({
       section: "shell",
       methods: STATUS_METHODS,
@@ -309,10 +303,9 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe(
-      "Changes apply on dev-box when it reconnects.",
-    );
+    await screen.findByRole("heading", { name: "Shell" });
+    expect(document.body.textContent).not.toMatch(/when it reconnects/);
+    expect(screen.queryByTestId("personal-page-status")).toBeNull();
   });
 
   it("shows no line when the host has no settings of the person's yet, and leaves the page as it was", async () => {

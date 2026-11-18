@@ -222,7 +222,6 @@ function renderShellPanelOverRpc(options: {
     section: "shell",
     pick: PERSONAL_PICK,
     state: { kind: "unknown" },
-    line: null,
     hostName: hostId,
     localOverrides: options.localOverrides ?? [],
     hostId,

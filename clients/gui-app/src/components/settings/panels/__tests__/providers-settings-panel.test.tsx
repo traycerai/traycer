@@ -5661,7 +5661,6 @@ describe("<ProvidersSettingsPanel />", () => {
                 section: "providers",
                 pick: { kind: "personal" },
                 state: { kind: "unknown" },
-                line: null,
                 hostName: "dev-box",
                 hostId: null,
                 client: null,

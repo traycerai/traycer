@@ -250,7 +250,7 @@ function heldValueOf(
 /**
  * The page under the host runtime Settings gives it: the real provider, and
  * the scope's client re-provided the way a host-scoped panel does, so the
- * page's own chip reads the same host the page does.
+ * page reads the same host the panel does.
  */
 function ScopedHostRuntime(props: { readonly children: ReactNode }): ReactNode {
   return (

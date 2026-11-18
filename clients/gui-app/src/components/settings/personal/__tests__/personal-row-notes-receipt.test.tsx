@@ -49,7 +49,6 @@ import {
 
 const HOST_ID = "host-a";
 const HOST_NAME = "dev-box";
-const OFFLINE_LINE = "Changes apply on dev-box when it reconnects.";
 
 afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
@@ -72,7 +71,7 @@ function RowNotesProbe(): ReactNode {
 /**
  * The page under the host runtime Settings gives it: the real provider, and
  * the scope's client re-provided the way a host-scoped panel does, so the
- * page's own chip reads the same host the page does.
+ * page reads the same host the panel does.
  */
 function ScopedHostRuntime(props: {
   readonly handlers: MockHandlerMap<HostRpcRegistry>;
@@ -178,11 +177,6 @@ function notes(): string[] {
     .sort();
 }
 
-/** The page's status line, or null while the page has nothing to say. */
-function statusLine(): string | null {
-  return screen.queryByTestId("personal-page-status")?.textContent ?? null;
-}
-
 function waitingEdit(
   reachability: EnvironmentStatusResponseV13["reachability"],
 ) {
@@ -193,14 +187,13 @@ function waitingEdit(
 }
 
 describe("an edit made while the host is out of reach", () => {
-  it("is Pending, with the page saying changes wait for the reconnect, until the receipt is accepted", async () => {
+  it("is Pending, with no delivery line on the page, until the receipt is accepted", async () => {
     const page = mountPageOver(waitingEdit("reconnecting"));
     await vi.waitFor(() => {
       expect(notes()).toEqual(["EDITED: pending"]);
     });
-    expect(
-      (await screen.findByTestId("personal-page-status")).textContent,
-    ).toBe(OFFLINE_LINE);
+    expect(screen.queryByTestId("personal-page-status")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/when it reconnects/);
 
     await page.hostNowAnswers(
       environmentStatusFixture({
@@ -218,7 +211,6 @@ describe("an edit made while the host is out of reach", () => {
     await vi.waitFor(() => {
       expect(notes()).toEqual([]);
     });
-    expect(statusLine()).not.toBe(OFFLINE_LINE);
   });
 
   it("stays Pending across a reconnect that has not yet delivered its receipt", async () => {
@@ -229,9 +221,6 @@ describe("an edit made while the host is out of reach", () => {
 
     await page.hostNowAnswers(waitingEdit("connected"));
 
-    await vi.waitFor(() => {
-      expect(statusLine()).not.toBe(OFFLINE_LINE);
-    });
     expect(notes()).toEqual(["EDITED: pending"]);
   });
 

@@ -409,7 +409,6 @@ describe("ProviderApiKeySection custody sentence", () => {
           section: "providers",
           pick: PERSONAL_PICK,
           state: hostState,
-          line: null,
           hostName: "Studio",
           localOverrides: NO_OVERRIDES,
           hostId: "host-1",

@@ -5,7 +5,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 
 export interface DetailsSubject {
   readonly environmentId: string;
-  /** Built-ins: secret, member, plan, host_settings, move, chip and sandbox.
+  /** Built-ins: secret, member, plan, host_settings, move and sandbox.
    * Open to additional providers without changing the drawer contract.
    */
   readonly kind: string;
@@ -21,16 +21,10 @@ export interface DetailsSubject {
 
 export type DetailsReaderScope = "full" | "own" | "status_only";
 
-export type DetailsRecovery =
-  | {
-      readonly kind: "repair" | "install" | "retry" | "overview";
-      readonly hostId: string;
-    }
-  | {
-      readonly kind: "apply";
-      readonly hostId: string;
-      readonly guestSetupFailed: boolean | null;
-    };
+export interface DetailsRecovery {
+  readonly kind: "repair" | "install" | "retry" | "overview";
+  readonly hostId: string;
+}
 
 /** Metadata only: never add values, tokens, credentials or arbitrary payloads.
  * Host names and actor labels must already be authorized by the provider.

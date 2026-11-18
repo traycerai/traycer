@@ -1222,7 +1222,7 @@ cleanup is pending, it publishes a revision-only delta to retry failed host work
 immediately; a completed cleanup publishes nothing. The delta also retries the
 environment's other failed items, just as any configuration change does. It
 never rewrites a declaration, so a replacement secret using the same name
-survives. The page's own `Details` sits beside its chip: its Now reads "Applied
+survives. The page's own `Details` sits in its header: its Now reads "Applied
 on 2 hosts" (or "Not applied on dev-box", "Applying on dev-box…"), counting and
 listing only the hosts the page's cached `environment.host.list` calls a
 sandbox; while that list is not loaded or its read failed, the drawer shows no
@@ -6069,10 +6069,11 @@ use-team-chat-auto-archive.ts`). The same controls as the account
     through). It is keyed by the viewer, like the auto-archive row, so a
     pending save never outlives an account switch.
   - Neither item changes anything a host reports (`UNREPORTED_ITEM_KINDS`),
-    so the page carries no status chip, like Sandboxes. Search folds every
-    group and row into the Storage page entry (`contributesTo: "page"`): they
-    are gated on the host, which no search shell can decide, so none is an
-    anchored entry and none has a search fixture. The "When" rows share that
+    so neither counts toward a computer's settings card, like Sandboxes. Search
+    folds every group and row into the Storage page entry
+    (`contributesTo: "page"`): they are gated on the host, which no search
+    shell can decide, so none is an anchored entry and none has a search
+    fixture. The "When" rows share that
     one entry, whose page shows them all, and their keywords keep "idle",
     "archived" and "snapshots" apart.
 - `Keybindings` Keyboard shortcut customization.
