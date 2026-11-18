@@ -191,14 +191,9 @@ export const authnHarnessDisconnectResponseSchema = lazySchema(() =>
   z.object({ disconnected: z.boolean() }),
 );
 
-/**
- * The capability a `managed_profile` item read names to carry the item's
- * binding fields: `MANAGED_PROFILE_IDENTITY_CAPABILITY` in the internal
- * repository's `packages/common/src/environments/managed-profile-projection.ts`.
- */
+/** Equals `MANAGED_PROFILE_IDENTITY_CAPABILITY` in the internal repository. */
 export const MANAGED_PROFILE_IDENTITY_CAPABILITY = "managed_profile_identity";
 
-/** The binding fields of a `managed_profile` item read with that capability. */
 export const authnManagedProfileBindingSchema = lazySchema(() =>
   z.object({
     bindingVersion: credentialVersionSchema.optional(),

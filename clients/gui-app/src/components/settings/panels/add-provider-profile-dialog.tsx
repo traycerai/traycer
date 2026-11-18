@@ -601,8 +601,7 @@ function ProviderProfileSignInDialog({
 /**
  * Whether this dialog reads a completed sign-in's `profileOutcome`: only on a
  * computer that offers sign-ins by itself, by the list `state` came from (read
- * from the cache its caller keeps, never fetched here). Read once when the
- * dialog opens and kept until it closes.
+ * from the cache its caller keeps, never fetched here).
  */
 function useAddProfileOutcomes(
   client: HostClient<HostRpcRegistry> | null,

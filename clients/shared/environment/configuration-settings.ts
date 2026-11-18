@@ -706,10 +706,6 @@ export async function listConfigurationPlans(
   };
 }
 
-/**
- * The kind of `harnessId`'s connection for `profileId` as the plans list
- * reads it from authn (`setup_token`, ...); null when none is listed.
- */
 export async function readHarnessConnectionKind(
   cloud: EnvironmentCloud,
   environmentId: string,
@@ -722,7 +718,6 @@ export async function readHarnessConnectionKind(
   return connection?.kind ?? null;
 }
 
-/** The binding of a managed profile's family entry at authn. */
 export interface ManagedProfileBinding {
   readonly entryProfileId: string;
   readonly bindingVersion: CredentialVersion | null;
@@ -745,11 +740,7 @@ function managedProfileValue(
   return value.data;
 }
 
-/**
- * The binding of the family entry the managed profile `harnessId:profileId`
- * belongs to: its own item, or the entry its folded item names. Read with the
- * identity fields; null when the environment holds no item for either.
- */
+/** authn never chains `mergedInto`, so one hop reaches the family's entry. */
 export async function readManagedProfileBinding(
   cloud: EnvironmentCloud,
   environmentId: string,

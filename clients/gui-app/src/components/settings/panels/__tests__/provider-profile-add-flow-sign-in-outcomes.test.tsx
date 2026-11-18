@@ -35,10 +35,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 
-/**
- * A refetched list that no longer offers sign-ins, delivered to the open
- * dialog inside `act`: the query's observers are notified synchronously.
- */
+/** Notifies synchronously so the refetch reaches the dialog inside `act`. */
 function stopOfferingSignIns(queryClient: QueryClient): void {
   notifyManager.setScheduler((notify) => notify());
   try {

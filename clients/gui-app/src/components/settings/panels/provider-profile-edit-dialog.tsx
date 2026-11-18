@@ -555,8 +555,7 @@ function ProfileSignOutAction(props: {
     props.recordAccount,
   );
   const signOut = props.recordAccount ? recordSignOut : localSignOut;
-  // An unmapped brokered row is disconnected at authn on the person's sign-in
-  // first; the host signs it out only once that disconnect has landed.
+  // authn's disconnect runs on the person's sign-in, never the host's.
   const connection = props.recordAccount
     ? null
     : brokeredProfileConnection(props.providerId, props.profile);
@@ -738,11 +737,7 @@ function useReauthSignInOutcomes(
   };
 }
 
-/**
- * The environment a profile's actions name: the one its home names, or for a
- * home that names none, the one this computer serves, which the list names
- * only when that is Personal.
- */
+/** The list can name this computer's environment only when it is Personal. */
 function useProfileEnvironmentName(
   profile: ProviderProfile,
   providersList:
