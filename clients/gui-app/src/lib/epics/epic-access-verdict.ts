@@ -32,11 +32,13 @@ export function deadEpicReason(state: OpenEpicState): DeadEpicReason | null {
 /**
  * A snapshot an artifact reader must not be admitted to. A tab keeps its own
  * FORBIDDEN recovery (the coordinator's re-grant watcher); a reader has none,
- * so FORBIDDEN withdraws it too. Reconnecting sets no error and stays admitted.
+ * so FORBIDDEN withdraws it too, as does a terminal UNAUTHORIZED (the stream
+ * gave up on the credential). Reconnecting sets no error and stays admitted.
  */
 export function readerAccessDenied(state: OpenEpicState): boolean {
   return (
     deadEpicReason(state) !== null ||
-    state.snapshotFetchError?.code === "FORBIDDEN"
+    state.snapshotFetchError?.code === "FORBIDDEN" ||
+    state.snapshotFetchError?.code === "UNAUTHORIZED"
   );
 }

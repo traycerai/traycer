@@ -246,6 +246,13 @@ interface EpicRegistrySession {
   /** Monotonic elapsed-time origin; survives repeated acquires and re-points. */
   unknownActivitySinceMs: number | null;
   /**
+   * A reader's own acquisition built this session and no tab has joined it.
+   * It holds no tab to return to and no chat of its own, so once its last
+   * reader leaves only the data-loss guards keep it: the activity arms do not
+   * apply. Cleared for good when a tab joins.
+   */
+  readerBuilt: boolean;
+  /**
    * Unsubscribe from the handle's unsynced-queue signal. Reaped on
    * release / disposeAll so we don't leak a zustand subscription after
    * the underlying session is gone.
@@ -933,9 +940,27 @@ export class OpenEpicSessionRegistry {
     });
   }
 
+  /** Records that a reader's acquisition built `handle`, with no tab in it. */
+  markReaderBuilt(epicId: string, handle: OpenEpicStoreHandle): void {
+    const entry = this.sessions.peekEntry(epicId);
+    if (entry === null || entry.session.handle !== handle) return;
+    entry.session.readerBuilt = true;
+  }
+
+  /** A tab joined `handle`: the activity arms apply to it from now on. */
+  clearReaderBuilt(epicId: string, handle: OpenEpicStoreHandle): void {
+    const entry = this.sessions.peekEntry(epicId);
+    if (entry === null || entry.session.handle !== handle) return;
+    entry.session.readerBuilt = false;
+  }
+
   private epicCapActivityBlocker(
     session: EpicRegistrySession,
   ): "agent-working" | EpicCapUnknownReason | null {
+    // The arms keep a worked-on session warm for a tab's return; a session
+    // only a reader ever held has none, so the cap and byte budget take it on
+    // the data-loss guards alone.
+    if (session.readerBuilt) return null;
     return epicCapActivityBlocker(session.epicId, session.handle.hostId, {
       unknownSinceMs: session.unknownActivitySinceMs,
       nowMs: this.environment.clock.monotonicNow(),
@@ -1651,6 +1676,7 @@ export class OpenEpicSessionRegistry {
       lastEligibilityKey: eligibilityKeyFor(epicId, handle),
       pendingRetention: null,
       pendingPark: false,
+      readerBuilt: false,
     };
     const handleEligibilityChange = (): void => {
       const previousUnknownSinceMs = session.unknownActivitySinceMs;

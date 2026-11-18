@@ -69,6 +69,7 @@ import {
   intersectAll,
   intersectIn,
   firstToken,
+  lastToken,
   killLatestWorker,
   openShownTabs,
   mountCard,
@@ -119,7 +120,14 @@ describe("a runtime fatal under a ready reader", () => {
     await waitFor(() =>
       expect(seen.constructions).toBe(constructionsBefore + 1),
     );
-    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).not.toBe(handle);
+    // The replacement serves the task: its snapshot lands and the card is
+    // admitted again over it.
+    deliverSnapshot();
+    await screen.findByTestId("artifact-frame-driver");
+    expect(lastToken().read().kind).toBe("ready");
+    const replacement = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+    expect(replacement).not.toBeNull();
+    expect(replacement).not.toBe(handle);
   });
 });
 
@@ -220,7 +228,7 @@ describe("a card is demand only while it is presented", () => {
     );
   });
 
-  it("a raised card in a hidden pane holds no demand, and holds it again when the pane returns", async () => {
+  it("a raised card whose row was last outside the scroller ends its expansion with its pane, and holds nothing until the row is seen again", async () => {
     const view = await showReaderOnlyCard();
     const registry = __getOpenEpicRegistryForTests();
     fireEvent.click(screen.getByRole("button", { name: "Expand" }));
@@ -228,6 +236,34 @@ describe("a card is demand only while it is presented", () => {
     // Raised, it is presented even once its row has scrolled away.
     intersectIn(view.container, false);
     expect(registry.hasReaderDemand(EPIC_ID)).toBe(true);
+
+    act(() => pane.set(false));
+
+    expect(registry.hasReaderDemand(EPIC_ID)).toBe(false);
+    const tokensBefore = seen.tokens.length;
+
+    act(() => pane.set(true));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The remembered raise is gone with its surface: no reader is held and
+    // none was acquired, and the first token stays closed.
+    expect(registry.hasReaderDemand(EPIC_ID)).toBe(false);
+    expect(seen.tokens).toHaveLength(tokensBefore);
+    expect(firstToken().read().kind).toBe("closed");
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    intersectIn(view.container, true);
+
+    await waitFor(() => expect(registry.hasReaderDemand(EPIC_ID)).toBe(true));
+  });
+
+  it("a raised card whose row was last inside the scroller holds demand again when its pane returns", async () => {
+    await showReaderOnlyCard();
+    const registry = __getOpenEpicRegistryForTests();
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
 
     act(() => pane.set(false));
 

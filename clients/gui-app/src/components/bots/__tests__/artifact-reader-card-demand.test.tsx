@@ -43,25 +43,13 @@ import {
   intersectIn,
   mountCard,
   openShownTabs,
+  presentCardOn,
+  registry,
   seen,
 } from "@/components/bots/__tests__/artifact-reader-card-harness-support";
-import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { DEFAULT_MAX_LIVE_EPICS } from "@/stores/replica-memory/budget-limits";
 
 installReaderCardHarness();
-
-function registry() {
-  return __getOpenEpicRegistryForTests();
-}
-
-/** A card on task `epicId`, presented; its stream is not answered (it needs no snapshot to hold demand). */
-async function presentCardOn(epicId: string, rowKey: string) {
-  const view = mountCard({ ...SURFACE, epicId }, rowKey);
-  // Only this card enters view; cards that scrolled out earlier stay out.
-  intersectIn(view.container, true);
-  await waitFor(() => expect(registry().hasReaderDemand(epicId)).toBe(true));
-  return view;
-}
 
 describe("several presented cards on one task", () => {
   it("share one session, which keeps its demand until the last one leaves", async () => {
@@ -117,18 +105,27 @@ describe("presented cards over a cap of warm sessions", () => {
       expect(registry().isEligibleForCapEviction(epicId)).toBe(true);
     }
 
-    // Two cards on new tasks are presented: they construct over the cap.
+    // A card on a new task is presented: it constructs over the cap, and the
+    // oldest warm session makes room, leaving the registry at the cap.
     await presentCardOn("fresh-0", "fresh-row-0");
-    await presentCardOn("fresh-1", "fresh-row-1");
+    expect(registry().size()).toBe(DEFAULT_MAX_LIVE_EPICS);
+    expect(registry().hasReaderDemand("fresh-0")).toBe(true);
+    expect(registry().peek("warm-0")).toBeNull();
+    for (const epicId of warmEpics.slice(1)) {
+      expect(registry().peek(epicId)).not.toBeNull();
+    }
 
-    expect(registry().peek("fresh-0")).not.toBeNull();
-    expect(registry().peek("fresh-1")).not.toBeNull();
+    // The next one takes the next oldest.
+    await presentCardOn("fresh-1", "fresh-row-1");
+    expect(registry().size()).toBe(DEFAULT_MAX_LIVE_EPICS);
     expect(registry().hasReaderDemand("fresh-0")).toBe(true);
     expect(registry().hasReaderDemand("fresh-1")).toBe(true);
-    // The two oldest warm sessions made room; the newer ones stay.
-    expect(registry().peek("warm-0")).toBeNull();
-    expect(registry().peek("warm-1")).toBeNull();
-    expect(registry().peek("warm-4")).not.toBeNull();
+    for (const epicId of warmEpics.slice(0, 2)) {
+      expect(registry().peek(epicId)).toBeNull();
+    }
+    for (const epicId of warmEpics.slice(2)) {
+      expect(registry().peek(epicId)).not.toBeNull();
+    }
   });
 });
 

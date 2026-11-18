@@ -38,6 +38,7 @@ import {
   admittedHandle,
   deliverSnapshot,
   detachTaskSurfaces,
+  firstToken,
   installReaderCardHarness,
   intersectAll,
   mountCard,
@@ -171,6 +172,44 @@ describe("a card on a task whose only tab is hidden", () => {
 
     await pastParkWindow(1);
 
+    expect(peek()).toBeNull();
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+  });
+
+  it("(P5) a refused card scrolling in does not un-park an already parked task", async () => {
+    const tabId = openVisibleTab();
+    hideTab(tabId);
+    await pastParkWindow(1);
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    expect(peek()).toBeNull();
+
+    // The task's host is this window's; the card names another, so it is
+    // refused and is no way the task is shown.
+    mountCard({ ...SURFACE, hostId: "host-elsewhere" }, "row-1");
+    intersectAll(true);
+    await waitFor(() => expect(seen.tokens).toHaveLength(1));
+    expect(firstToken().read()).toMatchObject({
+      kind: "refused",
+      reason: "host-conflict",
+    });
+
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    expect(peek()).toBeNull();
+  });
+
+  it("(P6) a refused card scrolling in and out does not restart the park window", async () => {
+    const tabId = openVisibleTab();
+    hideTab(tabId);
+    await pastParkWindow(0.5);
+
+    mountCard({ ...SURFACE, hostId: "host-elsewhere" }, "row-1");
+    intersectAll(true);
+    await waitFor(() => expect(seen.tokens).toHaveLength(1));
+    expect(firstToken().read().kind).toBe("refused");
+    intersectAll(false);
+    await pastParkWindow(0.5);
+
+    // Parked at the original deadline, not a full window after the card left.
     expect(peek()).toBeNull();
     expect(isEpicParked(EPIC_ID)).toBe(true);
   });

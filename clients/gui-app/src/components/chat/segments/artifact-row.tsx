@@ -363,9 +363,12 @@ function ArtifactCardFrame(props: {
       </div>
     );
   } else if (props.state === "pending") {
+    // A live row keeps its authored title while it is admitted; a captured
+    // card's page (its children) waits for the host instead.
     content = (
-      <div className="p-4 text-ui-sm text-muted-foreground">
-        Loading artifact
+      <div className="flex flex-col items-start gap-2 p-4 text-ui-sm text-muted-foreground">
+        {source === null ? props.children : null}
+        <span>Loading artifact</span>
       </div>
     );
   } else if (props.state === "no-preview") {
@@ -596,16 +599,18 @@ function LiveArtifactAdmission(props: {
   readonly onOpen: (() => void) | null;
   readonly onRetry: () => void;
 }): ReactNode {
-  const [unavailable, setUnavailable] = useState(false);
-  const refuse = useCallback(() => setUnavailable(true), []);
+  // The entry object that missed, by hash: the provider latches only the
+  // entry it still publishes, not a head that committed after the miss.
+  const [missedEntry, setMissedEntry] = useState<string | null>(null);
+  const refuse = useCallback((sha256: string) => setMissedEntry(sha256), []);
   const presentation = use(LiveArtifactPresentationContext);
-  const reportMissing = useEffectEvent(() => {
-    presentation?.reportEntryMissing(props.artifact);
+  const reportMissing = useEffectEvent((sha256: string) => {
+    presentation?.reportEntryMissing(props.artifact, sha256);
   });
   useEffect(() => {
-    if (unavailable) reportMissing();
-  }, [unavailable]);
-  if (unavailable) {
+    if (missedEntry !== null) reportMissing(missedEntry);
+  }, [missedEntry]);
+  if (missedEntry !== null) {
     return (
       <ArtifactCardFrame
         title={props.artifact.title}
@@ -635,7 +640,7 @@ function ReadyLiveArtifact(props: {
   readonly scope: LiveReadScope;
   readonly onOpen: (() => void) | null;
   readonly onRetry: () => void;
-  readonly onUnavailable: () => void;
+  readonly onUnavailable: (sha256: string) => void;
 }): ReactNode {
   const { artifact, scope } = props;
   const source = useCardSource({
@@ -707,7 +712,7 @@ function useCardSource(props: {
     | ((manifest: ArtifactManifest | null) => void)
     | null;
   readonly lifetime: ArtifactReadLifetime | null;
-  readonly onUnavailable: (() => void) | null;
+  readonly onUnavailable: ((sha256: string) => void) | null;
 }): ArtifactFrameSource | null {
   const {
     artifactId,
@@ -759,7 +764,7 @@ function useCardSource(props: {
       assertArtifactReadLive(lifetime);
       if ("unavailable" in result && result.unavailable === "missing") {
         if (stampedHashes.has(sha256)) onCaptureMissing?.(stampedManifest);
-        if (sha256 === entryHash.current) onUnavailable?.();
+        if (sha256 === entryHash.current) onUnavailable?.(sha256);
       }
       return result;
     };

@@ -428,13 +428,7 @@ export interface ArtifactReaderKey {
 
 export type ArtifactReaderSnapshot =
   | {
-      readonly kind:
-        | "reserved"
-        | "acquiring"
-        | "revoking"
-        | "revoked"
-        | "failed"
-        | "closed";
+      readonly kind: "reserved" | "acquiring" | "revoked" | "failed" | "closed";
       readonly generation: number;
     }
   | {
@@ -796,7 +790,9 @@ function createEpicSessionController(): EpicSessionController {
   function noteTabAttachment(entry: ControllerEntry): void {
     if (entry.tabs.size === 0 || entry.session === null) return;
     const record = handleRecords.get(entry.session.handle);
-    if (record !== undefined) record.tabAttachedSinceConstruction = true;
+    if (record === undefined || record.tabAttachedSinceConstruction) return;
+    record.tabAttachedSinceConstruction = true;
+    registry.clearReaderBuilt(entry.epicId, entry.session.handle);
   }
 
   /**
@@ -869,7 +865,6 @@ function createEpicSessionController(): EpicSessionController {
         return;
       case "reserved":
       case "acquiring":
-      case "revoking":
       case "closed":
         return;
     }
@@ -888,7 +883,10 @@ function createEpicSessionController(): EpicSessionController {
       entry.tabs.size === 0
     ) {
       const state = session.handle.store.getState();
-      if (state.snapshotFetchError?.code === "FORBIDDEN") {
+      // The two terminal denials a reader withdraws on are answered by the
+      // host's current verdict, never by re-reading the denied snapshot.
+      const code = state.snapshotFetchError?.code;
+      if (code === "FORBIDDEN" || code === "UNAUTHORIZED") {
         probeReaderAuthority(reader);
         return;
       }
@@ -2234,7 +2232,7 @@ function createEpicSessionController(): EpicSessionController {
       { epicId: entry.epicId },
       error instanceof Error ? error : new Error(String(error)),
     );
-    forgetSession(entry, "revoked");
+    forgetSession(entry, "failed");
     entry.constructionFailed = true;
     present(entry, {
       kind: "failed",
@@ -2276,6 +2274,15 @@ function createEpicSessionController(): EpicSessionController {
     } catch (error: unknown) {
       failConstruction(entry, targetHostId, error);
       return;
+    }
+    // The registry's session exists only once the factory has returned.
+    const record = handleRecords.get(nextHandle);
+    if (
+      record !== undefined &&
+      record.builtForReaders === entry &&
+      !record.tabAttachedSinceConstruction
+    ) {
+      registry.markReaderBuilt(epicId, nextHandle);
     }
     entry.demandHeld = true;
     entry.constructionFailed = false;
@@ -2391,11 +2398,16 @@ function createEpicSessionController(): EpicSessionController {
    *  - a first reading completes an unstamped handle;
    *  - no reading on a remote (or unresolvable) host waits, holding the run
    *    open until the handle's own transport moves its store or a host row
-   *    moves; on a local host the stamp stands.
+   *    moves, and failing at the establishing deadline; on a local host the
+   *    stamp stands.
    *
    * Returns whether the acquisition may proceed now.
    */
-  function admitWarmOwner(entry: ControllerEntry, run: ActiveRun): boolean {
+  function admitWarmOwner(
+    entry: ControllerEntry,
+    run: ActiveRun,
+    targetHostId: string | null,
+  ): boolean {
     const warm = registry.peek(entry.epicId);
     if (warm === null || isEpicSessionHandleDead(warm)) return true;
     const stampedHostId = getEpicSessionHandleHostId(warm);
@@ -2428,7 +2440,19 @@ function createEpicSessionController(): EpicSessionController {
     };
     const unsubscribeStore = warm.store.subscribe(wake);
     const unsubscribeRows = subscribeAnyHostRowChanged(wake);
+    // An owner that never proves itself fails rather than admits, within the
+    // bound the re-point arm gives a candidate; Retry asks again.
+    const deadline = window.setTimeout(() => {
+      if (run.cancelled) return;
+      retireEntryReaders(entry, "failed");
+      present(entry, {
+        kind: "failed",
+        targetHostId,
+        originalHostId: entry.originalHostId,
+      });
+    }, ESTABLISHING_DEADLINE_MS);
     run.cleanup = () => {
+      window.clearTimeout(deadline);
       unsubscribeStore();
       unsubscribeRows();
     };
@@ -2445,7 +2469,7 @@ function createEpicSessionController(): EpicSessionController {
     const current = settleSessionIdentity(entry, inputs);
     if (run.cancelled || entries.get(entry.epicId) !== entry) return;
     if (current === null || (wantsMountedDemand(entry) && !entry.demandHeld)) {
-      if (current === null && !admitWarmOwner(entry, run)) return;
+      if (current === null && !admitWarmOwner(entry, run, targetHostId)) return;
       acquireForRun({ entry, run, inputs, createHandle });
       return;
     }

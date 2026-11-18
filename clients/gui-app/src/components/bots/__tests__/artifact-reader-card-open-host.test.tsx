@@ -46,7 +46,9 @@ import {
   SURFACE,
   admittedHandle,
   deliverSnapshot,
+  firstToken,
   installReaderCardHarness,
+  intersectIn,
   openShownTaskTab,
   seen,
   showCardAlone,
@@ -131,5 +133,42 @@ describe("Open on a card admitted on another host than the window's", () => {
       WINDOW_HOST,
     );
     expect(tilesOfTask().some((tile) => tile.hostId === HOST_ID)).toBe(false);
+  });
+});
+
+describe("an Open queued behind router hydration", () => {
+  /** A loaded card on the window's own host whose Open is pressed before the router has hydrated. */
+  async function queueOpen() {
+    setTestEffectiveHost(HOST_ID, true);
+    const view = await showCardAlone(SURFACE, "row-1");
+    deliverSnapshot();
+    await screen.findByTestId("artifact-frame-driver");
+    __resetTabNavigationHydrationForTesting();
+    fireEvent.click(screen.getByRole("button", { name: "Open in panel" }));
+    expect(tabsOfTask()).toHaveLength(0);
+    return view;
+  }
+
+  it("opens the task once hydration lands while the card still holds its lifetime", async () => {
+    await queueOpen();
+
+    tabNavigationController.setHydrationReady(true, navigate);
+
+    await waitFor(() => expect(tabsOfTask()).toHaveLength(1));
+    expect(tilesOfTask()).toMatchObject([
+      { id: "artifact-rollout", type: "html", hostId: HOST_ID },
+    ]);
+  });
+
+  it("opens nothing when the card was withdrawn meanwhile, with no host change to blame", async () => {
+    const view = await queueOpen();
+    intersectIn(view.container, false);
+    expect(firstToken().read().kind).toBe("closed");
+
+    tabNavigationController.setHydrationReady(true, navigate);
+
+    expect(tabsOfTask()).toHaveLength(0);
+    expect(tilesOfTask()).toHaveLength(0);
+    expect(getEpicSessionController().readEpicHostId(EPIC_ID)).toBeNull();
   });
 });

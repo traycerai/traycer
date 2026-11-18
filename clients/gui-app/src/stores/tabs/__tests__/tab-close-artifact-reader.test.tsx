@@ -278,8 +278,10 @@ describe("card Retry on a session only the reader built", () => {
   });
 
   it("a FORBIDDEN never-loaded handle is not re-opened by Retry", async () => {
-    // Access is still refused when the card asks the host again.
+    // The host's authority answer is held, then refuses: Retry asked it.
+    const answer = Promise.withResolvers<void>();
     seen.authority = "forbidden";
+    seen.authorityGate = answer.promise;
     await showCardAlone(SURFACE, ROW_KEY);
     failStream("FORBIDDEN");
     const handle = admittedHandle();
@@ -290,8 +292,19 @@ describe("card Retry on a session only the reader built", () => {
     const refresh = vi.spyOn(handle, "requestFreshSnapshot");
     const constructionsBefore = seen.constructions;
     const subscribesBefore = seen.subscribes;
+    const probesBefore = seen.authorityProbes;
 
     await userEvent.setup().click(retry);
+
+    // Retry really asked the host, and is waiting on the answer.
+    await waitFor(() => expect(seen.authorityProbes).toBe(probesBefore + 1));
+    // The host refuses. The probe has settled once a further Retry is let
+    // issue its own: the first one's in-flight guard is gone.
+    answer.resolve();
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(seen.authorityProbes).toBe(probesBefore + 2));
 
     expect(refresh).not.toHaveBeenCalled();
     expect(seen.constructions).toBe(constructionsBefore);

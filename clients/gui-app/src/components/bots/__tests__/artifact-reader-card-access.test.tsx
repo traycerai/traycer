@@ -5,7 +5,7 @@
  * whether access is back before the card builds anything.
  */
 import userEvent from "@testing-library/user-event";
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const save = vi.hoisted(() => ({
@@ -57,6 +57,8 @@ import {
   failStream,
   figureLabel,
   installReaderCardHarness,
+  downloadsInFlight,
+  heldObjectReadCount,
   reconnectStream,
   releaseHeldObjectReads,
   seen,
@@ -89,6 +91,10 @@ describe.each(["NOT_FOUND", "FORBIDDEN"] as const)(
       await userEvent
         .setup()
         .click(screen.getByRole("button", { name: /download/i }));
+      // The ZIP really began: an object read is parked and the download is
+      // in flight, so the release below has something to let through.
+      await waitFor(() => expect(heldObjectReadCount()).toBeGreaterThan(0));
+      expect(downloadsInFlight()).toBe(1);
 
       failStream(code);
 
@@ -101,9 +107,9 @@ describe.each(["NOT_FOUND", "FORBIDDEN"] as const)(
       expect(screen.queryByText(SERVER_TITLE)).toBeNull();
       expect(figureLabel()).not.toContain(SERVER_TITLE);
       releaseHeldObjectReads();
-      // Let the held reads settle and the ZIP try to finish.
-      await waitFor(() => expect(seen.holdObjectReads).toBe(false));
-      await Promise.resolve();
+      // The download settles: the held reads answered and the ZIP's attempt
+      // to finish is over.
+      await waitFor(() => expect(downloadsInFlight()).toBe(0));
       expect(save.downloadFile).not.toHaveBeenCalled();
       expect(save.savedToast).not.toHaveBeenCalled();
     });
@@ -175,5 +181,53 @@ describe("Retry after a refusal", () => {
     expect(openButton()).toBeNull();
     expect(seen.constructions).toBe(constructionsBefore);
     expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(handle);
+  });
+});
+
+describe("a terminal UNAUTHORIZED on a loaded reader-only session", () => {
+  it("withdraws the frame and the Open, and keeps the transcript's own title", async () => {
+    await showLoadedCard();
+    expect(openButton()).not.toBeNull();
+
+    failStream("UNAUTHORIZED");
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("artifact-frame-driver")).toBeNull(),
+    );
+    expect(openButton()).toBeNull();
+    expect(screen.getByText(AUTHORED_TITLE)).toBeTruthy();
+    expect(screen.queryByText(SERVER_TITLE)).toBeNull();
+    expect(figureLabel()).not.toContain(SERVER_TITLE);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("Retry asks the host once per press and stays withdrawn while it refuses", async () => {
+    await showLoadedCard();
+    // The host's authority answer is held, then refuses.
+    const answer = Promise.withResolvers<void>();
+    seen.authority = "forbidden";
+    seen.authorityGate = answer.promise;
+    failStream("UNAUTHORIZED");
+    await waitFor(() =>
+      expect(screen.queryByTestId("artifact-frame-driver")).toBeNull(),
+    );
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+    // Exactly one authority probe, and it is waiting on the host.
+    await waitFor(() => expect(seen.authorityProbes).toBe(1));
+    answer.resolve();
+    // The refusal lands: the first probe has settled once a second press may
+    // issue its own, and that is the only way a second one is sent.
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(seen.authorityProbes).toBe(2));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(seen.authorityProbes).toBe(2);
+    expect(screen.queryByTestId("artifact-frame-driver")).toBeNull();
+    expect(openButton()).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });

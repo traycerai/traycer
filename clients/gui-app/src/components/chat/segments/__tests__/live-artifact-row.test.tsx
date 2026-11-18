@@ -109,6 +109,27 @@ describe("LiveArtifactRow union", () => {
     },
   );
 
+  it("a pending live row keeps its authored title beside the loading copy", () => {
+    const recorder = createArtifactReadScopeRecorder("host-a", {
+      objectResponse: "ok",
+    });
+    render(
+      shell(
+        <LiveArtifactRow
+          artifact={{ kind: "pending", title: "Roadmap" }}
+          readScope={recorder.scope}
+          onOpen={vi.fn()}
+          onRetry={vi.fn()}
+        />,
+      ),
+    );
+
+    const figure = screen.getByLabelText("Artifact: Roadmap");
+    expect(within(figure).getByText("Roadmap")).toBeTruthy();
+    expect(within(figure).getByText("Loading artifact")).toBeTruthy();
+    expect(recorder.calls).toHaveLength(0);
+  });
+
   it("a ready input whose host or epic does not match the client fails closed to unavailable", () => {
     const recorder = createArtifactReadScopeRecorder("host-b", {
       objectResponse: "ok",

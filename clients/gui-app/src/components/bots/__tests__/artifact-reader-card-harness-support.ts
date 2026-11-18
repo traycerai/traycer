@@ -46,6 +46,7 @@ import {
 } from "@/lib/registries/epic-session-controller";
 import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-runtime-worker-factory-slot";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import {
   defaultTestEpicSessionEnvironment,
   installTestEpicSessionEnvironment,
@@ -124,6 +125,8 @@ export const seen = {
   /** What the host answers the authority probe (`epic.listChatRecords`) with. */
   authority: "permitted" as "permitted" | "forbidden",
   authorityProbes: 0,
+  /** While set, the host's authority answer waits on it. */
+  authorityGate: null as Promise<void> | null,
   /** The last authority probe request the host received. */
   lastProbe: null as ListChatRecordsRequest | null,
   /** Who the host client of every host is signed in as; null = the directory has no client for it. */
@@ -132,12 +135,28 @@ export const seen = {
   remotePublicKey: null as string | null,
 };
 
-const heldObjectReads: Array<() => void> = [];
+const heldObjectReads: Array<(missing: boolean) => void> = [];
+
+/** Object reads waiting on `releaseHeldObjectReads()`. */
+export function heldObjectReadCount(): number {
+  return heldObjectReads.length;
+}
+
+/** HTML-artifact downloads the cards have started and not yet settled, read off the mutation cache. */
+export function downloadsInFlight(): number {
+  return queryClient.isMutating();
+}
 
 /** Let every object read that was held answer. */
 export function releaseHeldObjectReads(): void {
   seen.holdObjectReads = false;
-  for (const release of heldObjectReads.splice(0)) release();
+  for (const release of heldObjectReads.splice(0)) release(false);
+}
+
+/** Answer every held object read as missing on the host. */
+export function failHeldObjectReads(): void {
+  seen.holdObjectReads = false;
+  for (const release of heldObjectReads.splice(0)) release(true);
 }
 
 const streamCallbacks = new Map<string, EpicStreamCallbacks>();
@@ -158,12 +177,15 @@ const handlers: TestHostHandlers = {
     );
     if (!seen.holdObjectReads) return answer;
     return new Promise((resolve) => {
-      heldObjectReads.push(() => resolve(answer));
+      heldObjectReads.push((missing) =>
+        resolve(missing ? { kind: "unavailable", reason: "missing" } : answer),
+      );
     });
   },
-  "epic.listChatRecords": (request) => {
+  "epic.listChatRecords": async (request) => {
     seen.authorityProbes += 1;
     seen.lastProbe = request;
+    if (seen.authorityGate !== null) await seen.authorityGate;
     if (seen.authority === "forbidden")
       throw new Error("The host refused: no access to this task.");
     return { kind: "snapshot", listStamp: null, chats: [] };
@@ -278,6 +300,7 @@ export function installReaderCardHarness(): void {
     seen.holdObjectReads = false;
     seen.authority = "permitted";
     seen.authorityProbes = 0;
+    seen.authorityGate = null;
     seen.lastProbe = null;
     seen.clientUser = VIEWER_ID;
     seen.remotePublicKey = null;
@@ -562,7 +585,7 @@ export function openShownTabs(
       seedActiveEpicTabInTabsStore(tabId);
     }
     __syncEpicParkingOpenTabsForTests();
-    controller.attachSurface(epicId, tabId);
+    detaches.push(controller.attachSurface(epicId, tabId));
   }
   return { firstTabId };
 }
@@ -570,6 +593,30 @@ export function openShownTabs(
 /** The first real token the card acquired; throws when it acquired none. */
 export function firstToken(): ArtifactReaderToken {
   const token = seen.tokens.at(0);
+  if (token === undefined) throw new Error("the card acquired no reader");
+  return token;
+}
+
+/** The registry the cards' controller owns. */
+export function registry(): OpenEpicSessionRegistry {
+  return __getOpenEpicRegistryForTests();
+}
+
+/** A card on task `epicId`, presented alone; its stream is not answered (it needs no snapshot to hold demand). */
+export async function presentCardOn(
+  epicId: string,
+  rowKey: string,
+): Promise<RenderResult> {
+  const view = mountCard({ ...SURFACE, epicId }, rowKey);
+  // Only this card enters view; cards that scrolled out earlier stay out.
+  intersectIn(view.container, true);
+  await waitFor(() => expect(registry().hasReaderDemand(epicId)).toBe(true));
+  return view;
+}
+
+/** The most recent real token the card acquired; throws when it acquired none. */
+export function lastToken(): ArtifactReaderToken {
+  const token = seen.tokens.at(-1);
   if (token === undefined) throw new Error("the card acquired no reader");
   return token;
 }

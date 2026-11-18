@@ -724,7 +724,12 @@ describe("preload new-capability wiring", () => {
   });
 
   it("exposes file drop path lookup and temporary materialization", async () => {
-    const invokeFn = vi.fn(async () => "/tmp/materialized-drop.png");
+    const saved = { name: "diagram.png", path: "/tmp/saved/diagram.png" };
+    const invokeFn = vi.fn(async (channel: string) =>
+      channel === RunnerHostInvoke.fileSaveWrite
+        ? saved
+        : "/tmp/materialized-drop.png",
+    );
     const bridge = await loadPreload({
       authnApiUrl: undefined,
       desktopDev: undefined,
@@ -763,7 +768,10 @@ describe("preload new-capability wiring", () => {
       type: "image/png",
     });
 
-    await bridge.fileDrops.writeFileSave({ id: "target-1", bytes });
+    // The native write's own result comes back, not a stand-in.
+    await expect(
+      bridge.fileDrops.writeFileSave({ id: "target-1", bytes }),
+    ).resolves.toBe(saved);
     expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.fileSaveWrite, {
       id: "target-1",
       bytes,

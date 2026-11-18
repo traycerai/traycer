@@ -217,6 +217,17 @@ describe("a reader acquires like a tab, over the cap", () => {
   });
 });
 
+describe("a construction that fails", () => {
+  it("retires the attached readers as failed, so a card offers Retry rather than access copy", () => {
+    __setEpicRuntimeWorkerFactoryForTests(() => {
+      throw new Error("no worker here");
+    });
+    const token = reader("host-a", "epic-1", "row-1");
+
+    expect(token.read().kind).toBe("failed");
+  });
+});
+
 describe("a released token", () => {
   it("never reactivates, and release is idempotent", () => {
     const token = reader("host-a", "epic-1", "row-1");

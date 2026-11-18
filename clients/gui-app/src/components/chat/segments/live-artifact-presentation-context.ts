@@ -11,7 +11,11 @@ export type ArtifactRaiseReport = "raised" | "lowered" | "gone";
  */
 export interface LiveArtifactPresentation {
   readonly reportRaise: (report: ArtifactRaiseReport) => void;
-  readonly reportEntryMissing: (artifact: LiveArtifactReadyInput) => void;
+  /** `entrySha256` names the entry object that missed. */
+  readonly reportEntryMissing: (
+    artifact: LiveArtifactReadyInput,
+    entrySha256: string,
+  ) => void;
 }
 
 export const LiveArtifactPresentationContext =

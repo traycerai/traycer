@@ -9,21 +9,20 @@ import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 
 export function resetStores(): void {
-  useTabsStore.setState({
-    version: 2,
-    items: [],
-    activeItemId: null,
-    stripOrder: [],
-    systemTabs: { history: null, settings: null },
-  });
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   __resetTabSyncCoordinatorForTesting();
 }
 
 export function seedCommittedLayout(layout: PersistedTabStripLayout): void {
+  // Optional in a persisted layout, so a seed names each one: a layout that
+  // omits them must not inherit what an earlier case left in the store.
   useTabsStore.setState({
     ...layout,
+    activationHistory: layout.activationHistory ?? [],
+    customizations: layout.customizations ?? {},
+    groups: layout.groups ?? {},
     stripOrder: flattenLayoutRefs(layout),
   });
 }

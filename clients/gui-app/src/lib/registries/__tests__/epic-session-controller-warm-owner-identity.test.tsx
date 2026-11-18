@@ -10,7 +10,7 @@
  * key is a key rotation.
  */
 import { waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
@@ -26,10 +26,15 @@ import {
   openShownTaskTab,
   seen,
 } from "@/components/bots/__tests__/artifact-reader-card-harness-support";
+import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 
 installReaderCardHarness();
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const OTHER_USER = "user-changed";
 
@@ -39,7 +44,6 @@ function acquire(rowKey: string) {
     epicId: EPIC_ID,
     rowKey,
   });
-  seen.tokens.push(token);
   return token;
 }
 
@@ -140,5 +144,31 @@ describe("a warm handle on a remote host", () => {
 
     await waitFor(() => expect(token.read().kind).toBe("ready"));
     expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(handle);
+  });
+
+  it("fails an owner that never proves itself at the establishing deadline, builds nothing, and Retry asks again", () => {
+    seen.remotePublicKey = "key-before";
+    const handle = warmHandleOf("row-1");
+    seen.clientUser = null;
+    const constructionsBefore = seen.constructions;
+    vi.useFakeTimers();
+    const token = acquire("row-2");
+    expect(token.read().kind).toBe("acquiring");
+
+    vi.advanceTimersByTime(ESTABLISHING_DEADLINE_MS - 1);
+
+    expect(token.read().kind).toBe("acquiring");
+
+    vi.advanceTimersByTime(1);
+
+    // Failed, never admitted: the warm handle is neither shown nor rebuilt.
+    expect(token.read().kind).toBe("failed");
+    expect(seen.constructions).toBe(constructionsBefore);
+    expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(handle);
+
+    token.retry();
+
+    expect(token.read().kind).toBe("acquiring");
+    expect(seen.constructions).toBe(constructionsBefore);
   });
 });

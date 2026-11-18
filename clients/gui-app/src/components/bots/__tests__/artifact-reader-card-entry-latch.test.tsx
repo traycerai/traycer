@@ -5,7 +5,7 @@
  * record, ends it.
  */
 import userEvent from "@testing-library/user-event";
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tanstack/react-router", () => ({
@@ -37,6 +37,10 @@ import {
   deliverSnapshot,
   installReaderCardHarness,
   intersectIn,
+  failHeldObjectReads,
+  firstToken,
+  heldObjectReadCount,
+  lastToken,
   localHeadEdit,
   seen,
   showCardAlone,
@@ -58,9 +62,18 @@ describe("a missed entry object", () => {
   it("stays missed when the card scrolls out and back with nothing changed", async () => {
     const view = await showCardWithMissingEntry();
     const readsAfterMiss = seen.objectReads;
+    const first = firstToken();
 
     intersectIn(view.container, false);
+    // The scroll-out let the reader go.
+    expect(first.read().kind).toBe("closed");
     intersectIn(view.container, true);
+    // The re-entered card holds a new reader on the loaded task; only once it
+    // is ready could it have read the entry again.
+    await waitFor(() => expect(seen.tokens).toHaveLength(2));
+    const second = lastToken();
+    expect(second).not.toBe(first);
+    await waitFor(() => expect(second.read().kind).toBe("ready"));
 
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByTestId("artifact-frame-driver")).toBeNull();
@@ -91,5 +104,32 @@ describe("a missed entry object", () => {
       expect(seen.objectReads).toBeGreaterThan(readsAfterMiss),
     );
     await screen.findByTestId("artifact-frame-driver");
+  });
+
+  it("latches only the entry it published: a miss of the head that was replaced in the same commit leaves the new head to be read", async () => {
+    // The first head's entry object read is in flight when the card's
+    // frame is up.
+    seen.holdObjectReads = true;
+    const view = await showCardAlone(SURFACE, "row-1");
+    deliverSnapshot();
+    await screen.findByTestId("artifact-frame-driver");
+    await waitFor(() => expect(heldObjectReadCount()).toBeGreaterThan(0));
+    const handle = admittedHandle();
+
+    // One commit: the host answers that first read as missing AND the entry's
+    // own record moves to a new head, so the row's miss effect runs after both.
+    await act(async () => {
+      failHeldObjectReads();
+      await handle.applyRootUpdate(localHeadEdit("b".repeat(64)), true);
+    });
+    const readsAfterBatch = seen.objectReads;
+
+    // The row saw its read miss; the card did not latch the new head for it.
+    intersectIn(view.container, false);
+    intersectIn(view.container, true);
+
+    await screen.findByTestId("artifact-frame-driver");
+    expect(seen.objectReads).toBeGreaterThan(readsAfterBatch);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

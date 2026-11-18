@@ -2024,19 +2024,34 @@ describe("DesktopRunnerHost.fileSave.saveFile", () => {
     };
   }
 
+  /** Where the mock's first call falls in the order every mock was called in. */
+  function firstCallOrder(mock: {
+    readonly mock: { readonly invocationCallOrder: readonly number[] };
+  }): number {
+    const order = mock.mock.invocationCallOrder.at(0);
+    if (order === undefined) throw new Error("the mock was never called");
+    return order;
+  }
+
   const readsBytes = () =>
     vi.fn<FileSaveRequest["readBytes"]>(() => Promise.resolve(BYTES));
 
   it("picks, reads and writes once, in that order, while the source stays wanted", async () => {
     const save = rig("target-1");
+    const readBytes = readsBytes();
 
     const result = await save.host.fileSave.saveFile(
-      request(readsBytes(), () => true),
+      request(readBytes, () => true),
     );
 
     expect(result).toEqual({ name: "roadmap.zip", path: "/tmp/roadmap.zip" });
     expect(save.pick).toHaveBeenCalledTimes(1);
+    expect(readBytes).toHaveBeenCalledTimes(1);
+    expect(save.write).toHaveBeenCalledTimes(1);
     expect(save.write).toHaveBeenCalledWith({ id: "target-1", bytes: BYTES });
+    // Picked first, then read, then written.
+    expect(firstCallOrder(save.pick)).toBeLessThan(firstCallOrder(readBytes));
+    expect(firstCallOrder(readBytes)).toBeLessThan(firstCallOrder(save.write));
     expect(save.cancel).not.toHaveBeenCalled();
   });
 
@@ -2063,12 +2078,15 @@ describe("DesktopRunnerHost.fileSave.saveFile", () => {
 
   it("writes nothing when the chooser was dismissed", async () => {
     const save = rig(null);
+    const readBytes = readsBytes();
 
     const result = await save.host.fileSave.saveFile(
-      request(readsBytes(), () => true),
+      request(readBytes, () => true),
     );
 
     expect(result).toBeNull();
+    expect(save.pick).toHaveBeenCalledTimes(1);
+    expect(readBytes).not.toHaveBeenCalled();
     expect(save.cancel).not.toHaveBeenCalled();
     expect(save.write).not.toHaveBeenCalled();
   });

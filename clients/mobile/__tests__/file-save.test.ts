@@ -276,6 +276,8 @@ describe("MobileFileSave", () => {
       stillWanted: () => wanted,
     });
 
+    // It staged the file, and only then found the source gone.
+    expect(nativeMocks.writeFile).toHaveBeenCalledTimes(1);
     expect(saved).toBeNull();
     expect(nativeMocks.share).not.toHaveBeenCalled();
   });

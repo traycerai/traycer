@@ -285,6 +285,9 @@ for (const viewport of VIEWPORTS) {
           await callProbe(page, "saveHead");
           await gate.held;
           expect(await insertedIframes(page)).toBe(1);
+          // The open dialog is still the raised, modal surface while the
+          // replacement document is held, not only once it has loaded.
+          await expectRaisedAndModal(dialog);
           // Written to a file in the test's output directory so it survives a
           // passing run, then attached by path (one capture, no duplicate).
           const screenshotPath = testInfo.outputPath(

@@ -166,6 +166,8 @@ function usePresentationDemand(): {
   // `surfaceUp` is a surface raised right now; `raised` alone is a raise
   // remembered across a presentation loss that unmounted the surface.
   const [raise, setRaise] = useState<RaiseState>(NOT_RAISED);
+  // The row's last reported geometry, read when a raised surface leaves.
+  const lastObservedInside = useRef<boolean | null>(null);
 
   useEffect(() => {
     if (root === null || !observable) return;
@@ -173,6 +175,7 @@ function usePresentationDemand(): {
       (entries) => {
         const last = entries.at(-1);
         if (last === undefined) return;
+        lastObservedInside.current = last.isIntersecting;
         setIntersecting(last.isIntersecting);
         // A remembered raise lasts until the row's geometry is reported again
         // with no surface up to hold it.
@@ -185,9 +188,13 @@ function usePresentationDemand(): {
   }, [root, observable]);
 
   const reportRaise = useCallback((report: ArtifactRaiseReport) => {
+    // A remounted surface comes back inline (expansion is its own state), so
+    // a raise kept for a row last seen outside would hold the reader with
+    // nothing left to end it: the expansion ends with its surface.
+    const endsWithSurface = lastObservedInside.current === false;
     setRaise((previous) => {
       if (report === "raised") return { raised: true, surfaceUp: true };
-      if (report === "lowered") return NOT_RAISED;
+      if (report === "lowered" || endsWithSurface) return NOT_RAISED;
       return { raised: previous.raised, surfaceUp: false };
     });
   }, []);
@@ -241,7 +248,10 @@ function useReferenceReader(
 ): {
   readonly view: ReferenceView | null;
   readonly retry: () => void;
-  readonly reportEntryMissing: (artifact: LiveArtifactReadyInput) => void;
+  readonly reportEntryMissing: (
+    artifact: LiveArtifactReadyInput,
+    entrySha256: string,
+  ) => void;
 } {
   const userId = useAuthStore((state) => state.profile?.userId ?? null);
   const scopeKey = JSON.stringify([
@@ -258,10 +268,11 @@ function useReferenceReader(
   const retry = useCallback(() => retryRef.current?.(), []);
   const entryMissLatch = useRef<string | null>(null);
   const entryMissRef = useRef<
-    ((artifact: LiveArtifactReadyInput) => void) | null
+    ((artifact: LiveArtifactReadyInput, entrySha256: string) => void) | null
   >(null);
   const reportEntryMissing = useCallback(
-    (artifact: LiveArtifactReadyInput) => entryMissRef.current?.(artifact),
+    (artifact: LiveArtifactReadyInput, entrySha256: string) =>
+      entryMissRef.current?.(artifact, entrySha256),
     [],
   );
   const { hostId, epicId, artifactPath } = surface;
@@ -274,8 +285,8 @@ function useReferenceReader(
       presentationPublished = value;
       setEpicReaderPresented(epicId, presenterKey, value);
     };
-    // Before the acquisition, so a parked epic is unparked first.
-    publishPresentation(true);
+    // Presentation follows the reader's own state (`refresh`): a reader the
+    // controller refuses never unparks the task or moves its park window.
     const token = getEpicSessionController().acquireArtifactReader({
       hostId,
       epicId,
@@ -286,6 +297,15 @@ function useReferenceReader(
     let authority: ReferenceAuthority | null = null;
     let sourceGeneration = 0;
     let publishedLatchKey: string | null = null;
+    let publishedEntrySha256: string | null = null;
+    // Store notifications arrive on every edit; the path resolves again only
+    // when the artifacts slice, the handle or the reader generation moved.
+    let resolvedFor: {
+      readonly artifacts: ArtifactsSlice;
+      readonly handle: OpenEpicStoreHandle;
+      readonly generation: number;
+      readonly resolved: ResolvedReference | null;
+    } | null = null;
     let observedHandle: OpenEpicStoreHandle | null = null;
     let unsubscribeHandle: (() => void) | null = null;
 
@@ -293,6 +313,7 @@ function useReferenceReader(
       authority?.controller.abort();
       authority = null;
       publishedLatchKey = null;
+      publishedEntrySha256 = null;
     };
     const publishAbsent = (kind: "pending" | "unavailable"): void => {
       retire();
@@ -406,6 +427,11 @@ function useReferenceReader(
         return;
       }
       publishedLatchKey = latchKey;
+      publishedEntrySha256 =
+        resolveManifestPath(
+          manifest,
+          entryPath === "" ? "index.html" : entryPath,
+        )?.sha256 ?? null;
       // A head save updates the manifest without changing reader or source
       // authority. A download already holding that reader exports its snapshot.
       setView({
@@ -434,16 +460,26 @@ function useReferenceReader(
         snapshot.kind === "reserved" || snapshot.kind === "acquiring";
       // A refused, revoked or failed reader is not a way the epic is shown,
       // so it does not hold parking off.
-      publishPresentation(pending || snapshot.kind === "revoking");
+      publishPresentation(pending);
       if (pending && entryMissLatch.current === null) publishAbsent("pending");
       else publishAbsent("unavailable");
     };
     const refreshLoaded = (snapshot: ReadyReader): void => {
-      const resolved = resolveReference(
-        epicId,
-        artifactPath,
-        snapshot.handle.store.getState().artifacts,
-      );
+      const artifacts = snapshot.handle.store.getState().artifacts;
+      if (
+        resolvedFor === null ||
+        resolvedFor.artifacts !== artifacts ||
+        resolvedFor.handle !== snapshot.handle ||
+        resolvedFor.generation !== snapshot.generation
+      ) {
+        resolvedFor = {
+          artifacts,
+          handle: snapshot.handle,
+          generation: snapshot.generation,
+          resolved: resolveReference(epicId, artifactPath, artifacts),
+        };
+      }
+      const { resolved } = resolvedFor;
       if (resolved === null) {
         publishAbsent("unavailable");
         return;
@@ -505,12 +541,13 @@ function useReferenceReader(
       );
     };
 
-    entryMissRef.current = (artifact) => {
+    entryMissRef.current = (artifact, entrySha256) => {
       if (
         !active ||
         released ||
         authority === null ||
         publishedLatchKey === null ||
+        entrySha256 !== publishedEntrySha256 ||
         artifact.readerGeneration !== authority.readerGeneration ||
         artifact.sourceGeneration !== authority.sourceGeneration
       ) {
@@ -525,7 +562,6 @@ function useReferenceReader(
         return;
       }
       entryMissLatch.current = null;
-      publishPresentation(true);
       token.retry();
       refresh();
     };
