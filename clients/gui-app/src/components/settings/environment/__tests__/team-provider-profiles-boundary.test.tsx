@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { TeamProfileApiKeyForm } from "@/components/settings/environment/team-profile-api-key-form";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -35,13 +35,13 @@ import {
   teamProviderProfile,
 } from "./team-providers-test-support";
 
-vi.mock("@/lib/providers/provider-ambient-auth", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/providers/provider-ambient-auth")
-    >();
-  return { ...actual, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS: 20 };
-});
+function colourWrites() {
+  return teamProfileRecordHttpBoundary.calls.filter(
+    (call) =>
+      call.url.endsWith("/api/v3/environments/env-a/items/managed_profile") &&
+      call.method === "PUT",
+  );
+}
 
 const RETIRED_WAITING_SENTENCE =
   "Waiting for Traycer. Your sign-in is complete.";
@@ -643,138 +643,111 @@ describe("Team Providers boundary and sign-in", () => {
     },
   );
 
-  describe("a completed sign-in whose team row is not listed yet", () => {
-    async function openHeldSignIn() {
-      teamProfileRecordHttpBoundary.list = {
-        status: 200,
-        body: teamProfileRecordsBody([]),
-      };
-      let awaits = 0;
-      const harness = mountTeamPageThroughBoundary(
-        "admin",
-        {
-          ...handlers(() => []),
-          "environment.host.list": () => ({ hosts: [reachableHost] }),
-          "providers.list": () => ({
-            providers: [claudeLoginProviderRow()],
-            native: null,
-            offersSignIns: true,
-          }),
-          "providers.startLogin": () => teamLoginStartedAnswer(),
-          "providers.awaitLogin": () => {
-            awaits += 1;
-            return awaits === 1
-              ? teamAwaitLoginSignInRequestAnswer()
-              : teamAwaitLoginOutcomeAnswer({
-                  kind: "signed-in",
-                  profileId: "team-completed-profile",
-                });
-          },
-        },
-        "providers",
-      );
-      negotiateMethods({
-        "providers.startLogin": { major: 1, minor: 5 },
-        "providers.awaitLogin": { major: 2, minor: 5 },
-      });
-      await waitFor(() => {
-        expect(useAuthStore.getState().contextMetadata?.userId).toBe(
-          "team-test-user",
-        );
-      });
-      admitCurrentUserToTeamWindow();
-      render(<TeamProviders />, { wrapper: harness.Wrapper });
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Add a profile" }),
-      );
-      const addDialog = await screen.findByRole("dialog", {
-        name: "Add a profile",
-      });
-      await userEvent.click(
-        within(addDialog).getByRole("button", { name: "Sign in" }),
-      );
-      await waitFor(() => {
-        expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
-      });
-      return harness;
-    }
-
-    function listTeamRecord(): void {
-      teamProfileRecordHttpBoundary.items = {
-        status: 200,
-        body: {
-          items: [
-            configurationItem({
-              kind: "managed_profile",
-              key: "claude:team-completed-profile",
-              value: {
-                name: "Team account ready",
-                color: null,
-                harnessId: "claude",
-                accountIdentity: null,
-                needsLink: false,
-                enabled: true,
-              },
-              revision: 1,
-            }),
-          ],
-        },
-      };
-      teamProfileRecordHttpBoundary.list = {
-        status: 200,
-        body: teamProfileRecordsBody([
-          teamProfileRecord({
-            profileId: "team-completed-profile",
-            harnessId: "claude",
-            name: "Team account ready",
-            readerLabel: "live",
-            kind: "oauth_code",
-          }),
-        ]),
-      };
-    }
-
-    it("holds on its checking line, then closes on the listed profile", async () => {
-      const harness = await openHeldSignIn();
-
-      expect(screen.queryByText(RETIRED_WAITING_SENTENCE)).toBeNull();
-      expect(
-        screen.getByRole("dialog", { name: "Add a profile" }),
-      ).toBeTruthy();
-      const awaitRequests = harness.paramsOf("providers.awaitLogin");
-      expect(awaitRequests[0]).not.toHaveProperty("recordedOperationId");
-      expect(awaitRequests[1]).toHaveProperty(
-        "recordedOperationId",
-        "11111111-1111-4111-8111-111111111111",
-      );
-
-      listTeamRecord();
-      expect(
-        await screen.findByRole("button", {
-          name: "Claude Code profile: Team account ready",
+  it("closes a completed sign-in without its team row, then applies the picked colour once the row is listed", async () => {
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: teamProfileRecordsBody([]),
+    };
+    let awaits = 0;
+    const harness = mountTeamPageThroughBoundary(
+      "admin",
+      {
+        ...handlers(() => []),
+        "environment.host.list": () => ({ hosts: [reachableHost] }),
+        "providers.list": () => ({
+          providers: [claudeLoginProviderRow()],
+          native: null,
+          offersSignIns: true,
         }),
-      ).toBeTruthy();
-      await waitFor(() => {
-        expect(screen.queryByRole("dialog")).toBeNull();
-      });
-      expect(harness.paramsOf("providers.startLogin")).toHaveLength(1);
-      expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
-      expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
+        "providers.startLogin": () => teamLoginStartedAnswer(),
+        "providers.awaitLogin": () => {
+          awaits += 1;
+          return awaits === 1
+            ? teamAwaitLoginSignInRequestAnswer()
+            : teamAwaitLoginOutcomeAnswer({
+                kind: "signed-in",
+                profileId: "team-completed-profile",
+              });
+        },
+      },
+      "providers",
+    );
+    negotiateMethods({
+      "providers.startLogin": { major: 1, minor: 5 },
+      "providers.awaitLogin": { major: 2, minor: 5 },
     });
-
-    it("closing it while it holds sends no cancelLogin", async () => {
-      const harness = await openHeldSignIn();
-
-      await userEvent.click(
-        within(screen.getByRole("dialog", { name: "Add a profile" })).getByRole(
-          "button",
-          { name: "Close" },
-        ),
+    await waitFor(() => {
+      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
+        "team-test-user",
       );
-      await waitFor(() => {
-        expect(screen.queryByRole("dialog")).toBeNull();
-      });
-      expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
     });
+    admitCurrentUserToTeamWindow();
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add a profile" }),
+    );
+    await userEvent.click(
+      within(
+        await screen.findByRole("dialog", { name: "Add a profile" }),
+      ).getByRole("button", { name: "Sign in" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(screen.queryByText(RETIRED_WAITING_SENTENCE)).toBeNull();
+    expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
+    expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
+    expect(colourWrites()).toEqual([]);
+    const readsAtClose = teamProfileRecordReadCount();
+
+    teamProfileRecordHttpBoundary.items = {
+      status: 200,
+      body: {
+        items: [
+          configurationItem({
+            kind: "managed_profile",
+            key: "claude:team-completed-profile",
+            value: {
+              name: "Team account ready",
+              color: null,
+              harnessId: "claude",
+              accountIdentity: null,
+              needsLink: false,
+              enabled: true,
+            },
+            revision: 1,
+          }),
+        ],
+      },
+    };
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: teamProfileRecordsBody([
+        teamProfileRecord({
+          profileId: "team-completed-profile",
+          harnessId: "claude",
+          name: "Team account ready",
+          readerLabel: "live",
+          kind: "oauth_code",
+        }),
+      ]),
+    };
+    fireEvent.focus(window);
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Claude Code profile: Team account ready",
+      }),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(colourWrites()).toHaveLength(1);
+    });
+    expect(JSON.stringify(colourWrites()[0]?.body)).not.toContain(
+      '"color":null',
+    );
+    expect(teamProfileRecordReadCount()).toBeGreaterThan(readsAtClose);
+    expect(harness.paramsOf("providers.startLogin")).toHaveLength(1);
+    expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
   });
 });
