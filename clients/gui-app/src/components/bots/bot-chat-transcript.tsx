@@ -72,6 +72,7 @@ import { TasklessMarkdownLinkProvider } from "@/components/chat/chat-markdown-li
 import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { BotTranscriptImageScope } from "@/components/bots/bot-transcript-image-scope";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
+import { TRANSCRIPT_JUMP_TTL_MS } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import { TileErrorBoundary } from "@/components/epic-canvas/renderers/tile-error-boundary";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
@@ -650,8 +651,11 @@ function BotChatTranscriptBody(props: {
   // The row a pending jump waited on has rendered: settle it during render
   // (the adjust-state-on-prop-change pattern), so the scroll is issued in the
   // same pass the row appears in and no effect sets state.
-  const pendingTarget =
-    pendingJump === null ? null : jumpTargetIn(messages, pendingJump);
+  const pendingTarget = renderedJumpTarget(
+    messages,
+    pendingJump,
+    landOn === null,
+  );
   if (pendingTarget !== null) {
     setPendingJump(null);
     issueScroll(pendingTarget);
@@ -679,12 +683,27 @@ function BotChatTranscriptBody(props: {
       reportsMiss: false,
     });
   }
+  const jumpView = useJumpInView(pendingJump);
   useReportedMiss({
     pendingJump,
+    view: jumpView,
     withdrawn: landOn === null,
     located,
     end: () => setPendingJump(null),
   });
+  const expireJump = useCallback(
+    (jump: PendingJump) =>
+      setPendingJump((current) => (current === jump ? null : current)),
+    [],
+  );
+  usePendingJumpBound(pendingJump, jumpView.tried, expireJump);
+  // The reader moved the view while a jump waited on its row: where they went
+  // is where they stay. Clearing the jump is what releases the range the
+  // store holds open for it, below. The list is given this only while a jump
+  // waits: React keeps a write that changes nothing and replays it in a later
+  // render, after the jump that render set (`useLandOnMessage` lands during
+  // render), which would clear a jump asked after the reader moved.
+  const dropPendingJump = useCallback(() => setPendingJump(null), []);
   const locatedOrdinal = located.status === "found" ? located.ordinal : null;
   const { requestTranscriptOrdinal } = state;
   // The store's pending-jump ordinal follows the pending jump: named while
@@ -929,6 +948,9 @@ function BotChatTranscriptBody(props: {
                   systemOverlayActive={false}
                   scrollRequest={scrollRequest}
                   onScrollRequestSettled={onScrollRequestSettled}
+                  onReaderMoved={
+                    pendingJump === null ? undefined : dropPendingJump
+                  }
                   composerOverlayHeight={0}
                   subagentDrillIn={subagentDrillIn}
                 />
@@ -1414,13 +1436,12 @@ function useLandOnMessage(
  */
 function useReportedMiss(args: {
   readonly pendingJump: PendingJump | null;
+  readonly view: JumpView;
   readonly withdrawn: boolean;
   readonly located: ChatLocateRowAnswer;
   readonly end: () => void;
 }): void {
-  const { pendingJump, withdrawn, located, end } = args;
-  const paneVisible = usePaneVisible();
-  const [seenJump, setSeenJump] = useState<PendingJump | null>(null);
+  const { pendingJump, view, withdrawn, located, end } = args;
   const [unopened, setUnopened] = useState<PendingJump | null>(null);
   const toldUnopened = useRef<PendingJump | null>(null);
   useEffect(() => {
@@ -1429,16 +1450,65 @@ function useReportedMiss(args: {
     toast.error(NOTIFICATION_MESSAGE_UNAVAILABLE);
   }, [unopened]);
   if (pendingJump?.kind !== "message" || !pendingJump.reportsMiss) return;
-  if (paneVisible && seenJump !== pendingJump) setSeenJump(pendingJump);
-  if (withdrawn || (!paneVisible && seenJump === pendingJump)) {
+  if (withdrawn || (!view.paneVisible && view.tried)) {
     end();
     return;
   }
-  if (!paneVisible) return;
+  if (!view.paneVisible) return;
   if (located.status === "missing" && located.cause !== "unsupported") {
     end();
     setUnopened(pendingJump);
   }
+}
+
+/** A pending jump's pane: in view now, and whether the jump has been tried with it in view. */
+interface JumpView {
+  readonly paneVisible: boolean;
+  readonly tried: boolean;
+}
+
+/**
+ * What a reported miss and a jump's bound both wait for: the pending jump
+ * tried with its pane in view. Settled during render, as a pending jump is.
+ */
+function useJumpInView(pendingJump: PendingJump | null): JumpView {
+  const paneVisible = usePaneVisible();
+  const [triedJump, setTriedJump] = useState<PendingJump | null>(null);
+  if (pendingJump !== null && paneVisible && triedJump !== pendingJump) {
+    setTriedJump(pendingJump);
+  }
+  return {
+    paneVisible,
+    tried: pendingJump !== null && triedJump === pendingJump,
+  };
+}
+
+/**
+ * A pending jump is given up `TRANSCRIPT_JUMP_TTL_MS` after it was first
+ * tried with its pane in view, the bound a task chat's parked jump and find's
+ * index read have: a row the host located whose range never loads, or one it
+ * never answers for, would otherwise wait for as long as the list is mounted
+ * and scroll whenever the row came. Time out of view is not counted, so a
+ * jump asked of a hidden pane has the whole bound once shown. One that
+ * reports its miss says so; any other ends silently. The bound is this
+ * mount's and this jump's: a landing a remount tries again starts another, as
+ * does the turn a send falls back to.
+ */
+function usePendingJumpBound(
+  pendingJump: PendingJump | null,
+  tried: boolean,
+  expire: (jump: PendingJump) => void,
+): void {
+  useEffect(() => {
+    if (pendingJump === null || !tried) return;
+    const timer = window.setTimeout(() => {
+      expire(pendingJump);
+      if (pendingJump.kind === "message" && pendingJump.reportsMiss) {
+        toast.error(NOTIFICATION_MESSAGE_UNAVAILABLE);
+      }
+    }, TRANSCRIPT_JUMP_TTL_MS);
+    return () => window.clearTimeout(timer);
+  }, [expire, pendingJump, tried]);
 }
 
 /**
@@ -1465,6 +1535,21 @@ function jumpTargetIn(
   if (jump.kind === "send") return sendCardFor(messages, jump.postId);
   const rowId = replyRowIdFor(messages, jump.messageId);
   return rowId === null ? null : { rowId, blockId: null };
+}
+
+/**
+ * The row a pending jump lands on in this pass. A jump that reports its miss
+ * and whose landing was withdrawn has none, even in the pass its row renders
+ * in: `useReportedMiss` ends it unlanded.
+ */
+function renderedJumpTarget(
+  messages: ReadonlyArray<ChatMessage>,
+  jump: PendingJump | null,
+  withdrawn: boolean,
+): { readonly rowId: string; readonly blockId: string | null } | null {
+  if (jump === null) return null;
+  if (withdrawn && jump.kind === "message" && jump.reportsMiss) return null;
+  return jumpTargetIn(messages, jump);
 }
 
 function sameLanding(
