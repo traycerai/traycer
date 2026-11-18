@@ -1399,7 +1399,9 @@ describe("the Tracy surface shell", () => {
       fireEvent.click(row("bot-release"));
 
       const channel = await shownChannel("bot-release");
-      await act(() => Promise.resolve());
+      await waitFor(() => {
+        expect(keptState("bot-release").landing).toBe(false);
+      });
       expect(landedOn(channel)).toEqual({ open: "none", row: "none" });
       expect(keptState("bot-release").landing).toBe(false);
       expect(toast.error).not.toHaveBeenCalled();
@@ -1438,7 +1440,9 @@ describe("the Tracy surface shell", () => {
       );
 
       const channel = await shownChannel("bot-release");
-      await act(() => Promise.resolve());
+      await waitFor(() => {
+        expect(keptState("bot-release").landing).toBe(false);
+      });
       expect(landedOn(channel)).toEqual({ open: "none", row: "none" });
       expect(keptState("bot-release").landing).toBe(false);
       expect(toast.error).not.toHaveBeenCalled();

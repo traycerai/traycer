@@ -169,9 +169,9 @@ beforeEach(async () => {
   vi.mocked(toast.error).mockReset();
   __resetTabNavigationControllerForTesting();
   __resetTabSyncCoordinatorForTesting();
-  installTabSyncCoordinator({ readyPromise: Promise.resolve() });
-  await Promise.resolve();
-  await Promise.resolve();
+  const coordinatorReady = Promise.resolve();
+  installTabSyncCoordinator({ readyPromise: coordinatorReady });
+  await coordinatorReady;
   useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
   useSelectionAuthorityStore.setState({ effectiveHostId: HOST_ID });
   useBotTabLandingStore.setState({ byBotId: {} });

@@ -7,7 +7,7 @@
  * A landing that reports a miss says so once the host has no row for it;
  * every other landing waits quietly as it always has.
  */
-import { StrictMode, type ReactNode } from "react";
+import { StrictMode, useEffect, type ReactNode } from "react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import {
   QueryClient,
@@ -45,6 +45,10 @@ const mocks = vi.hoisted(() => ({
   /** What `chat.locateRow` answers, per ask. */
   locate: null as (() => Promise<ChatLocateRowResponse>) | null,
   asked: 0,
+  /** Renders of the hook's host that have committed, whichever read they carry. */
+  commits: 0,
+  /** The commit count when the transcript first rendered with a settled `chat.locateRow` read (success or error, nothing in flight). */
+  settledAt: null as number | null,
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
@@ -80,8 +84,8 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
     await importOriginal<typeof import("@/hooks/host/use-host-query")>();
   return {
     ...actual,
-    useHostQuery: (args: LocateQueryArgs) =>
-      useQuery(
+    useHostQuery: (args: LocateQueryArgs) => {
+      const result = useQuery(
         queryOptions<ChatLocateRowResponse, HostRpcError>({
           queryKey: [
             "locate-row",
@@ -101,7 +105,23 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
           gcTime: 0,
           retry: false,
         }),
-      ),
+      );
+      // The transcript acts on a settled read while it renders, and may end its
+      // jump there, so the settled state is recorded as rendered; the commit
+      // count is taken after commit.
+      if (
+        args.method === "chat.locateRow" &&
+        result.status !== "pending" &&
+        result.fetchStatus === "idle" &&
+        mocks.settledAt === null
+      ) {
+        mocks.settledAt = mocks.commits;
+      }
+      useEffect(() => {
+        mocks.commits += 1;
+      });
+      return result;
+    },
   };
 });
 import {
@@ -143,6 +163,9 @@ let requestTranscriptOrdinal: Mock<(ordinal: number | null) => void>;
 let store: UseBoundStore<StoreApi<LandingState>>;
 let landing: MissLanding | null = null;
 let paneVisible = true;
+let queryClient = new QueryClient();
+/** Reads of the locate entry that have ended, in success or in error. */
+let locateReadsEnded = 0;
 
 function landingOf(
   messageId: string,
@@ -154,7 +177,15 @@ function landingOf(
 function mountTranscript(): { readonly rerender: () => void } {
   store = createLandingStore([resolvedUserMessage()], requestTranscriptOrdinal);
   mocks.handle = { store } as ChatSessionStoreHandle;
-  const queryClient = new QueryClient();
+  queryClient = new QueryClient();
+  queryClient.getQueryCache().subscribe((event) => {
+    if (
+      event.type === "updated" &&
+      (event.action.type === "success" || event.action.type === "error")
+    ) {
+      locateReadsEnded += 1;
+    }
+  });
   const tree = (): ReactNode => (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
@@ -204,14 +235,49 @@ function flashing(messageId: string): boolean {
   return row !== null && row.dataset.navigationHighlighted === "true";
 }
 
-/** The host has answered and the transcript has acted on it. */
-async function answered(): Promise<void> {
+/**
+ * The host's read has ended and no other is in flight: the locate read is the
+ * only one this client ever runs.
+ */
+async function readEnded(): Promise<void> {
   await waitFor(() => {
-    expect(mocks.asked).toBeGreaterThan(0);
+    expect(locateReadsEnded).toBeGreaterThan(0);
+    expect(queryClient.isFetching()).toBe(0);
   });
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+}
+
+/**
+ * The host has answered and the transcript has acted on that settled answer:
+ * the read has ended, the transcript rendered with its success or its error,
+ * and a commit followed that render.
+ */
+async function answered(): Promise<void> {
+  await readEnded();
+  await waitFor(() => {
+    expect(mocks.settledAt).not.toBeNull();
+  });
+  const settledAt = mocks.settledAt ?? 0;
+  await waitFor(() => {
+    expect(mocks.commits).toBeGreaterThan(settledAt);
+  });
+  await settleLegendList();
+}
+
+/**
+ * The host has answered a read the landing had already left (the query may be
+ * disabled or gone from the cache by now): the read has ended, and a render
+ * committed after it, so nothing the answer could cause is still pending.
+ */
+async function answeredAfterDeparture(view: {
+  readonly rerender: () => void;
+}): Promise<void> {
+  await readEnded();
+  const before = mocks.commits;
+  act(() => {
+    view.rerender();
+  });
+  await waitFor(() => {
+    expect(mocks.commits).toBeGreaterThan(before);
   });
   await settleLegendList();
 }
@@ -243,7 +309,10 @@ beforeEach(() => {
   landing = null;
   paneVisible = true;
   mocks.asked = 0;
+  mocks.commits = 0;
+  mocks.settledAt = null;
   mocks.locate = null;
+  locateReadsEnded = 0;
   requestTranscriptOrdinal = vi.fn<(ordinal: number | null) => void>();
   const toastError = vi.spyOn(toast, "error").mockReturnValue("toast");
   onTestFinished(() => toastError.mockRestore());
@@ -445,10 +514,7 @@ describe("a landing that reports a miss, while its locate is held", () => {
 
       depart(held.view);
       held.release();
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
+      await answeredAfterDeparture(held.view);
       carryTheRow();
       await settleLegendList();
 
