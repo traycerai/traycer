@@ -1171,6 +1171,28 @@ describe("Switch account moves only previewed work", () => {
     expect(harness.calls).not.toContain("providers.answerProfileName");
   });
 
+  it("signs a new account in as its own profile and leaves the old row and its chats untouched", async () => {
+    const preview: ProvidersPreviewProfileMoveResponse = {
+      ...emptyPreview(),
+      targets: [agentTarget("epic-idle", "agent-idle", "Idle agent", "idle")],
+    };
+    const harness = renderSwitchHarness(successfulSwitchInput(preview, []));
+
+    await loginIntoSwitchDialog();
+
+    await waitFor(() => expect(harness.startRequests).toHaveLength(1));
+    expect(harness.startRequests[0]).toMatchObject({
+      providerId: "claude-code",
+      profileId: null,
+      target: null,
+    });
+    expect(harness.startRequests[0]?.createProfile).not.toBeNull();
+    expect(await screen.findByText("Move work from Work?")).toBeTruthy();
+    expect(harness.calls).not.toContain("providers.setEnabled");
+    expect(harness.commitRequests).toHaveLength(0);
+    expect(harness.selected).toHaveBeenCalledWith(DESTINATION_ID);
+  });
+
   it("selects an existing destination record instead of creating a third row", async () => {
     const source = account(SOURCE_ID, SOURCE_LABEL);
     const destination = account(DESTINATION_ID, DESTINATION_LABEL);
