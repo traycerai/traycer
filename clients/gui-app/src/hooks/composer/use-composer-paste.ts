@@ -868,7 +868,8 @@ export function useComposerDragAffordance(): {
   const [dragState, setDragState] = useState<ComposerDragState>(
     IDLE_COMPOSER_DRAG_STATE,
   );
-  // The element the handlers are on, as the drag last entered or crossed it.
+  // The outermost element the handlers are on, as the drag entered it or,
+  // with no dragenter, first crossed it.
   const dragZoneRef = useRef<HTMLElement | null>(null);
 
   const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {
@@ -878,7 +879,11 @@ export function useComposerDragAffordance(): {
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "copy";
-    dragZoneRef.current = event.currentTarget;
+    // The editor's own dragover, inside the zone, never takes its place.
+    const zone = dragZoneRef.current;
+    if (zone === null || !zone.contains(event.currentTarget)) {
+      dragZoneRef.current = event.currentTarget;
+    }
     setDragState((state) => {
       // A drag already over the zone when these handlers took it (a Tracy box
       // swapped for its reading view mid-drag, T386) is sent no dragenter:

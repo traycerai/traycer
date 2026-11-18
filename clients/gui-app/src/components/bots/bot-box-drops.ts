@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type DragEvent,
@@ -20,6 +21,7 @@ import {
   useComposerDragAffordance,
   type HeldFileTransfer,
 } from "@/hooks/composer/use-composer-paste";
+import type { ComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import {
   collectFileTransferEntries,
   hasClaimableFileTransfer,
@@ -180,20 +182,35 @@ export function useHeldDropPicker(hold: BotBoxHold | null): {
  */
 export function useHeldDropDrain(args: {
   readonly hold: BotBoxHold | null;
-  readonly ready: boolean;
+  /**
+   * The editor that took the box's load, `null` until one has: the drain
+   * runs again each time a new one has.
+   */
+  readonly loadedEditor: ComposerEditorIncarnation | null;
+  /** Whether that editor is the one in the box now. */
+  readonly holdsLoad: () => boolean;
   readonly takesImages: boolean;
   readonly attachHeldTransfer: BotBoxHeldTransferIngest["attachHeldTransfer"];
 }): void {
-  const { hold, ready, takesImages, attachHeldTransfer } = args;
-  const mounted = useRef(false);
+  const { hold, loadedEditor, holdsLoad, takesImages, attachHeldTransfer } =
+    args;
+  // Read as a batch lands: a host that stops taking images while a batch
+  // prepares takes none of it, and the batch is refused as the next one is.
+  const takesImagesRef = useRef(takesImages);
+  useLayoutEffect(() => {
+    takesImagesRef.current = takesImages;
+  }, [takesImages]);
   useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-  useEffect(() => {
-    if (!ready || hold === null || hold.batches.length === 0) return;
+    // An editor gone, as a call takes the field, or not yet holding the
+    // box's load takes nothing: the batch waits for the one that comes back.
+    if (
+      loadedEditor === null ||
+      hold === null ||
+      hold.batches.length === 0 ||
+      !holdsLoad()
+    ) {
+      return;
+    }
     const taken = hold.claim();
     if (taken === null) return;
     if (!takesImages) {
@@ -203,10 +220,10 @@ export function useHeldDropDrain(args: {
     }
     void attachHeldTransfer(
       taken.transfer,
-      () => mounted.current && taken.holds(),
+      () => taken.holds() && holdsLoad() && takesImagesRef.current,
     ).then((outcome) => {
       if (outcome === "settled") taken.settle();
       else taken.release();
     });
-  }, [attachHeldTransfer, hold, ready, takesImages]);
+  }, [attachHeldTransfer, hold, holdsLoad, loadedEditor, takesImages]);
 }

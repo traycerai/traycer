@@ -22,12 +22,14 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { DROP_WITHOUT_IMAGE_HOST } from "@/components/bots/bot-drop-lines";
 import { BOT_CONVERSATION_ATTACHMENTS_MAX } from "@traycer/protocol/host/bot/conversation-schemas";
 import { BOT_CONVERSATION_IMAGES_VERSION } from "@/hooks/bots/use-bot-send-version";
 import { MAX_IMAGE_SOURCE_BYTES } from "@/hooks/composer/use-composer-paste";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { activityStore, mocks } from "./bot-channel-question-card-state";
 import { chatMessagesMock } from "./bot-channel-question-card-mocks";
@@ -56,8 +58,10 @@ import {
 import {
   dropOn,
   filesTransfer,
+  gatedImage,
   imageFile,
-  PNG_BYTES,
+  noticeIds,
+  noticeMessages,
   spyOnNotices,
 } from "@/components/bots/__tests__/bot-drop-test-support";
 
@@ -164,28 +168,6 @@ afterEach(() => {
   useBotDraftsStore.setState({ boxesReading: {} });
 });
 
-/** An image whose bytes the case hands over when it chooses: a conversion that is slow until `open`. */
-function gatedImage(name: string): {
-  readonly file: File;
-  readonly asked: () => number;
-  readonly open: () => void;
-} {
-  const file = imageFile(name);
-  const gate = Promise.withResolvers<ArrayBuffer>();
-  let asked = 0;
-  Object.defineProperty(file, "arrayBuffer", {
-    value: () => {
-      asked += 1;
-      return gate.promise;
-    },
-  });
-  return {
-    file,
-    asked: () => asked,
-    open: () => gate.resolve(new Uint8Array(PNG_BYTES).buffer),
-  };
-}
-
 /** A file whose reported size is `size`, with the bytes of a small image. */
 function imageOfSize(name: string, size: number): File {
   const file = imageFile(name);
@@ -282,7 +264,7 @@ describe("<BotChannelView tiles={null} /> held files landing in the box", () => 
 
   it("lands an entry a cross-window re-read interrupted once, when the next editor drains it, and none twice", async () => {
     const { hash } = await mountReading(1);
-    const slow = gatedImage("slow.png");
+    const slow = gatedImage("slow.png", "same");
     dropOn(pane(), filesTransfer(slow.file));
     release(hash);
     await until(() => expect(slow.asked()).toBeGreaterThan(0));
@@ -321,7 +303,7 @@ describe("<BotChannelView tiles={null} /> held files landing in the box", () => 
 
   it("lands two batches in drop order when the first is slow to prepare and the second fast", async () => {
     const { hash } = await mountReading(1);
-    const slow = gatedImage("slow.png");
+    const slow = gatedImage("slow.png", "same");
     dropOn(pane(), filesTransfer(slow.file));
     dropOn(pane(), filesTransfer(imageFile("fast.png")));
     release(hash);
@@ -397,5 +379,78 @@ describe("<BotChannelView tiles={null} /> what the hold admits at the drop", () 
     expect(drop.prevented).toBe(true);
     expect(refusals).not.toHaveBeenCalled();
     expect(screen.getByTestId(HELD)).toBeTruthy();
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a call placed from the box while a held conversion runs", () => {
+  it("converts the held batch once, lands nothing while the call bar replaces the field, and appends it exactly once after the restored image when the call ends", async () => {
+    const { hash } = await mountReading(1);
+    const slow = gatedImage("slow.png", "held");
+    dropOn(pane(), filesTransfer(slow.file));
+    release(hash);
+    await until(() => expect(slow.asked()).toBe(1));
+
+    act(() => {
+      useVoiceSessionStore
+        .getState()
+        .sessionConnecting(
+          { botId: BOT_ID, hostId: HOST_ID, threadId: null },
+          "Tracy",
+        );
+      useVoiceSessionStore.setState({ phase: "live" });
+    });
+    expect(screen.getByTestId(`${COMPOSER}-call-bar`)).toBeTruthy();
+    expect(
+      screen.getByTestId(COMPOSER).querySelector("[data-composer-editor]"),
+    ).toBeNull();
+    act(() => slow.open());
+    for (let tick = 0; tick < 4; tick += 1) await settleLong();
+
+    expect(slow.asked()).toBe(1);
+    expect(refusals).not.toHaveBeenCalled();
+    act(() => {
+      useVoiceSessionStore.setState({
+        phase: "idle",
+        placedFrom: null,
+        endReason: null,
+        refusal: null,
+      });
+    });
+
+    act(() => slow.openRepeats());
+    await chipsAre(["shot.png", "slow.png"]);
+    await settleLong();
+    expect(chips()).toEqual(["shot.png", "slow.png"]);
+    expect(screen.queryByTestId(HELD)).toBeNull();
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a host that stops taking images while a held batch converts", () => {
+  it("lands nothing, refuses the batch once with the host line under the pane's id, and leaves the hold empty", async () => {
+    const { hash, reopen } = await mountReading(1);
+    const slow = gatedImage("slow.png", "same");
+    dropOn(pane(), filesTransfer(slow.file));
+    release(hash);
+    await until(() => expect(slow.asked()).toBe(1));
+
+    act(() => negotiateBotSend(HOST_ID, { major: 1, minor: 3 }));
+    reopen(null);
+    act(() => slow.open());
+    await settleLong();
+
+    expect(noticeMessages(notices)).toEqual([DROP_WITHOUT_IMAGE_HOST]);
+    expect(noticeIds(notices)[0]).toBeDefined();
+    act(() => negotiateBotSend(HOST_ID, BOT_CONVERSATION_IMAGES_VERSION));
+    reopen(null);
+    await chipsAre(["shot.png"]);
+    act(() => {
+      useBotDraftsStore.setState({
+        boxesReading: {
+          [BOT_ID]: { [CHANNEL_ID]: { text: "Read again", replyTo: null } },
+        },
+      });
+    });
+    expect(screen.getByTestId(READING)).toBeTruthy();
+    expect(screen.queryByTestId(HELD)).toBeNull();
   });
 });

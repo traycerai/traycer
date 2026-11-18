@@ -39,7 +39,7 @@ export interface DragTransfer extends FakeTransfer {
 }
 
 function writable(transfer: FakeTransfer): DragTransfer {
-  return { ...transfer, dropEffect: "copy" };
+  return { ...transfer, dropEffect: "none" };
 }
 
 export function filesTransfer(...files: ReadonlyArray<File>): DragTransfer {
@@ -142,4 +142,38 @@ export function storeDraftWithImages(
   });
   localStorage.setItem(botBoxDraftsKey(account), raw);
   return raw;
+}
+
+/**
+ * An image whose bytes the case hands over when it chooses: a conversion that
+ * is slow until `open`. A read after the first answers with the same bytes
+ * (`"same"`), or waits for `openRepeats` (`"held"`), so a conversion that
+ * starts again is counted without spinning.
+ */
+export function gatedImage(
+  name: string,
+  repeats: "same" | "held",
+): {
+  readonly file: File;
+  readonly asked: () => number;
+  readonly open: () => void;
+  readonly openRepeats: () => void;
+} {
+  const file = imageFile(name);
+  const first = Promise.withResolvers<ArrayBuffer>();
+  const again = Promise.withResolvers<ArrayBuffer>();
+  let asked = 0;
+  Object.defineProperty(file, "arrayBuffer", {
+    value: () => {
+      asked += 1;
+      return asked > 1 && repeats === "held" ? again.promise : first.promise;
+    },
+  });
+  const bytes = (): ArrayBuffer => new Uint8Array(PNG_BYTES).buffer;
+  return {
+    file,
+    asked: () => asked,
+    open: () => first.resolve(bytes()),
+    openRepeats: () => again.resolve(bytes()),
+  };
 }

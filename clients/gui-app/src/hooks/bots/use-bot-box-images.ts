@@ -69,7 +69,8 @@ function validMessageImage(image: PastedComposerImage): boolean {
   return true;
 }
 
-function refuseOverCount(): void {
+/** The box's count refusal, for images a message has no room for. */
+export function refuseOverCount(): void {
   refuse(
     `A message carries at most ${String(BOT_CONVERSATION_ATTACHMENTS_MAX)} images.`,
   );
@@ -109,11 +110,6 @@ export function admitHeldTransfer(
   };
 }
 
-/** The count refusal, for entries a box's hold has no room for. */
-export function refuseHeldOverflow(): void {
-  refuseOverCount();
-}
-
 function noop(): void {}
 
 /** The box's entry for what was dropped or picked on it while it read its draft (T386). */
@@ -137,7 +133,7 @@ function placeMessageImages(
   attrs: ReadonlyArray<ImageAttachmentAttrs>,
   at: ImageAttachmentPlace,
 ): number {
-  if (editor === null) return 0;
+  if (editor === null || !editor.isReady()) return 0;
   const accepted = attrs.filter((image) => {
     if (image.b64content === undefined) {
       refuseAsNoImage();
@@ -187,9 +183,7 @@ export function useBotBoxImageIngest(
     (transfer: HeldFileTransfer, stillOwned: () => boolean) =>
       attachHeld(transfer, {
         insert: (attrs) => placeMessageImages(editorRef.current, attrs, "end"),
-        // An editor gone as the batch lands takes none of it: the batch waits
-        // for the next box, never counted as landed.
-        stillOwned: () => stillOwned() && editorRef.current !== null,
+        stillOwned,
       }),
     [attachHeld, editorRef],
   );

@@ -12,7 +12,7 @@ import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
-import { act, waitFor, within } from "@testing-library/react";
+import { act, within } from "@testing-library/react";
 import { toast } from "sonner";
 import {
   afterEach,
@@ -50,13 +50,15 @@ import {
   chatSessionWithThreadRows,
   postRow,
 } from "./bot-channel-rows-test-support";
+import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
+import { until } from "@/components/bots/__tests__/bot-drop-reading-support";
 import { mocks } from "./bot-threads-view-state";
 import {
   card,
   FOLLOWING,
   installBotThreadsViewCaseLifecycle,
   mount,
-  revealFull,
+  intersectTarget,
   script,
   thread,
   TRACY,
@@ -211,6 +213,7 @@ const SECOND = "tracy-b";
 let notices: MockInstance<typeof toast.info>;
 
 beforeEach(() => {
+  installLegendListTestClock();
   localStorage.clear();
   installFreshIndexedDb();
   resetLandingImageBudgetReservationsForTesting();
@@ -246,9 +249,13 @@ const FIRST_BOX = conversationRequestMessageId(`req-${FIRST}`);
 async function mountReadingCard(): Promise<void> {
   followBoth();
   mount();
-  await waitFor(() => expect(card(FIRST)).toBeTruthy());
-  await revealFull(FIRST);
-  await revealFull(SECOND);
+  await until(() => expect(card(FIRST)).toBeTruthy());
+  for (const threadId of [FIRST, SECOND]) {
+    intersectTarget(card(threadId), "near", true);
+    await until(() =>
+      expect(card(threadId).getAttribute("data-full")).toBe("true"),
+    );
+  }
   act(() => {
     useBotDraftsStore.setState({
       boxesReading: {
@@ -256,7 +263,7 @@ async function mountReadingCard(): Promise<void> {
       },
     });
   });
-  await waitFor(() =>
+  await until(() =>
     expect(
       within(card(FIRST)).getByTestId("bot-thread-composer-reading"),
     ).toBeTruthy(),
@@ -317,7 +324,7 @@ describe("<BotThreadsView /> a near card's box reading its stored draft's images
     expect(within(card(SECOND)).queryByTestId(HELD)).toBeNull();
     expect(chipsIn(FIRST)).toEqual([]);
     endRead();
-    await waitFor(() =>
+    await until(() =>
       expect(chipsIn(FIRST)).toEqual(["shot.png", "dropped.png"]),
     );
     expect(chipsIn(SECOND)).toEqual([]);

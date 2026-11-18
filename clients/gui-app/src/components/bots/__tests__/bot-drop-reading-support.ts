@@ -7,6 +7,7 @@
 import { act, screen } from "@testing-library/react";
 import { expect, vi } from "vitest";
 import { FILE_DROP_OVERLAY_CONTENT } from "@/components/home/composer/composer-drop-overlay-content";
+import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { releaseImageReads } from "@/components/bots/__tests__/bot-drop-image-reads";
 import {
@@ -91,15 +92,16 @@ export async function chipsAre(names: ReadonlyArray<string>): Promise<void> {
 export async function mountReading(imageCount: number): Promise<{
   readonly hash: string;
   readonly stored: string;
+  readonly reopen: (next: BotOpenThread | null) => void;
 }> {
   const hash = await storedImageHash();
   signInAs(accounts.a);
   setIdentityBridge(true);
   const stored = storeDraftWithImages(accounts.a, CHANNEL_ID, hash, imageCount);
   session(CHANNEL_ID, []);
-  mountChannel(null);
+  const { reopen } = mountChannel(null);
   await until(() => expect(screen.getByTestId(READING)).toBeTruthy());
-  return { hash, stored };
+  return { hash, stored, reopen };
 }
 
 export function release(hash: string): void {

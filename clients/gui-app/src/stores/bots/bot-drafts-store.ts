@@ -210,14 +210,14 @@ export interface BotUnsentMessage {
 
 /**
  * Files dropped or picked onto a box while it read its draft's images (T386),
- * waiting for its editor. `claim` is the box's take of them while it prepares
- * and inserts them: `null` while none has taken them.
+ * waiting for its editor. `claimed` while the box has taken them and is
+ * preparing and inserting them.
  */
 export interface BotHeldDrop {
   readonly id: number;
   readonly files: ReadonlyArray<File>;
   readonly fileUrlPaths: ReadonlyArray<string>;
-  readonly claim: number | null;
+  readonly claimed: boolean;
 }
 
 /** A held batch's entries: its files, then its file references. */
@@ -376,32 +376,17 @@ interface BotDraftsState {
     transfer: Pick<BotHeldDrop, "files" | "fileUrlPaths">,
   ) => number | null;
   /**
-   * Takes the first batch held for that box, under a new claim, where none
-   * holds it; `null` where nothing is held or the first batch is taken. Only
-   * the first is ever taken, so batches land in drop order.
+   * Takes the first batch held for that box, where it is not taken already;
+   * `null` where nothing is held or the first batch is taken. Only the first
+   * is ever taken, so batches land in drop order.
    */
   readonly claimDrop: (botId: string, key: string) => BotHeldDrop | null;
-  /** Whether that batch is still held for that box under `claim`. */
-  readonly dropClaimHolds: (
-    botId: string,
-    key: string,
-    id: number,
-    claim: number,
-  ) => boolean;
+  /** Whether that batch is still held for that box, and taken. */
+  readonly dropClaimHolds: (botId: string, key: string, id: number) => boolean;
   /** That batch landed or was refused: it is held no more. */
-  readonly settleDrop: (
-    botId: string,
-    key: string,
-    id: number,
-    claim: number,
-  ) => void;
+  readonly settleDrop: (botId: string, key: string, id: number) => void;
   /** None of that batch landed: it waits to be taken again. */
-  readonly releaseDrop: (
-    botId: string,
-    key: string,
-    id: number,
-    claim: number,
-  ) => void;
+  readonly releaseDrop: (botId: string, key: string, id: number) => void;
   /** Drops every draft of the bot: it is gone. */
   readonly forgetBot: (botId: string) => void;
   /**
@@ -579,12 +564,6 @@ let carryCount = 0;
 
 /** Numbers each batch held for a box (`holdDrop`). */
 let heldDropCount = 0;
-
-/**
- * Numbers each take of a held batch (`claimDrop`), so a take that ended can
- * neither settle nor release a batch taken again since.
- */
-let dropClaimCount = 0;
 
 /** The carries without the moves `held` for that box; `null` where it holds none of them. */
 function carriesWithout(
@@ -1041,7 +1020,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         set({
           boxDrops: withEntry(state.boxDrops, botId, key, [
             ...held,
-            { id: heldDropCount, files, fileUrlPaths, claim: null },
+            { id: heldDropCount, files, fileUrlPaths, claimed: false },
           ]),
         });
         return taken;
@@ -1051,24 +1030,21 @@ export const useBotDraftsStore = create<BotDraftsState>()(
         const held = state.boxDrops[botId]?.[key] ?? [];
         if (held.length === 0) return null;
         const [first, ...rest] = held;
-        if (first.claim !== null) return null;
-        dropClaimCount += 1;
-        const claimed: BotHeldDrop = { ...first, claim: dropClaimCount };
+        if (first.claimed) return null;
+        const taken: BotHeldDrop = { ...first, claimed: true };
         set({
-          boxDrops: withEntry(state.boxDrops, botId, key, [claimed, ...rest]),
+          boxDrops: withEntry(state.boxDrops, botId, key, [taken, ...rest]),
         });
-        return claimed;
+        return taken;
       },
-      dropClaimHolds: (botId, key, id, claim) =>
+      dropClaimHolds: (botId, key, id) =>
         (get().boxDrops[botId]?.[key] ?? []).some(
-          (drop) => drop.id === id && drop.claim === claim,
+          (drop) => drop.id === id && drop.claimed,
         ),
-      settleDrop: (botId, key, id, claim) =>
+      settleDrop: (botId, key, id) =>
         set((state) => {
           const held = state.boxDrops[botId]?.[key] ?? [];
-          const rest = held.filter(
-            (drop) => drop.id !== id || drop.claim !== claim,
-          );
+          const rest = held.filter((drop) => drop.id !== id);
           if (rest.length === held.length) return state;
           return {
             boxDrops: withEntry(
@@ -1079,10 +1055,10 @@ export const useBotDraftsStore = create<BotDraftsState>()(
             ),
           };
         }),
-      releaseDrop: (botId, key, id, claim) =>
+      releaseDrop: (botId, key, id) =>
         set((state) => {
           const held = state.boxDrops[botId]?.[key] ?? [];
-          if (!held.some((drop) => drop.id === id && drop.claim === claim)) {
+          if (!held.some((drop) => drop.id === id && drop.claimed)) {
             return state;
           }
           return {
@@ -1091,7 +1067,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
               botId,
               key,
               held.map((drop) =>
-                drop.id === id ? { ...drop, claim: null } : drop,
+                drop.id === id ? { ...drop, claimed: false } : drop,
               ),
             ),
           };
@@ -1501,13 +1477,13 @@ function draftActionsOf(generation: number): BotDraftActions {
     holdDrop: (botId, key, epoch, transfer) =>
       live()?.holdDrop(botId, key, epoch, transfer) ?? null,
     claimDrop: (botId, key) => live()?.claimDrop(botId, key) ?? null,
-    dropClaimHolds: (botId, key, id, claim) =>
-      live()?.dropClaimHolds(botId, key, id, claim) ?? false,
-    settleDrop: (botId, key, id, claim) => {
-      live()?.settleDrop(botId, key, id, claim);
+    dropClaimHolds: (botId, key, id) =>
+      live()?.dropClaimHolds(botId, key, id) ?? false,
+    settleDrop: (botId, key, id) => {
+      live()?.settleDrop(botId, key, id);
     },
-    releaseDrop: (botId, key, id, claim) => {
-      live()?.releaseDrop(botId, key, id, claim);
+    releaseDrop: (botId, key, id) => {
+      live()?.releaseDrop(botId, key, id);
     },
   };
 }

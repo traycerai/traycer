@@ -12,7 +12,7 @@ import type {
 } from "@/components/bots/bot-message-composer";
 import {
   admitHeldTransfer,
-  refuseHeldOverflow,
+  refuseOverCount,
 } from "@/hooks/bots/use-bot-box-images";
 import {
   useBotDraftActions,
@@ -112,18 +112,18 @@ export function useKeptBoxDraft(
                   admitted.files.length + admitted.fileUrlPaths.length;
                 if (entries === 0) return;
                 const held = holdDrop(botId, key, epoch, admitted);
-                if (held !== null && held < entries) refuseHeldOverflow();
+                if (held !== null && held < entries) refuseOverCount();
               };
             },
             claim: () => {
               const taken = claimDrop(botId, key);
-              if (taken === null || taken.claim === null) return null;
-              const { id, claim } = taken;
+              if (taken === null) return null;
+              const { id } = taken;
               return {
                 transfer: taken,
-                holds: () => dropClaimHolds(botId, key, id, claim),
-                settle: () => settleDrop(botId, key, id, claim),
-                release: () => releaseDrop(botId, key, id, claim),
+                holds: () => dropClaimHolds(botId, key, id),
+                settle: () => settleDrop(botId, key, id),
+                release: () => releaseDrop(botId, key, id),
               };
             },
             noticeId: botDropNoticeId(botId, key),

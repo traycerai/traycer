@@ -9,7 +9,7 @@ import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import { toast } from "sonner";
 import {
   afterEach,
@@ -35,6 +35,7 @@ import {
   dropOn,
   fileReferenceTransfer,
   filesTransfer,
+  gatedImage,
   imageFile,
   linkTransfer,
   noticeIds,
@@ -47,6 +48,8 @@ import {
   chatSessionWithThreadRows,
   postRow,
 } from "./bot-channel-rows-test-support";
+import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
+import { until } from "@/components/bots/__tests__/bot-drop-reading-support";
 import { mocks } from "./bot-threads-view-state";
 import {
   card,
@@ -55,7 +58,6 @@ import {
   intersectTarget,
   mount,
   queryClient,
-  revealFull,
   script,
   TEAM,
   thread,
@@ -234,13 +236,28 @@ function postGone(threadId: string): void {
 }
 
 async function listedCards(...threadIds: ReadonlyArray<string>): Promise<void> {
-  await waitFor(() =>
+  await until(() =>
     expect(
       screen
         .getAllByTestId("bot-thread-card")
         .map((li) => li.getAttribute("data-thread-id")),
     ).toEqual(expect.arrayContaining([...threadIds])),
   );
+}
+
+/** Brings a card near the page's view and waits for its thread to draw. */
+async function revealFull(threadId: string): Promise<void> {
+  intersectTarget(card(threadId), "near", true);
+  await until(() =>
+    expect(card(threadId).getAttribute("data-full")).toBe("true"),
+  );
+}
+
+/** Lets the fake clock run past any read or conversion a misrouted drop would have started. */
+async function settleLong(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
 }
 
 /** The images a card's own box holds, by file name. */
@@ -261,6 +278,7 @@ function overlaysAnywhere(): number {
 }
 
 beforeEach(() => {
+  installLegendListTestClock();
   localStorage.clear();
   installFreshIndexedDb();
   resetLandingImageBudgetReservationsForTesting();
@@ -352,7 +370,7 @@ describe("<BotThreadsView /> a file dropped on a card that is near", () => {
     expect(overlaysIn(card("team-a"))).toBe(1);
     expect(overlaysIn(card("team-b"))).toBe(0);
     dropOn(within(card("team-a")).getByTestId("bot-thread-anchor"), transfer);
-    await waitFor(() => expect(chipsIn("team-a")).toEqual(["shot.png"]));
+    await until(() => expect(chipsIn("team-a")).toEqual(["shot.png"]));
     expect(chipsIn("team-b")).toEqual([]);
     expect(overlaysAnywhere()).toBe(0);
   });
@@ -368,7 +386,7 @@ describe("<BotThreadsView /> a file dropped on a card that is near", () => {
 
     postGone("team-a");
     await act(() => queryClient.invalidateQueries());
-    await waitFor(() =>
+    await until(() =>
       expect(card("team-a").getAttribute("data-full")).toBe("false"),
     );
 
@@ -394,15 +412,18 @@ describe("<BotThreadsView /> a file dropped on the unread banner", () => {
     await listedCards("team-a", "team-b");
     await revealFull("team-a");
     await revealFull("team-b");
-    await screen.findByTestId("bot-unread-banner");
+    await until(() =>
+      expect(screen.getByTestId("bot-unread-banner")).toBeTruthy(),
+    );
   }
 
   it("shows no card's overlay and lands nothing in any box when no overlay was up", async () => {
     await mountWithBanner();
     dropOn(card("team-a"), filesTransfer(imageFile("first.png")));
-    await waitFor(() => expect(chipsIn("team-a")).toEqual(["first.png"]));
+    await until(() => expect(chipsIn("team-a")).toEqual(["first.png"]));
     const banner = screen.getByTestId("bot-unread-banner");
-    const transfer = filesTransfer(imageFile("shot.png"));
+    const gated = gatedImage("shot.png", "same");
+    const transfer = filesTransfer(gated.file);
 
     dragEnter(banner, transfer);
     expect(overlaysAnywhere()).toBe(0);
@@ -410,16 +431,17 @@ describe("<BotThreadsView /> a file dropped on the unread banner", () => {
     dropOn(banner, transfer);
 
     expect(overlaysAnywhere()).toBe(0);
-    await act(async () => {
-      await Promise.resolve();
-    });
+    act(() => gated.open());
+    await settleLong();
+    expect(gated.asked()).toBe(0);
     expect(chipsIn("team-a")).toEqual(["first.png"]);
     expect(chipsIn("team-b")).toEqual([]);
   });
 
   it("clears a card's overlay that was up when the drag moves to the banner and drops there, and lands nothing", async () => {
     await mountWithBanner();
-    const transfer = filesTransfer(imageFile("shot.png"));
+    const gated = gatedImage("shot.png", "same");
+    const transfer = filesTransfer(gated.file);
     dragEnter(card("team-a"), transfer);
     expect(overlaysIn(card("team-a"))).toBe(1);
     const banner = screen.getByTestId("bot-unread-banner");
@@ -428,9 +450,9 @@ describe("<BotThreadsView /> a file dropped on the unread banner", () => {
     expect(overlaysAnywhere()).toBe(0);
     dropOn(banner, transfer);
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    act(() => gated.open());
+    await settleLong();
+    expect(gated.asked()).toBe(0);
     expect(chipsIn("team-a")).toEqual([]);
     expect(chipsIn("team-b")).toEqual([]);
   });

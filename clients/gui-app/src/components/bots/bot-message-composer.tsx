@@ -94,6 +94,7 @@ import {
   botBoxWire,
   EMPTY_BOT_BOX,
 } from "@/lib/bots/bot-box-content";
+import type { ComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import {
   collectImageAtoms,
   type ComposerImageAtom,
@@ -406,7 +407,8 @@ export function BotMessageComposer(props: {
     setContent,
     loadBox,
     onEditorReady,
-    editorReady,
+    loadedEditor,
+    holdsLoad,
     takenQuoteId,
     held,
     seedsLoaded,
@@ -426,7 +428,8 @@ export function BotMessageComposer(props: {
   const paste = useBotBoxImageIngest(editorRef);
   useHeldDropDrain({
     hold,
-    ready: editorReady,
+    loadedEditor,
+    holdsLoad,
     takesImages,
     attachHeldTransfer: paste.attachHeldTransfer,
   });
@@ -1071,8 +1074,17 @@ function useBotBoxDocument(
     contentHeld: ReadonlyArray<number>,
   ) => void;
   readonly onEditorReady: () => void;
-  /** The editor is there and holds what the box loaded, or nothing where it loaded none. */
-  readonly editorReady: boolean;
+  /**
+   * The editor that took what the box loaded, or nothing where it loaded
+   * none: `null` until one has.
+   */
+  readonly loadedEditor: ComposerEditorIncarnation | null;
+  /**
+   * Whether the editor in the box now is that one: false the moment it
+   * leaves, as when a call takes the field, and until the editor that
+   * comes back has taken the box's load.
+   */
+  readonly holdsLoad: () => boolean;
   readonly takenQuoteId: number | null;
   readonly held: ReadonlyArray<number>;
   /** How many seeds put a draft from outside the box in it. */
@@ -1168,20 +1180,32 @@ function useBotBoxDocument(
   useLayoutEffect(() => {
     contentRef.current = content;
   }, [content]);
-  const [editorReady, setEditorReady] = useState(false);
-  // Anything loaded before the editor could take it.
+  const [loadedEditor, setLoadedEditor] =
+    useState<ComposerEditorIncarnation | null>(null);
+  const loadedEditorRef = useRef<ComposerEditorIncarnation | null>(null);
+  // Anything loaded before the editor could take it. Runs for each editor
+  // the box mounts, so the one back after a call takes the draft again.
   const onEditorReady = useCallback(() => {
+    const editor = editorRef.current;
+    if (editor === null) return;
     if (contentRef.current !== EMPTY_BOT_BOX) {
-      editorRef.current?.syncContent(contentRef.current, START_OF_BOX);
+      editor.syncContent(contentRef.current, START_OF_BOX);
     }
-    setEditorReady(true);
+    const incarnation = editor.getEditorIncarnation();
+    loadedEditorRef.current = incarnation;
+    setLoadedEditor(incarnation);
+  }, [editorRef]);
+  const holdsLoad = useCallback((): boolean => {
+    const incarnation = editorRef.current?.getEditorIncarnation() ?? null;
+    return incarnation !== null && incarnation === loadedEditorRef.current;
   }, [editorRef]);
   return {
     content,
     setContent,
     loadBox,
     onEditorReady,
-    editorReady,
+    loadedEditor,
+    holdsLoad,
     takenQuoteId,
     held,
     seedsLoaded,
