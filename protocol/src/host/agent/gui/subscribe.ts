@@ -117,6 +117,7 @@ import { chatPortForwardSchema } from "@traycer/protocol/host/port-forward";
 import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreReasonix,
+  guiHarnessIdSchemaV100,
 } from "@traycer/protocol/host/agent/shared";
 import {
   openChatEventSchema,
@@ -1794,6 +1795,12 @@ export const chatActiveTurnSchemaPreReasonix = lazySchema(() =>
 
 // Live shape, bound only to the unreleased `1.7` line: re-widens `harnessId` to
 // the full enum so a Reasonix turn is expressible on the wire it ships with.
+const chatActiveTurnSchemaPreCline = lazySchema(() =>
+  chatActiveTurnSchemaPreReasonix.extend({
+    harnessId: guiHarnessIdSchemaV100,
+  }),
+);
+
 export const chatActiveTurnSchema = lazySchema(() =>
   chatActiveTurnSchemaPreReasonix.extend({
     harnessId: guiHarnessIdSchema,
@@ -9006,6 +9013,11 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV144 = lazySchema(() =>
 const chatSubscribeTurnStateChangedServerFrameSchemaV146 = lazySchema(() =>
   chatSubscribeTurnStateChangedServerFrameSchemaV144.extend(accountWaitFields),
 );
+const chatSubscribeTurnStateChangedServerFrameSchemaPreCline = lazySchema(() =>
+  chatSubscribeTurnStateChangedServerFrameSchemaV146.extend({
+    activeTurn: chatActiveTurnSchemaPreCline.nullable(),
+  }),
+);
 const openChatSubscribeWindowedServerFrameSchemaV141 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
@@ -9162,12 +9174,17 @@ const openChatSubscribeWindowedServerFrameSchemaPreAccountWait = lazySchema(
       blockDeltaServerFrameSchema(openRuntimeEventSchema),
     ]),
 );
+const openChatWindowedSnapshotSchemaPreCline = lazySchema(() =>
+  openChatWindowedSnapshotSchemaPreAccountWait.extend({
+    ...accountWaitFields,
+    activeTurn: chatActiveTurnSchemaPreCline.nullable(),
+    tail: openChatTranscriptWindowSchemaPreCline,
+  }),
+);
 const openChatSubscribeWindowedServerFrameSchemaPreCline = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
-      snapshot: openChatWindowedSnapshotSchema.extend({
-        tail: openChatTranscriptWindowSchemaPreCline,
-      }),
+      snapshot: openChatWindowedSnapshotSchemaPreCline,
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
@@ -9175,7 +9192,7 @@ const openChatSubscribeWindowedServerFrameSchemaPreCline = lazySchema(() =>
     chatSubscribeRangeServerFrameSchemaOpenHarnessV143.extend({
       range: openChatRangeResponseSchemaPreCline,
     }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV146,
+    chatSubscribeTurnStateChangedServerFrameSchemaPreCline,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,

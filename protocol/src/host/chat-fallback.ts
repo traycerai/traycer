@@ -994,9 +994,18 @@ export const chatFallbackListTargetsDowngradeV30ToV20 = defineDowngradePath<
       const parsed = fallbackModelTargetSchemaV20.safeParse(row);
       return parsed.success ? [parsed.data] : [];
     });
+    const modelTargetsSkip =
+      response.modelTargetsSkip ??
+      (response.modelTargets.length > 0 && modelTargets.length === 0
+        ? {
+            reason: "client_upgrade_required",
+            label: "Available fallback models require a newer Traycer client.",
+          }
+        : null);
     const parsed = chatFallbackListTargetsResponseSchemaV20.safeParse({
       ...response,
       modelTargets,
+      modelTargetsSkip,
     });
     if (!parsed.success) {
       return {
@@ -1024,9 +1033,18 @@ export const chatFallbackListTargetsDowngradeV30ToV10 = defineDowngradePath<
       const parsed = fallbackModelTargetSchemaV10.safeParse(row);
       return parsed.success ? [parsed.data] : [];
     });
+    const modelTargetsSkip =
+      response.modelTargetsSkip ??
+      (response.modelTargets.length > 0 && modelTargets.length === 0
+        ? {
+            reason: "client_upgrade_required",
+            label: "Available fallback models require a newer Traycer client.",
+          }
+        : null);
     const parsed = chatFallbackListTargetsResponseSchemaV10.safeParse({
       ...response,
       modelTargets,
+      modelTargetsSkip,
     });
     if (!parsed.success) {
       return {

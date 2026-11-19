@@ -2085,7 +2085,7 @@ export type ProviderManagedLineV100 = z.infer<
  * to re-derive `enabled`.
  */
 
-const providerCliStateBaseShape = {
+const providerCliStateBaseShapeV100 = {
   // List-only, first published by providers.list@10.2. Older hosts omit it;
   // malformed future values degrade quietly without dropping the provider.
   macosRequirement: lazySchema(() =>
@@ -2225,7 +2225,7 @@ const providerCliStateBaseShape = {
   // whenever `packId` is null, and also when the host has a pack but no
   // channel knowledge to describe it with.
   managedVersions: lazySchema(() =>
-    providerManagedVersionsSchema.nullable().catch(null).optional(),
+    providerManagedVersionsSchemaV100.nullable().catch(null).optional(),
   ),
   // Why `managedVersions` is null, when the reason is worth showing. Carried
   // as a SIBLING rather than folded into `managedVersions` as a union member
@@ -2253,7 +2253,7 @@ const providerCliStateBaseShape = {
   // re-parse strips a key but cannot drop an array element: a second candidate
   // would reach every older client as a second, indistinguishable Managed row.
   managedLines: lazySchema(() =>
-    z.array(providerManagedLineSchema).catch([]).optional(),
+    z.array(providerManagedLineSchemaV100).catch([]).optional(),
   ),
   // Whether existing chats follow the stored selection's line: true when a
   // caller on `providers.setSelection@2.3` saved the selection as it is now.
@@ -2296,6 +2296,17 @@ const providerCliStateBaseShape = {
   // and "not applicable" everywhere else, and readers spell the `[]` default
   // themselves.
   hiddenModelProviders: lazySchema(() => z.array(z.string().min(1)).optional()),
+};
+
+/** Live base shape for `providers.list@11.0+` and mutation echoes. */
+const providerCliStateBaseShape = {
+  ...providerCliStateBaseShapeV100,
+  managedVersions: lazySchema(() =>
+    providerManagedVersionsSchema.nullable().catch(null).optional(),
+  ),
+  managedLines: lazySchema(() =>
+    z.array(providerManagedLineSchema).catch([]).optional(),
+  ),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -2364,12 +2375,7 @@ const providerManagedVersionsSchemaV100 = lazySchema(() =>
 const providerCliStateSchemaV1012Preimage = lazySchema(() =>
   z.object({
     providerId: providerIdSchemaV100,
-    ...providerCliStateBaseShape,
-    managedVersions: providerManagedVersionsSchemaV100
-      .nullable()
-      .catch(null)
-      .optional(),
-    managedLines: z.array(providerManagedLineSchemaV100).catch([]).optional(),
+    ...providerCliStateBaseShapeV100,
     auth: PROVIDER_AUTH_SCHEMA_V20,
     nativeCapabilities: providerNativeCapabilitiesSchema.catch(
       DEFAULT_PROVIDER_NATIVE_CAPABILITIES,

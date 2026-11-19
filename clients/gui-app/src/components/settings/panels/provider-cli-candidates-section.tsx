@@ -187,9 +187,9 @@ const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   // state, and the quickstart is the page that installs it.
   commandcode: "https://commandcode.ai/docs/quickstart",
   // Cline is never bundled either: Traycer finds your own install on PATH, so
-  // not-found is its normal first state and its CLI reference is the page that
-  // covers installing it.
-  cline: "https://docs.cline.bot/cli/cli-reference",
+  // not-found is its normal first state and its CLI overview covers installing
+  // it.
+  cline: "https://docs.cline.bot/cli/overview",
 };
 
 interface ProviderCandidateConfig {

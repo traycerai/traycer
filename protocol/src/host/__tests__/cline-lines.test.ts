@@ -97,7 +97,10 @@ import {
   transcriptRowContextSchemaPreCline,
 } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { userMessageAnchorResolvedEventSchema } from "@traycer/protocol/host/agent/gui/agent-runtime";
+import { projectChatServerFrameForVersion } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 import {
+  chatSubscribeV144,
+  chatSubscribeV145,
   chatSubscribeV146,
   chatSubscribeV147,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -555,6 +558,45 @@ describe("row-dropping bridges that keep non-row fields (3 -> 2)", () => {
       refused,
       "Listing fallback targets for this chat requires a newer Traycer client.",
     );
+
+    // When filtering drops the only targets from a non-empty list, explain why.
+    for (const target of [2, 1] as const) {
+      const emptied = downgradeResponseAcrossMajors(
+        hostRpcRegistry["chat.fallback.listTargets"],
+        3,
+        target,
+        chatFallbackListTargetsResponseSchema.parse({
+          ...response,
+          modelTargets: [row("only-cline", NEW_ID, NEW_ID)],
+          modelTargetsSkip: null,
+        }),
+      );
+      expect(emptied.ok, `emptied to ${String(target)}`).toBe(true);
+      if (!emptied.ok) return;
+      expect(emptied.value.modelTargets).toEqual([]);
+      expect(emptied.value.modelTargetsSkip).toEqual({
+        reason: "client_upgrade_required",
+        label: "Available fallback models require a newer Traycer client.",
+      });
+    }
+
+    // Already-empty lists keep the host skip verbatim (null or host-supplied).
+    const alreadyEmpty = downgradeResponseAcrossMajors(
+      hostRpcRegistry["chat.fallback.listTargets"],
+      3,
+      2,
+      chatFallbackListTargetsResponseSchema.parse({
+        ...response,
+        modelTargets: [],
+        modelTargetsSkip: { reason: "no-group", label: "No fallback group" },
+      }),
+    );
+    expect(alreadyEmpty.ok).toBe(true);
+    if (!alreadyEmpty.ok) return;
+    expect(alreadyEmpty.value.modelTargetsSkip).toEqual({
+      reason: "no-group",
+      label: "No fallback group",
+    });
   });
 
   it("environment.localOverrides and config.env.localOverride.{set,clear} 2 -> 1 drop cline env overrides and keep released rows", () => {
@@ -618,9 +660,9 @@ describe("row-dropping bridges that keep non-row fields (3 -> 2)", () => {
         }),
       );
       expect(savedDowngraded.ok).toBe(true);
-      if (!savedDowngraded.ok || savedDowngraded.value.outcome !== "saved") {
-        return;
-      }
+      if (!savedDowngraded.ok) return;
+      expect(savedDowngraded.value.outcome).toBe("saved");
+      if (savedDowngraded.value.outcome !== "saved") return;
       expect(savedDowngraded.value.overrides.map((o) => o.target.key)).toEqual([
         "FOO",
         "CC_TOKEN",
@@ -1129,7 +1171,7 @@ describe("released wire lines reject cline; their live counterparts accept it", 
       kind: "range" as const,
       epicId: "epic-1",
       chatId: "chat-1",
-      hasBinaryPayload: false,
+      hasBinaryPayload: false as const,
       range: {
         requestId: "req-1",
         epoch: 1,
@@ -1149,6 +1191,124 @@ describe("released wire lines reject cline; their live counterparts accept it", 
     ).toBe(false);
     expect(
       chatSubscribeV147.serverFrameSchema.safeParse(rangeFrame).success,
+    ).toBe(true);
+
+    // Outbound projection strips Cline session anchors on < 1.47 while keeping
+    // sibling rowContext fields and non-Cline anchors, and passes through on 1.47.
+    const claudeAnchor = {
+      ...clineAnchor,
+      harnessId: "claude" as const,
+      sessionId: "claude-session-1",
+      claudeMessageUuid: "claude-msg-1",
+    };
+    const mixedRangeFrame = {
+      ...rangeFrame,
+      range: {
+        ...rangeFrame.range,
+        rowIds: ["row-1", "row-2", "row-3"],
+        rowContext: {
+          "row-1": { sessionAnchor: clineAnchor },
+          "row-2": { sessionAnchor: clineAnchor, legacyRowAnchorAt: 42 },
+          "row-3": { sessionAnchor: claudeAnchor },
+        },
+      },
+    };
+    for (const [minor, contract] of [
+      [44, chatSubscribeV144],
+      [45, chatSubscribeV145],
+      [46, chatSubscribeV146],
+    ] as const) {
+      const projected = projectChatServerFrameForVersion(mixedRangeFrame, {
+        major: 1,
+        minor,
+      });
+      expect(
+        contract.serverFrameSchema.safeParse(projected).success,
+        `range projected to 1.${String(minor)}`,
+      ).toBe(true);
+      expect((projected as typeof mixedRangeFrame).range.rowContext).toEqual({
+        "row-2": { legacyRowAnchorAt: 42 },
+        "row-3": { sessionAnchor: claudeAnchor },
+      });
+
+      const onlyClineProjected = projectChatServerFrameForVersion(rangeFrame, {
+        major: 1,
+        minor,
+      });
+      expect(
+        contract.serverFrameSchema.safeParse(onlyClineProjected).success,
+        `only-cline range projected to 1.${String(minor)}`,
+      ).toBe(true);
+      expect(
+        "rowContext" in (onlyClineProjected as typeof rangeFrame).range,
+      ).toBe(false);
+    }
+    expect(
+      projectChatServerFrameForVersion(mixedRangeFrame, {
+        major: 1,
+        minor: 47,
+      }),
+    ).toBe(mixedRangeFrame);
+
+    // Snapshot tail projection also strips Cline anchors below 1.47.
+    const snapshotWithTail = {
+      kind: "snapshot" as const,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hasBinaryPayload: false as const,
+      snapshot: {
+        tail: {
+          rowContext: {
+            "row-1": { sessionAnchor: clineAnchor },
+          },
+        },
+      },
+    };
+    const projectedSnapshot = projectChatServerFrameForVersion(
+      snapshotWithTail,
+      { major: 1, minor: 46 },
+    );
+    expect(projectedSnapshot).toEqual({
+      ...snapshotWithTail,
+      snapshot: { tail: {} },
+    });
+    expect(
+      projectChatServerFrameForVersion(snapshotWithTail, {
+        major: 1,
+        minor: 47,
+      }),
+    ).toBe(snapshotWithTail);
+
+    // 1.46 freezes activeTurn.harnessId on the pre-Cline enum; 1.47 takes cline.
+    const turnStateFrame = {
+      kind: "turnStateChanged" as const,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hasBinaryPayload: false as const,
+      runStatus: "running" as const,
+      activeTurn: {
+        turnId: "turn-1",
+        status: "running" as const,
+        harnessId: NEW_ID,
+        model: "claude-sonnet-4-6",
+        userMessageId: null,
+        startedAt: 100,
+        updatedAt: 100,
+        sameTurnSteeringSupported: false,
+      },
+      accountWait: null,
+    };
+    expect(
+      chatSubscribeV146.serverFrameSchema.safeParse(turnStateFrame).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV146.serverFrameSchema.safeParse({
+        ...turnStateFrame,
+        activeTurn: { ...turnStateFrame.activeTurn, harnessId: "commandcode" },
+      }).success,
+    ).toBe(true);
+    expect(
+      chatSubscribeV147.serverFrameSchema.safeParse(turnStateFrame).success,
     ).toBe(true);
   });
 });

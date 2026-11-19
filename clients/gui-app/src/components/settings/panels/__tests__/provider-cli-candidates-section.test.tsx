@@ -404,12 +404,12 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
       name: "Cline installation guide",
     });
     expect(guide.getAttribute("href")).toBe(
-      "https://docs.cline.bot/cli/cli-reference",
+      "https://docs.cline.bot/cli/overview",
     );
 
     fireEvent.click(guide);
     expect(openLink).toHaveBeenCalledWith(
-      "https://docs.cline.bot/cli/cli-reference",
+      "https://docs.cline.bot/cli/overview",
       "docs",
       null,
     );
