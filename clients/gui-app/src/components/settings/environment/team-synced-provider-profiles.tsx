@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useAuthService } from "@/lib/host";
@@ -6,6 +6,7 @@ import { environmentMutationKeys } from "@/lib/query-keys";
 import type {
   ProviderId,
   ProviderProfile,
+  ProviderProfileAccentColor,
 } from "@traycer/protocol/host/provider-schemas";
 import type { EnvironmentConfigurationItemWriteResponse } from "@traycer/protocol/host/environment/configuration-contracts";
 import { ProfileDropdown } from "@/components/providers/profile-dropdown";
@@ -33,6 +34,7 @@ import { TeamProfileEditor } from "./team-profile-editor";
 import { TeamProfileLoginDialog } from "./team-profile-login-dialog";
 import { SwitchAccountMoveDialog } from "@/components/providers/switch-account-move-dialog";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import { useTeamProfileColor } from "@/hooks/environment/team/use-team-profile-color";
 import { usePickedTeamLabel } from "./team-pick-label";
 import { TeamReadFailed } from "./team-read-failed";
 
@@ -82,6 +84,38 @@ export function TeamSyncedProviderProfiles(props: {
     readonly switchSource: ProviderProfile | null;
   } | null>(null);
   const [session, setSession] = useState(0);
+  // A sign-in the dialog closed on before its row was listed: its picked color
+  // is written once the row is listed.
+  const pendingColor = useRef<{
+    readonly profileId: string;
+    readonly color: ProviderProfileAccentColor;
+  } | null>(null);
+  const [pendingColorAsked, setPendingColorAsked] = useState(0);
+  const colorWrite = useTeamProfileColor(() => {});
+  const environmentId = source.kind === "pool" ? source.environmentId : null;
+  const listedProviders = records?.providers;
+  useEffect(() => {
+    const pending = pendingColor.current;
+    if (pending === null || environmentId === null) return;
+    const row = listedProviders
+      ?.find((provider) => provider.providerId === props.providerId)
+      ?.profiles.find((profile) => profile.profileId === pending.profileId);
+    if (row === undefined) return;
+    pendingColor.current = null;
+    if (row.accentColor === pending.color) return;
+    void colorWrite.save(
+      environmentId,
+      props.providerId,
+      pending.profileId,
+      pending.color,
+    );
+  }, [
+    pendingColorAsked,
+    listedProviders,
+    environmentId,
+    props.providerId,
+    colorWrite,
+  ]);
   if (source.kind !== "pool") return null;
   const { profiles, selected, edited } = teamProfileSelection(
     records?.providers ?? [],
@@ -97,7 +131,7 @@ export function TeamSyncedProviderProfiles(props: {
     setLogin({ profile, switchSource });
   };
   const setEnabled = (profileId: string | null, enabled: boolean): void => {
-    if (!canEdit || put.isPending || profileId === null) return;
+    if (put.isPending || profileId === null) return;
     put.mutate({ environmentId: source.environmentId, profileId, enabled });
   };
   return (
@@ -147,6 +181,11 @@ export function TeamSyncedProviderProfiles(props: {
           environmentId={source.environmentId}
           onClose={() => setLogin(null)}
           onSelect={setPickedId}
+          onCompletedUnlisted={(profileId, color) => {
+            if (color === undefined) return;
+            pendingColor.current = { profileId, color };
+            setPendingColorAsked((asked) => asked + 1);
+          }}
           onAddAsNew={() => startLogin(null, login.profile)}
         />
       ) : null}
@@ -249,7 +288,7 @@ function TeamSelectedProviderProfile(props: {
         eligibilityControls={{
           pending: () => props.pending,
           disabledReason: () => null,
-          onSetEnabled: props.canEdit ? props.onSetEnabled : null,
+          onSetEnabled: props.onSetEnabled,
         }}
         admissionByProfileId={null}
         showTerminalBadge={false}

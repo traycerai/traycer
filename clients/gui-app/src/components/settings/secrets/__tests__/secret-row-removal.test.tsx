@@ -28,7 +28,6 @@ vi.mock(
       state: "ready",
       collisions: [],
       retry: () => undefined,
-      reread: () => undefined,
     }),
   }),
 );

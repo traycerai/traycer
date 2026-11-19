@@ -105,7 +105,8 @@ export function useMoveRerun(
     client,
     method: "environment.status",
     params: {},
-    options: { enabled: statusServed === true, poll: true },
+    // Read again on every opening, so Retry need not wait for the next poll.
+    options: { enabled: statusServed === true, poll: true, staleTime: 0 },
   });
   const status = statusRead.data ?? null;
   const retryable =
@@ -120,10 +121,15 @@ export function useMoveRerun(
     stoppedAgain:
       rerun !== null && reading === "stopped_again" ? rerun.refusal : null,
     // A re-run can stop before it reaches the move; the host retries any stopped stage.
+    // A status cached before the sheet opened is not read as stopped, even
+    // when this opening's own read failed and left that status in place.
     stopped:
       retryable &&
       (reading === "stopped_again" ||
-        (status !== null && moveHasStopped(status))),
+        (status !== null &&
+          statusRead.isFetchedAfterMount &&
+          !statusRead.isError &&
+          moveHasStopped(status))),
     pending: retry.isPending,
     rerun: (refusal, started) => {
       retry.mutate(

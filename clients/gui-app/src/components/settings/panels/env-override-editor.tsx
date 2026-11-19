@@ -212,13 +212,6 @@ export function EnvOverrideEditor(props: {
   readonly rowNotes: ReadonlyMap<string, ReactNode>;
   /** The latest stale refusal of a row's save, or `null` for none. */
   readonly staleRefusal: EnvStaleRefusal | null;
-  /**
-   * The hosts a SET save propagates to, for the editor's single pending
-   * footer ("`<key>` · Applying on `<n>` hosts…"); `null` for a save that
-   * reaches only this computer (a Local row, or the Shell host-process
-   * caller), which keeps the plain Adding/Saving/Removing text instead.
-   */
-  readonly applyingHostsCount?: number | null;
   /** Resolves after the write and its post-write overrides read complete. */
   readonly onCommit: (
     oldKey: string,
@@ -292,24 +285,7 @@ export function EnvOverrideEditor(props: {
       () => props.onDelete(key),
     );
   };
-  let pendingLabel: string | null = null;
-  if (pending !== null) {
-    const hostCount = props.applyingHostsCount ?? null;
-    if (pending.action === "put" && hostCount !== null) {
-      pendingLabel =
-        hostCount === 1
-          ? `${pending.key} · Applying on 1 host…`
-          : `${pending.key} · Applying on ${hostCount} hosts…`;
-    } else {
-      let action = pending.oldKey === "" ? "Adding" : "Saving";
-      if (pending.action === "remove") action = "Removing";
-      pendingLabel = `${pending.key} · ${action}`;
-    }
-  }
-
-  const feedback = (
-    <EnvWriteFeedback pendingLabel={pendingLabel} writeError={writeError} />
-  );
+  const feedback = <EnvWriteFeedback writeError={writeError} />;
   // Every phone sheet shows the editor's one write error, so opening or
   // closing a sheet clears it: an error never shows in a sheet it is not from.
   const clearSheetError = (): void => setWriteError(null);
@@ -414,22 +390,12 @@ export function EnvOverrideEditor(props: {
 }
 
 function EnvWriteFeedback(props: {
-  readonly pendingLabel: string | null;
   readonly writeError: string | null;
 }): ReactNode {
-  return (
-    <>
-      {props.pendingLabel === null ? null : (
-        <p role="status" className="px-3 py-2 text-ui-xs text-muted-foreground">
-          {props.pendingLabel}
-        </p>
-      )}
-      {props.writeError === null ? null : (
-        <p role="alert" className="px-3 py-2 text-ui-xs text-destructive">
-          {props.writeError}
-        </p>
-      )}
-    </>
+  return props.writeError === null ? null : (
+    <p role="alert" className="px-3 py-2 text-ui-xs text-destructive">
+      {props.writeError}
+    </p>
   );
 }
 

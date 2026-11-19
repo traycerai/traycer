@@ -263,8 +263,6 @@ function runningHost(hostId: string, kind: RunningHost["kind"]): RunningHost {
     name: hostId,
     kind,
     isThisComputer: false,
-    lastReportedAt: null,
-    applied: [],
   };
 }
 

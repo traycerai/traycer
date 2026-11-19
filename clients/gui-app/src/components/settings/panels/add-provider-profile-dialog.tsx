@@ -32,7 +32,6 @@ import {
   SIGN_IN_WITH_ANOTHER_TEXT,
   signedInAsText,
   USE_PROFILE_TEXT,
-  WAITING_FOR_PROFILE_TEXT,
 } from "@/components/providers/profile-sync-copy";
 import {
   useCachedProviderProfilesReader,
@@ -243,8 +242,14 @@ function ProviderProfileSignInDialog({
   const [accentColor, setAccentColor] = useState<ProviderProfileAccentColor>(
     () => nextAvailableAccentColor(state.profiles),
   );
+  // The row this sign-in creates joins `state.profiles` with the dialog's own
+  // colour, so the duplicate-colour warning counts only what was here at open.
+  const [profileIdsAtOpen] = useState(
+    () => new Set(state.profiles.map((profile) => profile.profileId)),
+  );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const finalizeAttemptRef = useRef<string | null>(null);
+  const completedHandledRef = useRef(false);
   // Keep the committed name through recolor completion and retry, which still
   // receive the profile snapshot from before naming.
   const [namingCommittedProfile, setNamingCommittedProfile] =
@@ -398,6 +403,15 @@ function ProviderProfileSignInDialog({
       onOpenChange(false);
       return;
     }
+    if (flow.state.kind === "completed") {
+      if (completedHandledRef.current) return;
+      completedHandledRef.current = true;
+      onFailedAttempt(null);
+      if (flow.state.profileId !== null) onProfileCreated(flow.state.profileId);
+      onOpenChange(false);
+      return;
+    }
+    completedHandledRef.current = false;
     if (
       flow.state.kind !== "identity" ||
       flow.state.existingProfileId !== null ||
@@ -471,7 +485,9 @@ function ProviderProfileSignInDialog({
           <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
             <AddProfileSetupFields
               target={target}
-              profiles={state.profiles}
+              profiles={state.profiles.filter((profile) =>
+                profileIdsAtOpen.has(profile.profileId),
+              )}
               label={label}
               onLabelChange={setLabel}
               accentColor={accentColor}
@@ -660,9 +676,6 @@ function dialogShowsCloseButton(
   return (
     flowState.kind === "start" ||
     flowState.kind === "already-signed-in" ||
-    flowState.kind === "waiting-for-profile" ||
-    (flowState.kind === "target-outcome" &&
-      flowState.profileOutcome?.kind === "waiting-for-profile") ||
     flowState.kind === "list-unread"
   );
 }
@@ -845,7 +858,6 @@ function signInAccountBody({
           profile={flowState.profile}
         />
       );
-    case "waiting-for-profile":
     case "list-unread":
       return (
         <p className="text-ui-sm text-muted-foreground">
@@ -1035,16 +1047,6 @@ function AddProfileOutcomeFooter({
           {USE_PROFILE_TEXT}
         </Button>
         <FooterSentence>{alreadySignedInAsText(profile.label)}</FooterSentence>
-      </DialogFooter>
-    );
-  }
-  if (flowState.kind === "waiting-for-profile") {
-    return (
-      <DialogFooter>
-        <Button type="button" size="sm" onClick={onDone}>
-          Done
-        </Button>
-        <FooterSentence>{WAITING_FOR_PROFILE_TEXT}</FooterSentence>
       </DialogFooter>
     );
   }

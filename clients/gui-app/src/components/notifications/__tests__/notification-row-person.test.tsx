@@ -21,7 +21,13 @@ import type { QueryClient } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type {
   ChatRecordSummaryV12,
   ChatRecordSummaryV15,
@@ -320,17 +326,14 @@ describe("<NotificationRow /> about a member's post", () => {
   });
 });
 
-describe("NotificationRow started-by attribution", () => {
+describe("NotificationRow chat text with a starter recorded", () => {
   const epicHarness = createEpicSessionTestHarness(STARTER_EPIC_ID);
   let runnerHost: MockRunnerHost;
-  let authnRequests: string[];
 
   beforeEach(async () => {
-    authnRequests = [];
-    vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
-      authnRequests.push(requestUrl(input));
-      return Promise.resolve(new Response(null, { status: 404 }));
-    });
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(new Response(null, { status: 404 })),
+    );
     runnerHost = new MockRunnerHost({
       signInUrl: "https://example.com",
       authnBaseUrl: "https://auth.example.com",
@@ -364,71 +367,74 @@ describe("NotificationRow started-by attribution", () => {
   afterEach(() => {
     cleanup();
     epicHarness.teardown();
+    resetHostConnectionRegistryForTest();
     useSelectionAuthorityStore.getState().reset();
   });
 
-  it("keeps a failed chat's own text even when its open task has a starter", async () => {
-    cacheMembers(
-      membersPage({
-        userId: "user-2",
-        displayName: "Grace Hopper",
-        avatarUrl: null,
-      }),
-    );
-    render(startedRowTree(starterNotificationRow("errored"), true));
-    const store = await waitForStarterStore();
-    seedStarter(store, "user-2");
+  function installHostOwnedBy(owner: HostOwnerPrincipal): void {
+    const row = {
+      ...remoteEntry(mockLocalHostEntry.hostId, null),
+      owner,
+    };
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) => (hostId === row.hostId ? row : null),
+        onDirectoryChanged: () => ({ dispose: () => undefined }),
+      },
+      leases: null,
+    });
+  }
 
-    const entry = await screen.findByTestId("notification-entry");
-    expect(within(entry).getByText("The server's chat result")).not.toBeNull();
-    expect(within(entry).queryByText(/Started by/)).toBeNull();
-  });
+  it.each([
+    ["a personal computer", { kind: "user", id: "user-1" } as const],
+    ["a team computer", { kind: "team", id: "team-1", name: "Team" } as const],
+  ])(
+    "shows a chat notification's own text on %s, before and after a named starter is recorded",
+    async (_computer, owner) => {
+      installHostOwnedBy(owner);
+      cacheMembers(
+        membersPage({
+          userId: "user-2",
+          displayName: "Grace Hopper",
+          avatarUrl: "https://example.com/grace.png",
+        }),
+      );
+      const row = starterNotificationRow("completed");
+      const rendered = render(startedRowTree(row, false));
+      expect(
+        await screen.findByText("The server's chat result"),
+      ).not.toBeNull();
 
-  it("keeps a closed task's text without an authn lookup for its starter", () => {
-    const cloudRequestsBefore = harness.cloudRequests.length;
-    const entry = renderRow(starterNotificationRow("completed"));
+      rendered.rerender(startedRowTree(row, true));
+      const store = await waitForStarterStore();
+      seedStarter(store, "user-2");
 
-    expect(within(entry).getByText("The server's chat result")).not.toBeNull();
-    expect(within(entry).queryByText(/Started by/)).toBeNull();
-    expect(queryClient.isFetching()).toBe(0);
-    expect(harness.cloudRequests).toHaveLength(cloudRequestsBefore);
-    expect(authnRequests).toEqual([]);
-    expect(harness.messenger.calls).toEqual([]);
-    expect(memberRequests).toBe(0);
-  });
+      const entry = await screen.findByTestId("notification-entry");
+      expect(
+        within(entry).getByText("The server's chat result"),
+      ).not.toBeNull();
+      expect(within(entry).queryByText(/Started by/)).toBeNull();
+    },
+  );
 
-  it("replaces the same row's body once its open task supplies a named starter", async () => {
-    cacheMembers(
-      membersPage({
-        userId: "user-2",
-        displayName: "Grace Hopper",
-        avatarUrl: "https://example.com/grace.png",
-      }),
-    );
-    const row = starterNotificationRow("completed");
-    const rendered = render(startedRowTree(row, false));
-    expect(await screen.findByText("The server's chat result")).not.toBeNull();
+  it.each([
+    ["errored", "user-2"],
+    ["completed", "system"],
+  ] as const)(
+    "shows the own text of the %s chat notification on a team computer, starter %s",
+    async (outcome, starterUserId) => {
+      installHostOwnedBy({ kind: "team", id: "team-1", name: "Team" });
+      render(startedRowTree(starterNotificationRow(outcome), true));
+      const store = await waitForStarterStore();
+      seedStarter(store, starterUserId);
 
-    rendered.rerender(startedRowTree(row, true));
-    const store = await waitForStarterStore();
-    seedStarter(store, "user-2");
-
-    const entry = await screen.findByTestId("notification-entry");
-    expect(
-      await within(entry).findByText("Started by Grace Hopper"),
-    ).not.toBeNull();
-    expect(within(entry).queryByText("The server's chat result")).toBeNull();
-  });
-
-  it("keeps the server body when the starter is system", async () => {
-    render(startedRowTree(starterNotificationRow("completed"), true));
-    const store = await waitForStarterStore();
-    seedStarter(store, "system");
-
-    const entry = await screen.findByTestId("notification-entry");
-    expect(within(entry).getByText("The server's chat result")).not.toBeNull();
-    expect(within(entry).queryByText(/Started by/)).toBeNull();
-  });
+      const entry = await screen.findByTestId("notification-entry");
+      expect(
+        within(entry).getByText("The server's chat result"),
+      ).not.toBeNull();
+      expect(within(entry).queryByText(/Started by/)).toBeNull();
+    },
+  );
 
   function starterNotificationRow(
     outcome: "completed" | "errored",
@@ -512,12 +518,6 @@ const sessionMessengerFactory = ({ registry }: { registry: HostRpcRegistry }) =>
 
 const noRemoteHosts = () =>
   Promise.resolve({ kind: "hosts" as const, entries: [] });
-
-function requestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.href;
-  return input.url;
-}
 
 async function waitForStarterStore(): Promise<StarterStore> {
   await waitFor(() => {

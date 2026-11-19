@@ -2,7 +2,6 @@ import { unresolvedSetupText } from "@/components/settings/environment/environme
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { planesOfferStopSharing } from "@/components/settings/move/status-planes";
-import { isReportedItemKind } from "@/components/settings/environment/status-chip-page-kinds";
 import {
   localRowCohort,
   type LocalRowVerb,
@@ -51,11 +50,24 @@ export function moveStoppedText(reason: string, left: number): string {
   return `Moving stopped: ${reason}. ${left === 1 ? "1 item" : `${String(left)} items`} left.`;
 }
 
+/**
+ * Kinds no count reports: a configuration's sandbox defaults, storage policy
+ * and snapshot policy change nothing on a host (every host answers them
+ * applied).
+ */
+const UNREPORTED_ITEM_KINDS: ReadonlySet<string> = new Set([
+  "sandbox_defaults",
+  "storage_policy",
+  "snapshot_policy",
+]);
+
 export function moveItemCounts(status: EnvironmentStatusResponseV11): {
   readonly applied: number;
   readonly total: number;
 } {
-  const items = status.items.filter((item) => isReportedItemKind(item.kind));
+  const items = status.items.filter(
+    (item) => !UNREPORTED_ITEM_KINDS.has(item.kind),
+  );
   const applied = items.filter((item) => item.status === "applied").length;
   return { applied, total: items.length + status.pendingUploads.length };
 }

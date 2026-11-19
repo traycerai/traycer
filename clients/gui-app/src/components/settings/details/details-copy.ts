@@ -13,8 +13,6 @@ export function detailsRecoveryLabel(
   switch (recovery.kind) {
     case "repair":
       return `Open ${name}`;
-    case "apply":
-      return "Retry applying";
     case "install":
       return `Install on ${name}`;
     case "retry":

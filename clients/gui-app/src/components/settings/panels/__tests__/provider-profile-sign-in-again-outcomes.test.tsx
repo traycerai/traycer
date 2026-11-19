@@ -26,6 +26,13 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
     useAuthService: currentAuthService,
   };
 });
+vi.mock("@/lib/providers/provider-ambient-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/providers/provider-ambient-auth")
+    >();
+  return { ...actual, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS: 20 };
+});
 vi.mock("@/lib/links/open-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/links/open-link")>();
   return { ...actual, useOpenLink: () => () => Promise.resolve() };
@@ -53,6 +60,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import { AMBIENT_AUTH_PENDING_REPOLL_CAP } from "@/lib/providers/provider-ambient-auth";
 import {
   profile,
   provider,
@@ -86,7 +94,7 @@ const DIFFERENT_ACCOUNT = `That sign-in is a different account. ${PROFILE_LABEL}
 const UNPROVEN =
   "This sign-in can't be matched to the account this profile uses.";
 const NOT_CHANGED = `${PROFILE_LABEL} was not changed.`;
-const WAITING_FOR_PROFILE = "Waiting for Traycer. Your sign-in is complete.";
+const DUPLICATE_REASON = `${PROFILE_LABEL} already uses this account and organization. Sign in again and choose a different organization.`;
 const DID_NOT_FINISH = "Sign-in did not finish. Try again.";
 const ADD_AS_NEW = "Add as a new profile";
 const SWITCH_ACCOUNT = "Switch account";
@@ -426,9 +434,9 @@ const REAUTH_MISFITS = [
 
 const SETTLED_CLOSE = [
   {
-    name: "waiting-for-profile",
-    outcome: { kind: "waiting-for-profile" },
-    sentence: WAITING_FOR_PROFILE,
+    name: "already-signed-in",
+    outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
+    sentence: DUPLICATE_REASON,
   },
   {
     name: "account-mismatch",
@@ -526,15 +534,39 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
     expect(methodCount(harness.calls, "providers.awaitLogin")).toBe(1);
   });
 
-  it("shows the waiting-for-profile sentence and Done", async () => {
-    renderReauth({
+  it("asks the host again, ending nowhere, when it has not named the profile", async () => {
+    const harness = renderReauth({
+      ...REAUTH_DEFAULTS,
+      offers: true,
+      outcome: null,
+      holdAwait: false,
+      awaitAnswers: [
+        nothingChanged({ kind: "waiting-for-profile" }),
+        nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
+      ],
+    });
+
+    await waitFor(() => {
+      expect(harness.onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(methodCount(harness.calls, "providers.awaitLogin")).toBe(2);
+  });
+
+  it("settles as a completed sign-in once the host has answered with no profile past the re-ask cap", async () => {
+    const harness = renderReauth({
       ...REAUTH_DEFAULTS,
       offers: true,
       outcome: { kind: "waiting-for-profile" },
       holdAwait: false,
     });
-    expect(await screen.findByText(WAITING_FOR_PROFILE)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+
+    await waitFor(() => {
+      expect(harness.onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(methodCount(harness.calls, "providers.awaitLogin")).toBe(
+      AMBIENT_AUTH_PENDING_REPOLL_CAP + 1,
+    );
+    expect(harness.cancelCount()).toBe(0);
   });
 
   it.each(REAUTH_MISFITS)(
@@ -558,7 +590,6 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
       expect(screen.queryByText(DIFFERENT_ACCOUNT)).toBeNull();
       expect(screen.queryByText(UNPROVEN)).toBeNull();
       expect(screen.queryByText(ADD_AS_NEW)).toBeNull();
-      expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
       expect(harness.selected).not.toHaveBeenCalled();
       const cancel = harness.calls.find(
         (call) => call.method === "providers.cancelLogin",
@@ -589,7 +620,6 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
       expect(screen.queryByText(DIFFERENT_ACCOUNT)).toBeNull();
       expect(screen.queryByText(UNPROVEN)).toBeNull();
       expect(screen.queryByText(ADD_AS_NEW)).toBeNull();
-      expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
       expect(harness.selected).not.toHaveBeenCalled();
       const cancel = harness.calls.find(
         (call) => call.method === "providers.cancelLogin",
@@ -606,19 +636,19 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
     expect(harness.listCalls()).toBe(0);
   });
 
-  it("keeps today's did-not-finish result for already-signed-in", async () => {
-    renderReauth({
+  it("shows why an account the environment already holds is refused, not a failed sign-in", async () => {
+    const harness = renderReauth({
       ...REAUTH_DEFAULTS,
       offers: true,
       outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
       holdAwait: false,
     });
-    expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
-    expect(
-      screen.queryByText(`Already signed in as ${PROFILE_LABEL}`),
-    ).toBeNull();
+    expect(await screen.findByText(DUPLICATE_REASON)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    expect(screen.queryByText(DID_NOT_FINISH)).toBeNull();
     expect(screen.queryByText(ADD_AS_NEW)).toBeNull();
-    expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
+    expect(harness.selected).not.toHaveBeenCalled();
+    expect(harness.cancelCount()).toBe(0);
   });
 
   it("records a matching 200 receipt and shows the existing signed-in state", async () => {

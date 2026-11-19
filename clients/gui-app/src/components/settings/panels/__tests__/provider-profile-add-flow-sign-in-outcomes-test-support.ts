@@ -95,7 +95,6 @@ const PROFILE_LABEL = "Work";
 export const MINTED_PROFILE_ID = "minted-1";
 export const DID_NOT_FINISH =
   "Sign-in did not finish. Retry when you are ready.";
-export const WAITING = "Waiting for Traycer. Your sign-in is complete.";
 export const UNREADABLE = "Couldn't load provider state.";
 export const SIGNED_IN = `Signed in as ${PROFILE_LABEL}`;
 export const ALREADY_SIGNED_IN = `Already signed in as ${PROFILE_LABEL}`;
@@ -143,6 +142,8 @@ interface AddFlowHarness {
   readonly releaseRecolor: () => void;
   readonly signInFetch: SignInRequestFetchHarness | null;
   readonly updateProfileName: (profileId: string, name: string) => void;
+  /** The rows every list read after the await answers with from now on. */
+  readonly listProfiles: (profiles: readonly ProviderProfile[]) => void;
 }
 
 let settleHeldRecolor: () => void = () => undefined;
@@ -683,6 +684,9 @@ export function renderAddFlow(input: {
       release(setEnabledEcho());
     },
     signInFetch,
+    listProfiles: (profiles) => {
+      profilesAfter = profiles;
+    },
     updateProfileName: (profileId, name) => {
       profilesAfter = profilesAfter.map((profile) =>
         profile.profileId === profileId ? { ...profile, label: name } : profile,
@@ -765,7 +769,6 @@ export async function chooseSignedIn(
 export function expectNoSuccessSentence(): void {
   expect(screen.queryByText(SIGNED_IN)).toBeNull();
   expect(screen.queryByText(ALREADY_SIGNED_IN)).toBeNull();
-  expect(screen.queryByText(WAITING)).toBeNull();
   expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
 }
 

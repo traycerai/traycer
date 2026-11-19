@@ -14,7 +14,6 @@ function nameOnPageWith(hostName: string): string | null {
         section: "secrets",
         pick: { kind: "personal" },
         state: { kind: "ready", status: environmentStatusFixture({}) },
-        line: null,
         hostName,
         localOverrides: [],
         hostId: null,

@@ -2,7 +2,15 @@ import type { ComponentProps, ReactNode } from "react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -29,6 +37,11 @@ import {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -1120,6 +1133,17 @@ function chatStarterRecord(
     head: null,
     ...(starterUserId === null ? {} : { starterUserId }),
   };
+}
+
+function installHostDirectory(rows: ReadonlyArray<HostDirectoryEntry>): void {
+  const byId = new Map(rows.map((row) => [row.hostId, row]));
+  installHostConnectionRegistrySource({
+    directory: {
+      findById: (hostId) => byId.get(hostId) ?? null,
+      onDirectoryChanged: () => ({ dispose: () => undefined }),
+    },
+    leases: null,
+  });
 }
 
 function publishChatStarter(starterUserId: string | null): void {
@@ -2760,56 +2784,34 @@ describe("<ChatTile />", () => {
     );
   });
 
-  it("shows Started by Priya with her picture from the team's directory", async () => {
-    teamDirectoryPeople.set("u-priya", {
-      displayName: "Priya",
-      avatarUrl: "https://images.example.test/priya.png",
-    });
-    renderChatTile();
-    await waitForChatTileLoaded();
-    publishChatStarter("u-priya");
+  it.each([
+    ["a personal computer's", { kind: "user", id: "owner-1" } as const],
+    [
+      "a team computer's",
+      { kind: "team", id: "team-1", name: "Team" } as const,
+    ],
+  ])(
+    "draws no Started by strip on %s chat, whoever started it",
+    async (_computer, owner) => {
+      installHostDirectory([{ ...remoteEntry(HOST_ID, null), owner }]);
+      onTestFinished(resetHostConnectionRegistryForTest);
+      teamDirectoryPeople.set("u-priya", {
+        displayName: "Priya",
+        avatarUrl: "https://images.example.test/priya.png",
+      });
+      renderChatTile();
+      await waitForChatTileLoaded();
 
-    const line = await screen.findByTestId(
-      `chat-started-by-${CHAT_ARTIFACT.id}`,
-    );
-    expect(
-      within(line).getByText("Started by Priya", { exact: true }),
-    ).toBeTruthy();
-    expect(
-      line
-        .querySelector('[data-testid="person-avatar"] img')
-        ?.getAttribute("src"),
-    ).toBe("https://images.example.test/priya.png");
-    expect(screen.queryByText("u-priya", { exact: true })).toBeNull();
-  });
+      for (const starter of ["u-priya", "u-gone", "system", null]) {
+        publishChatStarter(starter);
 
-  it("draws no Started by line when the starter is system", async () => {
-    renderChatTile();
-    await waitForChatTileLoaded();
-    publishChatStarter("system");
-
-    expect(
-      screen.queryByTestId(`chat-started-by-${CHAT_ARTIFACT.id}`),
-    ).toBeNull();
-  });
-
-  it("draws no Started by line when an older chat row omits the starter", async () => {
-    renderChatTile();
-    await waitForChatTileLoaded();
-    publishChatStarter(null);
-
-    expect(
-      screen.queryByTestId(`chat-started-by-${CHAT_ARTIFACT.id}`),
-    ).toBeNull();
-  });
-
-  it("uses the starter id when no directory names that person", async () => {
-    renderChatTile();
-    await waitForChatTileLoaded();
-    publishChatStarter("u-gone");
-
-    expect(await screen.findByText("Started by u-gone")).not.toBeNull();
-  });
+        expect(
+          screen.queryByTestId(`chat-started-by-${CHAT_ARTIFACT.id}`),
+        ).toBeNull();
+        expect(screen.queryByText(/Started by/u)).toBeNull();
+      }
+    },
+  );
 
   it("keeps a resting copy sendable without serving-host workspace access", async () => {
     useSettingsStore.setState({ defaultPermission: "full_access" });

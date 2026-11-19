@@ -133,8 +133,6 @@ import {
 
 const HOST_ID = "host-a";
 const READY_STATUS: EnvironmentStatusResponseV13 = environmentStatusFixture({
-  // Pending, so a ready page says so ("Applying EXISTING on host-a."), which
-  // is how a test knows the status was read and rendered.
   items: [
     itemStatusFixture({ kind: "variable", key: "EXISTING", status: "pending" }),
   ],
@@ -192,6 +190,9 @@ type RenderShellPageOptions = {
   /** What `environment.secrets.list` answers. */
   readonly secrets: readonly EnvironmentSecretV12[];
 };
+
+/** How many `environment.status` reads the latest render's host answered. */
+let statusCallsOfLastRender: () => number = () => 0;
 
 function renderShellPage(
   options: RenderShellPageOptions,
@@ -368,6 +369,7 @@ function renderShellPage(
       </RunnerHostProvider>
     </QueryClientProvider>,
   );
+  statusCallsOfLastRender = () => statusCalls;
   return {
     cli,
     runnerHost,
@@ -393,9 +395,13 @@ const READY_HOST = {
   secrets: [],
 } as const;
 
-/** Waits until the page has rendered the host's status it read. */
+/** Waits until the page has read the host's status and rendered it. */
 async function pageIsReady(): Promise<void> {
-  await screen.findByText("Applying EXISTING on host-a.");
+  await screen.findByRole("button", { name: "Add a variable" });
+  await vi.waitFor(() => {
+    expect(statusCallsOfLastRender()).toBeGreaterThan(0);
+  });
+  await act(async () => {});
 }
 
 async function addVariable(name: string, value: string): Promise<void> {

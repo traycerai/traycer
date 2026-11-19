@@ -76,13 +76,6 @@ export interface TerminalStreamCallbacks {
       { readonly kind: "sessionUpdated" }
     >,
   ) => void;
-  /** The whole set each time; never called on an older connection, whose set stays unknown. */
-  readonly onViewers: (
-    frame: Extract<
-      TerminalSubscribeServerFrameOnWire,
-      { readonly kind: "viewers" }
-    >,
-  ) => void;
   readonly onConnectionStatus: StatusChangeHandler;
 }
 
@@ -292,8 +285,8 @@ export class TerminalStreamClient {
       case "pong": {
         return;
       }
+      // A 1.8 host still sends who is attached; the app draws nobody.
       case "viewers": {
-        this.callbacks.onViewers(frame);
         return;
       }
     }

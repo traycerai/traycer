@@ -3,6 +3,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -11,7 +12,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
-import { PageChip } from "@/components/settings/personal/page-chip";
+import { useHostsRunningConfiguration } from "@/components/settings/environment/use-hosts-running-configuration";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -150,11 +151,12 @@ describe("team pages on a build with a server pool", () => {
     const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
       "environment.host.list": () => ({ hosts: [] }),
     });
-    render(
-      <PageChip
-        section="shell"
-        pick={{ kind: "team", environmentId: "env-a" }}
-      />,
+    renderHook(
+      () =>
+        useHostsRunningConfiguration(
+          { kind: "team", environmentId: "env-a" },
+          true,
+        ),
       { wrapper: harness.Wrapper },
     );
 
