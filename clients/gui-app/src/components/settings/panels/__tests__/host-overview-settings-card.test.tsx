@@ -48,6 +48,7 @@ import {
   hostSettingsRowModel,
 } from "@/components/settings/panels/host-overview-settings-card-model";
 import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
+import { WithReceipt } from "@/components/settings/panels/__tests__/ownership-receipt-test-support";
 import { moveDiagnosticsExport } from "@/components/settings/move/move-diagnostics-export";
 import {
   moveHasStopped,
@@ -433,19 +434,24 @@ function renderCardWithBinding(
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <HostOverviewSettingsCard
-        client={client}
-        hostId={hostId}
-        hostName="Old laptop"
-        status={status}
-        binding={
-          options.binding.hostId === hostId
-            ? options.binding
-            : { ...options.binding, hostId }
-        }
-        owner={options.owner}
-        isLocalMachine={options.isLocalMachine}
-      />
+      <WithReceipt>
+        {(receipt) => (
+          <HostOverviewSettingsCard
+            client={client}
+            hostId={hostId}
+            hostName="Old laptop"
+            status={status}
+            binding={
+              options.binding.hostId === hostId
+                ? options.binding
+                : { ...options.binding, hostId }
+            }
+            owner={options.owner}
+            isLocalMachine={options.isLocalMachine}
+            receipt={receipt}
+          />
+        )}
+      </WithReceipt>
     </QueryClientProvider>,
   );
   return queryClient;

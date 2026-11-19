@@ -39,6 +39,7 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 // Until `done`, the outcome is `environment.status@1.3`'s `move` on that read's own
 // poll; `done` is reported only after a fresh authn read on the confirming sign-in
 // shows the computer in the team. A status naming another attempt counts only after the start.
+// `onStarted` fires once the start answers that the give is under way.
 export function TeamGiveDialog(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
@@ -46,6 +47,7 @@ export function TeamGiveDialog(props: {
   readonly currentEnvironmentId: string | null;
   readonly team: EnvironmentDescriptorV11;
   readonly onClose: () => void;
+  readonly onStarted: (team: EnvironmentDescriptorV11) => void;
   readonly onGiven: (team: EnvironmentDescriptorV11) => void;
 }): ReactNode {
   const { team } = props;
@@ -83,6 +85,7 @@ export function TeamGiveDialog(props: {
       setNotFinished(true);
       return;
     }
+    press.onStarted(press.team);
     // `done` reads like `running` through the status. The re-read cancels one in flight,
     // so every answer after `startedAt` was asked after the start.
     setAttempt({ attemptId: answer.attemptId, startedAt: Date.now(), press });
@@ -100,6 +103,7 @@ export function TeamGiveDialog(props: {
       client: props.client,
       hostId: props.hostId,
       team,
+      onStarted: props.onStarted,
       onGiven: props.onGiven,
     };
     setAttempt(null);
@@ -236,6 +240,7 @@ interface GivePress {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly team: EnvironmentDescriptorV11;
+  readonly onStarted: (team: EnvironmentDescriptorV11) => void;
   readonly onGiven: (team: EnvironmentDescriptorV11) => void;
 }
 
