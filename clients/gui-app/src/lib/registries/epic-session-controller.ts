@@ -494,6 +494,38 @@ interface HandleRecord {
   ownerIdentityKey: string | null;
 }
 
+/** One admission attempt's wait for a warm handle's owner reading. */
+interface WarmOwnerWait {
+  readonly handle: OpenEpicStoreHandle;
+  readonly retryGeneration: number;
+  /** `Date.now()` past which the attempt fails. */
+  readonly deadlineAt: number;
+}
+
+/**
+ * The attempt's wait on `warm`: the one already running when it waits on the
+ * same handle in the same retry generation, otherwise a new one.
+ */
+function continueWarmOwnerWait(
+  previous: WarmOwnerWait | null,
+  warm: OpenEpicStoreHandle,
+  retryGeneration: number,
+  now: number,
+): WarmOwnerWait {
+  if (
+    previous !== null &&
+    previous.handle === warm &&
+    previous.retryGeneration === retryGeneration
+  ) {
+    return previous;
+  }
+  return {
+    handle: warm,
+    retryGeneration,
+    deadlineAt: now + ESTABLISHING_DEADLINE_MS,
+  };
+}
+
 interface ControllerEntry {
   readonly epicId: string;
   readonly tabs: Map<string, TabMembership>;
@@ -546,6 +578,13 @@ interface ControllerEntry {
   /** The selection-gap sub-run: `establishing` bounded by a deadline, then `failed`. */
   gapDeadline: number | null;
   gapKey: string | null;
+  /**
+   * The current admission attempt's wait for a warm handle's owner. A run
+   * that a notification restarts arms only the time left. A new attempt (a
+   * Retry, a different warm handle) or the wait's end (a reading, an
+   * admission) starts over.
+   */
+  warmOwnerWait: WarmOwnerWait | null;
   metadataHold: MetadataHold | null;
   /** The client for `session?.hostId ?? targetHostId`, stamped onto the handle. */
   sessionHostClient: HostClient<HostRpcRegistry> | null;
@@ -898,14 +937,14 @@ function createEpicSessionController(): EpicSessionController {
         retryReadyReader(reader, snapshot);
         return;
       case "failed":
-        if (reader.entry === null) attachReader(reader);
+        if (reader.entry === null) reattachForRetry(reader);
         return;
       case "refused":
         if (snapshot.reason === "access") {
           probeReaderAuthority(reader);
           return;
         }
-        if (reader.entry === null) attachReader(reader);
+        if (reader.entry === null) reattachForRetry(reader);
         return;
       case "revoked":
         probeReaderAuthority(reader);
@@ -915,6 +954,13 @@ function createEpicSessionController(): EpicSessionController {
       case "closed":
         return;
     }
+  }
+
+  /** A reader's Retry is a new admission attempt: the warm-owner wait starts over. */
+  function reattachForRetry(reader: ArtifactReaderDemand): void {
+    const entry = entries.get(reader.key.epicId);
+    if (entry !== undefined) entry.warmOwnerWait = null;
+    attachReader(reader);
   }
 
   function retryReadyReader(
@@ -1591,6 +1637,7 @@ function createEpicSessionController(): EpicSessionController {
       runKey: null,
       gapDeadline: null,
       gapKey: null,
+      warmOwnerWait: null,
       metadataHold: null,
       sessionHostClient: null,
       tabSnapshots: new Map(),
@@ -2471,6 +2518,10 @@ function createEpicSessionController(): EpicSessionController {
     run: ActiveRun,
     targetHostId: string | null,
   ): boolean {
+    // Cleared up front, so every path that proceeds ends the attempt's wait;
+    // only the waiting path below sets it again.
+    const previousWait = entry.warmOwnerWait;
+    entry.warmOwnerWait = null;
     const warm = registry.peek(entry.epicId);
     if (warm === null || isEpicSessionHandleDead(warm)) return true;
     const stampedHostId = getEpicSessionHandleHostId(warm);
@@ -2498,29 +2549,65 @@ function createEpicSessionController(): EpicSessionController {
     ) {
       return true;
     }
+    // Only a change that ends the wait restarts the run. A notification that
+    // leaves it unread (a store update that changes nothing, another host's
+    // row) restarts nothing: a restarted run subscribes again, and a store
+    // notifying its listeners would reach the new one in the same pass.
     const wake = (): void => {
-      if (!run.cancelled) requestReconcileRun(entry);
+      if (run.cancelled) return;
+      if (warmOwnerStillUnread(entry, warm, stampedHostId)) return;
+      requestReconcileRun(entry);
     };
     const unsubscribeStore = warm.store.subscribe(wake);
     const unsubscribeRows = subscribeAnyHostRowChanged(wake);
     // An owner that never proves itself fails rather than admits, within the
-    // bound the re-point arm gives a candidate. The run stays subscribed, so a
-    // later owner reading or host move asks again.
-    const deadline = window.setTimeout(() => {
-      if (run.cancelled) return;
-      retireEntryReaders(entry, "failed");
-      present(entry, {
-        kind: "failed",
-        targetHostId,
-        originalHostId: entry.originalHostId,
-      });
-    }, ESTABLISHING_DEADLINE_MS);
+    // bound the re-point arm gives a candidate. The bound is the attempt's,
+    // not the run's: a wake restarts the run, and it arms only what is left,
+    // so wake-ups closer together than the bound cannot hold the wait open.
+    // The run stays subscribed, so a later owner reading or host move asks
+    // again.
+    const now = Date.now();
+    const wait = continueWarmOwnerWait(
+      previousWait,
+      warm,
+      entry.retryGeneration,
+      now,
+    );
+    entry.warmOwnerWait = wait;
+    const deadline = window.setTimeout(
+      () => {
+        if (run.cancelled) return;
+        retireEntryReaders(entry, "failed");
+        present(entry, {
+          kind: "failed",
+          targetHostId,
+          originalHostId: entry.originalHostId,
+        });
+      },
+      Math.max(0, wait.deadlineAt - now),
+    );
     run.cleanup = () => {
       window.clearTimeout(deadline);
       unsubscribeStore();
       unsubscribeRows();
     };
     return false;
+  }
+
+  /** Whether a warm handle's admission still has no owner reading to go on. */
+  function warmOwnerStillUnread(
+    entry: ControllerEntry,
+    warm: OpenEpicStoreHandle,
+    stampedHostId: string,
+  ): boolean {
+    if (registry.peek(entry.epicId) !== warm) return false;
+    if (isEpicSessionHandleDead(warm)) return false;
+    const client = resolveClient(stampedHostId);
+    if (readOwnerIdentityKey(client) !== null) return false;
+    const directoryEntry = client?.getActiveHost() ?? null;
+    return (
+      directoryEntry === null || isRemoteHostDirectoryEntry(directoryEntry)
+    );
   }
 
   function startRun(entry: ControllerEntry, inputs: RunInputs): void {

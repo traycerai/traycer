@@ -26,6 +26,10 @@ import {
   openShownTaskTab,
   seen,
 } from "@/components/bots/__tests__/artifact-reader-card-harness-support";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 import { getEpicSessionController } from "@/lib/registries/epic-session-controller";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
@@ -202,5 +206,148 @@ describe("a warm handle on a remote host", () => {
     expect(status?.hasSession).toBe(true);
     expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(handle);
     expect(seen.constructions).toBe(constructionsBefore);
+  });
+
+  describe("the wait for an owner that has not proved itself", () => {
+    const THIRD = ESTABLISHING_DEADLINE_MS / 3;
+
+    /** A host row moves somewhere else: the coarse wake every waiting run hears. */
+    function unrelatedHostRowMoves(): void {
+      installHostConnectionRegistrySource({
+        directory: {
+          findById: () => null,
+          onDirectoryChanged: () => ({ dispose: () => undefined }),
+        },
+        leases: null,
+      });
+    }
+
+    /** The warm remote handle, its owner unreadable, and a reader waiting at t=0. */
+    function waitingReader() {
+      seen.remotePublicKey = "key-before";
+      const handle = warmHandleOf("row-1");
+      seen.clientUser = null;
+      const constructionsBefore = seen.constructions;
+      vi.useFakeTimers();
+      const token = acquire("row-2");
+      expect(token.read().kind).toBe("acquiring");
+      return { handle, token, constructionsBefore };
+    }
+
+    function presentation() {
+      return getEpicSessionController().readEntryStatusForTests(EPIC_ID)
+        ?.presentation.kind;
+    }
+
+    afterEach(() => {
+      resetHostConnectionRegistryForTest();
+    });
+
+    it("W1: fails at the deadline counted from the first wait, however many host-row notifications arrive meanwhile", () => {
+      const { token, constructionsBefore } = waitingReader();
+
+      vi.advanceTimersByTime(THIRD);
+      unrelatedHostRowMoves();
+      vi.advanceTimersByTime(THIRD);
+      unrelatedHostRowMoves();
+      vi.advanceTimersByTime(THIRD - 100);
+
+      expect(token.read().kind).toBe("acquiring");
+
+      vi.advanceTimersByTime(100);
+
+      expect(token.read().kind).toBe("failed");
+      expect(seen.constructions).toBe(constructionsBefore);
+    });
+
+    it("W1b: a warm-store notification that changes nothing is heard once, and does not restart the wait", () => {
+      const { handle, token } = waitingReader();
+      // A wake that subscribes anew inside its own notification is visited
+      // again by the store and loops: bounded here so the failure is a
+      // message, not a hung worker.
+      const subscribe = handle.store.subscribe.bind(handle.store);
+      let subscriptions = 0;
+      vi.spyOn(handle.store, "subscribe").mockImplementation((listener) => {
+        subscriptions += 1;
+        if (subscriptions > 20) {
+          throw new Error("the wake re-subscribed inside its own notification");
+        }
+        return subscribe(listener);
+      });
+
+      vi.advanceTimersByTime(THIRD);
+      act(() => {
+        handle.store.setState((state) => ({ ...state }));
+      });
+      vi.advanceTimersByTime(ESTABLISHING_DEADLINE_MS - THIRD - 100);
+
+      expect(token.read().kind).toBe("acquiring");
+
+      vi.advanceTimersByTime(100);
+
+      expect(token.read().kind).toBe("failed");
+    });
+
+    it("W4: fails at the deadline counted from the first wait, however many readers attach to the task meanwhile", () => {
+      const { token, constructionsBefore } = waitingReader();
+
+      // A second card for the same task attaches, and another: each restarts
+      // the run without a notification.
+      vi.advanceTimersByTime(THIRD);
+      const second = acquire("row-3");
+      vi.advanceTimersByTime(THIRD);
+      const third = acquire("row-4");
+      vi.advanceTimersByTime(THIRD - 100);
+
+      expect(token.read().kind).toBe("acquiring");
+      expect(second.read().kind).toBe("acquiring");
+      expect(third.read().kind).toBe("acquiring");
+
+      vi.advanceTimersByTime(100);
+
+      expect(token.read().kind).toBe("failed");
+      expect(second.read().kind).toBe("failed");
+      expect(third.read().kind).toBe("failed");
+      expect(seen.constructions).toBe(constructionsBefore);
+    });
+
+    it("W2: a Retry after the failure is a new attempt with its own full deadline", () => {
+      const { token, constructionsBefore } = waitingReader();
+      vi.advanceTimersByTime(ESTABLISHING_DEADLINE_MS);
+      expect(token.read().kind).toBe("failed");
+
+      token.retry();
+      expect(token.read().kind).toBe("acquiring");
+      vi.advanceTimersByTime(ESTABLISHING_DEADLINE_MS - 100);
+
+      expect(token.read().kind).toBe("acquiring");
+
+      vi.advanceTimersByTime(100);
+
+      expect(token.read().kind).toBe("failed");
+      expect(seen.constructions).toBe(constructionsBefore);
+    });
+
+    it("W3: an owner reading that arrives mid-wait admits the handle, and nothing fails at the old deadline", async () => {
+      const { handle, token, constructionsBefore } = waitingReader();
+
+      vi.advanceTimersByTime(5_000);
+      unrelatedHostRowMoves();
+      vi.advanceTimersByTime(3_000);
+      seen.clientUser = "user-fixture-1";
+      await act(async () => {
+        handle.store.setState((state) => ({ ...state }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(token.read().kind).toBe("ready");
+
+      vi.advanceTimersByTime(ESTABLISHING_DEADLINE_MS);
+
+      expect(token.read().kind).toBe("ready");
+      expect(presentation()).toBe("ready");
+      expect(__getOpenEpicRegistryForTests().peek(EPIC_ID)).toBe(handle);
+      expect(seen.constructions).toBe(constructionsBefore);
+    });
   });
 });
