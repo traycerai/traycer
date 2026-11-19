@@ -327,8 +327,10 @@ const mocks = vi.hoisted(
     modelsWarmupError: boolean;
     /** The retry the panel's "Try again" button calls; must return a Promise. */
     modelsWarmupRetry: () => Promise<void>;
-    /** The tested provider's settled catalog when a test pins one; else the fixture's own list. */
-    modelsWarmupModels: readonly GuiAgentModelOption[] | null;
+    /** A provider's settled catalog when a test pins one; else the fixture's own list. */
+    modelsWarmupModelsByHarness: Partial<
+      Record<GuiHarnessId, readonly GuiAgentModelOption[]>
+    >;
     /** The refetch of a settled catalog slot; the panel's mount edge may call it. */
     modelsWarmupRefetch: () => Promise<void>;
     /** The Provider picker's options; overridable per test. */
@@ -344,7 +346,7 @@ const mocks = vi.hoisted(
     lastProfileByHarness: { codex: "profile-2" },
     modelsWarmupError: false,
     modelsWarmupRetry: () => Promise.resolve(),
-    modelsWarmupModels: null,
+    modelsWarmupModelsByHarness: {},
     modelsWarmupRefetch: () => Promise.resolve(),
     // Set for real by `resetMocks()`, called before every test - `HARNESSES`
     // is declared after this hoisted factory runs and cannot be referenced
@@ -389,7 +391,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async (importOriginal) => {
         ];
       }
       const models =
-        mocks.modelsWarmupModels ?? MODELS_BY_HARNESS.get(harnessId) ?? [];
+        mocks.modelsWarmupModelsByHarness[harnessId] ??
+        MODELS_BY_HARNESS.get(harnessId) ??
+        [];
       return [
         {
           data: { models },
@@ -538,7 +542,7 @@ function resetMocks(): void {
   mocks.lastProfileByHarness = { codex: "profile-2" };
   mocks.modelsWarmupError = false;
   mocks.modelsWarmupRetry = () => Promise.resolve();
-  mocks.modelsWarmupModels = null;
+  mocks.modelsWarmupModelsByHarness = {};
   mocks.modelsWarmupRefetch = () => Promise.resolve();
   mocks.harnesses = HARNESSES;
 }
@@ -636,10 +640,24 @@ describe("FallbackTestModelPanel - tested provider's catalog slot", () => {
   it("asks a settled empty catalog again once on mount", () => {
     resetMocks();
     const refetch = vi.fn(() => Promise.resolve());
-    mocks.modelsWarmupModels = [];
+    mocks.modelsWarmupModelsByHarness = { codex: [] };
     mocks.modelsWarmupRefetch = refetch;
 
     renderPanel({});
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks a settled empty catalog again when the tested provider changes to it", () => {
+    resetMocks();
+    const refetch = vi.fn(() => Promise.resolve());
+    mocks.modelsWarmupModelsByHarness = { claude: [] };
+    mocks.modelsWarmupRefetch = refetch;
+    renderPanel({});
+    expect(refetch).not.toHaveBeenCalled();
+
+    openSelect(screen.getByTestId("fallback-test-model-provider"));
+    chooseOption("Claude Code");
 
     expect(refetch).toHaveBeenCalledTimes(1);
   });

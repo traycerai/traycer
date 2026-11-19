@@ -783,17 +783,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       void commands.refetch();
     }
   }, []);
-  // Explicit intent edges - the only thing that RE-fetches an already-warm
-  // model catalog outside the app-load fill and the manual refresh button
-  // (first loads belong to `selectedModelsQuery` / `activeProviderModelsQuery`
-  // below via TanStack's no-data path; every model query is cache-only, see
+  // Explicit intent edges - with the Fallback test-model panel's, the only
+  // thing that RE-fetches an already-warm model catalog outside the app-load
+  // fill and the manual refresh button (first loads belong to
+  // `selectedModelsQuery` / `activeProviderModelsQuery` below via TanStack's
+  // no-data path; every model query is cache-only, see
   // `use-gui-harness-catalog.ts`). They refresh just the selected harness, so
   // opening the picker never fans out across every provider, and only once
-  // its cached entry has aged past the window, so an open on warm cache costs
-  // nothing. That also makes them the intent-driven
-  // prewarm for a reaped OpenCode-backed server (the age threshold is the
-  // host's idle timeout) and the error-recovery path, now that a failed fetch
-  // no longer self-heals on a background timer.
+  // its cached entry is due (aged past the window, errored, or empty), so an
+  // open on a warm non-empty cache costs nothing. That also makes them the
+  // intent-driven prewarm for a reaped OpenCode-backed server (the age
+  // threshold is the host's idle timeout) and the error-recovery path, now
+  // that a failed fetch no longer self-heals on a background timer.
   useEffect(() => {
     if (!visibleOpen) return;
     runSelectedHarnessIntentRefetch();
