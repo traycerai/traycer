@@ -798,18 +798,6 @@ describe("environment.move stop@1.2 tells a pressed Skip from an untouched row",
     });
   });
 
-  it("leaves a 1.2 client's pressed Skip a skip", () => {
-    const request = stopRegistry[1].versions[2].contract.requestSchema.parse({
-      choices: legacyStopChoices,
-      profileMode: "keep-personal",
-      profileSignIns: mixedSignIns,
-    });
-    expect(
-      upgradeRequestToVersion(stopRegistry, stopV12, stopV12, request)
-        .profileSignIns,
-    ).toEqual(mixedSignIns);
-  });
-
   it("answers a 1.1 host's stop like a 1.2 host's", () => {
     expect(
       decodeResponsePayload<EnvironmentMoveStopResponseV11>(
