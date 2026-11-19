@@ -12,7 +12,13 @@ function row(
   signIn: EnvironmentMovePersonalProfile["signIn"],
   shared: boolean,
 ): EnvironmentMovePersonalProfile {
-  return { providerId: "claude-code", profileId, label: profileId, signIn, shared };
+  return {
+    providerId: "claude-code",
+    profileId,
+    label: profileId,
+    signIn,
+    shared,
+  };
 }
 
 function statesOf(
@@ -44,15 +50,17 @@ describe("personalLeaveSignIns", () => {
         ]),
       ),
     ).toEqual([
-      { providerId: "claude-code", profileId: "shared", signIn: { kind: "skip" } },
+      {
+        providerId: "claude-code",
+        profileId: "shared",
+        signIn: { kind: "skip" },
+      },
       { providerId: "claude-code", profileId: "own", signIn: { kind: "skip" } },
     ]);
   });
 
   it("sends untouched for an offered row with no state, shared or not", () => {
-    expect(
-      personalLeaveSignIns([sharedRow, ownRow], new Map()),
-    ).toEqual([
+    expect(personalLeaveSignIns([sharedRow, ownRow], new Map())).toEqual([
       {
         providerId: "claude-code",
         profileId: "shared",

@@ -1605,9 +1605,7 @@ describe("Skip at Stop sharing removes only a shared account", () => {
     );
 
     expect(within(rowOf("shared-one")).getByText(SKIPPED_SHARED)).toBeTruthy();
-    expect(
-      within(rowOf("shared-one")).queryByText(/Works until/),
-    ).toBeNull();
+    expect(within(rowOf("shared-one")).queryByText(/Works until/)).toBeNull();
     expect(
       within(rowOf("own-one")).getByText(
         "Skipped. Works until Codex asks for a new sign-in.",
