@@ -1584,6 +1584,16 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
     expect(harnessCatalogEntryNeedsRefresh(fetchingEmpty)).toBe(false);
     expect(harnessCatalogEntryNeedsRefresh(notAModelCatalog)).toBe(false);
   });
+
+  it("treats an entry with no data yet and a null model count as due through the never-loaded rule", () => {
+    const neverLoaded = {
+      dataUpdatedAt: 0,
+      isError: false,
+      isFetching: false,
+      modelCount: null,
+    };
+    expect(harnessCatalogEntryNeedsRefresh(neverLoaded)).toBe(true);
+  });
 });
 
 // Coverage for the cold-host narrowing: the all-harness `listModels` fan-out

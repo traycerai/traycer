@@ -766,7 +766,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         dataUpdatedAt: models.dataUpdatedAt,
         isError: models.isError,
         isFetching: models.isFetching,
-        modelCount: models.data?.models.length ?? 0,
+        modelCount: models.data?.models.length ?? null,
       })
     ) {
       void models.refetch();
