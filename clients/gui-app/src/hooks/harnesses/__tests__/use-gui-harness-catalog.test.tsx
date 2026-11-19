@@ -1522,6 +1522,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: 0,
         isError: false,
         isFetching: true,
+        modelCount: 10,
       }),
     ).toBe(false);
     // Same while an errored entry's recovery refetch is already underway.
@@ -1530,6 +1531,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: 1,
         isError: true,
         isFetching: true,
+        modelCount: 10,
       }),
     ).toBe(false);
   });
@@ -1540,6 +1542,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: 0,
         isError: false,
         isFetching: false,
+        modelCount: 10,
       }),
     ).toBe(true);
     expect(
@@ -1547,6 +1550,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: Date.now(),
         isError: true,
         isFetching: false,
+        modelCount: 10,
       }),
     ).toBe(true);
     expect(
@@ -1554,6 +1558,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: Date.now() - HARNESS_CATALOG_REFRESH_AFTER_MS - 1,
         isError: false,
         isFetching: false,
+        modelCount: 10,
       }),
     ).toBe(true);
     expect(
@@ -1561,8 +1566,23 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: Date.now(),
         isError: false,
         isFetching: false,
+        modelCount: 10,
       }),
     ).toBe(false);
+  });
+
+  it("treats a settled empty model list as due however fresh it is, and never while a fetch is underway", () => {
+    const settledEmpty = {
+      dataUpdatedAt: Date.now(),
+      isError: false,
+      isFetching: false,
+      modelCount: 0,
+    };
+    const fetchingEmpty = { ...settledEmpty, isFetching: true };
+    const notAModelCatalog = { ...settledEmpty, modelCount: null };
+    expect(harnessCatalogEntryNeedsRefresh(settledEmpty)).toBe(true);
+    expect(harnessCatalogEntryNeedsRefresh(fetchingEmpty)).toBe(false);
+    expect(harnessCatalogEntryNeedsRefresh(notAModelCatalog)).toBe(false);
   });
 });
 

@@ -47,9 +47,10 @@ import {
 // Model catalogs are CACHE-ONLY: `staleTime: Infinity` on every model query -
 // the batched fan-out in `useGuiHarnessCatalog` and the standalone
 // `useGuiHarnessModelsQuery` alike - so no observer ever refetches one on its
-// own. Not on a timer, not when a surface mounts, and not when an `enabled`
-// gate flips as the user moves between composers, chat tiles and palette
-// subpages.
+// own. Not on a timer, and not when an `enabled` gate flips as the user moves
+// between composers, chat tiles and palette subpages. A surface that re-asks
+// a warm slot does it explicitly, through `harnessCatalogEntryNeedsRefresh`
+// (the intent edges below).
 //
 // A finite `staleTime` is not enough here, and that is the subtle part. It
 // stops nothing by itself: it only decides whether the *next* mount or
@@ -76,10 +77,12 @@ import {
 // is about via its own targeted query on the shared cache slot.
 //
 // Models therefore refresh in exactly three places:
-//   - the picker's intent edges - popover open, harness selection - which
-//     refresh ONLY the selected harness, and only once its cached entry is
-//     older than `HARNESS_CATALOG_REFRESH_AFTER_MS`
-//     (`harnessCatalogEntryNeedsRefresh`);
+//   - intent edges, each refreshing ONLY its one harness's slot and only
+//     when `harnessCatalogEntryNeedsRefresh` says it is due - never loaded,
+//     errored, empty, or older than `HARNESS_CATALOG_REFRESH_AFTER_MS`: the
+//     picker's popover open and harness/profile selection (the selected
+//     harness), and Settings > Fallback's test-model panel on mount and on a
+//     tested-provider change (the tested harness);
 //   - targeted per-harness fetches on their surface's own gate: the picker's
 //     selected-harness and browsed-provider queries
 //     (`useGuiHarnessModelsQueryForClient`), the composer toolbar's selected
@@ -115,6 +118,8 @@ export interface HarnessCatalogEntryFreshness {
   readonly dataUpdatedAt: number;
   readonly isError: boolean;
   readonly isFetching: boolean;
+  /** The cached model list's length; `null` for an entry that is not a model catalog. */
+  readonly modelCount: number | null;
 }
 
 /**
@@ -134,13 +139,16 @@ export interface HarnessCatalogEntryFreshness {
  *
  * An entry that never loaded (`dataUpdatedAt === 0`) or whose last fetch failed
  * is always due: with no background retry left, the intent edges are also the
- * error-recovery path.
+ * error-recovery path. So is an empty model list: a provider can answer `[]`
+ * before its account's catalog is ready, so an empty slot is asked again on
+ * every edge until it fills.
  */
 export function harnessCatalogEntryNeedsRefresh(
   entry: HarnessCatalogEntryFreshness,
 ): boolean {
   if (entry.isFetching) return false;
   if (entry.isError || entry.dataUpdatedAt === 0) return true;
+  if (entry.modelCount === 0) return true;
   return Date.now() - entry.dataUpdatedAt >= HARNESS_CATALOG_REFRESH_AFTER_MS;
 }
 
