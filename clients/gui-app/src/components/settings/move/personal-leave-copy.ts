@@ -4,9 +4,10 @@ export const PERSONAL_LEAVE_NOT_NEEDED = "Keeps working. No sign-in needed.";
 export const PERSONAL_LEAVE_UNAVAILABLE =
   "This account can't be signed in from here any more. It is kept as it is.";
 
-export function personalLeaveGuidance(provider: string): string {
-  return `Sign in to each account you want to keep using on this computer, or skip it. A skipped account keeps working until ${provider} asks for a new sign-in.`;
-}
+export const PERSONAL_LEAVE_GUIDANCE =
+  "Sign in to each account you want to keep using on this computer, or skip it.";
+export const PERSONAL_LEAVE_SKIPPED_SHARED =
+  "Skipped. Not kept on this computer.";
 
 export function personalLeaveSkipped(provider: string): string {
   return `Skipped. Works until ${provider} asks for a new sign-in.`;
