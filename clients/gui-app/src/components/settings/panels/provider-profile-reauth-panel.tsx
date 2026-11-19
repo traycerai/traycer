@@ -33,6 +33,7 @@ import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-la
 import {
   AddProfileIdentityStep,
   AddProfileWaitingStep,
+  DuplicateAccountNotice,
 } from "./add-provider-profile-dialog";
 import {
   useProviderProfileOutcomeLoginFlow,
@@ -47,7 +48,6 @@ import {
   differentAccountText,
   profileNotChangedText,
   SIGN_IN_UNPROVEN_TEXT,
-  WAITING_FOR_PROFILE_TEXT,
 } from "@/components/providers/profile-sync-copy";
 
 function noop(): void {}
@@ -187,6 +187,14 @@ export function ProviderProfileReauthPanel({
     start();
   };
 
+  const completed = flow.state.kind === "completed";
+  const completedHandledRef = useRef(false);
+  useEffect(() => {
+    if (!completed || completedHandledRef.current) return;
+    completedHandledRef.current = true;
+    onDone();
+  }, [completed, onDone]);
+
   useEffect(() => {
     // Not latched while refused, so the automatic start is never spent on a
     // sign-in that was not allowed to begin.
@@ -284,18 +292,17 @@ function ProviderProfileReauthOutcome({
   ) => void;
   readonly onDone: () => void;
 }): ReactNode {
-  if (flowState.kind === "waiting-for-profile") {
+  if (flowState.kind === "already-signed-in")
     return (
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <p role="status" className="min-w-0 flex-1 text-ui-sm text-foreground">
-          {WAITING_FOR_PROFILE_TEXT}
-        </p>
-        <Button type="button" size="sm" onClick={onDone}>
-          Done
-        </Button>
+      <div className="flex flex-col gap-3">
+        <DuplicateAccountNotice profile={flowState.profile} />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={onDone}>
+            Done
+          </Button>
+        </div>
       </div>
     );
-  }
   if (flowState.kind !== "not-changed") return null;
   const mismatch = flowState.reason === "account-mismatch";
   return (
@@ -338,7 +345,8 @@ function useSettledReport(
   const onSettledChange =
     signInOutcomes === null ? null : signInOutcomes.onSettledChange;
   const settled =
-    flowState.kind === "waiting-for-profile" ||
+    flowState.kind === "completed" ||
+    flowState.kind === "already-signed-in" ||
     flowState.kind === "not-changed";
   useEffect(() => {
     if (onSettledChange === null) return;
