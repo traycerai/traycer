@@ -153,8 +153,12 @@ function renderWithProviders(children: ReactNode): QueryClient {
   return queryClient;
 }
 
-function makeMeta(permissionRole: WirePermissionRole | null): SnapshotMetaEpic {
-  return {
+function makeMeta(
+  permissionRole: WirePermissionRole | "supervisor" | null,
+): SnapshotMetaEpic {
+  // `"supervisor"` stands for a role nothing recognises. It never parses on the
+  // wire, so it is handed over the way a decoder that let it through would.
+  const meta: SnapshotMetaEpic = {
     schemaVersion: "1.0",
     epicLight:
       permissionRole === null
@@ -173,7 +177,7 @@ function makeMeta(permissionRole: WirePermissionRole | null): SnapshotMetaEpic {
             createdBy: USER_ID,
             version: "1",
           },
-    permissionRole,
+    permissionRole: null,
     repos: [],
     workspaces: [],
     repoMapping: [],
@@ -181,6 +185,7 @@ function makeMeta(permissionRole: WirePermissionRole | null): SnapshotMetaEpic {
     unresolvedRepos: [],
     hostStateVectorBase64: "AA==",
   };
+  return Object.assign(meta, { permissionRole });
 }
 
 function registerPendingHandoff(): void {
@@ -415,7 +420,7 @@ describe("initial chat handoff route coordinator", () => {
     queryClient.clear();
   });
 
-  it("does not advance while the epic is still loading or the snapshot names the retired viewer role", async () => {
+  it("does not advance while the epic is still loading or the snapshot names a role nothing recognises", async () => {
     registerPendingHandoff();
     const queryClient = renderWithProviders(
       <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
@@ -431,16 +436,44 @@ describe("initial chat handoff route coordinator", () => {
     seedDocWithChat(donor);
     act(() => {
       epicCallbacks.onConnectionStatus("open", null, true, null);
-      // The retired viewer role decodes to no role, which is not `epicReady`,
-      // so adoption must not advance the handoff.
+      // A role nothing recognises decodes to no role, which is not
+      // `epicReady`, so adoption must not advance the handoff.
       epicCallbacks.onSnapshot(
-        makeMeta("viewer"),
+        makeMeta("supervisor"),
         Y.encodeStateAsUpdate(donor),
       );
     });
 
     await Promise.resolve();
     expect(handoffStatus()).toBe("pending");
+    queryClient.clear();
+  });
+
+  it("advances pending → waitingChat when the snapshot names viewer: a viewer role reads as editor", async () => {
+    registerPendingHandoff();
+    const queryClient = renderWithProviders(
+      <TestEpicSessionTab epicId={EPIC_ID} tabId={EPIC_ID}>
+        <EpicSessionGate fallback={null}>
+          <CoordinatorOnly epicId={EPIC_ID} tabId={EPIC_ID} />
+        </EpicSessionGate>
+      </TestEpicSessionTab>,
+    );
+    if (callbacks === null) throw new Error("expected epic callbacks");
+    const epicCallbacks = callbacks;
+
+    const donor = new Y.Doc();
+    seedDocWithChat(donor);
+    act(() => {
+      epicCallbacks.onConnectionStatus("open", null, true, null);
+      epicCallbacks.onSnapshot(
+        makeMeta("viewer"),
+        Y.encodeStateAsUpdate(donor),
+      );
+    });
+
+    await waitFor(() => {
+      expect(handoffStatus()).toBe("waitingChat");
+    });
     queryClient.clear();
   });
 

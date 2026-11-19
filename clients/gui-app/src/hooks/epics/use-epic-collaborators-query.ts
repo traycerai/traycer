@@ -163,10 +163,11 @@ export function useEpicCollaboratorsQuery(
 /**
  * "People with access", from the rows the host answered with.
  *
- * A row whose role resolves to no access is not a row about access: the
- * view-only role is retired, and a host that predates the retirement can
- * still answer one. Dropping it here keeps the list and the authority the
- * same answer, rather than listing a grant nothing honours.
+ * A row whose role resolves to no access is not a row about access: a role
+ * this client does not recognise gives none. Dropping it here keeps the list
+ * and the authority the same answer, rather than listing a grant nothing
+ * honours. A `viewer` row, which a host that predates the decode still
+ * answers, resolves to editor and is listed as one.
  */
 export function projectCollaborators(
   entries: ReadonlyArray<CollaboratorEntry>,

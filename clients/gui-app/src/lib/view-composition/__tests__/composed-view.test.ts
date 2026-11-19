@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import { HISTORY_COMPOSED_VIEW } from "@/lib/history-composition/compose-history-page";
 import {
   defineComposedView,
@@ -40,12 +41,16 @@ describe("defineComposedView", () => {
 });
 
 describe("intersectRole", () => {
+  // Compared as access, not as the spelling handed back: a `viewer` role gives
+  // the access of `editor`, so neither spelling is the lesser of the two.
   it.each([
-    ["owner", "viewer", "viewer"],
-    ["viewer", "editor", "viewer"],
+    ["owner", "viewer", "editor"],
+    ["viewer", "editor", "editor"],
+    ["viewer", "viewer", "editor"],
     ["editor", "owner", "editor"],
     ["editor", "editor", "editor"],
-  ] as const)("%s with %s is %s", (left, right, expected) => {
-    expect(intersectRole(left, right)).toBe(expected);
+    ["owner", "owner", "owner"],
+  ] as const)("%s with %s gives %s access", (left, right, expected) => {
+    expect(grantedRole(intersectRole(left, right))).toBe(expected);
   });
 });
