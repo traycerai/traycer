@@ -1436,55 +1436,66 @@ describe("StopSharingSession over the real remote session", () => {
     });
   });
 
-  it("reports when Stop could not keep a staged sign-in", async () => {
-    const harness = makeHarness(({ method }) => {
-      if (method === "environment.move.stopPreview")
-        return successful(preview([FOLDER("folder-one", "Work", "offered")]));
-      if (method === "providers.list") return successful(providerList([]));
-      if (method === "providers.startLogin")
-        return successful(started("held-admission", null));
-      if (method === "providers.awaitLogin")
-        return successful(staged("folder-one"));
-      if (method === "environment.move.stop")
-        return successful({
-          outcome: "stopped",
-          profileResults: [
-            {
-              providerId: "codex",
-              profileId: "folder-one",
-              signIn: "installation-failed",
-            },
-          ],
-        });
-      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
-    });
-    await renderSession(
-      harness.client,
-      {
-        showListAfterStop: false,
-        showToaster: true,
-      },
-      null,
-    );
-
-    await screen.findByTestId("personal-leave-codex-folder-one");
-    fireEvent.click(
-      within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
-        "button",
-        { name: "Sign in" },
-      ),
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
-    expect(await screen.findByText("Signed in")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-
-    expect(
-      await screen.findByText(
+  it.each([
+    {
+      name: "an own sign-in row, in both sentences",
+      row: FOLDER("folder-one", "Work", "offered"),
+      toast:
         "The sign-in for Work wasn't kept. It works until Codex asks for a new sign-in.",
-      ),
-    ).toBeTruthy();
-    expect(harness.relay.errors).toEqual([]);
-  });
+    },
+    {
+      name: "a shared row, in one sentence",
+      row: SHARED_FOLDER("folder-one", "Work"),
+      toast: "The sign-in for Work wasn't kept.",
+    },
+  ])(
+    "reports when Stop could not keep a staged sign-in of $name",
+    async ({ row, toast }) => {
+      const harness = makeHarness(({ method }) => {
+        if (method === "environment.move.stopPreview")
+          return successful(preview([row]));
+        if (method === "providers.list") return successful(providerList([]));
+        if (method === "providers.startLogin")
+          return successful(started("held-admission", null));
+        if (method === "providers.awaitLogin")
+          return successful(staged("folder-one"));
+        if (method === "environment.move.stop")
+          return successful({
+            outcome: "stopped",
+            profileResults: [
+              {
+                providerId: "codex",
+                profileId: "folder-one",
+                signIn: "installation-failed",
+              },
+            ],
+          });
+        return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+      });
+      await renderSession(
+        harness.client,
+        {
+          showListAfterStop: false,
+          showToaster: true,
+        },
+        null,
+      );
+
+      await screen.findByTestId("personal-leave-codex-folder-one");
+      fireEvent.click(
+        within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
+          "button",
+          { name: "Sign in" },
+        ),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      expect(await screen.findByText("Signed in")).toBeTruthy();
+      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+
+      expect(await screen.findByText(toast)).toBeTruthy();
+      expect(harness.relay.errors).toEqual([]);
+    },
+  );
 });
 
 describe("provider metadata retry after an initial read failure", () => {
