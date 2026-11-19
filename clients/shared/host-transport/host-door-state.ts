@@ -164,18 +164,19 @@ const OLDER_HOST_TOKEN_REFUSALS: ReadonlySet<string> = new Set([
 ]);
 
 // A host's own error envelope, final rather than retryable: an answer from past its
-// door. Marked where the envelope is read.
-const hostAnswers = new WeakSet<HostRpcError>();
+// door. Marked on the error itself where the envelope is read, so this module holds
+// no state of its own.
+const HOST_ANSWER = Symbol("host-answer");
 
 export function asHostAnswer(error: HostRpcError): HostRpcError {
-  hostAnswers.add(error);
+  Object.defineProperty(error, HOST_ANSWER, { value: true });
   return error;
 }
 
 /** The host answered the call and refused no token, so its door admitted the token. */
 export function isAdmittingAnswer(error: HostRpcError): boolean {
   return (
-    hostAnswers.has(error) &&
+    HOST_ANSWER in error &&
     hostRefusalOf(error) === null &&
     !OLDER_HOST_TOKEN_REFUSALS.has(error.code)
   );
