@@ -249,6 +249,7 @@ function announceUnkeptSignIns(
         personalLeaveSignInNotKept(
           row.label,
           providerDisplayName(row.providerId),
+          row.shared,
         ),
       );
   }

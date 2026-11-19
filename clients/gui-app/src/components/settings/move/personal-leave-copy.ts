@@ -20,6 +20,10 @@ export function personalLeaveSameAccount(profile: string): string {
 export function personalLeaveSignInNotKept(
   profile: string,
   provider: string,
+  shared: boolean,
 ): string {
-  return `The sign-in for ${profile} wasn't kept. It works until ${provider} asks for a new sign-in.`;
+  const notKept = `The sign-in for ${profile} wasn't kept.`;
+  return shared
+    ? notKept
+    : `${notKept} It works until ${provider} asks for a new sign-in.`;
 }
