@@ -1250,65 +1250,153 @@ describe("released wire lines reject cline; their live counterparts accept it", 
       }),
     ).toBe(mixedRangeFrame);
 
-    // Snapshot tail projection also strips Cline anchors below 1.47.
-    const snapshotWithTail = {
-      kind: "snapshot" as const,
-      epicId: "epic-1",
-      chatId: "chat-1",
-      hasBinaryPayload: false as const,
-      snapshot: {
-        tail: {
-          rowContext: {
-            "row-1": { sessionAnchor: clineAnchor },
-          },
-        },
-      },
-    };
-    const projectedSnapshot = projectChatServerFrameForVersion(
-      snapshotWithTail,
-      { major: 1, minor: 46 },
-    );
-    expect(projectedSnapshot).toEqual({
-      ...snapshotWithTail,
-      snapshot: { tail: {} },
-    });
-    expect(
-      projectChatServerFrameForVersion(snapshotWithTail, {
-        major: 1,
-        minor: 47,
-      }),
-    ).toBe(snapshotWithTail);
-
     // 1.46 freezes activeTurn.harnessId on the pre-Cline enum; 1.47 takes cline.
+    // Outbound projection clears Cline activeTurn and tail anchors below 1.47.
+    const clineActiveTurn = {
+      turnId: "turn-1",
+      status: "running" as const,
+      harnessId: NEW_ID,
+      model: "claude-sonnet-4-6",
+      userMessageId: null,
+      startedAt: 100,
+      updatedAt: 100,
+      sameTurnSteeringSupported: false,
+    };
     const turnStateFrame = {
       kind: "turnStateChanged" as const,
       epicId: "epic-1",
       chatId: "chat-1",
       hasBinaryPayload: false as const,
       runStatus: "running" as const,
-      activeTurn: {
-        turnId: "turn-1",
-        status: "running" as const,
-        harnessId: NEW_ID,
-        model: "claude-sonnet-4-6",
-        userMessageId: null,
-        startedAt: 100,
-        updatedAt: 100,
-        sameTurnSteeringSupported: false,
-      },
+      activeTurn: clineActiveTurn,
       accountWait: null,
+    };
+    const commandCodeTurnStateFrame = {
+      ...turnStateFrame,
+      activeTurn: { ...clineActiveTurn, harnessId: "commandcode" as const },
     };
     expect(
       chatSubscribeV146.serverFrameSchema.safeParse(turnStateFrame).success,
     ).toBe(false);
     expect(
-      chatSubscribeV146.serverFrameSchema.safeParse({
-        ...turnStateFrame,
-        activeTurn: { ...turnStateFrame.activeTurn, harnessId: "commandcode" },
-      }).success,
+      chatSubscribeV146.serverFrameSchema.safeParse(commandCodeTurnStateFrame)
+        .success,
     ).toBe(true);
     expect(
       chatSubscribeV147.serverFrameSchema.safeParse(turnStateFrame).success,
     ).toBe(true);
+    for (const [minor, contract] of [
+      [44, chatSubscribeV144],
+      [45, chatSubscribeV145],
+      [46, chatSubscribeV146],
+    ] as const) {
+      const projectedTurnState = projectChatServerFrameForVersion(
+        turnStateFrame,
+        { major: 1, minor },
+      );
+      expect(
+        contract.serverFrameSchema.safeParse(projectedTurnState).success,
+        `turnStateChanged projected to 1.${String(minor)}`,
+      ).toBe(true);
+      expect(projectedTurnState.activeTurn).toBeNull();
+    }
+    expect(
+      projectChatServerFrameForVersion(commandCodeTurnStateFrame, {
+        major: 1,
+        minor: 46,
+      }),
+    ).toBe(commandCodeTurnStateFrame);
+    expect(
+      projectChatServerFrameForVersion(turnStateFrame, {
+        major: 1,
+        minor: 47,
+      }),
+    ).toBe(turnStateFrame);
+
+    // Full windowed snapshot carrying both a Cline activeTurn and Cline tail anchor:
+    // rejected on 1.46 raw, accepted on 1.47 raw, and accepted on 1.44-1.46 once projected.
+    const snapshotFrame = {
+      kind: "snapshot" as const,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      hasBinaryPayload: false as const,
+      snapshot: {
+        chat: {
+          parentId: null,
+          id: "chat-1",
+          userId: "user-1",
+          hostId: "host-1",
+          title: "Chat",
+          createdAt: 1000,
+          updatedAt: 1000,
+          isTitleEditedByUser: false,
+          settings: null,
+        },
+        access: { role: "owner" as const, ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle" as const, items: [] },
+        runStatus: "running" as const,
+        activeTurn: clineActiveTurn,
+        pendingApprovals: [],
+        pendingInterviews: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        pendingFileEditApprovals: [],
+        accumulatedFileChangeCount: 0,
+        transcriptEpoch: 0,
+        rowCount: 1,
+        indexRevision: null,
+        tail: {
+          fromOrdinal: 0,
+          rowIds: ["row-1"],
+          messages: [],
+          events: [],
+          rowContext: {
+            "row-1": { sessionAnchor: clineAnchor },
+          },
+        },
+        derived: {
+          latestAssistantUsage: null,
+          pinnedTodo: null,
+          pinnedTaskTodoItems: [],
+          latestForkableAssistantMessageId: null,
+          restorableSetupInterruption: null,
+          interviewAnswerability: [],
+          latestAssistantAuthFailureTurnKey: null,
+          setupCardWindows: [],
+        },
+        accountWait: null,
+      },
+    };
+    expect(
+      chatSubscribeV146.serverFrameSchema.safeParse(snapshotFrame).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV147.serverFrameSchema.safeParse(snapshotFrame).success,
+    ).toBe(true);
+    for (const [minor, contract] of [
+      [44, chatSubscribeV144],
+      [45, chatSubscribeV145],
+      [46, chatSubscribeV146],
+    ] as const) {
+      const projectedSnapshot = projectChatServerFrameForVersion(
+        snapshotFrame,
+        { major: 1, minor },
+      );
+      expect(
+        contract.serverFrameSchema.safeParse(projectedSnapshot).success,
+        `snapshot projected to 1.${String(minor)}`,
+      ).toBe(true);
+      const parsed = contract.serverFrameSchema.parse(projectedSnapshot);
+      expect(parsed.kind).toBe("snapshot");
+      if (parsed.kind !== "snapshot") return;
+      expect(parsed.snapshot.activeTurn).toBeNull();
+      expect(parsed.snapshot.tail.rowContext).toBeUndefined();
+    }
+    expect(
+      projectChatServerFrameForVersion(snapshotFrame, {
+        major: 1,
+        minor: 47,
+      }),
+    ).toBe(snapshotFrame);
   });
 });

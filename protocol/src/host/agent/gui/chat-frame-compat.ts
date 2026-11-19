@@ -2051,7 +2051,11 @@ function projectAccountWaitFrame(
   return frame;
 }
 
-const CHAT_SUBSCRIBE_CLINE_SESSION_ANCHOR_MINOR = 47;
+const CHAT_SUBSCRIBE_CLINE_MINOR = 47;
+
+function isClineActiveTurn(value: unknown): boolean {
+  return isRecord(value) && value.harnessId === "cline";
+}
 
 function projectClineSessionAnchorRowContext(value: unknown): unknown {
   if (!isRecord(value) || !isRecord(value.rowContext)) return value;
@@ -2081,14 +2085,14 @@ function projectClineSessionAnchorRowContext(value: unknown): unknown {
   return { ...value, rowContext: nextRowContext };
 }
 
-function projectClineSessionAnchorFrame(
+function projectClineChatFrame(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
   if (
     negotiated !== null &&
     negotiated.major === 1 &&
-    negotiated.minor >= CHAT_SUBSCRIBE_CLINE_SESSION_ANCHOR_MINOR
+    negotiated.minor >= CHAT_SUBSCRIBE_CLINE_MINOR
   ) {
     return frame;
   }
@@ -2096,13 +2100,19 @@ function projectClineSessionAnchorFrame(
     const range = projectClineSessionAnchorRowContext(frame.range);
     return range === frame.range ? frame : { ...frame, range };
   }
+  if (frame.kind === "turnStateChanged") {
+    if (!isClineActiveTurn(frame.activeTurn)) return frame;
+    return { ...frame, activeTurn: null };
+  }
   if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
-  const tail = projectClineSessionAnchorRowContext(frame.snapshot.tail);
-  if (tail === frame.snapshot.tail) return frame;
-  return {
-    ...frame,
-    snapshot: { ...frame.snapshot, tail },
-  };
+  const original = frame.snapshot;
+  const tail = projectClineSessionAnchorRowContext(original.tail);
+  const clearActiveTurn = isClineActiveTurn(original.activeTurn);
+  if (tail === original.tail && !clearActiveTurn) return frame;
+  const snapshot = { ...original };
+  if (tail !== original.tail) snapshot.tail = tail;
+  if (clearActiveTurn) snapshot.activeTurn = null;
+  return { ...frame, snapshot };
 }
 
 export function projectChatServerFrameForVersion(
@@ -2112,7 +2122,7 @@ export function projectChatServerFrameForVersion(
   const projected = projectChatServerFrameBeforeUltracode(
     projectDeliveryWorktreeIntent(
       projectFeedbackDraftFrame(
-        projectClineSessionAnchorFrame(
+        projectClineChatFrame(
           projectAccountWaitFrame(
             projectProviderSelectionFrame(frame, negotiated),
             negotiated,
