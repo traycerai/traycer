@@ -1,1 +1,3 @@
-{}
+{
+  "src/framework/__tests__/lazy-schema-standin-ops-scan.test.ts": "Prefiltered TypeScript scan of 458 of 6,661 production files; the case 4.0–5.3 s, the file 5.9–8.3 s on host-3 at load ≈10 (19 Nov 2026)."
+}
