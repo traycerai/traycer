@@ -118,7 +118,11 @@ export interface HarnessCatalogEntryFreshness {
   readonly dataUpdatedAt: number;
   readonly isError: boolean;
   readonly isFetching: boolean;
-  /** The cached model list's length; `null` for an entry that is not a model catalog. */
+  /**
+   * The cached model list's length; `null` when there is no list to count -
+   * an entry that is not a model catalog, or one with nothing cached yet
+   * (which `dataUpdatedAt === 0` already makes due).
+   */
   readonly modelCount: number | null;
 }
 
