@@ -7,7 +7,7 @@ import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
-import { hostRefusalOf } from "./host-door-state";
+import { hostRefusalOf, isAdmittingAnswer } from "./host-door-state";
 import {
   HostRpcError,
   HostAuthoritySupersededError,
@@ -132,12 +132,20 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
     method: string,
     call: () => Promise<Response>,
   ): Promise<Response> => {
-    // An answered call was admitted, so a later refusal of its token is news again.
+    // An answered call was admitted, so a later refusal of its token is news again:
+    // a result, or the host's own error that refuses no token.
     const answered = async (): Promise<Response> => {
       const admitted = readsHostRefusal(auth)
         ? auth.admissionOf?.(authority.bearer, authority.endpoint.hostId)
         : undefined;
-      const response = await call();
+      let response: Response;
+      try {
+        response = await call();
+      } catch (cause) {
+        if (cause instanceof HostRpcError && isAdmittingAnswer(cause))
+          admitted?.();
+        throw cause;
+      }
       admitted?.();
       return response;
     };

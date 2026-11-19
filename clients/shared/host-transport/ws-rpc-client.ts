@@ -43,6 +43,7 @@ import {
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "./host-messenger";
+import { asHostAnswer } from "./host-door-state";
 import { dialPriorityForMethod } from "./dial-priority";
 import type {
   IWebSocketFactory,
@@ -1147,7 +1148,14 @@ async function executeAvailableMethodRequest<Payload, Response>(
     throw markedAfterSend(cause);
   }
   if (responseFrame.error !== null) {
-    throw HostRpcError.fromWireEnvelope(responseFrame.error, requestId, method);
+    const answer = HostRpcError.fromWireEnvelope(
+      responseFrame.error,
+      requestId,
+      method,
+    );
+    throw responseFrame.error.retryable === true
+      ? answer
+      : asHostAnswer(answer);
   }
 
   try {
