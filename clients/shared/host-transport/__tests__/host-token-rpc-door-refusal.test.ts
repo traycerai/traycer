@@ -856,6 +856,54 @@ describe("persistent /rpc door refusals through the host-only token", () => {
       { hostId: HOST_ID, kind: "not-admitted", detail: null },
     ]);
   });
+  it("does not count an older host's reasonless TEAM_MEMBERSHIP_REQUIRED answer as admission: a later not_admitted on the minted token stays final", async () => {
+    const harness = doorHarness();
+    await harness.ready;
+    const refusal = responseError(
+      "UNAUTHORIZED",
+      "not admitted",
+      "not_admitted",
+      false,
+    );
+    const firstCall = captureRejection(harness.call("first change"));
+    const socket = await harness.nextSocket();
+    const first = await firstRequest(socket);
+    const olderRetry = await refuseAndAwaitRetry(socket, first, refusal);
+    // `responseError` takes the code as a plain string, so the raw wire code goes
+    // out as is; the client narrows it, as it is not one of its RPC error codes.
+    socket.fireMessage(
+      refusalFrame(
+        olderRetry,
+        responseError(
+          "TEAM_MEMBERSHIP_REQUIRED",
+          "membership required",
+          undefined,
+          false,
+        ),
+      ),
+    );
+    const olderError = await firstCall;
+    expect(olderError).toBeInstanceOf(HostRpcError);
+    if (!(olderError instanceof HostRpcError)) {
+      throw new Error("expected the older host's refusal");
+    }
+    expect(olderError.code).toBe("RPC_ERROR");
+    expect(olderError.doorRefusal).toBeNull();
+    expect(harness.minted).toEqual(["host-token-2"]);
+    expect(requestFrames(socket.sent)).toHaveLength(2);
+    expect(harness.states).toEqual([]);
+    // The later not_admitted on T2: T2 was never admitted, so it is final.
+    const later = await startCallOn(harness, socket, "second change");
+    const laterOutcome = captureRejection(later.pending);
+    socket.fireMessage(refusalFrame(later.request, refusal));
+    expect(await laterOutcome).toBeInstanceOf(HostRpcError);
+    expect(harness.mintAttempts).toBe(1);
+    expect(harness.minted).toEqual(["host-token-2"]);
+    expect(requestFrames(socket.sent)).toHaveLength(3);
+    expect(harness.states).toEqual([
+      { hostId: HOST_ID, kind: "not-admitted", detail: null },
+    ]);
+  });
   it("keeps a token minted after not_admitted final when its first use is refused, and a later call on it", async () => {
     const harness = doorHarness();
     await harness.ready;

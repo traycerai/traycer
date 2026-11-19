@@ -643,6 +643,7 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
             entry.requestId,
             entry.method,
           ),
+          frame.error.code,
         ),
       );
       return;

@@ -168,18 +168,22 @@ const OLDER_HOST_TOKEN_REFUSALS: ReadonlySet<string> = new Set([
 // no state of its own.
 const HOST_ANSWER = Symbol("host-answer");
 
-export function asHostAnswer(error: HostRpcError): HostRpcError {
-  Object.defineProperty(error, HOST_ANSWER, { value: true });
+/**
+ * Judged on the code as sent: the error narrows a code it does not know to
+ * `RPC_ERROR`, and an older host's `TEAM_MEMBERSHIP_REQUIRED` is one.
+ */
+export function asHostAnswer(
+  error: HostRpcError,
+  wireCode: string,
+): HostRpcError {
+  if (!OLDER_HOST_TOKEN_REFUSALS.has(wireCode))
+    Object.defineProperty(error, HOST_ANSWER, { value: true });
   return error;
 }
 
 /** The host answered the call and refused no token, so its door admitted the token. */
 export function isAdmittingAnswer(error: HostRpcError): boolean {
-  return (
-    HOST_ANSWER in error &&
-    hostRefusalOf(error) === null &&
-    !OLDER_HOST_TOKEN_REFUSALS.has(error.code)
-  );
+  return HOST_ANSWER in error && hostRefusalOf(error) === null;
 }
 
 /**

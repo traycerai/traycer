@@ -1155,7 +1155,7 @@ async function executeAvailableMethodRequest<Payload, Response>(
     );
     throw responseFrame.error.retryable === true
       ? answer
-      : asHostAnswer(answer);
+      : asHostAnswer(answer, responseFrame.error.code);
   }
 
   try {
