@@ -115,6 +115,8 @@ export interface HarnessCatalogEntryFreshness {
   readonly dataUpdatedAt: number;
   readonly isError: boolean;
   readonly isFetching: boolean;
+  /** The cached model list's length; `null` for an entry that is not a model catalog. */
+  readonly modelCount: number | null;
 }
 
 /**
@@ -134,13 +136,16 @@ export interface HarnessCatalogEntryFreshness {
  *
  * An entry that never loaded (`dataUpdatedAt === 0`) or whose last fetch failed
  * is always due: with no background retry left, the intent edges are also the
- * error-recovery path.
+ * error-recovery path. So is an empty model list: a provider can answer `[]`
+ * before its account's catalog is ready, so an empty slot is asked again on
+ * every edge until it fills.
  */
 export function harnessCatalogEntryNeedsRefresh(
   entry: HarnessCatalogEntryFreshness,
 ): boolean {
   if (entry.isFetching) return false;
   if (entry.isError || entry.dataUpdatedAt === 0) return true;
+  if (entry.modelCount === 0) return true;
   return Date.now() - entry.dataUpdatedAt >= HARNESS_CATALOG_REFRESH_AFTER_MS;
 }
 

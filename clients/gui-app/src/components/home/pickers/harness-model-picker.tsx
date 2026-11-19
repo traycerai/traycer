@@ -761,9 +761,27 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const runSelectedHarnessIntentRefetch = useCallback(() => {
     if (!selectedHarnessRefetchGateRef.current) return;
     const models = selectedModelsQueryRef.current;
-    if (harnessCatalogEntryNeedsRefresh(models)) void models.refetch();
+    if (
+      harnessCatalogEntryNeedsRefresh({
+        dataUpdatedAt: models.dataUpdatedAt,
+        isError: models.isError,
+        isFetching: models.isFetching,
+        modelCount: models.data?.models.length ?? 0,
+      })
+    ) {
+      void models.refetch();
+    }
     const commands = selectedCommandsQueryRef.current;
-    if (harnessCatalogEntryNeedsRefresh(commands)) void commands.refetch();
+    if (
+      harnessCatalogEntryNeedsRefresh({
+        dataUpdatedAt: commands.dataUpdatedAt,
+        isError: commands.isError,
+        isFetching: commands.isFetching,
+        modelCount: null,
+      })
+    ) {
+      void commands.refetch();
+    }
   }, []);
   // Explicit intent edges - the only thing that RE-fetches an already-warm
   // model catalog outside the app-load fill and the manual refresh button

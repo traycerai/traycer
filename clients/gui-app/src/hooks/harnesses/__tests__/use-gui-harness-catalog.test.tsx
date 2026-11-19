@@ -1522,6 +1522,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: 0,
         isError: false,
         isFetching: true,
+        modelCount: 10,
       }),
     ).toBe(false);
     // Same while an errored entry's recovery refetch is already underway.
@@ -1530,6 +1531,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: 1,
         isError: true,
         isFetching: true,
+        modelCount: 10,
       }),
     ).toBe(false);
   });
@@ -1540,6 +1542,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: 0,
         isError: false,
         isFetching: false,
+        modelCount: 10,
       }),
     ).toBe(true);
     expect(
@@ -1547,6 +1550,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: Date.now(),
         isError: true,
         isFetching: false,
+        modelCount: 10,
       }),
     ).toBe(true);
     expect(
@@ -1554,6 +1558,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: Date.now() - HARNESS_CATALOG_REFRESH_AFTER_MS - 1,
         isError: false,
         isFetching: false,
+        modelCount: 10,
       }),
     ).toBe(true);
     expect(
@@ -1561,6 +1566,7 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
         dataUpdatedAt: Date.now(),
         isError: false,
         isFetching: false,
+        modelCount: 10,
       }),
     ).toBe(false);
   });
