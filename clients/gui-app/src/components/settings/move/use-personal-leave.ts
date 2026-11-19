@@ -177,17 +177,19 @@ export function personalLeaveSignIns(
 ): EnvironmentMoveProfileSignInChoice[] {
   return rows
     .filter((row) => row.signIn === "offered")
-    .map((row) => {
-      const state = states.get(personalLeaveAddress(row));
-      return {
-        providerId: row.providerId,
-        profileId: row.profileId,
-        signIn:
-          state?.kind === "signed-in"
-            ? { kind: "signed-in", admissionId: state.admissionId }
-            : state?.kind === "skip"
-              ? { kind: "skip" }
-              : { kind: "untouched" },
-      };
-    });
+    .map((row) => ({
+      providerId: row.providerId,
+      profileId: row.profileId,
+      signIn: signInChoiceOf(states.get(personalLeaveAddress(row))),
+    }));
+}
+
+/** Only a pressed Skip is `skip`; a row nobody answered is `untouched`. */
+function signInChoiceOf(
+  state: PersonalLeaveAccountState | undefined,
+): EnvironmentMoveProfileSignInChoice["signIn"] {
+  if (state?.kind === "signed-in")
+    return { kind: "signed-in", admissionId: state.admissionId };
+  if (state?.kind === "skip") return { kind: "skip" };
+  return { kind: "untouched" };
 }
