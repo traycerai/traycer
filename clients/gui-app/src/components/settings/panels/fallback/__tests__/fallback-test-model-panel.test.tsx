@@ -327,6 +327,10 @@ const mocks = vi.hoisted(
     modelsWarmupError: boolean;
     /** The retry the panel's "Try again" button calls; must return a Promise. */
     modelsWarmupRetry: () => Promise<void>;
+    /** The tested provider's settled catalog when a test pins one; else the fixture's own list. */
+    modelsWarmupModels: readonly GuiAgentModelOption[] | null;
+    /** The refetch of a settled catalog slot; the panel's mount edge may call it. */
+    modelsWarmupRefetch: () => Promise<void>;
     /** The Provider picker's options; overridable per test. */
     harnesses: readonly HarnessFixture[];
   } => ({
@@ -340,6 +344,8 @@ const mocks = vi.hoisted(
     lastProfileByHarness: { codex: "profile-2" },
     modelsWarmupError: false,
     modelsWarmupRetry: () => Promise.resolve(),
+    modelsWarmupModels: null,
+    modelsWarmupRefetch: () => Promise.resolve(),
     // Set for real by `resetMocks()`, called before every test - `HARNESSES`
     // is declared after this hoisted factory runs and cannot be referenced
     // here.
@@ -356,26 +362,46 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-a",
 }));
 
-vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
-  useGuiHarnessesQuery: () => ({
-    data: { harnesses: mocks.harnesses },
-  }),
-  useGuiHarnessModelsWarmup: (
-    _client: unknown,
-    harnessId: GuiHarnessId | null,
-  ) => {
-    if (harnessId === null) return [];
-    if (mocks.modelsWarmupError) {
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/harnesses/use-gui-harness-catalog")
+    >();
+  return {
+    harnessCatalogEntryNeedsRefresh: actual.harnessCatalogEntryNeedsRefresh,
+    useGuiHarnessesQuery: () => ({
+      data: { harnesses: mocks.harnesses },
+    }),
+    useGuiHarnessModelsWarmup: (
+      _client: unknown,
+      harnessId: GuiHarnessId | null,
+    ) => {
+      if (harnessId === null) return [];
+      if (mocks.modelsWarmupError) {
+        return [
+          {
+            data: undefined,
+            dataUpdatedAt: 0,
+            isError: true,
+            isFetching: false,
+            refetch: mocks.modelsWarmupRetry,
+          },
+        ];
+      }
+      const models =
+        mocks.modelsWarmupModels ?? MODELS_BY_HARNESS.get(harnessId) ?? [];
       return [
-        { data: undefined, isError: true, refetch: mocks.modelsWarmupRetry },
+        {
+          data: { models },
+          dataUpdatedAt: Date.now(),
+          isError: false,
+          isFetching: false,
+          refetch: mocks.modelsWarmupRefetch,
+        },
       ];
-    }
-    const models = MODELS_BY_HARNESS.get(harnessId) ?? [];
-    return [
-      { data: { models }, isError: false, refetch: () => Promise.resolve() },
-    ];
-  },
-}));
+    },
+  };
+});
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({
@@ -512,6 +538,8 @@ function resetMocks(): void {
   mocks.lastProfileByHarness = { codex: "profile-2" };
   mocks.modelsWarmupError = false;
   mocks.modelsWarmupRetry = () => Promise.resolve();
+  mocks.modelsWarmupModels = null;
+  mocks.modelsWarmupRefetch = () => Promise.resolve();
   mocks.harnesses = HARNESSES;
 }
 
@@ -597,6 +625,33 @@ describe("FallbackTestModelPanel - request built from defaults", () => {
     expect(captured.length).toBeGreaterThan(0);
     const request = captured[captured.length - 1];
     expect(request.blocked.serviceTier).toBe("fast");
+  });
+});
+
+describe("FallbackTestModelPanel - tested provider's catalog slot", () => {
+  afterEach(() => {
+    resetMocks();
+  });
+
+  it("asks a settled empty catalog again once on mount", () => {
+    resetMocks();
+    const refetch = vi.fn(() => Promise.resolve());
+    mocks.modelsWarmupModels = [];
+    mocks.modelsWarmupRefetch = refetch;
+
+    renderPanel({});
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a settled catalog with models alone", () => {
+    resetMocks();
+    const refetch = vi.fn(() => Promise.resolve());
+    mocks.modelsWarmupRefetch = refetch;
+
+    renderPanel({});
+
+    expect(refetch).not.toHaveBeenCalled();
   });
 });
 

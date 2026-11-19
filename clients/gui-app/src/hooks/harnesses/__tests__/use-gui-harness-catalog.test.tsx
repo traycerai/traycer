@@ -1564,6 +1564,20 @@ describe("harnessCatalogEntryNeedsRefresh", () => {
       }),
     ).toBe(false);
   });
+
+  it("treats a settled empty model list as due however fresh it is, and never while a fetch is underway", () => {
+    const settledEmpty = {
+      dataUpdatedAt: Date.now(),
+      isError: false,
+      isFetching: false,
+      modelCount: 0,
+    };
+    const fetchingEmpty = { ...settledEmpty, isFetching: true };
+    const notAModelCatalog = { ...settledEmpty, modelCount: null };
+    expect(harnessCatalogEntryNeedsRefresh(settledEmpty)).toBe(true);
+    expect(harnessCatalogEntryNeedsRefresh(fetchingEmpty)).toBe(false);
+    expect(harnessCatalogEntryNeedsRefresh(notAModelCatalog)).toBe(false);
+  });
 });
 
 // Coverage for the cold-host narrowing: the all-harness `listModels` fan-out
