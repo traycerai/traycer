@@ -245,7 +245,10 @@ describe("new methods are off every released floor", () => {
       ENVIRONMENT_METHOD_NAMES.map((name) =>
         name === "environment.status"
           ? `${name}: degrade=unsupported majors=1 latestMinor=3 minors=0,1,2,3`
-          : name === "host.remoteAccess.set"
+          : name === "host.remoteAccess.set" ||
+              name === "environment.localOverrides" ||
+              name === "config.env.localOverride.set" ||
+              name === "config.env.localOverride.clear"
             ? `${name}: degrade=unsupported majors=1,2 latestMinor=0 minors=0`
             : ENVIRONMENT_METHODS_WITH_MINOR_1_2.has(name)
               ? `${name}: degrade=unsupported majors=1 latestMinor=2 minors=0,1,2`

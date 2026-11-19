@@ -46,6 +46,19 @@ describe("agentAppearance", () => {
     expect(HARNESS_ACCENT.commandcode).not.toBe(HARNESS_ACCENT.grok);
   });
 
+  it("gives cline its own cool slate accent, distinct from every other harness", () => {
+    expect(HARNESS_ACCENT.cline).toBe("#94a6b8");
+    expect(agentAppearance("a", "terminal-agent", "cline").accent).toBe(
+      "#94a6b8",
+    );
+    const sharing = Object.entries(HARNESS_ACCENT).filter(
+      ([, accent]) => accent === HARNESS_ACCENT.cline,
+    );
+    expect(sharing.map(([harnessId]) => harnessId)).toEqual(["cline"]);
+    expect(HARNESS_ACCENT.cline).not.toBe(HARNESS_ACCENT.commandcode);
+    expect(HARNESS_ACCENT.cline).not.toBe(HARNESS_ACCENT.grok);
+  });
+
   it("carries the harness brand color as its accent", () => {
     expect(agentAppearance("a", "terminal-agent", "codex").accent).toBe(
       HARNESS_ACCENT.codex,

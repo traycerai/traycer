@@ -11,6 +11,7 @@ import {
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   guiHarnessIdSchemaV90,
+  guiHarnessIdSchemaV100,
   harnessIdSchema,
   type HarnessId,
 } from "./agent/shared";
@@ -670,6 +671,73 @@ export const fallbackPolicySchemaV10 = lazySchema(() =>
 export type FallbackPolicyV10 = z.infer<typeof fallbackPolicySchemaV10>;
 
 /**
+ * Frozen tier row, group and policy as the 1.5.1 tags shipped them on every
+ * `providers.fallbackPolicy.*` RESPONSE of major 2 (`guiHarnessIdSchemaV100`,
+ * through Command Code, before Cline).
+ */
+export const tierCandidateSchemaV20 = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaV100,
+    modelFamily: z.string().trim().min(1),
+    reasoningEffort: z.string().trim().min(1).nullable(),
+  }),
+);
+export type TierCandidateV20 = z.infer<typeof tierCandidateSchemaV20>;
+
+export const tierGroupSchemaV20 = lazySchema(() =>
+  z.object({
+    id: z.string().trim().min(1),
+    candidates: z.array(tierCandidateSchemaV20),
+  }),
+);
+export type TierGroupV20 = z.infer<typeof tierGroupSchemaV20>;
+
+export const fallbackPolicySchemaV20 = lazySchema(() =>
+  z
+    .object({
+      enabled: z.boolean(),
+      ladder: fallbackLadderSchema,
+      reasonOverrides: z
+        .partialRecord(
+          z.enum(HOST_NOTIFICATION_STOPPED_REASONS),
+          z.union([fallbackLadderSchema, z.literal("off")]),
+        )
+        .optional(),
+      graceWindowSeconds: z
+        .number()
+        .int()
+        .min(FALLBACK_POLICY_LIMITS.minGraceWindowSeconds)
+        .max(FALLBACK_POLICY_LIMITS.maxGraceWindowSeconds),
+      maxWaitMinutes: z
+        .number()
+        .int()
+        .min(FALLBACK_POLICY_LIMITS.minWaitMinutes)
+        .max(FALLBACK_POLICY_LIMITS.maxWaitMinutes),
+      returnToPreferred: z.enum(["prompt", "auto", "stay"]),
+      tierGroups: z
+        .array(tierGroupSchemaV20)
+        .refine(
+          (groups) =>
+            new Set(groups.map((group) => group.id)).size === groups.length,
+          { message: "Tier group IDs must be unique" },
+        ),
+      defaultTierGroupId: z.string().trim().min(1).nullable().default(null),
+    })
+    .refine(
+      (policy) =>
+        policy.defaultTierGroupId === null ||
+        policy.tierGroups.some(
+          (group) => group.id === policy.defaultTierGroupId,
+        ),
+      {
+        message: "The default tier group must name an existing group",
+        path: ["defaultTierGroupId"],
+      },
+    ),
+);
+export type FallbackPolicyV20 = z.infer<typeof fallbackPolicySchemaV20>;
+
+/**
  * What a user with no stored policy gets: automatic routing on.
  *
  * Only for "no row". A row that could not be read is not one: the host answers
@@ -764,19 +832,34 @@ export type ProvidersFallbackPolicyGetResponseV10 = z.infer<
 >;
 
 /**
- * Frozen `get` response of major 2, minor 0: the live policy, before 2.1 said
- * whose policy it is. A caller on this line is served this shape, and never
- * `source`.
+ * Frozen `get` response of major 2, minor 0 as the 1.5.1 tags shipped it
+ * (`fallbackPolicySchemaV20`, before 2.1 added `source` and before Cline).
  */
 export const providersFallbackPolicyGetResponseSchemaV20 = lazySchema(() =>
   z.object({
-    policy: fallbackPolicySchema,
+    policy: fallbackPolicySchemaV20,
     storedPolicyUnreadable: z.boolean(),
     inFlightCount: z.number().int().nonnegative(),
   }),
 );
 export type ProvidersFallbackPolicyGetResponseV20 = z.infer<
   typeof providersFallbackPolicyGetResponseSchemaV20
+>;
+
+/**
+ * Frozen `get` response of major 2, minor 1: adds `source` while keeping
+ * `policy` pinned to `fallbackPolicySchemaV20` (Cline opens major 3).
+ */
+export const providersFallbackPolicyGetResponseSchemaV21 = lazySchema(() =>
+  z.object({
+    policy: fallbackPolicySchemaV20,
+    storedPolicyUnreadable: z.boolean(),
+    inFlightCount: z.number().int().nonnegative(),
+    source: fallbackPolicySourceSchema,
+  }),
+);
+export type ProvidersFallbackPolicyGetResponseV21 = z.infer<
+  typeof providersFallbackPolicyGetResponseSchemaV21
 >;
 
 /** Frozen major-1 `set` response: the 1.5.0 shape over `fallbackPolicySchemaV10`. */
@@ -787,6 +870,16 @@ export const providersFallbackPolicySetResponseSchemaV10 = lazySchema(() =>
 );
 export type ProvidersFallbackPolicySetResponseV10 = z.infer<
   typeof providersFallbackPolicySetResponseSchemaV10
+>;
+
+/** Frozen major-2 `set` response: the 1.5.1 shape over `fallbackPolicySchemaV20`. */
+export const providersFallbackPolicySetResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    policy: fallbackPolicySchemaV20,
+  }),
+);
+export type ProvidersFallbackPolicySetResponseV20 = z.infer<
+  typeof providersFallbackPolicySetResponseSchemaV20
 >;
 
 /**
@@ -1031,14 +1124,13 @@ export const providersFallbackPolicyGetUpgradeV11ToV20 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// 2.1 adds `source`: the host says whose policy it answered with, so a client
-// can tell a policy the caller owns from the team's, which the policy itself
-// does not carry. Additive and request-identical, so it is a minor.
+// 2.1 adds `source`: frozen on `providersFallbackPolicyGetResponseSchemaV21`
+// (pre-Cline) now that major 3 carries Cline.
 export const providersFallbackPolicyGetV21 = defineRpcContract({
   method: "providers.fallbackPolicy.get",
   schemaVersion: { major: 2, minor: 1 } as const,
   requestSchema: providersFallbackPolicyGetRequestSchema,
-  responseSchema: providersFallbackPolicyGetResponseSchema,
+  responseSchema: providersFallbackPolicyGetResponseSchemaV21,
 });
 
 export const providersFallbackPolicyGetUpgradeV20ToV21 = defineUpgradePath<
@@ -1077,11 +1169,62 @@ export const providersFallbackPolicyGetDowngradeV21ToV11 = defineDowngradePath<
   },
 });
 
+export const providersFallbackPolicyGetV30 = defineRpcContract({
+  method: "providers.fallbackPolicy.get",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: providersFallbackPolicyGetRequestSchema,
+  responseSchema: providersFallbackPolicyGetResponseSchema,
+});
+
+export const providersFallbackPolicyGetUpgradeV21ToV30 = defineUpgradePath<
+  typeof providersFallbackPolicyGetV21,
+  typeof providersFallbackPolicyGetV30
+>({
+  from: { major: 2, minor: 1 },
+  to: { major: 3, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersFallbackPolicyGetDowngradeV30ToV21 = defineDowngradePath<
+  typeof providersFallbackPolicyGetV30,
+  typeof providersFallbackPolicyGetV21
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 2, minor: 1 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      providersFallbackPolicyGetResponseSchemaV21.safeParse(response);
+    if (!parsed.success) {
+      return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const providersFallbackPolicyGetDowngradeV30ToV11 = defineDowngradePath<
+  typeof providersFallbackPolicyGetV30,
+  typeof providersFallbackPolicyGetV11
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 1, minor: 1 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      providersFallbackPolicyGetResponseSchemaV10.safeParse(response);
+    if (!parsed.success) {
+      return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
 export const providersFallbackPolicySetV20 = defineRpcContract({
   method: "providers.fallbackPolicy.set",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersFallbackPolicySetRequestSchema,
-  responseSchema: providersFallbackPolicySetResponseSchema,
+  responseSchema: providersFallbackPolicySetResponseSchemaV20,
 });
 
 export const providersFallbackPolicySetUpgradeV11ToV20 = defineUpgradePath<
@@ -1099,6 +1242,57 @@ export const providersFallbackPolicySetDowngradeV20ToV11 = defineDowngradePath<
   typeof providersFallbackPolicySetV11
 >({
   from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 1 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      providersFallbackPolicySetResponseSchemaV10.safeParse(response);
+    if (!parsed.success) {
+      return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const providersFallbackPolicySetV30 = defineRpcContract({
+  method: "providers.fallbackPolicy.set",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: providersFallbackPolicySetRequestSchema,
+  responseSchema: providersFallbackPolicySetResponseSchema,
+});
+
+export const providersFallbackPolicySetUpgradeV20ToV30 = defineUpgradePath<
+  typeof providersFallbackPolicySetV20,
+  typeof providersFallbackPolicySetV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersFallbackPolicySetDowngradeV30ToV20 = defineDowngradePath<
+  typeof providersFallbackPolicySetV30,
+  typeof providersFallbackPolicySetV20
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      providersFallbackPolicySetResponseSchemaV20.safeParse(response);
+    if (!parsed.success) {
+      return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const providersFallbackPolicySetDowngradeV30ToV11 = defineDowngradePath<
+  typeof providersFallbackPolicySetV30,
+  typeof providersFallbackPolicySetV11
+>({
+  from: { major: 3, minor: 0 },
   to: { major: 1, minor: 1 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
@@ -1191,6 +1385,21 @@ export const providersFallbackPolicyResetResponseSchemaV10 = lazySchema(() =>
   }),
 );
 
+/** Frozen major-2 `restoreTierGroups` response (`fallbackPolicySchemaV20`). */
+export const providersFallbackPolicyRestoreTierGroupsResponseSchemaV20 =
+  lazySchema(() =>
+    z.object({
+      policy: fallbackPolicySchemaV20,
+    }),
+  );
+
+/** Frozen major-2 `reset` response (`fallbackPolicySchemaV20`). */
+export const providersFallbackPolicyResetResponseSchemaV20 = lazySchema(() =>
+  z.object({
+    policy: fallbackPolicySchemaV20,
+  }),
+);
+
 /**
  * One candidate's verdict as the groups editor draws it.
  *
@@ -1275,6 +1484,26 @@ export const tierCandidatePreviewSchemaV11 = lazySchema(() =>
 );
 export type TierCandidatePreviewV11 = z.infer<
   typeof tierCandidatePreviewSchemaV11
+>;
+
+/** Frozen major-2 preview row (`guiHarnessIdSchemaV100`, through Command Code). */
+export const tierCandidatePreviewSchemaV20 = lazySchema(() =>
+  z.object({
+    groupId: z.string(),
+    candidateIndex: z.number().int().nonnegative(),
+    harnessId: guiHarnessIdSchemaV100,
+    modelFamily: z.string(),
+    reasoningEffort: z.string().nullable(),
+    resolvedModel: z.string().nullable(),
+    profileId: z.string().nullable(),
+    skipReason: z.string().nullable(),
+    skipLabel: z.string().nullable(),
+    warnings: z.array(z.string()),
+    matches: z.array(tierCandidatePreviewMatchSchema),
+  }),
+);
+export type TierCandidatePreviewV20 = z.infer<
+  typeof tierCandidatePreviewSchemaV20
 >;
 
 /**
@@ -1427,6 +1656,14 @@ export const providersFallbackPolicyPreviewTierGroupsResponseSchemaV11 =
     }),
   );
 
+/** Frozen: the `previewTierGroups@2.0` response, over the released 2.0 row. */
+export const providersFallbackPolicyPreviewTierGroupsResponseSchemaV20 =
+  lazySchema(() =>
+    z.object({
+      candidates: z.array(tierCandidatePreviewSchemaV20),
+    }),
+  );
+
 /**
  * The live (2.0) response: the 1.0 response over rows that carry `matches`.
  *
@@ -1517,13 +1754,12 @@ export const providersFallbackPolicyPreviewTierGroupsUpgradeV10ToV11 =
     }),
   });
 
-// Major 2 of the three settings-only methods: the live policy and the live
-// preview row, for the reason `providers.fallbackPolicy.get@2.0` gives.
+// Frozen major 2 of the three settings-only methods (as 1.5.1 shipped them).
 export const providersFallbackPolicyRestoreTierGroupsV20 = defineRpcContract({
   method: "providers.fallbackPolicy.restoreTierGroups",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersFallbackPolicyRestoreTierGroupsRequestSchema,
-  responseSchema: providersFallbackPolicyRestoreTierGroupsResponseSchema,
+  responseSchema: providersFallbackPolicyRestoreTierGroupsResponseSchemaV20,
 });
 
 export const providersFallbackPolicyRestoreTierGroupsUpgradeV10ToV20 =
@@ -1561,7 +1797,7 @@ export const providersFallbackPolicyResetV20 = defineRpcContract({
   method: "providers.fallbackPolicy.reset",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersFallbackPolicyResetRequestSchema,
-  responseSchema: providersFallbackPolicyResetResponseSchema,
+  responseSchema: providersFallbackPolicyResetResponseSchemaV20,
 });
 
 export const providersFallbackPolicyResetUpgradeV10ToV20 = defineUpgradePath<
@@ -1596,7 +1832,7 @@ export const providersFallbackPolicyPreviewTierGroupsV20 = defineRpcContract({
   method: "providers.fallbackPolicy.previewTierGroups",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: providersFallbackPolicyPreviewTierGroupsRequestSchema,
-  responseSchema: providersFallbackPolicyPreviewTierGroupsResponseSchema,
+  responseSchema: providersFallbackPolicyPreviewTierGroupsResponseSchemaV20,
 });
 
 export const providersFallbackPolicyPreviewTierGroupsUpgradeV11ToV20 =
@@ -1616,6 +1852,176 @@ export const providersFallbackPolicyPreviewTierGroupsDowngradeV20ToV11 =
     typeof providersFallbackPolicyPreviewTierGroupsV11
   >({
     from: { major: 2, minor: 0 },
+    to: { major: 1, minor: 1 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        providersFallbackPolicyPreviewTierGroupsResponseSchemaV11.safeParse(
+          response,
+        );
+      if (!parsed.success) {
+        return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+// Major 3 of the three settings-only methods: carries live policy / preview row (including Cline).
+export const providersFallbackPolicyRestoreTierGroupsV30 = defineRpcContract({
+  method: "providers.fallbackPolicy.restoreTierGroups",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: providersFallbackPolicyRestoreTierGroupsRequestSchema,
+  responseSchema: providersFallbackPolicyRestoreTierGroupsResponseSchema,
+});
+
+export const providersFallbackPolicyRestoreTierGroupsUpgradeV20ToV30 =
+  defineUpgradePath<
+    typeof providersFallbackPolicyRestoreTierGroupsV20,
+    typeof providersFallbackPolicyRestoreTierGroupsV30
+  >({
+    from: { major: 2, minor: 0 },
+    to: { major: 3, minor: 0 },
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
+
+export const providersFallbackPolicyRestoreTierGroupsDowngradeV30ToV20 =
+  defineDowngradePath<
+    typeof providersFallbackPolicyRestoreTierGroupsV30,
+    typeof providersFallbackPolicyRestoreTierGroupsV20
+  >({
+    from: { major: 3, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        providersFallbackPolicyRestoreTierGroupsResponseSchemaV20.safeParse(
+          response,
+        );
+      if (!parsed.success) {
+        return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const providersFallbackPolicyRestoreTierGroupsDowngradeV30ToV10 =
+  defineDowngradePath<
+    typeof providersFallbackPolicyRestoreTierGroupsV30,
+    typeof providersFallbackPolicyRestoreTierGroupsV10
+  >({
+    from: { major: 3, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        providersFallbackPolicyRestoreTierGroupsResponseSchemaV10.safeParse(
+          response,
+        );
+      if (!parsed.success) {
+        return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const providersFallbackPolicyResetV30 = defineRpcContract({
+  method: "providers.fallbackPolicy.reset",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: providersFallbackPolicyResetRequestSchema,
+  responseSchema: providersFallbackPolicyResetResponseSchema,
+});
+
+export const providersFallbackPolicyResetUpgradeV20ToV30 = defineUpgradePath<
+  typeof providersFallbackPolicyResetV20,
+  typeof providersFallbackPolicyResetV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersFallbackPolicyResetDowngradeV30ToV20 =
+  defineDowngradePath<
+    typeof providersFallbackPolicyResetV30,
+    typeof providersFallbackPolicyResetV20
+  >({
+    from: { major: 3, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        providersFallbackPolicyResetResponseSchemaV20.safeParse(response);
+      if (!parsed.success) {
+        return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const providersFallbackPolicyResetDowngradeV30ToV10 =
+  defineDowngradePath<
+    typeof providersFallbackPolicyResetV30,
+    typeof providersFallbackPolicyResetV10
+  >({
+    from: { major: 3, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        providersFallbackPolicyResetResponseSchemaV10.safeParse(response);
+      if (!parsed.success) {
+        return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const providersFallbackPolicyPreviewTierGroupsV30 = defineRpcContract({
+  method: "providers.fallbackPolicy.previewTierGroups",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: providersFallbackPolicyPreviewTierGroupsRequestSchema,
+  responseSchema: providersFallbackPolicyPreviewTierGroupsResponseSchema,
+});
+
+export const providersFallbackPolicyPreviewTierGroupsUpgradeV20ToV30 =
+  defineUpgradePath<
+    typeof providersFallbackPolicyPreviewTierGroupsV20,
+    typeof providersFallbackPolicyPreviewTierGroupsV30
+  >({
+    from: { major: 2, minor: 0 },
+    to: { major: 3, minor: 0 },
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
+
+export const providersFallbackPolicyPreviewTierGroupsDowngradeV30ToV20 =
+  defineDowngradePath<
+    typeof providersFallbackPolicyPreviewTierGroupsV30,
+    typeof providersFallbackPolicyPreviewTierGroupsV20
+  >({
+    from: { major: 3, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        providersFallbackPolicyPreviewTierGroupsResponseSchemaV20.safeParse(
+          response,
+        );
+      if (!parsed.success) {
+        return { ok: false, error: FALLBACK_POLICY_REQUIRES_NEWER_CLIENT };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const providersFallbackPolicyPreviewTierGroupsDowngradeV30ToV11 =
+  defineDowngradePath<
+    typeof providersFallbackPolicyPreviewTierGroupsV30,
+    typeof providersFallbackPolicyPreviewTierGroupsV11
+  >({
+    from: { major: 3, minor: 0 },
     to: { major: 1, minor: 1 },
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {

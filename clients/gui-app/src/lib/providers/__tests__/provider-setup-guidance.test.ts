@@ -169,6 +169,25 @@ describe("TERMINAL_SIGN_IN_COPY", () => {
     );
   });
 
+  it("re-words Cline around the browser page its CLI opens itself, not a printed sign-in code, and keeps the generic labels", () => {
+    const guidance = providerTerminalGuidance("cline");
+    expect(providerSetupGuidance("cline")).toBeNull();
+    expect(guidance.summary).toBe(
+      "Cline signs in from a terminal: it opens its sign-in page in a browser and waits in that terminal.",
+    );
+    expect(guidance.stepsAfterAction).toEqual([
+      "Finish the sign-in in the browser page that terminal opens, on the computer it runs on.",
+      "Refresh this list.",
+    ]);
+    expect(guidance.terminalHint).toBe(
+      "Cline opens its sign-in page in a browser on that computer and waits in the terminal. Finish there, then use Refresh above.",
+    );
+    expect(guidance.summary).not.toContain("sign-in code");
+    expect(guidance.terminalHint).not.toContain("sign-in code");
+    expect(guidance.terminalActionLabel).toBe("Sign in from a terminal");
+    expect(guidance.manualCommand).toBeNull();
+  });
+
   it("re-words Amp around a printed sign-in link that finishes in the terminal, without promising a code paste or that a browser opens", () => {
     const guidance = providerTerminalGuidance("amp");
     expect(providerSetupGuidance("amp")).toBeNull();
@@ -334,7 +353,7 @@ describe("resolveProviderTerminalSetup", () => {
     expect(setup?.guidance.manualCommand).toBe("hermes setup model");
   });
 
-  it.each(["kilocode", "amp", "kiro", "commandcode"] as const)(
+  it.each(["kilocode", "amp", "kiro", "commandcode", "cline"] as const)(
     "gives %s the terminal-sign-in copy when the capability is present, and nothing when it is absent",
     (providerId: ProviderId) => {
       const withCapability = resolveProviderTerminalSetup(

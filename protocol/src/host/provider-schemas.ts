@@ -318,6 +318,42 @@ export const providerIdSchemaV91 = lazySchema(() =>
 );
 export type ProviderIdV91 = z.infer<typeof providerIdSchemaV91>;
 
+/**
+ * Frozen provider id set as `1.5.1` shipped major 10 - everything through
+ * Command Code, before Cline.
+ *
+ * Same rule as `guiHarnessIdSchemaV100`: a released `@10.x` payload pins
+ * the ids it shipped with, so the next provider rides only the major 11 head.
+ * Do NOT add new providers here - extend the latest `providerIdSchema`.
+ */
+export const providerIdSchemaV100 = lazySchema(() =>
+  z.enum([
+    "claude-code",
+    "codex",
+    "opencode",
+    "cursor",
+    "traycer",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+    "commandcode",
+  ]),
+);
+export type ProviderIdV100 = z.infer<typeof providerIdSchemaV100>;
+
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   "claude-code": "Claude Code",
@@ -342,6 +378,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   reasonix: "Reasonix",
   antigravity: "Antigravity",
   commandcode: "Command Code",
+  cline: "Cline",
 };
 
 /**
@@ -2011,6 +2048,31 @@ export const providerManagedLineSchema = lazySchema(() =>
 export type ProviderManagedLine = z.infer<typeof providerManagedLineSchema>;
 
 /**
+ * Frozen `providerManagedLineSchema` for major 10 (`10.6`–`10.13`), pinned to
+ * `providerManagedVersionsSchemaV100` so post-major-10 provider ids (`cline`)
+ * cannot leak into `managedLines[].managedVersions.sharedWithProviders`.
+ */
+export const providerManagedLineSchemaV100 = lazySchema(() =>
+  z.object({
+    line: opencodeLineSchema,
+    candidate: providerCliCandidateSchema.extend({
+      kind: z.literal("bundled"),
+    }),
+    packId: z.string().nullable().catch(null),
+    managedInstallState: providerManagedInstallStateSchema
+      .nullable()
+      .catch(null),
+    managedVersions: providerManagedVersionsSchemaV100.nullable().catch(null),
+    managedVersionsUnavailable: providerManagedVersionsUnavailableSchema
+      .nullable()
+      .catch(null),
+  }),
+);
+export type ProviderManagedLineV100 = z.infer<
+  typeof providerManagedLineSchemaV100
+>;
+
+/**
  * Enablement is a plain STICKY BOOLEAN on every wire: `enabled` below is the
  * whole story, and the only thing that changes it is the user's toggle
  * (`providers.setEnabled`). An earlier revision of this line carried a
@@ -2279,9 +2341,56 @@ const providerCliStateBaseShapeV20 = {
 };
 
 /**
- * Provider list row through 10.12. Mutation echoes use their own frozen shape.
+ * Frozen `providers.list@10.x` managed-versions row: pins `sharedWithProviders`
+ * to `providerIdSchemaV100` (through Command Code, before Cline) so no released
+ * `@10.x` line widens when `providerIdSchema` gains a new id.
+ */
+const providerManagedVersionsSchemaV100 = lazySchema(() =>
+  z.object({
+    autoDownload: z.boolean(),
+    pinnedVersion: z.string().nullable(),
+    updateAvailable: z.object({ version: z.string() }).nullable(),
+    sharedWithProviders: z.array(providerIdSchemaV100).catch([]),
+    totalSizeBytes: z.number().int().nonnegative().nullable(),
+    available: z.array(providerPackVersionSchema),
+  }),
+);
+
+/**
+ * Frozen provider list row through 10.12 (pre-Cline id set). Every `10.0`–`10.13`
+ * list schema derives from this so major 10 never carries post-1.5.1 provider ids.
+ * Mutation echoes use their own frozen shape.
  */
 const providerCliStateSchemaV1012Preimage = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchemaV100,
+    ...providerCliStateBaseShape,
+    managedVersions: providerManagedVersionsSchemaV100
+      .nullable()
+      .catch(null)
+      .optional(),
+    managedLines: z.array(providerManagedLineSchemaV100).catch([]).optional(),
+    auth: PROVIDER_AUTH_SCHEMA_V20,
+    nativeCapabilities: providerNativeCapabilitiesSchema.catch(
+      DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    ),
+  }),
+);
+
+/** Frozen `providers.list@10.13` row (major 10 head, pre-Cline id set). */
+export const providerCliStateSchemaV1013 = lazySchema(() =>
+  providerCliStateSchemaV1012Preimage.extend({
+    apiKey: providerApiKeyStateSchema.extend({
+      recordEnvironmentId: z.string().min(1).nullable().optional(),
+    }),
+    usageReporting: z.boolean().optional(),
+    profiles: z.array(providerProfileProjectionSchema).catch([]),
+  }),
+);
+export type ProviderCliStateV1013 = z.infer<typeof providerCliStateSchemaV1013>;
+
+/** List-only record routing; absent means the computer reports legacy key custody. */
+export const providerCliStateSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     ...providerCliStateBaseShape,
@@ -2289,11 +2398,6 @@ const providerCliStateSchemaV1012Preimage = lazySchema(() =>
     nativeCapabilities: providerNativeCapabilitiesSchema.catch(
       DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     ),
-  }),
-);
-/** List-only record routing; absent means the computer reports legacy key custody. */
-export const providerCliStateSchema = lazySchema(() =>
-  providerCliStateSchemaV1012Preimage.extend({
     apiKey: providerApiKeyStateSchema.extend({
       recordEnvironmentId: z.string().min(1).nullable().optional(),
     }),
@@ -2820,9 +2924,20 @@ export const providersListResponseSchemaV1012Preimage = lazySchema(() =>
     offersSignIns: z.boolean().optional(),
   }),
 );
+
+/** Frozen `providers.list@10.13` response (major 10 head, pre-Cline id set). */
+export const providersListResponseSchemaV1013 = lazySchema(() =>
+  providersListResponseSchemaV1012Preimage.extend({
+    providers: z.array(providerCliStateSchemaV1013),
+  }),
+);
+export type ProvidersListResponseV1013 = z.infer<
+  typeof providersListResponseSchemaV1013
+>;
+
 /**
- * Canonical `providers.list` response. Classic callers receive `native: null`;
- * a native query carries its list/discover result or typed error there.
+ * Canonical `providers.list` response (major 11 head). Classic callers receive
+ * `native: null`; a native query carries its list/discover result or typed error there.
  */
 export const providersListResponseSchema = lazySchema(() =>
   providersListResponseSchemaV1012Preimage.extend({
@@ -6273,6 +6388,18 @@ export function downgradeProviderCliStateListToV92(
   states: readonly unknown[],
 ): ProviderCliStateV92[] {
   return projectRowsOntoFrozenLine(providerCliStateSchemaV92, states);
+}
+
+/**
+ * Drop the providers major 10 cannot spell (`cline` and later) for an
+ * already-shipped major-10 client. Keeps every field `10.13` carries
+ * (`usageReporting`, `profiles`, `apiKey.recordEnvironmentId`) and projects
+ * `managedVersions.sharedWithProviders` onto `providerIdSchemaV100`.
+ */
+export function downgradeProviderCliStateListToV1013(
+  states: readonly unknown[],
+): ProviderCliStateV1013[] {
+  return projectRowsOntoFrozenLine(providerCliStateSchemaV1013, states);
 }
 
 /**

@@ -359,6 +359,20 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
   });
 });
 
+describe("ProviderEnvOverridesSection — provider env name placeholder", () => {
+  it("uses CLINE_API_KEY as the add-row name placeholder for cline", () => {
+    renderSection({
+      providerId: "cline",
+      envOverrideScope: "harness-and-native-config",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+    expect(
+      screen.getByLabelText("New variable name").getAttribute("placeholder"),
+    ).toBe("CLINE_API_KEY");
+  });
+});
+
 describe("ProviderEnvOverridesSection on a sandbox host", () => {
   function renderWithOverride(): void {
     render(

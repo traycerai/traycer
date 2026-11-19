@@ -247,11 +247,16 @@ describe("catalogLineKnowsAutoMode", () => {
     expect(catalogLineKnowsAutoMode(lowerMinor)).toBe(false);
   });
 
-  // 10.0 is the 9.x row over a wider harness id set and nothing else, so the
-  // new head answers true on every minor.
+  // 10.0 and 11.0 are the 9.x row over wider harness id sets and nothing else,
+  // so every minor of them answers true.
   it("answers true on major 10, the line that opened for the Command Code harness id", () => {
     expect(catalogLineKnowsAutoMode({ major: 10, minor: 0 })).toBe(true);
     expect(catalogLineKnowsAutoMode({ major: 10, minor: 3 })).toBe(true);
+  });
+
+  it("answers true on major 11, the line that opened for the Cline harness id", () => {
+    expect(catalogLineKnowsAutoMode({ major: 11, minor: 0 })).toBe(true);
+    expect(catalogLineKnowsAutoMode({ major: 11, minor: 2 })).toBe(true);
   });
 
   // A higher MAJOR that is not named is not evidence: the contract's own
@@ -262,7 +267,7 @@ describe("catalogLineKnowsAutoMode", () => {
     // (major comparison dropped) would wrongly answer true here - this is
     // what makes the case actually exercise the major guard.
     const higherMajor: SchemaVersion = {
-      major: 11,
+      major: 12,
       minor: AUTO_MODE_LINE.minor,
     };
     expect(catalogLineKnowsAutoMode(higherMajor)).toBe(false);

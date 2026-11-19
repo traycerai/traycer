@@ -130,6 +130,28 @@ describe("<ProviderNativeSubagentsGroup />", () => {
     expect(screen.queryByTestId("provider-native-subagents-group")).toBeNull();
   });
 
+  it("renders on providers.list@11.0 (Cline wider id set) and withholds on an unnamed major", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.setNativeSubagents": { major: 1, minor: 0 },
+      "providers.list": { major: 11, minor: 0 },
+    });
+
+    const { unmount } = render(
+      <ProviderNativeSubagentsGroup state={providerState({})} />,
+    );
+    expect(
+      screen.getByTestId("provider-native-subagents-group"),
+    ).not.toBeNull();
+    unmount();
+
+    recordNegotiatedHostManifest(HOST_ID, {
+      "providers.setNativeSubagents": { major: 1, minor: 0 },
+      "providers.list": { major: 12, minor: 0 },
+    });
+    render(<ProviderNativeSubagentsGroup state={providerState({})} />);
+    expect(screen.queryByTestId("provider-native-subagents-group")).toBeNull();
+  });
+
   it("renders a checked switch for a row without the key, and an unchecked one for nativeSubagents: false", () => {
     const { rerender } = render(
       <ProviderNativeSubagentsGroup state={providerState({})} />,

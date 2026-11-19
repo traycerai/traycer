@@ -90,7 +90,7 @@ describe("providers.list@10.13 key-record environment", () => {
       const live = latestListResponse(ENVIRONMENT_ID);
       const downgraded = downgradeResponseAcrossMajors(
         PROVIDERS_LIST,
-        10,
+        11,
         major,
         live,
       );

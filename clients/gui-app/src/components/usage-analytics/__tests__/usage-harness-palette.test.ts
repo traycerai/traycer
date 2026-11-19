@@ -121,6 +121,27 @@ describe("usage harness brand anchors", () => {
     }
   });
 
+  it("resolves cline, which has no brand anchor, to a distinct validated slot in both themes", () => {
+    const scale = buildHarnessUsageSeriesScale([
+      "claude",
+      "cline",
+      "codex",
+      "commandcode",
+      "openrouter",
+      "opencode",
+    ]);
+    for (const selector of [
+      ".usage-chart-root {",
+      ".dark .usage-chart-root {",
+    ]) {
+      const colors = scale.order.map((key) =>
+        resolveColor(selector, scale.colorVar(key)),
+      );
+      expect(new Set(colors).size).toBe(colors.length);
+      expect(colors).toHaveLength(6);
+    }
+  });
+
   it("resolves every supported harness to a distinct color in both themes", () => {
     const scale = buildHarnessUsageSeriesScale([
       "amp",

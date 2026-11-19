@@ -31,6 +31,7 @@ import {
   draftsSubscribeServerFrameSchemaV10,
   draftsSubscribeV10,
   draftsSubscribeV11,
+  draftsSubscribeV12,
   draftsUpsertRequestSchema,
   draftsUpsertV10,
   draftSubscribeFrameApplies,
@@ -208,9 +209,9 @@ describe("drafts unary contracts", () => {
       (typeof UNARY_METHODS)[number],
       { major: number; minor: number }
     > = {
-      "drafts.upsert": { major: 2, minor: 0 },
+      "drafts.upsert": { major: 3, minor: 0 },
       "drafts.delete": { major: 1, minor: 0 },
-      "drafts.list": { major: 2, minor: 0 },
+      "drafts.list": { major: 3, minor: 0 },
       "drafts.retract": { major: 1, minor: 0 },
       "drafts.putBlob": { major: 1, minor: 2 },
       "drafts.readBlob": { major: 1, minor: 1 },
@@ -223,7 +224,7 @@ describe("drafts unary contracts", () => {
       expect(split.optionalManifest[method]).toEqual({
         major: line.major,
         minor: line.minor,
-        ...(line.major === 2 ? { supportedMajors: [1, 2] } : {}),
+        ...(line.major === 3 ? { supportedMajors: [1, 2, 3] } : {}),
       });
     }
   });
@@ -399,16 +400,19 @@ describe("drafts.subscribe@1.0 contract", () => {
         STREAM_METHOD
       ],
     ).toEqual({
-      // 1.1 is canonical: it binds the live server frame (Command Code ids)
-      // above the frozen 1.0 that the released hosts shipped.
+      // 1.2 is canonical: it binds the live server frame (`cline`) above the
+      // frozen 1.0 and 1.1 lines.
       major: 1,
-      minor: 1,
+      minor: 2,
     });
     expect(hostStreamRpcRegistry[STREAM_METHOD][1].versions[0].contract).toBe(
       draftsSubscribeV10,
     );
     expect(hostStreamRpcRegistry[STREAM_METHOD][1].versions[1].contract).toBe(
       draftsSubscribeV11,
+    );
+    expect(hostStreamRpcRegistry[STREAM_METHOD][1].versions[2].contract).toBe(
+      draftsSubscribeV12,
     );
   });
 

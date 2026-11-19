@@ -235,91 +235,91 @@ const SERVER_FRAME_DIGESTS = {
     "c145b4fff10cde51da38b4ae9a844647353e2f29a3ec901922e6ca692f535d52",
   ],
   7: [
-    "2972058fc6f2bf8bb69597c5e1d0dfdab98cf59618a3c63498a326400b2cf265",
-    "a9cfec2289a5da3e3cf30e405b94a1251f74c25fb99852d1f24399530f7d27aa",
+    "56e335b905e9fc1ea1ecc430d2e0b1a614946d8ef48f6b7476071189eb5498a8",
+    "c9ffb457f5a7610f343f7ce0a747ff01c4536a8b498f83c00dcb9e671d734258",
   ],
   8: [
-    "88f63c0469306ed76c287a83617b7c384166f137eb8568ee15cb8d3de5ed8772",
-    "a1eb1f9df80b952a15412cb5beb25f50b93b3d6f7a55693e0e3a07c040598738",
+    "ae93abefa774ccb48a554a05f4eb5293e3765f4a161e32b8be202351a6f1f868",
+    "c886ff4277701f51c3416789ec6b03ca2d8d2897b4022849cfa382c96ffc705b",
   ],
   9: [
-    "a45d5ebfe9b89eba5d983aecdca1b2e7c429efc568da42f8cf272d22dacaec67",
-    "322b2339d59ed6d917892f36b69b96ec43e758007f37c38a32d37d51ff8b0b50",
+    "f20874d46e386797167248d503ff9037f178db61067551a9997e4a8dd2bf83e5",
+    "6a1aa1d39123da798c601e9a57fdf868add0598bc6cc67cb0e0d2c9ff553b143",
   ],
   10: [
-    "21d0548f2b4968208594300aeff12317e9cff382bf69b51ba6005f547b9c7a45",
-    "35035b2e5d4b8825f18ad0d1fb34742d6421e86332614953fc2fa7994ee018c3",
+    "1bb5d282f0cd3409374fc552b4f7923d71fd5663273da54f7a363677be2cee67",
+    "3d1eeb963ee7fed1ecc9e65e8c9994cec250e93fca6985cd67e3e7003726d76e",
   ],
   11: [
-    "084bcfe7661f24efafbe36d9aea590f14772f7ecfbeab7c79022e4379c18c4a4",
-    "ce0f42c2622d848af1a2d003b65504376fe387aaaec8715b3b134114766446ea",
+    "16714072b3dc0e5160b26b0537ef6a64660a6c8042bc8f68a0e0f415fe3f403f",
+    "8fd39ec55e6bf2fd50a13033a0cffcfd125c5e14ab23349cf33ef41618ec720a",
   ],
   12: [
-    "9780f12940560a78d77c3445e23be894d7ad4935f05c3193f0676e2cffe0a283",
-    "51806edbbf4a8cb2ab3a7b9e4cd464857001c3488ac97c0e6921efe80a61ca1d",
+    "841912e96e07edb4a4052cb3c37c74beb676b6cd738d1fbf0d986c86cbc84b15",
+    "c45d33081830c87655deebb5cdd80e9a28177818f218f2fb84a0e5ad9c1e3633",
   ],
   13: [
-    "a8bf9702a714b5585634fc4a31ac90c7e1867e8d696f78149f8ebff0e06d0696",
-    "29cb1baa74dff1262c102f425b260b8b7fe40c734140bf356502d140ed54a185",
+    "a93f998496c742f9eb0795d36b369b6ffe89d056c072a5d52af4d460f763a1f1",
+    "d0eb0c1992a3af01bbc16b66e68df54174d051b39a94a37f3dda7b2603aeeb7d",
   ],
   14: [
-    "ac5f0f6f092b320b1f69687c3f0b994943603652fee4093de17f3d043998b39a",
-    "bf654ab31bcf052575c328acbd430791874328d5a6566a8f86ede62f184d531f",
+    "1b996fb5ac09c16ac912e9ae2db5dab5083b10498b3098923c35c213029ea057",
+    "511d8ed913afe90e144ecdb0f1be329f8c81551197e9b61d65d01801e14738d1",
   ],
   15: [
-    "cba84866e0cfba0a5e332c5d37d7d1693f611b27cec639a12ca9c3ab3f523f7c",
-    "fd9d5274d3e103c2f80ee6192a263dcc2c936b4b7d6c06644749a8168c766537",
+    "0318ee2cdad8420507c1b6983461d640755b7be732585afdb349689ddd1a9304",
+    "c7dd9d0ee1649817d1eed914b74d3debc3a099742a37cb12a626bd9f264b3786",
   ],
   16: [
-    "f903b0516835c52a7577fc97f1dc2b4a9f5d55f81c36c0996566e3ee3b47b0ba",
-    "3aceaabf237e5e049a0b4f5e593fb692104db9dda16a0b846dacfcc5b4175214",
+    "f57d9ccd0c806746298eb71cd749b5667116dd128eb6ae10122bc214cf74dc6b",
+    "cecc39bdee5de1c2258a29c4e66d10016a1bcdc6d96121650c5c8344c1384c0d",
   ],
   17: [
-    "64db3e02ed3e0268eb98c1b3a11a9d6989e0c680e7a53a15a939c3512e996951",
-    "fc8c87edb1549033c42d2b2034a781a7e15f04de94456a910e4b38ca2ef0677f",
+    "b0ddd3a28d218d5e8aebe45a4143c421196c475dc79baf2f8736a7c028aa8fc7",
+    "bbab93c8b75fc0de62121f9182872d356dcec735c20778fd7d8109e4cbf4776c",
   ],
   18: [
-    "7a4f2062af5aa44e4a6b5535653e6606ecd2c1352906a9ad10a26f69fe46909f",
-    "c4d342f3adf2eaacef9d36a2a7e1551f58bf1797b1766cbc72ca84210713f73f",
+    "d37320847eba9431b1a2e0bac3a6cec80f6ab99b3400f970f130076831ad660a",
+    "db6240e8958d5e473a061e1ef9c4b91fbd12ca21b760a37107e96838f7c5f2e2",
   ],
   19: [
-    "d450239c4feb1db24a49fa003ed6474137fab7015b5ede8a08dc2429a6adaeed",
-    "01e75b75c973a7d40e3bd2b3a23aa13f14e8d1dcdbd1a78969b0f97d9be5b8e5",
+    "8f22b95dbc7f2f3caa71c91b358e0aaf2acdf5c7adab38abb7a1166044404d3f",
+    "e0142cf277454359273777395ad91b741d9fd4d4d805a883ce5fe7620aa33379",
   ],
   20: [
-    "463161909221ea897690842b41ee10abae7214f1055d0ed16f56b17d9cbbb3cc",
-    "5c81ac906499c0383bcb6a21e3f148b0ac9f3d2214d24b3c6700a454814908a1",
+    "267803d667bffa32d0e7038e6ec1321c36690645650325596d1a2037b7661ee4",
+    "f0a3fc6d61b508c4dc901d7be39710342fb03717acbcd407e4833b274d56426e",
   ],
   21: [
-    "95eb83c260fa3524bcf2a276bcc7b3e21f36da417803d484580aad803eab4c8d",
-    "df9bbe86f245826e18b231b0266dc27364e9cf82d825f3672f48633febd3825a",
+    "52c5e37f323b7ff951ba9546eda65b342a0e5d6cc8b3bfcfd94c6ad62bd87a1d",
+    "0f0cb53be5846016431bbb9295846a1bfd327ffe6cee5f749ed73364f5f05f2e",
   ],
   22: [
-    "c196eb5624840268d72b08b89b20fc50202d06d01f6999e506f48b02f2c7c46c",
-    "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
+    "e1f1c4d92a18a8423cbe9b07b8bc389e7d029949a750bc395cd5a157deda9dd1",
+    "ebb1f90fb9e2b6b6799ec33624ee42f781e5ceca7ed8c3e01995f5ffe3824f40",
   ],
   23: [
-    "bf3aeb58c237c1565e925a3e084df419e659c216d22534b2a381b0b122fd5118",
-    "5b70ba72b3881759743985dd5a00c8cd22648b6968e927fe1c02da6d8812b01b",
+    "725c1c98ac0b2ad93ecf9923e39a71ce06dec064abf6866eb5da3ca9351df407",
+    "7f5d542d21942eda9da0cc70673e7f65067626921128c2bb0430c91209d2e641",
   ],
   // Captured from the live schema the moment before 1.25 opened above it: the
   // cron next-run line, with no bot-conversation request on a user row and no
   // conversation-message queue item.
   24: [
-    "f1e91dd0e3fb8354d3c35cafbb604b10a22ee030ab772e9584da3618fcbffa70",
-    "60c355b9255cabc3f8d72082892edd5017842c0417c93bf40dbb0804caa13f93",
+    "28a02553fd78cf36320da488600e68e592fc36a367ea69b316bda7ff7cc35b93",
+    "b51fcced953e22883ded52ee896f72ab246923682ee7e2c9976f33ba245f5c3e",
   ],
   // Captured from the live schema the moment before 1.26 opened above it: the
   // bot-conversation line, with no task-checkin queue item.
   25: [
-    "988b6609457f4f51a5b60d5534db80d533a5c370a9554805ee176327d8b9246a",
-    "40d3340102096c4e188f6d67b1f252f5f03e17215cc7a50635c3972121715087",
+    "6cbd6fe26e74ca8e4d9e8767b0b921d0f5c123950ec96f6974134158ed659fde",
+    "4aa1593b172b8680d6bc07eaa879959894875aafa63808e7cb78ad521fa3c441",
   ],
   // Captured from the live schema the moment before 1.27 opened above it: the
   // task-checkin line, with no task-overdue queue item.
   26: [
-    "d13ebcc95feead1075be2401fd1cf03ac234e1a2434f709a4e2b89d419497622",
-    "a1bc873d99a5b4e12b8345691d427b5bca26d40c5e03bb5a474b68a282ca5a6b",
+    "7948297517316b0e9ffa1a689e8f68e7de4a4836aa83fe405cb16edc51c25f2e",
+    "3697b98492b0ed8dd20c71eb1d7e8bd682e6ef6dbad3fc6cdc52a6212f5d4ddc",
   ],
   // Captured from the live schema the moment before 1.28 opened above it: the
   // task-overdue line, with no `signInParked` on a queued prompt and operation
@@ -328,8 +328,8 @@ const SERVER_FRAME_DIGESTS = {
   // one this tree pinned before main's 1.28 landed, and the merged tree's
   // frozen 1.27 reproduces it.
   27: [
-    "03d84eb3535a09bb9de2b461e884a181e96ddcb4f8b6684e277594f92944a8da",
-    "328a808328b0c2c876dabb63507530770a8e2ba52954c4e36129a0f468850cae",
+    "6792dab575af3a22a380ce1d2c091bdf94efbdce4fdf9ce95e662b7deb6980a6",
+    "42caa677f5d8c7edce3012a433b50ee151926d652d974b82bb107ebef3d3377f",
   ],
   // The sign-in park line (main's 1.28): a queued prompt may carry
   // `signInParked`; operation blocks and events keep the four markdown kinds.
@@ -338,8 +338,8 @@ const SERVER_FRAME_DIGESTS = {
   // 1.27 above, and 1.29–1.31 reproduce the values this tree pinned for them
   // as 1.28–1.30, so the re-mint moved nothing else.
   28: [
-    "da49112bfac4bee61d549c097f0ba826ed9e4e3e9875665bc2c46ac1b81b35d4",
-    "164f04130a480a3a49847b77ab44f2dd1f75940b6183455dd3a4e9955889c91d",
+    "9ae81ced85f6c37e1eed02cacc45a94ec01c2558df87958d721e81cd9569e3f7",
+    "7f6a9d2a01d9903424dd888439047d84cda0965b9e2dbec1614354c65f4a7a03",
   ],
   // The delivery line (main's 1.29): a tool block may carry
   // `agentMessageDelivery`; operation blocks and events keep the four markdown
@@ -348,26 +348,26 @@ const SERVER_FRAME_DIGESTS = {
   // stamp gained `targetHostOffline` (traycer#2421): no stable release carries
   // 1.29 or above, and every line through 1.28 reproduces its value.
   29: [
-    "e260121a7db075fad147c9dd6463835ec7a0582c637e1c4f03fdb2689de2aac0",
-    "6c867969d2b9f870339eb86baedce6d01f7604b17c60d6ae1bc2fc138f0ee126",
+    "748e5eb64ffaa11ab7b5bb90f75b5228edba772bcbffbf58cc8513e2a87f384b",
+    "a0fa845aeca4a2390ea7033e8253c5a86b9c85d75a632468b945b72347e5f3ac",
   ],
   // The html/canvas/file artifact-kind line, with tool calls carrying no
   // `artifact` stamp. Re-minted above main's 1.29.
   30: [
-    "cb1dd0a535ad85316427702a9a4d3805de9d90d7ae21d02707107de17d146cec",
-    "d9c2f68f08c6876054e9ccb92a9bd9326daeb2bcd07184a2d6a44028ef6adc41",
+    "f94dff7598365591d06b452f981f168ea59b6135da7512e45822f03d5c161828",
+    "785c59f99c7432b48658215b9009b10faddaa7e0157e80201105a6b8097a9cb6",
   ],
   // The artifact-stamp line, with no canvas annotations. Re-minted above
   // main's 1.29.
   31: [
-    "283c7bb59e3e1bd5ce7b6d1bf2aab377a65b20a66beb957064f991856faee1d0",
-    "476d75740c797a230194aafb04f1d2404a115ed444808ef8b465d9adcba9e931",
+    "5f13ad506888fc0fcd3cd42504c3442dc2ad0aef77ffa5fa02c98d136725674e",
+    "5ebdc4a673a74c35421862be1d21e91e99f3743d81e4be0a015ac2fa9db4ca5c",
   ],
   // The canvas-annotation line, before 1.33 widened checkpoint artifact tags.
   // Re-minted above main's 1.29.
   32: [
-    "224fc4ca3d808110780499ec3cbf26c6e748498d796410a2197d978a937e37c0",
-    "9623021c7506345642718eb0a3bf001f3d6346bef56061a587f863d3af62428f",
+    "50156f6565e51692170a51c618cec3b509be61ac48a7d13411b84058eef715eb",
+    "8cd92633dd7dbde5c03523ba51a24c3ff55defb1a3acbbbae791278381420234",
   ],
 } as const;
 

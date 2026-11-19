@@ -610,22 +610,22 @@ describe("optional-method capability negotiation", () => {
     // `agent.getProviderProfileRateLimits@8.0` alone (the other two carry no
     // rate-limit union).
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 7,
-      minor: 0,
-      supportedMajors: [1, 2, 3, 4, 5, 6, 7],
-    });
-    expect(
-      split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({
       major: 8,
       minor: 0,
       supportedMajors: [1, 2, 3, 4, 5, 6, 7, 8],
     });
-    // `agent.configure@7.2` added the service-tier choice to the request.
+    expect(
+      split.optionalManifest["agent.getProviderProfileRateLimits"],
+    ).toEqual({
+      major: 9,
+      minor: 0,
+      supportedMajors: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    });
+    // `agent.configure@8.0` widened the response harness enum for `cline`.
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 7,
-      minor: 2,
-      supportedMajors: [1, 2, 3, 4, 5, 6, 7],
+      major: 8,
+      minor: 0,
+      supportedMajors: [1, 2, 3, 4, 5, 6, 7, 8],
     });
   });
 

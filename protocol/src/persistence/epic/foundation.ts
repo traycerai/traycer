@@ -86,6 +86,7 @@ export const guiHarnessIdSchema = lazySchema(() =>
     "reasonix",
     "antigravity",
     "commandcode",
+    "cline",
   ]),
 );
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
@@ -214,6 +215,45 @@ export const guiHarnessIdSchemaPreCommandCode = lazySchema(() =>
 export type GuiHarnessIdPreCommandCode = z.infer<
   typeof guiHarnessIdSchemaPreCommandCode
 >;
+
+/**
+ * Frozen copy of the persisted harness enum as the 1.5.1 tags shipped it -
+ * everything through Command Code, before Cline, which first rides
+ * `sessionImport.scan@1.4`, `sessionImport.run@1.4`, `drafts.subscribe@1.2`,
+ * `epic.getChatRunSettings@5.0`, `epic.getChatRunSettingsBatch@3.0`,
+ * `chat.fallback.listTargets@3.0`, `drafts.list@3.0`, and `drafts.upsert@3.0`.
+ *
+ * Do NOT add new harnesses here - extend `guiHarnessIdSchema` above, freeze
+ * the lines a tag has shipped, and gate stream emission on the negotiated
+ * minor (streams have no downgrade bridge).
+ */
+export const guiHarnessIdSchemaPreCline = lazySchema(() =>
+  z.enum([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+    "commandcode",
+  ]),
+);
+export type GuiHarnessIdPreCline = z.infer<typeof guiHarnessIdSchemaPreCline>;
 
 // Cursor remains a reserved compatibility value: it shipped in this persisted
 // enum before the unfinished runtime surface was withdrawn from the product.
@@ -561,6 +601,90 @@ export const chatRunSettingsStrictSchemaPreCommandCode = lazySchema(() =>
 );
 export type ChatRunSettingsStrictPreCommandCode = z.infer<
   typeof chatRunSettingsStrictSchemaPreCommandCode
+>;
+
+/**
+ * Wire-freeze copy of the persisted settings tuple as the 1.5.1 tags shipped
+ * it: `harnessId` pinned to `guiHarnessIdSchemaPreCline` (through Command Code),
+ * pre-ultracode / pre-profileBinding. Bound by `epic.getChatRunSettings@4.0`,
+ * `epic.getChatRunSettingsBatch@2.0`, and `chat.fallback.listTargets@2.0`.
+ */
+export const chatRunSettingsSchemaPreCline = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaPreCline,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
+export type ChatRunSettingsPreCline = z.infer<
+  typeof chatRunSettingsSchemaPreCline
+>;
+
+/**
+ * Frozen settings tuple for `epic.getChatRunSettings@4.1` and
+ * `epic.getChatRunSettingsBatch@2.1`: includes `ultracode`, before
+ * `profileBinding`, with `harnessId` pinned to `guiHarnessIdSchemaPreCline`.
+ */
+export const chatRunSettingsSchemaPreProfileBindingPreCline = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaPreCline,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+    ultracode: z.boolean().default(false),
+  }),
+);
+export type ChatRunSettingsPreProfileBindingPreCline = z.infer<
+  typeof chatRunSettingsSchemaPreProfileBindingPreCline
+>;
+
+/**
+ * Frozen settings tuple for `epic.getChatRunSettings@4.2` and
+ * `epic.getChatRunSettingsBatch@2.2`: includes `ultracode` and
+ * `profileBinding`, with `harnessId` pinned to `guiHarnessIdSchemaPreCline`.
+ */
+export const chatRunSettingsSchemaV42PreCline = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaPreCline,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable().default(null),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable().default(null),
+    profileBinding: profileBindingSchema.optional(),
+    ultracode: z.boolean().default(false),
+  }),
+);
+export type ChatRunSettingsV42PreCline = z.infer<
+  typeof chatRunSettingsSchemaV42PreCline
+>;
+
+/**
+ * The STRICT counterpart of `chatRunSettingsSchemaPreCline`: every key
+ * required, pre-ultracode. Bound by the released draft lines
+ * (`drafts.list@2.0`, `drafts.upsert@2.0`, `drafts.subscribe@1.1`).
+ */
+export const chatRunSettingsStrictSchemaPreCline = lazySchema(() =>
+  z.object({
+    harnessId: guiHarnessIdSchemaPreCline,
+    model: z.string().min(1),
+    permissionMode: permissionModeSchema,
+    reasoningEffort: z.string().nullable(),
+    serviceTier: z.string().nullable(),
+    agentMode: agentModeSchema,
+    profileId: z.string().nullable(),
+  }),
+);
+export type ChatRunSettingsStrictPreCline = z.infer<
+  typeof chatRunSettingsStrictSchemaPreCline
 >;
 
 // Settings carried by every wire line before the per-chat Ultracode request.

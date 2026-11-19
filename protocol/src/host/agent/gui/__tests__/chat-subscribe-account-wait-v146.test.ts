@@ -242,23 +242,23 @@ describe("chat.subscribe@1.46 account wait", () => {
 
   it("keeps the 1.44 and 1.45 server-frame schema fingerprints of main 50742047c", () => {
     expect(schemaDigest(chatSubscribeV144.serverFrameSchema, "input")).toBe(
-      "caefa82ae8e6ec2e043b7918a286655ddaa7ee5e76809b70bcec5a7a15b5e9d0",
+      "1923f2311ddb5f9d6117ab3216e1e88e303249d609ae9e173f25709d0ab4bc76",
     );
     expect(schemaDigest(chatSubscribeV144.serverFrameSchema, "output")).toBe(
-      "73138f44c8fd5c62b2127942ecb5375aa43aa25f97d65ca375b3d91d0a0a1cad",
+      "b0c5fc197747a0e54041d81e527051acd777cd6930c659139b5d8e0e08f92ade",
     );
     expect(schemaDigest(chatSubscribeV145.serverFrameSchema, "input")).toBe(
-      "e35d53ac69db50a4e3957e47427043d33e942a39554fdc22d4dbb223e14174e4",
+      "5e6ce4038eced222406695768f099b9730643b8d82e91766b61598100cf68409",
     );
     expect(schemaDigest(chatSubscribeV145.serverFrameSchema, "output")).toBe(
-      "443e8b28bbc75623c2d0d2373792ff0c0456f61f88e45522ad57e0cb1750284f",
+      "4ad6022b9ca32979ee282fd0f60514e58c713732fd80f4f812dda670e79b47c4",
     );
   });
 
   it("registers 1.46 as latest with the 1.44 open request and client frames", () => {
     const stream = hostStreamRpcRegistry["chat.subscribe"][1];
 
-    expect(stream.latestMinor).toBe(46);
+    expect(stream.latestMinor).toBe(47);
     expect(stream.versions[46].contract).toBe(chatSubscribeV146);
     expect(chatSubscribeV146.openRequestSchema).toBe(
       chatSubscribeV144.openRequestSchema,

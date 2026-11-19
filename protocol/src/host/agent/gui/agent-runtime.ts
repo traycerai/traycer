@@ -1743,6 +1743,16 @@ export const commandCodeUserMessageAnchorResolvedSchema = lazySchema(() =>
   }),
 );
 
+export const clineUserMessageAnchorResolvedSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("cline"),
+    sessionId: z.string(),
+    // The session id Cline assigned for this turn. Null until session creation
+    // resolves; used to resume the same Cline session.
+    clineSessionId: z.string().nullable(),
+  }),
+);
+
 export const userMessageAnchorResolvedEventSchema = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
@@ -1771,6 +1781,7 @@ export const userMessageAnchorResolvedEventSchema = lazySchema(() =>
       reasonixUserMessageAnchorResolvedSchema,
       antigravityUserMessageAnchorResolvedSchema,
       commandCodeUserMessageAnchorResolvedSchema,
+      clineUserMessageAnchorResolvedSchema,
     ]),
   }),
 );

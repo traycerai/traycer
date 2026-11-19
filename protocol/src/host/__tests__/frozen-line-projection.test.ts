@@ -442,7 +442,7 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      10,
+      11,
       8,
       providersListResponseSchema.parse({ providers: [state], native: null }),
     );
@@ -474,7 +474,7 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      10,
+      11,
       7,
       providersListResponseSchema.parse({ providers: [state], native: null }),
     );
@@ -592,7 +592,7 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
     // providers off an already-shipped wire.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      10,
+      11,
       7,
       providersListResponseSchema.parse({
         providers: [providerState("claude-code"), providerState("antigravity")],

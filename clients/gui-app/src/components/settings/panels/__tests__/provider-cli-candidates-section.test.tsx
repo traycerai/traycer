@@ -387,6 +387,34 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
     );
   });
 
+  it("shows Cline's install notice with its CLI reference link when candidates are empty", () => {
+    const state = providerState({
+      providerId: "cline",
+      selected: { kind: "path" },
+      candidates: [],
+    });
+    renderSection(state);
+
+    expect(
+      screen.getByText(
+        "No Cline CLI was found on this computer, and Traycer ships no bundled copy of it. Install it, or add its path below.",
+      ),
+    ).toBeDefined();
+    const guide = screen.getByRole("link", {
+      name: "Cline installation guide",
+    });
+    expect(guide.getAttribute("href")).toBe(
+      "https://docs.cline.bot/cli/cli-reference",
+    );
+
+    fireEvent.click(guide);
+    expect(openLink).toHaveBeenCalledWith(
+      "https://docs.cline.bot/cli/cli-reference",
+      "docs",
+      null,
+    );
+  });
+
   it("waits for the PATH probe instead of declaring the binary missing", () => {
     // `availabilityPending` means the host's shell/PATH probe has not settled,
     // and the protocol is explicit that `candidates` must not be trusted until

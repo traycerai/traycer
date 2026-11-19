@@ -3,6 +3,7 @@ import {
   providerIdSchema,
   providerIdSchemaV80,
   providerIdSchemaV91,
+  providerIdSchemaV100,
 } from "@traycer/protocol/host/provider-schemas";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -102,12 +103,43 @@ export const providersChangedV11 = defineStreamRpcContract({
 });
 
 /**
- * @1.2 is the first minor whose `changed` frames may name a provider added
- * after 1.5.0 (Command Code is the first).
+ * Frozen server-frame shape as the 1.5.1 tags shipped @1.2: the `changed`
+ * arm's provider id pinned to the twenty-two ids those peers strict-decode
+ * (`providerIdSchemaV100`, through Command Code, before Cline).
+ */
+export const providersChangedServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("changed"),
+      providerId: providerIdSchemaV100,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+
+/**
+ * @1.2 is the first minor whose `changed` frames may name Command Code, and is
+ * frozen there.
  */
 export const providersChangedV12 = defineStreamRpcContract({
   method: "providers.changed",
   schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: providersChangedOpenRequestSchema,
+  serverFrameSchema: providersChangedServerFrameSchemaV12,
+  clientFrameSchema: providersChangedClientFrameSchema,
+});
+
+/**
+ * @1.3 is the first minor whose `changed` frames may name a provider added
+ * after 1.5.1 (Cline is the first).
+ */
+export const providersChangedV13 = defineStreamRpcContract({
+  method: "providers.changed",
+  schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: providersChangedOpenRequestSchema,
   serverFrameSchema: providersChangedServerFrameSchema,
   clientFrameSchema: providersChangedClientFrameSchema,

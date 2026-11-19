@@ -87,6 +87,7 @@ const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
   // Command Code is a subscription provider too (browser sign-in), absent
   // from the host's `API_KEY_ENV_VAR`, so this section never renders for it.
   commandcode: null,
+  cline: null,
 };
 
 /** The configuration this page's host runs; `null` outside Personal (a Local row) or before it answers. */

@@ -47,6 +47,7 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
+  transcriptRowContextSchemaPreCline,
   transcriptRowContextSchemaPreCommandCode,
   transcriptRowContextSchemaPreFallback,
 } from "@traycer/protocol/persistence/chat-transcript/row-context";
@@ -795,13 +796,16 @@ export const chatTranscriptWindowSchemaPreProviderSelection = lazySchema(() =>
      * asked for them and a wrong elapsed time or profile label persists until the
      * rows are evicted. Most tails have nothing to say and omit it.
      */
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCline)
+      .optional(),
   }),
 );
-/** Provider dispatch provenance first rides chat.subscribe@1.44. */
+/** Provider dispatch provenance first rides chat.subscribe@1.44; live rowContext rides @1.47. */
 export const chatTranscriptWindowSchema = lazySchema(() =>
   chatTranscriptWindowSchemaPreProviderSelection.extend({
     events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
   }),
 );
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
@@ -814,7 +818,9 @@ export const openChatTranscriptWindowSchemaPreNotApplied = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(openMessageSchemaPreNotApplied),
     events: z.array(openChatEventSchemaPreProviderSelection),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCline)
+      .optional(),
   }),
 );
 
@@ -870,10 +876,16 @@ export const openChatTranscriptWindowSchemaPreFeedbackOrigin = lazySchema(() =>
     events: z.array(openChatEventSchema),
   }),
 );
-/** The live tail: `chat.subscribe@1.45` adds the feedback draft leaves. */
-export const openChatTranscriptWindowSchema = lazySchema(() =>
+/** Frozen tail bound to `chat.subscribe@1.45` and `@1.46`: feedback draft leaves live, rowContext pinned before Cline. */
+export const openChatTranscriptWindowSchemaPreCline = lazySchema(() =>
   openChatTranscriptWindowSchemaPreFeedbackOrigin.extend({
     messages: z.array(openMessageSchema),
+  }),
+);
+/** The live tail: `chat.subscribe@1.47` adds the Cline session-anchor arm on rowContext. */
+export const openChatTranscriptWindowSchema = lazySchema(() =>
+  openChatTranscriptWindowSchemaPreCline.extend({
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
   }),
 );
 export type OpenChatTranscriptWindow = z.infer<
@@ -990,7 +1002,9 @@ export const chatTranscriptWindowSchemaPreMcpApp = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMcpApp),
     events: z.array(chatEventSchemaPreProviderSelection),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCline)
+      .optional(),
   }),
 );
 
@@ -1207,16 +1221,19 @@ export const chatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
      * a consumer falls back to its own derivation, which is what keeps a host
      * predating a field from silently asserting one.
      */
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCline)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
   }),
 );
-/** Provider dispatch provenance first rides chat.subscribe@1.44. */
+/** Provider dispatch provenance first rides chat.subscribe@1.44; live rowContext rides @1.47. */
 export const chatRangeResponseSchema = lazySchema(() =>
   chatRangeResponseSchemaPreProviderSelection.extend({
     events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
   }),
 );
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
@@ -1236,7 +1253,9 @@ export const chatRangeResponseSchemaPreMcpApp = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMcpApp),
     events: z.array(chatEventSchemaPreProviderSelection),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCline)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -1253,7 +1272,9 @@ export const openChatRangeResponseSchemaPreNotApplied = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(openMessageSchemaPreNotApplied),
     events: z.array(openChatEventSchemaPreProviderSelection),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreCline)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -1302,10 +1323,16 @@ export const openChatRangeResponseSchemaPreFeedbackOrigin = lazySchema(() =>
     events: z.array(openChatEventSchema),
   }),
 );
-/** The live range response: `chat.subscribe@1.45` adds the feedback draft leaves. */
-export const openChatRangeResponseSchema = lazySchema(() =>
+/** Frozen range response bound to `chat.subscribe@1.45` and `@1.46`: feedback draft leaves live, rowContext pinned before Cline. */
+export const openChatRangeResponseSchemaPreCline = lazySchema(() =>
   openChatRangeResponseSchemaPreFeedbackOrigin.extend({
     messages: z.array(openMessageSchema),
+  }),
+);
+/** The live range response: `chat.subscribe@1.47` adds the Cline session-anchor arm on rowContext. */
+export const openChatRangeResponseSchema = lazySchema(() =>
+  openChatRangeResponseSchemaPreCline.extend({
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
   }),
 );
 export type OpenChatRangeResponse = z.infer<typeof openChatRangeResponseSchema>;

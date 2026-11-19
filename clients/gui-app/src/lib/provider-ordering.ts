@@ -33,6 +33,7 @@ const PROVIDER_ID_ORDER = [
   "omp",
   "reasonix",
   "commandcode",
+  "cline",
 ] as const satisfies ReadonlyArray<ProviderId>;
 
 type MissingProviderIdFromOrder = Exclude<

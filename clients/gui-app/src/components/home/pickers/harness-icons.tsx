@@ -18,6 +18,7 @@ import DevinMono from "@lobehub/icons/es/Devin/components/Mono";
 import HermesAgentMono from "@lobehub/icons/es/HermesAgent/components/Mono";
 import HuggingFaceColor from "@lobehub/icons/es/HuggingFace/components/Color";
 import AntigravityMono from "@lobehub/icons/es/Antigravity/components/Mono";
+import ClineMono from "@lobehub/icons/es/Cline/components/Mono";
 
 export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 
@@ -148,6 +149,10 @@ export const ReasonixIcon: HarnessIcon = (props) => (
 export const AntigravityIcon: HarnessIcon = (props) => (
   <AntigravityMono {...props} />
 );
+
+// Cline — lobehub monochrome brand mark (`currentColor` theming), same pattern
+// as Antigravity and Hermes.
+export const ClineIcon: HarnessIcon = (props) => <ClineMono {...props} />;
 
 // Command Code's official logomark, verbatim from `symbol.svg` on the brand
 // page (https://commandcode.ai/brand): the black rounded tile, the white ⌘

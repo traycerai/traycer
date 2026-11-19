@@ -11,6 +11,7 @@ import {
   providerIdSchemaV70,
   providerIdSchemaV80,
   providerIdSchemaV91,
+  providerIdSchemaV100,
 } from "@traycer/protocol/host/provider-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -644,9 +645,11 @@ const unavailableProviderRateLimitsSchemaV2 = lazySchema(() =>
 );
 
 // The unavailable arm as the 1.5.1 tags shipped it, on the frozen v2 reason
-// enum. Feeds `providerRateLimitsSchemaV151` only.
+// enum and `providerIdSchemaV100` (through Command Code, before Cline).
+// Feeds `providerRateLimitsSchemaV151` only.
 const unavailableProviderRateLimitsSchemaV151 = lazySchema(() =>
   unavailableProviderRateLimitsSchemaV2.extend({
+    provider: providerIdSchemaV100,
     // Present on OpenCode snapshots so renderer retention is scoped to the
     // credential observed by the host. Other providers omit it.
     credentialGeneration: z.string().min(1).optional(),
@@ -668,15 +671,25 @@ export type RateLimitChatCredential = z.infer<
   typeof rateLimitChatCredentialSchema
 >;
 
-const unavailableProviderRateLimitsSchema = lazySchema(() =>
+// The unavailable arm as the 1.5.2-1.5.4 tags shipped it: v3 reason enum and
+// optional `chatCredential`, with `provider` pinned to `providerIdSchemaV100`
+// (through Command Code, before Cline). Feeds `providerRateLimitsSchemaV154`
+// only.
+const unavailableProviderRateLimitsSchemaV154 = lazySchema(() =>
   unavailableProviderRateLimitsSchemaV151.extend({
     reason: rateLimitUnavailableReasonSchemaV3,
     // Present only on a Claude Code `rate_limits_not_available` read whose
     // handshake reported a credential other than the plan login: the plan's
-    // limits are not what those chats spend. Rides the unreleased heads only;
-    // `degradeProviderRateLimitsToV151` drops it for every older line, which
-    // then sees the bare `rate_limits_not_available` it always did.
+    // limits are not what those chats spend. `degradeProviderRateLimitsToV151`
+    // drops it for every pre-1.5.2 line, which then sees the bare
+    // `rate_limits_not_available` it always did.
     chatCredential: rateLimitChatCredentialSchema.optional(),
+  }),
+);
+
+const unavailableProviderRateLimitsSchema = lazySchema(() =>
+  unavailableProviderRateLimitsSchemaV154.extend({
+    provider: providerIdSchema,
   }),
 );
 
@@ -1245,6 +1258,37 @@ export type ProviderRateLimitsV151 = z.infer<
   typeof providerRateLimitsSchemaV151
 >;
 
+/**
+ * Frozen provider union as the 1.5.2-1.5.4 tags shipped it: every available arm
+ * through Kimi, and the unavailable arm on the v3 reason enum with `provider`
+ * pinned to `providerIdSchemaV100` (before Cline).
+ *
+ * Bound by `agent.getProviderProfileRateLimits@8.0` and
+ * `providers.refreshProfileStatus@4.0`. Both ranged over the live union until
+ * `cline` was added, which opened 9.0 and 5.0.
+ *
+ * Do NOT widen this schema - extend the latest union and use the 9.0 / 5.0
+ * bridges.
+ */
+export const providerRateLimitsSchemaV154 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    huggingFaceRateLimitsSchema,
+    openCodeRateLimitsSchema,
+    cursorRateLimitsSchema,
+    antigravityRateLimitsSchema,
+    kimiRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV154,
+  ]),
+);
+export type ProviderRateLimitsV154 = z.infer<
+  typeof providerRateLimitsSchemaV154
+>;
+
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see
 // `providerRateLimitsSchemaV1` above). Null both when the request didn't ask
@@ -1427,6 +1471,21 @@ export const providersRefreshProfileStatusResponseSchemaV30 = lazySchema(() =>
 );
 export type ProvidersRefreshProfileStatusResponseV30 = z.infer<
   typeof providersRefreshProfileStatusResponseSchemaV30
+>;
+
+/**
+ * Frozen `providers.refreshProfileStatus@4.0` response: the 1.5.2-1.5.4 tags
+ * shipped this line, so it stops tracking the live union and ranges over
+ * `providerRateLimitsSchemaV154` (through `commandcode`, before `cline`).
+ * v5.0 carries the live union with fail-closed bridges to every older line.
+ */
+export const providersRefreshProfileStatusResponseSchemaV40 = lazySchema(() =>
+  z.object({
+    providerRateLimits: providerRateLimitsSchemaV154,
+  }),
+);
+export type ProvidersRefreshProfileStatusResponseV40 = z.infer<
+  typeof providersRefreshProfileStatusResponseSchemaV40
 >;
 
 /**

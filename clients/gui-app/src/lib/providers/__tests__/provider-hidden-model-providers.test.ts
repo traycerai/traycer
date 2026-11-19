@@ -14,7 +14,7 @@ import {
 } from "../provider-hidden-model-providers";
 
 describe("hidden model provider helpers", () => {
-  it("enables visibility only for providers.list 10.10 and later in major 10", () => {
+  it("enables visibility only for providers.list 10.10+ and major 11", () => {
     expect(providersListReportsHiddenModelProviders(null)).toBe(false);
     expect(
       providersListReportsHiddenModelProviders({ major: 10, minor: 9 }),
@@ -27,6 +27,9 @@ describe("hidden model provider helpers", () => {
     ).toBe(true);
     expect(
       providersListReportsHiddenModelProviders({ major: 11, minor: 0 }),
+    ).toBe(true);
+    expect(
+      providersListReportsHiddenModelProviders({ major: 12, minor: 0 }),
     ).toBe(false);
   });
 

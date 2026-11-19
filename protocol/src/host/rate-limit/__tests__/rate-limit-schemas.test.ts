@@ -41,6 +41,7 @@ import {
   providersConsumeRateLimitResetCreditRequestSchema,
   providersConsumeRateLimitResetCreditResponseSchema,
   providersRefreshProfileStatusResponseSchema,
+  providersRefreshProfileStatusResponseSchemaV40,
   providersRefreshProfileStatusResponseSchemaV30,
   rateLimitUnavailableReasonSchemaV1,
   rateLimitUnavailableReasonSchemaV2,
@@ -2183,7 +2184,7 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
             refreshRegistry,
             4,
             toMajor,
-            providersRefreshProfileStatusResponseSchema.parse({
+            providersRefreshProfileStatusResponseSchemaV40.parse({
               providerRateLimits: kimiAvailable,
             }),
           ),
@@ -2202,7 +2203,7 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
             refreshRegistry,
             4,
             toMajor,
-            providersRefreshProfileStatusResponseSchema.parse({
+            providersRefreshProfileStatusResponseSchemaV40.parse({
               providerRateLimits: notSignedIn,
             }),
           ),
@@ -2218,7 +2219,7 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
           refreshRegistry,
           4,
           1,
-          providersRefreshProfileStatusResponseSchema.parse({
+          providersRefreshProfileStatusResponseSchemaV40.parse({
             providerRateLimits: antigravityAvailable,
           }),
         ),
@@ -2235,7 +2236,7 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
     it.each([3, 2, 1] as const)(
       "passes a codex unavailable snapshot through the registry 4 -> %i",
       (toMajor) => {
-        const response = providersRefreshProfileStatusResponseSchema.parse({
+        const response = providersRefreshProfileStatusResponseSchemaV40.parse({
           providerRateLimits: codexUnavailable,
         });
         expect(
@@ -2400,7 +2401,7 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
             hostRpcRegistry["providers.refreshProfileStatus"],
             4,
             toMajor,
-            providersRefreshProfileStatusResponseSchema.parse({
+            providersRefreshProfileStatusResponseSchemaV40.parse({
               providerRateLimits: withCredential,
             }),
           ),

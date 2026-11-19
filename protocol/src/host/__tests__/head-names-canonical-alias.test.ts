@@ -13,10 +13,14 @@ import {
   autoJudgeSetResponseSchema,
 } from "../auto-mode/contracts.js";
 import {
-  getChatRunSettingsResponseSchemaV42,
-  getChatRunSettingsBatchResponseSchemaV22,
+  getChatRunSettingsResponseSchemaV50,
+  getChatRunSettingsBatchResponseSchemaV30,
 } from "../epic/chat-records.js";
 import { providersListResponseSchema } from "../provider-schemas.js";
+import {
+  configEnvLocalOverrideResponseSchema,
+  environmentLocalOverridesResponseSchema,
+} from "../environment-schemas.js";
 import { providersRefreshProfileStatusResponseSchema } from "../rate-limit/schemas.js";
 import { hostRpcRegistry } from "../registry.js";
 
@@ -82,13 +86,13 @@ const HEAD_NAMES_ITS_CANONICAL_ALIAS: readonly [
   // docblock above. Its exclusion is asserted below, not merely omitted.
   [
     "epic.getChatRunSettings",
-    "getChatRunSettingsResponseSchemaV42",
-    getChatRunSettingsResponseSchemaV42,
+    "getChatRunSettingsResponseSchemaV50",
+    getChatRunSettingsResponseSchemaV50,
   ],
   [
     "epic.getChatRunSettingsBatch",
-    "getChatRunSettingsBatchResponseSchemaV22",
-    getChatRunSettingsBatchResponseSchemaV22,
+    "getChatRunSettingsBatchResponseSchemaV30",
+    getChatRunSettingsBatchResponseSchemaV30,
   ],
   [
     "providers.refreshProfileStatus",
@@ -97,6 +101,21 @@ const HEAD_NAMES_ITS_CANONICAL_ALIAS: readonly [
   ],
   ["autoJudge.get", "autoJudgeGetResponseSchema", autoJudgeGetResponseSchema],
   ["autoJudge.set", "autoJudgeSetResponseSchema", autoJudgeSetResponseSchema],
+  [
+    "environment.localOverrides",
+    "environmentLocalOverridesResponseSchema",
+    environmentLocalOverridesResponseSchema,
+  ],
+  [
+    "config.env.localOverride.set",
+    "configEnvLocalOverrideResponseSchema",
+    configEnvLocalOverrideResponseSchema,
+  ],
+  [
+    "config.env.localOverride.clear",
+    "configEnvLocalOverrideResponseSchema",
+    configEnvLocalOverrideResponseSchema,
+  ],
 ];
 
 describe("the head contract names the canonical live response schema", () => {
@@ -115,7 +134,7 @@ describe("the head contract names the canonical live response schema", () => {
     // A row silently deleted from the table would make this file pass while
     // checking less, so pin the count too. Raise it deliberately when a new
     // head major is opened - never lower it to make a red row go away.
-    expect(HEAD_NAMES_ITS_CANONICAL_ALIAS).toHaveLength(10);
+    expect(HEAD_NAMES_ITS_CANONICAL_ALIAS).toHaveLength(13);
     const methods = HEAD_NAMES_ITS_CANONICAL_ALIAS.map(([method]) => method);
     expect(new Set(methods).size).toBe(methods.length);
     for (const method of methods) {

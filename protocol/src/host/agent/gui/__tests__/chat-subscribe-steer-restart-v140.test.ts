@@ -51,7 +51,7 @@ const rejectedAck = {
 
 describe("chat.subscribe@1.40 registration", () => {
   it("keeps chatSubscribeV140 installed below the 1.46 head", () => {
-    expect(line.latestMinor).toBe(46);
+    expect(line.latestMinor).toBe(47);
     expect(line.versions[40].contract).toBe(chatSubscribeV140);
     expect(chatSubscribeV140.schemaVersion).toEqual({ major: 1, minor: 40 });
     expect(chatSubscribeV140.openRequestSchema).toBe(

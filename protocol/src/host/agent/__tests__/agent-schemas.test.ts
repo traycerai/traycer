@@ -613,8 +613,7 @@ const V102_RESPONSE = listAgentsResponseSchemaV102.parse({
   ],
 });
 
-const V103_RESPONSE: ListAgentsResponse =
-  agentListUpgradeV102ToV103.upgradeResponse(V102_RESPONSE);
+const V103_RESPONSE = agentListUpgradeV102ToV103.upgradeResponse(V102_RESPONSE);
 const V103_ROW = V103_RESPONSE.agents[0];
 
 describe("agent.list@9.2 archived flag", () => {
@@ -709,9 +708,9 @@ describe("agent.list@9.2 archived flag", () => {
 // below is the head (10.2) shape, whose run tuple and reach pair the bridge
 // drops too.
 describe("agent.list@10.x against the frozen 9.2 line", () => {
-  const V100_RESPONSE: ListAgentsResponse = {
+  const V100_RESPONSE = {
     caller: { agentId: "agent-1", canSendMessages: true },
-    scope: "user",
+    scope: "user" as const,
     agents: [
       V103_ROW,
       { ...V103_ROW, id: "agent-2", isSelf: false, archived: null },
@@ -719,7 +718,7 @@ describe("agent.list@10.x against the frozen 9.2 line", () => {
         ...V103_ROW,
         id: "agent-commandcode",
         isSelf: false,
-        harnessId: "commandcode",
+        harnessId: "commandcode" as const,
         archived: false,
       },
     ],
@@ -758,9 +757,9 @@ describe("agent.list@10.x against the frozen 9.2 line", () => {
 describe("agent.list@10.x run tuple and service tier", () => {
   const V100_ROW = agentSummarySchemaV100.parse(V92_ROW);
   const V100_WIRE_RESPONSE = listAgentsResponseSchemaV100.parse(V92_RESPONSE);
-  const LATEST_RESPONSE: ListAgentsResponse = {
+  const LATEST_RESPONSE = {
     caller: { agentId: "agent-1", canSendMessages: true },
-    scope: "user",
+    scope: "user" as const,
     agents: [
       V103_ROW,
       {

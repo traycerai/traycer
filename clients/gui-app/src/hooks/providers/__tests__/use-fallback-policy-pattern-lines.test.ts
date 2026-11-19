@@ -92,22 +92,34 @@ describe("useFallbackPolicyPatternLines", () => {
     });
   });
 
-  it("reads patterns:false when providers.fallbackPolicy.get negotiated at 3.0 (a major no line names)", () => {
+  it("reads patterns:true when providers.fallbackPolicy.get negotiated at 3.0 (the 1.1 line over the Cline harness id set)", () => {
     recordNegotiatedHostManifest(HOST_ID, {
       [GET_METHOD]: { major: 3, minor: 0 },
       [PREVIEW_METHOD]: { major: 3, minor: 0 },
     });
     const { result } = renderLines();
+    expect(result.current).toEqual({
+      patterns: true,
+      blankPreviewRows: true,
+    });
+  });
+
+  it("reads patterns:false when providers.fallbackPolicy.get negotiated at 4.0 (a major no line names)", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      [GET_METHOD]: { major: 4, minor: 0 },
+      [PREVIEW_METHOD]: { major: 4, minor: 0 },
+    });
+    const { result } = renderLines();
     expect(result.current.patterns).toBe(false);
   });
 
-  it("reads patterns:false at major 3 even with a minor that would reach 1.1 if the major check were dropped", () => {
-    // The 2.0 case above cannot alone falsify a dropped major check: minor 0
+  it("reads patterns:false at major 4 even with a minor that would reach 1.1 if the major check were dropped", () => {
+    // The 4.0 case above cannot alone falsify a dropped major check: minor 0
     // fails the minor comparison on its own. A higher minor under the wrong
     // major is the case that needs the major check specifically.
     recordNegotiatedHostManifest(HOST_ID, {
-      [GET_METHOD]: { major: 3, minor: 5 },
-      [PREVIEW_METHOD]: { major: 3, minor: 5 },
+      [GET_METHOD]: { major: 4, minor: 5 },
+      [PREVIEW_METHOD]: { major: 4, minor: 5 },
     });
     const { result } = renderLines();
     // Falsification: the `negotiated.major !== wanted.major` check dropped

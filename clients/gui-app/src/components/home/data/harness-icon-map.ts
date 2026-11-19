@@ -2,6 +2,7 @@ import {
   AmpIcon,
   AntigravityIcon,
   ClaudeAIIcon,
+  ClineIcon,
   CodexIcon,
   CommandCodeIcon,
   CopilotIcon,
@@ -53,4 +54,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   reasonix: { Icon: ReasonixIcon, className: "text-foreground" },
   antigravity: { Icon: AntigravityIcon, className: "text-foreground" },
   commandcode: { Icon: CommandCodeIcon, className: "text-foreground" },
+  cline: { Icon: ClineIcon, className: "text-foreground" },
 };

@@ -57,9 +57,9 @@ describe("ORDERED_PROVIDERS antigravity placement", () => {
 });
 
 describe("ORDERED_PROVIDERS commandcode placement", () => {
-  it("places commandcode last, after every harness that shipped before it", () => {
+  it("places commandcode after every harness that shipped before it", () => {
     const ids = ORDERED_PROVIDERS.map((p) => p.providerId);
-    expect(ids.at(-1)).toBe("commandcode");
+    expect(ids.at(-2)).toBe("commandcode");
     expect(ids.filter((id) => id === "commandcode")).toHaveLength(1);
     // Positive control: the previous last entry is still present, just earlier.
     expect(ids).toContain("reasonix");
@@ -70,6 +70,21 @@ describe("ORDERED_PROVIDERS commandcode placement", () => {
     expect(guiHarnessIdToProviderId("commandcode")).toBe("commandcode");
     expect(providerIdToGuiHarnessId("commandcode")).toBe("commandcode");
     expect(providerCliIdForHarness("commandcode")).toBe("commandcode");
+  });
+});
+
+describe("ORDERED_PROVIDERS cline placement", () => {
+  it("places cline last, after every harness that shipped before it", () => {
+    const ids = ORDERED_PROVIDERS.map((p) => p.providerId);
+    expect(ids.at(-1)).toBe("cline");
+    expect(ids.filter((id) => id === "cline")).toHaveLength(1);
+    expect(ids.indexOf("commandcode")).toBeLessThan(ids.indexOf("cline"));
+  });
+
+  it("round-trips cline through guiHarnessIdToProviderId and providerIdToGuiHarnessId", () => {
+    expect(guiHarnessIdToProviderId("cline")).toBe("cline");
+    expect(providerIdToGuiHarnessId("cline")).toBe("cline");
+    expect(providerCliIdForHarness("cline")).toBe("cline");
   });
 });
 

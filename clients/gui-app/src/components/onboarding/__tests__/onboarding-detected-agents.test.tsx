@@ -582,6 +582,7 @@ describe("OnboardingDetectedAgents", () => {
       "Oh My Pi",
       "Reasonix",
       "Command Code",
+      "Cline",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
     // Longest match, not first match: display names overlap ("Pi" is a
@@ -628,6 +629,7 @@ describe("OnboardingDetectedAgents", () => {
       "Hermes Agent",
       "Oh My Pi",
       "Reasonix",
+      "Cline",
     ];
     const rows = screen.getAllByRole("listitem").map((row) => row.textContent);
     const commandCodeRows = rows.filter((text) =>
@@ -643,6 +645,47 @@ describe("OnboardingDetectedAgents", () => {
     );
     // ... and no other row mentions it. Positive control: every other name
     // still has a row of its own.
+    expect(rows).toHaveLength(otherNames.length + 1);
+    for (const name of otherNames) {
+      expect(
+        rows.some((text) => text.includes(name)),
+        name,
+      ).toBe(true);
+    }
+  });
+
+  it("matches the Cline row exactly and never as another agent, nor another row as Cline", () => {
+    render(<OnboardingDetectedAgents />);
+
+    const otherNames = [
+      "Codex",
+      "Claude Code",
+      "OpenCode",
+      "Traycer Inference",
+      "OpenRouter",
+      "Hugging Face",
+      "Droid",
+      "Cursor",
+      "Copilot",
+      "Grok",
+      "Kiro",
+      "Kilo Code",
+      "Kimi",
+      "Qwen Code",
+      "Antigravity",
+      "Amp",
+      "Devin",
+      "Pi",
+      "Hermes Agent",
+      "Oh My Pi",
+      "Reasonix",
+      "Command Code",
+    ];
+    const rows = screen.getAllByRole("listitem").map((row) => row.textContent);
+    const clineRows = rows.filter((text) => text.includes("Cline"));
+    expect(clineRows).toHaveLength(1);
+    const [clineRow = ""] = clineRows;
+    expect(otherNames.filter((name) => clineRow.includes(name))).toEqual([]);
     expect(rows).toHaveLength(otherNames.length + 1);
     for (const name of otherNames) {
       expect(

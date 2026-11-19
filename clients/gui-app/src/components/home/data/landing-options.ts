@@ -14,6 +14,7 @@ import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import { sortReasoningEffortOptions } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import {
   agentGuiListHarnessesV100,
+  agentGuiListHarnessesV110,
   agentGuiListHarnessesV91,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
@@ -416,14 +417,17 @@ function findSafestSupportedPermissionMode(
  *
  * Each major that can spell `auto` is NAMED rather than reached by `>`: a
  * later major's relationship to this field is not knowable from here. `10.0`
- * is the `9.x` row over a wider harness id set and nothing else, so every
- * minor of it qualifies. The next major needs its own line.
+ * and `11.0` are the `9.x` row over wider harness id sets and nothing else, so
+ * every minor of them qualifies. The next major needs its own line.
  */
 export function catalogLineKnowsAutoMode(
   version: SchemaVersion | null,
 ): boolean {
   if (version === null) return false;
-  if (version.major === agentGuiListHarnessesV100.schemaVersion.major) {
+  if (
+    version.major === agentGuiListHarnessesV100.schemaVersion.major ||
+    version.major === agentGuiListHarnessesV110.schemaVersion.major
+  ) {
     return true;
   }
   const line = agentGuiListHarnessesV91.schemaVersion;

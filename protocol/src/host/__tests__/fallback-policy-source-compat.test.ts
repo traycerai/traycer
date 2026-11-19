@@ -8,6 +8,7 @@ import {
   createDefaultFallbackPolicy,
   providersFallbackPolicyGetResponseSchemaV10,
   providersFallbackPolicyGetResponseSchemaV20,
+  providersFallbackPolicyGetResponseSchemaV21,
 } from "@traycer/protocol/host/fallback-policy";
 
 /**
@@ -51,12 +52,12 @@ describe("providers.fallbackPolicy.get: the 2.1 source field", () => {
   });
 
   it("the 2.1 -> 1.1 downgrade still answers what the 1.1 line expects", () => {
-    const v21Response = {
+    const v21Response = providersFallbackPolicyGetResponseSchemaV21.parse({
       policy: POLICY,
       storedPolicyUnreadable: false,
       inFlightCount: 0,
       source: "team" as const,
-    };
+    });
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.fallbackPolicy.get"],
