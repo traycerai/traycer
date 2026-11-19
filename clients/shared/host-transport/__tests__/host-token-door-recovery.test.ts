@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import { RECONNECT_INITIAL_BACKOFF_MS } from "@traycer/protocol/host-transport/remote/config";
 import {
   hostRpcRegistry,
@@ -14,7 +15,7 @@ import {
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import {
-  hostTokenRevalidator,
+  hostTokenSessionAuth,
   type HostTokenRevalidator,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -52,6 +53,8 @@ interface RecoveryHarness {
   readonly states: HostDoorStateKind[];
   readonly signInCalls: string[];
   readonly recover: HostTokenRevalidator;
+  // What a relay session tells the lease when the host admits its open.
+  readonly door: SessionDoorObserver;
 }
 
 async function harness(
@@ -88,19 +91,24 @@ async function harness(
       return Promise.resolve("rotated" as const);
     },
   };
-  return {
-    tokens,
-    mintCalls,
-    states,
-    signInCalls,
-    recover: hostTokenRevalidator({
+  const session = hostTokenSessionAuth(
+    {
       tokens,
       currentUserId: () => USER_ID,
       hostId: HOST_ID,
       signInRecovery: recovery,
       onState: (_hostId, state) => states.push(state),
       now: () => NOW,
-    }),
+    },
+    null,
+  );
+  return {
+    tokens,
+    mintCalls,
+    states,
+    signInCalls,
+    recover: session.auth,
+    door: session.door,
   };
 }
 
@@ -166,6 +174,62 @@ describe("host-token refusal recovery", () => {
     expect(test.signInCalls).toEqual([]);
   });
 
+  it.each(["not_admitted", "token_expired"])(
+    "mints once more when a token minted after %s, and admitted by its open, is refused again",
+    async (doorReason) => {
+      const test = await harness(
+        [tokenOutcome("second-token"), tokenOutcome("third-token")],
+        null,
+      );
+      const refused = refusal("UNAUTHORIZED", doorReason, false);
+      await expect(test.recover.revalidateRefused(refused)).resolves.toBe(
+        "rotated",
+      );
+      expect(test.tokens.current(USER_ID, HOST_ID)?.token).toBe("second-token");
+      // The host admits the open that carried the second token.
+      test.door.admitted();
+      // A second ownership change makes that token stale.
+      await expect(test.recover.revalidateRefused(refused)).resolves.toBe(
+        "rotated",
+      );
+      expect(test.mintCalls).toEqual([HOST_ID, HOST_ID]);
+      expect(test.tokens.current(USER_ID, HOST_ID)?.token).toBe("third-token");
+      expect(test.states).toEqual([]);
+    },
+  );
+  it.each([
+    { doorReason: "not_admitted", states: ["not-admitted"] },
+    { doorReason: "token_expired", states: [] },
+  ])(
+    "stays final when the token minted after $doorReason is refused at once, and again after a later admission",
+    async ({ doorReason, states }) => {
+      const test = await harness(
+        [tokenOutcome("second-token"), tokenOutcome("third-token")],
+        null,
+      );
+      const refused = refusal("UNAUTHORIZED", doorReason, false);
+      await expect(test.recover.revalidateRefused(refused)).resolves.toBe(
+        "rotated",
+      );
+      await expect(test.recover.revalidateRefused(refused)).resolves.toBe(
+        "rejected",
+      );
+      expect(test.mintCalls).toEqual([HOST_ID]);
+      expect(test.states).toEqual(states);
+      // An admission after the open that was refused (a later session, say) resets
+      // the bound, and the next minted token is held to it again.
+      test.door.admitted();
+      await expect(test.recover.revalidateRefused(refused)).resolves.toBe(
+        "rotated",
+      );
+      await expect(test.recover.revalidateRefused(refused)).resolves.toBe(
+        "rejected",
+      );
+      expect(test.mintCalls).toEqual([HOST_ID, HOST_ID]);
+      expect(test.tokens.current(USER_ID, HOST_ID)?.token).toBe("third-token");
+      expect(test.states).toEqual([...states, ...states]);
+    },
+  );
   it("mints again for not_admitted after an unavailable replacement", async () => {
     const test = await harness(
       [

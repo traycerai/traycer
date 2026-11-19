@@ -26,6 +26,7 @@ import {
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "./host-messenger";
+import { asHostAnswer } from "./host-door-state";
 import type { TimerHandle } from "./timer-handle";
 import {
   decodeResponsePayloadWithContext,
@@ -636,10 +637,13 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       }
       this.rejectInFlight(
         entry,
-        HostRpcError.fromWireEnvelope(
-          frame.error,
-          entry.requestId,
-          entry.method,
+        asHostAnswer(
+          HostRpcError.fromWireEnvelope(
+            frame.error,
+            entry.requestId,
+            entry.method,
+          ),
+          frame.error.code,
         ),
       );
       return;

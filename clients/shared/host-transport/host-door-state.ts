@@ -163,6 +163,29 @@ const OLDER_HOST_TOKEN_REFUSALS: ReadonlySet<string> = new Set([
   "TEAM_MEMBERSHIP_REQUIRED",
 ]);
 
+// A host's own error envelope, final rather than retryable: an answer from past its
+// door. Marked on the error itself where the envelope is read, so this module holds
+// no state of its own.
+const HOST_ANSWER = Symbol("host-answer");
+
+/**
+ * Judged on the code as sent: the error narrows a code it does not know to
+ * `RPC_ERROR`, and an older host's `TEAM_MEMBERSHIP_REQUIRED` is one.
+ */
+export function asHostAnswer(
+  error: HostRpcError,
+  wireCode: string,
+): HostRpcError {
+  if (!OLDER_HOST_TOKEN_REFUSALS.has(wireCode))
+    Object.defineProperty(error, HOST_ANSWER, { value: true });
+  return error;
+}
+
+/** The host answered the call and refused no token, so its door admitted the token. */
+export function isAdmittingAnswer(error: HostRpcError): boolean {
+  return HOST_ANSWER in error && hostRefusalOf(error) === null;
+}
+
 /**
  * A recognised reason raises a state alone, whatever its code; with no reason only
  * a refusal of the token itself does (an older host). A retryable refusal never does.

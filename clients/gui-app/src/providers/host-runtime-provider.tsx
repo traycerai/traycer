@@ -396,6 +396,10 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
             return Promise.resolve("rejected");
           return auth.revalidateExpectedBearer(expected);
         },
+        admissionOf: (expected, hostId) =>
+          hostId === POOL_HOST_ID
+            ? () => undefined
+            : hostTokenRecovery.admissionOf(expected, hostId),
       };
       // Outermost, so the error a caller catches is the one whose host is recorded.
       const messenger: IHostMessenger<Registry> = recordingRefusedHost(

@@ -103,8 +103,8 @@ export function hostTokenBearerFor(
 }
 
 // A relay redials with the token its attach grant brings, so a session's bound
-// lasts until its open is admitted; a unary call's ends at the token minted after
-// the first refusal.
+// lasts until its open is admitted; a unary call's holds the token minted after the
+// last refusal until the host answers a call that started with it.
 interface ReplacementBound {
   readonly final: (userId: string, held: string | null) => boolean;
   readonly retried: (userId: string, minted: string | null) => void;
@@ -125,13 +125,18 @@ function untilAdmittedBound(): ReplacementBound & {
   };
 }
 
-function sameTokenBound(): ReplacementBound {
+function sameTokenBound(): ReplacementBound & {
+  readonly admitted: (userId: string, token: string) => void;
+} {
   let minted: { readonly userId: string; readonly token: string } | null = null;
   return {
     final: (userId, held) =>
       held !== null && minted?.userId === userId && held === minted.token,
     retried: (userId, token) => {
       minted = token === null ? null : { userId, token };
+    },
+    admitted: (userId, token) => {
+      if (minted?.userId === userId && minted.token === token) minted = null;
     },
   };
 }
@@ -286,18 +291,32 @@ export function hostTokenUnaryRevalidator(deps: {
   readonly signInRecovery: StreamAuthRevalidator | null;
   readonly onState: HostTokenStateSink;
   readonly now: () => number;
-}): Pick<RefusalAwareAuthRevalidator, "revalidateRefusedBearer"> {
-  const byHost = new Map<string, HostTokenRevalidator>();
-  const forHost = (hostId: string): HostTokenRevalidator => {
-    let revalidator = byHost.get(hostId);
-    if (revalidator === undefined) {
-      revalidator = revalidatorWithBounds(
-        { ...deps, hostId },
-        { expiry: sameTokenBound(), notAdmitted: sameTokenBound() },
-      );
-      byHost.set(hostId, revalidator);
+}): Required<
+  Pick<RefusalAwareAuthRevalidator, "revalidateRefusedBearer" | "admissionOf">
+> {
+  interface HostRecovery {
+    readonly revalidator: HostTokenRevalidator;
+    readonly admitted: (userId: string, token: string) => void;
+  }
+  const byHost = new Map<string, HostRecovery>();
+  const forHost = (hostId: string): HostRecovery => {
+    let recovery = byHost.get(hostId);
+    if (recovery === undefined) {
+      const expiry = sameTokenBound();
+      const notAdmitted = sameTokenBound();
+      recovery = {
+        revalidator: revalidatorWithBounds(
+          { ...deps, hostId },
+          { expiry, notAdmitted },
+        ),
+        admitted: (userId, token) => {
+          expiry.admitted(userId, token);
+          notAdmitted.admitted(userId, token);
+        },
+      };
+      byHost.set(hostId, recovery);
     }
-    return revalidator;
+    return recovery;
   };
   return {
     revalidateRefusedBearer: async (expected, hostId, refusal) => {
@@ -305,7 +324,16 @@ export function hostTokenUnaryRevalidator(deps: {
       if (userId === null) return "rejected";
       if (userId !== expected.identity.userId) return "superseded";
       if (refusal === null) return "rejected";
-      return forHost(hostId).revalidateRefused(refusal);
+      return forHost(hostId).revalidator.revalidateRefused(refusal);
+    },
+    // Read as the call starts: a token minted while it ran is cleared only by a
+    // call that starts with it.
+    admissionOf: (expected, hostId) => {
+      const userId = expected.identity.userId;
+      const held = deps.tokens.current(userId, hostId)?.token ?? null;
+      return () => {
+        if (held !== null) byHost.get(hostId)?.admitted(userId, held);
+      };
     },
   };
 }
