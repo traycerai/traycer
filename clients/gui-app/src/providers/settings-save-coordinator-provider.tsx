@@ -4,6 +4,7 @@ import { tryAcquireReadyRemoteSession } from "@traycer-clients/shared/host-trans
 import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { servesOverLocalSocket } from "@/lib/host/host-messenger";
 import {
   createSettingsSaveCoordinator,
   scheduleFollowUp,
@@ -15,13 +16,20 @@ import { SettingsSaveReconcile } from "@/providers/settings-save-reconcile";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-/** Opens nothing: this machine's host through its own requester, a remote one only through a ready session another surface holds. */
+/**
+ * Opens nothing: a host the transport serves over the local socket through
+ * its own requester, any other only through a ready session another surface
+ * holds. Decided by the directory row the transport routes by, not by this
+ * machine's id: a shell with no local host of its own can still list a local
+ * row.
+ */
 async function readProposals(
   binding: HostRuntimeBinding<HostRpcRegistry> | null,
   hostId: string,
 ): Promise<EnvironmentProposalsResponse | null> {
   if (binding === null) return null;
-  if (hostId === binding.directory.getLocalHostId()) {
+  const entry = binding.hostClient.resolveHostById(hostId);
+  if (entry !== null && servesOverLocalSocket(entry)) {
     const local = resolveNamedHostClient(binding, hostId);
     if (local === null || !readHostReadiness(local).canExecute) return null;
     return local.request("environment.proposals", {});

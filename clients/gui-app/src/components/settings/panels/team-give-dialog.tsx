@@ -17,6 +17,7 @@ import {
   giveNotFinishedLine,
   TEAM_TRANSFER_NOT_CONFIRMED,
 } from "@/components/settings/panels/team-give-copy";
+import { answeredThisOpening } from "@/components/settings/move/answered-this-opening";
 import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 // Until `done`, the outcome is `environment.status@1.3`'s `move` on that read's own
 // poll; `done` is reported only after a fresh authn read on the confirming sign-in
 // shows the computer in the team. A status naming another attempt counts only after the start.
+// `onStarted` fires once the start answers that the give is under way.
 export function TeamGiveDialog(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
@@ -45,6 +47,7 @@ export function TeamGiveDialog(props: {
   readonly currentEnvironmentId: string | null;
   readonly team: EnvironmentDescriptorV11;
   readonly onClose: () => void;
+  readonly onStarted: (team: EnvironmentDescriptorV11) => void;
   readonly onGiven: (team: EnvironmentDescriptorV11) => void;
 }): ReactNode {
   const { team } = props;
@@ -60,7 +63,8 @@ export function TeamGiveDialog(props: {
     method: "environment.move.plan",
     // A give hands the computer nothing of Personal.
     params: { target, personal: null },
-    options: { refetchOnWindowFocus: false },
+    // Every opening reads the plan again, however recent the cached one.
+    options: { refetchOnWindowFocus: false, staleTime: 0 },
   });
   const start = useEnvironmentMoveStartMutation(props.client, null);
   const [attempt, setAttempt] = useState<GiveAttempt | null>(null);
@@ -81,6 +85,7 @@ export function TeamGiveDialog(props: {
       setNotFinished(true);
       return;
     }
+    press.onStarted(press.team);
     // `done` reads like `running` through the status. The re-read cancels one in flight,
     // so every answer after `startedAt` was asked after the start.
     setAttempt({ attemptId: answer.attemptId, startedAt: Date.now(), press });
@@ -98,6 +103,7 @@ export function TeamGiveDialog(props: {
       client: props.client,
       hostId: props.hostId,
       team,
+      onStarted: props.onStarted,
       onGiven: props.onGiven,
     };
     setAttempt(null);
@@ -135,7 +141,8 @@ export function TeamGiveDialog(props: {
   const ownershipNotConfirmed =
     originAttempt !== null && ownership.data === "not_confirmed";
   // A refused read keeps the last plan in the cache; it is not confirmed again.
-  const shownPlan = plan.isError ? undefined : plan.data;
+  // Nor is a plan or refusal cached before this opening's own read answered.
+  const { shownPlan, planError } = answeredPlanRead(plan);
   const versionDiffers =
     shownPlan !== undefined &&
     shownPlan.disclosureVersion !== TEAM_TRANSFER_DISCLOSURE_VERSION;
@@ -169,7 +176,7 @@ export function TeamGiveDialog(props: {
           hostName={props.hostName}
           teamLabel={team.label}
           versionDiffers={versionDiffers}
-          planError={plan.isError ? plan.error.message : null}
+          planError={planError}
           onRetryPlan={() => void plan.refetch().catch(ignoreError)}
           notFinished={notFinished || ended}
           startError={
@@ -209,6 +216,23 @@ export function TeamGiveDialog(props: {
   );
 }
 
+/** The plan or refusal this opening's read answered; neither before it answers. */
+function answeredPlanRead<Plan>(plan: {
+  readonly data: Plan | undefined;
+  readonly error: { readonly message: string } | null;
+  readonly isFetchedAfterMount: boolean;
+  readonly isFetching: boolean;
+}): {
+  readonly shownPlan: Plan | undefined;
+  readonly planError: string | null;
+} {
+  if (!answeredThisOpening(plan))
+    return { shownPlan: undefined, planError: null };
+  return plan.error === null
+    ? { shownPlan: plan.data, planError: null }
+    : { shownPlan: undefined, planError: plan.error.message };
+}
+
 interface GivePress {
   readonly runtime: HostRuntimeBinding<HostRpcRegistry>;
   readonly operation: EnvironmentCloud;
@@ -216,6 +240,7 @@ interface GivePress {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly team: EnvironmentDescriptorV11;
+  readonly onStarted: (team: EnvironmentDescriptorV11) => void;
   readonly onGiven: (team: EnvironmentDescriptorV11) => void;
 }
 

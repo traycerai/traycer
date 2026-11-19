@@ -29,7 +29,6 @@ interface EditorInput {
   }[];
   readonly onCommit: EnvCommit;
   readonly onDelete: EnvDelete;
-  readonly applyingHostsCount?: number | null;
 }
 
 function editorElement(input: EditorInput) {
@@ -43,7 +42,6 @@ function editorElement(input: EditorInput) {
       emptyLabel="No environment variables."
       onCommit={input.onCommit}
       onDelete={input.onDelete}
-      applyingHostsCount={input.applyingHostsCount}
     />
   );
 }
@@ -119,87 +117,162 @@ describe("EnvOverrideEditor", () => {
     expect(onCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("reads a pending SET save as <key> · Applying on <n> hosts…", async () => {
-    let finishRead: () => void = () => {
-      throw new Error("read has not started");
-    };
-    const completedWrite = new Promise<void>((resolve) => {
-      finishRead = resolve;
-    });
-    const onCommit = vi.fn<EnvCommit>(() => completedWrite);
-    const onDelete = vi.fn<EnvDelete>();
-    const input: EditorInput = {
-      overrides: [],
-      onCommit,
-      onDelete,
-      applyingHostsCount: 3,
-    };
+  describe("while a save is pending", () => {
+    const GREY_LINE = /Applying on|Adding|Saving|Removing/;
 
-    const view = renderEditor(input);
-    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
-    fireEvent.change(screen.getByLabelText("New variable name"), {
-      target: { value: "ANTHROPIC_BASE_URL" },
-    });
-    fireEvent.change(screen.getByLabelText("New variable value"), {
-      target: { value: "https://example.invalid" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+    function expectNoSaveLine(): void {
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByText(GREY_LINE)).toBeNull();
+    }
 
-    expect(screen.getByRole("status").textContent).toBe(
-      "ANTHROPIC_BASE_URL · Applying on 3 hosts…",
-    );
+    it("shows no line for an added variable, which still holds its draft disabled", async () => {
+      const write = Promise.withResolvers<void>();
+      const onCommit = vi.fn<EnvCommit>(() => write.promise);
+      renderEditor({ overrides: [], onCommit, onDelete: vi.fn<EnvDelete>() });
+      fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+      fireEvent.change(screen.getByLabelText("New variable name"), {
+        target: { value: "ANTHROPIC_BASE_URL" },
+      });
+      fireEvent.change(screen.getByLabelText("New variable value"), {
+        target: { value: "https://example.invalid" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
 
-    await act(async () => {
-      view.rerender(
-        editorElement({
-          ...input,
-          overrides: [
-            { key: "ANTHROPIC_BASE_URL", value: "https://example.invalid" },
-          ],
-        }),
+      expect(onCommit).toHaveBeenCalledWith(
+        "",
+        "ANTHROPIC_BASE_URL",
+        "https://example.invalid",
       );
-      finishRead();
-      await completedWrite;
+      expect(screen.getByLabelText("New variable name")).toHaveProperty(
+        "disabled",
+        true,
+      );
+      expectNoSaveLine();
+      await act(async () => {
+        write.resolve();
+        await write.promise;
+      });
+      expectNoSaveLine();
     });
-    expect(screen.queryByRole("status")).toBeNull();
+
+    it("shows no line for a saved edit", async () => {
+      const write = Promise.withResolvers<void>();
+      const onCommit = vi.fn<EnvCommit>(() => write.promise);
+      renderEditor({
+        overrides: [{ key: "NODE_ENV", value: "development" }],
+        onCommit,
+        onDelete: vi.fn<EnvDelete>(),
+      });
+      const value = screen.getByLabelText("Value for NODE_ENV");
+      fireEvent.change(value, { target: { value: "production" } });
+      fireEvent.blur(value);
+
+      expect(onCommit).toHaveBeenCalledWith(
+        "NODE_ENV",
+        "NODE_ENV",
+        "production",
+      );
+      expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
+        "disabled",
+        true,
+      );
+      expectNoSaveLine();
+      await act(async () => {
+        write.resolve();
+        await write.promise;
+      });
+    });
+
+    it("shows no line for a removal", async () => {
+      const write = Promise.withResolvers<void>();
+      const onDelete = vi.fn<EnvDelete>(() => write.promise);
+      renderEditor({
+        overrides: [{ key: "NODE_ENV", value: "development" }],
+        onCommit: vi.fn<EnvCommit>(),
+        onDelete,
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Remove NODE_ENV" }));
+
+      expect(onDelete).toHaveBeenCalledWith("NODE_ENV");
+      expect(screen.getByLabelText("Value for NODE_ENV")).toHaveProperty(
+        "disabled",
+        true,
+      );
+      expectNoSaveLine();
+      await act(async () => {
+        write.resolve();
+        await write.promise;
+      });
+    });
   });
 
-  it("reads a single applying host without the plural", () => {
-    const onCommit = vi.fn<EnvCommit>(() => new Promise<void>(() => {}));
-    renderEditor({
-      overrides: [],
-      onCommit,
-      onDelete: vi.fn<EnvDelete>(),
-      applyingHostsCount: 1,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
-    fireEvent.change(screen.getByLabelText("New variable name"), {
-      target: { value: "ANTHROPIC_BASE_URL" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+  describe("when a save fails", () => {
+    it("shows the failure's own message in the red line", async () => {
+      const onCommit = vi
+        .fn<EnvCommit>()
+        .mockRejectedValueOnce(new Error("The host refused this variable."));
+      renderEditor({ overrides: [], onCommit, onDelete: vi.fn<EnvDelete>() });
+      fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+      fireEvent.change(screen.getByLabelText("New variable name"), {
+        target: { value: "ANTHROPIC_BASE_URL" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
 
-    expect(screen.getByRole("status").textContent).toBe(
-      "ANTHROPIC_BASE_URL · Applying on 1 host…",
+      expect((await screen.findByRole("alert")).textContent).toBe(
+        "The host refused this variable.",
+      );
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    // The editor's catch takes whatever the caller threw, and only a caller
+    // that wraps it hands back an Error.
+    it.each([
+      { reason: "a string", rejection: "refused" },
+      { reason: "nothing", rejection: undefined },
+    ])(
+      "says Couldn't save this variable. when the save fails with $reason",
+      async ({ rejection }) => {
+        const onCommit = vi.fn<EnvCommit>().mockRejectedValueOnce(rejection);
+        renderEditor({
+          overrides: [],
+          onCommit,
+          onDelete: vi.fn<EnvDelete>(),
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+        fireEvent.change(screen.getByLabelText("New variable name"), {
+          target: { value: "ANTHROPIC_BASE_URL" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+        expect((await screen.findByRole("alert")).textContent).toBe(
+          "Couldn't save this variable.",
+        );
+      },
     );
-  });
 
-  it("control: with no host count, a pending SET save keeps the plain Adding text", () => {
-    const onCommit = vi.fn<EnvCommit>(() => new Promise<void>(() => {}));
-    renderEditor({
-      overrides: [],
-      onCommit,
-      onDelete: vi.fn<EnvDelete>(),
-      applyingHostsCount: null,
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
-    fireEvent.change(screen.getByLabelText("New variable name"), {
-      target: { value: "ANTHROPIC_BASE_URL" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+    it("clears the red line when the next save starts", async () => {
+      const retry = Promise.withResolvers<void>();
+      const onCommit = vi
+        .fn<EnvCommit>()
+        .mockRejectedValueOnce(new Error("The host refused this variable."))
+        .mockImplementationOnce(() => retry.promise);
+      renderEditor({ overrides: [], onCommit, onDelete: vi.fn<EnvDelete>() });
+      fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+      fireEvent.change(screen.getByLabelText("New variable name"), {
+        target: { value: "ANTHROPIC_BASE_URL" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+      await screen.findByRole("alert");
 
-    expect(screen.getByRole("status").textContent).toBe(
-      "ANTHROPIC_BASE_URL · Adding",
-    );
+      fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+      expect(onCommit).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole("alert")).toBeNull();
+      await act(async () => {
+        retry.resolve();
+        await retry.promise;
+      });
+    });
   });
 
   it("discards a staged environment variable without applying it", () => {

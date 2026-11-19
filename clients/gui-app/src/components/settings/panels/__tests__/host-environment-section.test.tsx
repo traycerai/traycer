@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -237,6 +238,12 @@ function registryItem(owner: HostOwnerPrincipal | undefined): HostListItem {
   return owner === undefined ? row : { ...row, owner };
 }
 
+interface MountedSection {
+  readonly queryClient: QueryClient;
+  /** The computer goes away (the card unmounts) or comes back. */
+  readonly setHostUsable: (usable: boolean) => void;
+}
+
 function renderSection(
   kind: "personal" | "sandbox",
   options: {
@@ -246,6 +253,18 @@ function renderSection(
     readonly runnerHost?: IRunnerHost;
   },
 ): QueryClient {
+  return mountSection(kind, options).queryClient;
+}
+
+function mountSection(
+  kind: "personal" | "sandbox",
+  options: {
+    readonly owner: HostOwnerPrincipal | undefined;
+    readonly isLocalMachine: boolean | undefined;
+    readonly handlers: MockHandlerMap<HostRpcRegistry> | undefined;
+    readonly runnerHost?: IRunnerHost;
+  },
+): MountedSection {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "environment.list": () => ({
       environments: [
@@ -267,7 +286,7 @@ function renderSection(
   });
   const client = makeClient(handlers);
   mocks.state.client = client;
-  render(
+  const sectionFor = (usable: boolean): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <RunnerHostContext.Provider
         value={options.runnerHost ?? dashboardRunnerHost()}
@@ -275,6 +294,7 @@ function renderSection(
         <HostEnvironmentSection
           hostName="Mac mini"
           scope={hostScopeFixture({
+            status: usable ? "following" : "unreachable",
             host: hostScopeOptionFixture({
               hostId: "host-a",
               name: "Mac mini",
@@ -295,13 +315,17 @@ function renderSection(
                     }
                   : null,
             }),
-            client,
+            client: usable ? client : null,
           })}
         />
       </RunnerHostContext.Provider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
-  return queryClient;
+  const view = render(sectionFor(true));
+  return {
+    queryClient,
+    setHostUsable: (usable) => view.rerender(sectionFor(usable)),
+  };
 }
 
 function teamBinding(canUnbind: boolean): EnvironmentHostBinding {
@@ -426,12 +450,19 @@ async function openGiveDialog(
   calls: GiveCalls,
   events: string[],
 ): Promise<QueryClient> {
+  return (await openGive(giveHostHandlers(calls, events))).queryClient;
+}
+
+async function openGive(
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): Promise<MountedSection> {
   giveNegotiatedHostMethods();
-  const queryClient = renderSection("personal", {
+  const section = mountSection("personal", {
     owner: PERSON_OWNER,
     isLocalMachine: true,
-    handlers: giveHostHandlers(calls, events),
+    handlers,
   });
+  const { queryClient } = section;
   await waitFor(() => {
     expect(
       queryClient.getQueryState(
@@ -450,7 +481,7 @@ async function openGiveDialog(
         .hasAttribute("disabled"),
     ).toBe(false);
   });
-  return queryClient;
+  return section;
 }
 
 function giveReadbackKey(): readonly unknown[] {
@@ -1032,5 +1063,208 @@ describe("HostEnvironmentSection", () => {
     expect(
       screen.queryByRole("button", { name: "Claim this computer" }),
     ).toBeNull();
+  });
+});
+
+const GIVE_LINE =
+  "Mac mini now belongs to Acme. Any Admin or Editor of the team can claim it as their own.";
+const CLAIM_LINE =
+  "This computer is now yours. The team can no longer run work on it.";
+
+/** The give ends in the dialog while the host is up: the line shows. */
+async function giveUntilLineShows(): Promise<MountedSection> {
+  const calls = giveCalls();
+  const events: string[] = [];
+  mocks.auth.readHostOwnership
+    .mockResolvedValueOnce(ownershipResult(PERSON_OWNER))
+    .mockResolvedValue(ownershipResult(TEAM_OWNER));
+  const section = await openGive(giveHostHandlers(calls, events));
+  installGiveAcceptanceTransport(() => true, events);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Confirm at this computer" }),
+  );
+  expect(await screen.findByText(GIVE_LINE)).toBeTruthy();
+  return section;
+}
+
+/**
+ * A give whose start answered "started" and whose status never says done, then
+ * the host drops: the dialog goes with the card before it can confirm anything.
+ */
+async function startGiveThenLoseHost(
+  ownerAfterReturn: HostOwnerPrincipal,
+): Promise<MountedSection> {
+  const calls = giveCalls();
+  const events: string[] = [];
+  let statusReadsAfterStart = 0;
+  mocks.auth.readHostOwnership
+    .mockResolvedValueOnce(ownershipResult(PERSON_OWNER))
+    .mockResolvedValue(ownershipResult(ownerAfterReturn));
+  const section = await openGive({
+    ...giveHostHandlers(calls, events),
+    "environment.status": () => {
+      if (calls.starts.length > 0) statusReadsAfterStart += 1;
+      return giveMoveStatus("running", GIVE_ATTEMPT_ID);
+    },
+  });
+  installGiveAcceptanceTransport(() => true, events);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Confirm at this computer" }),
+  );
+  // The dialog polls the status only once it has the start's answer.
+  await waitFor(() => expect(statusReadsAfterStart).toBeGreaterThan(0));
+  act(() => section.setHostUsable(false));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(mocks.auth.readHostOwnership).toHaveBeenCalledTimes(1);
+  // The computer is away for a moment before it is back.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  return section;
+}
+
+/** A claim whose confirm is pressed; `finish` lets the claim answer "ok". */
+async function pressClaim(): Promise<{
+  readonly section: MountedSection;
+  readonly finish: () => Promise<void>;
+}> {
+  mocks.state.binding = teamBinding(true);
+  mocks.auth.readHostOwnership
+    .mockResolvedValueOnce(ownershipResult(TEAM_OWNER))
+    .mockResolvedValue(ownershipResult(PERSON_OWNER));
+  const claim = Promise.withResolvers<TeamComputerReleaseResult>();
+  mocks.auth.releaseTeamComputer.mockReturnValue(claim.promise);
+  const section = mountSection("personal", {
+    owner: TEAM_OWNER,
+    isLocalMachine: true,
+    handlers: {
+      "environment.previewLocalFacts": () => ({ activeTurns: 2, terminals: 0 }),
+    },
+  });
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Claim this computer" }),
+  );
+  const dialog = await screen.findByRole("dialog");
+  expect(
+    await within(dialog).findByText("2 chats are running and will stop."),
+  ).toBeTruthy();
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Claim this computer" }),
+  );
+  await waitFor(() =>
+    expect(mocks.auth.releaseTeamComputer).toHaveBeenCalledOnce(),
+  );
+  return {
+    section,
+    finish: async () => {
+      await act(async () => {
+        claim.resolve({ kind: "ok" });
+        await claim.promise;
+      });
+      await waitFor(() =>
+        expect(noteHostMembershipChanged).toHaveBeenCalledWith("host-a"),
+      );
+    },
+  };
+}
+
+function signInAs(userId: string): void {
+  act(() => {
+    mocks.auth.currentAuthEra.mockReturnValue({
+      identity: userId,
+      credentialGeneration: 1,
+    });
+    useAuthStore.setState({
+      contextMetadata: { userId, username: userId },
+    });
+  });
+}
+
+describe("HostEnvironmentSection's give and claim receipt across the computer's restart", () => {
+  it("keeps a give's line when the computer goes away after the dialog confirmed and comes back", async () => {
+    const section = await giveUntilLineShows();
+
+    act(() => section.setHostUsable(false));
+    expect(screen.queryByText(GIVE_LINE)).toBeNull();
+    act(() => section.setHostUsable(true));
+
+    expect(await screen.findByText(GIVE_LINE)).toBeTruthy();
+  });
+
+  it("keeps a claim's line when the computer goes away and comes back", async () => {
+    const { section, finish } = await pressClaim();
+    await finish();
+    expect(await screen.findByText(CLAIM_LINE)).toBeTruthy();
+
+    act(() => section.setHostUsable(false));
+    expect(screen.queryByText(CLAIM_LINE)).toBeNull();
+    act(() => section.setHostUsable(true));
+
+    expect(await screen.findByText(CLAIM_LINE)).toBeTruthy();
+  });
+
+  it("shows a claim's line once the computer is back when the claim answered after the card was gone", async () => {
+    const { section, finish } = await pressClaim();
+
+    act(() => section.setHostUsable(false));
+    await finish();
+    expect(screen.queryByText(CLAIM_LINE)).toBeNull();
+    act(() => section.setHostUsable(true));
+
+    expect(await screen.findByText(CLAIM_LINE)).toBeTruthy();
+  });
+
+  it("shows a give's line without any action when the computer dropped before the dialog confirmed and the owner read names the team", async () => {
+    const section = await startGiveThenLoseHost(TEAM_OWNER);
+    expect(screen.queryByText(GIVE_LINE)).toBeNull();
+
+    act(() => section.setHostUsable(true));
+
+    expect(await screen.findByText(GIVE_LINE)).toBeTruthy();
+    expect(mocks.auth.readHostOwnership).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows no line for a give that did not complete when the computer returns and the owner is still the person", async () => {
+    const section = await startGiveThenLoseHost(PERSON_OWNER);
+
+    act(() => section.setHostUsable(true));
+
+    expect(await screen.findByTestId("host-settings-source")).toBeTruthy();
+    await waitFor(() =>
+      expect(mocks.auth.readHostOwnership).toHaveBeenCalledTimes(2),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/now belongs to Acme/)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("does not show a finished give's line to a different sign-in", async () => {
+    const section = await giveUntilLineShows();
+
+    signInAs("user-other");
+    expect(screen.queryByText(GIVE_LINE)).toBeNull();
+    act(() => section.setHostUsable(false));
+    act(() => section.setHostUsable(true));
+
+    expect(await screen.findByTestId("host-settings-source")).toBeTruthy();
+    expect(screen.queryByText(GIVE_LINE)).toBeNull();
+  });
+
+  it("does not show a held give's line to a different sign-in when the computer returns", async () => {
+    const section = await startGiveThenLoseHost(TEAM_OWNER);
+
+    signInAs("user-other");
+    act(() => section.setHostUsable(true));
+
+    expect(await screen.findByTestId("host-settings-source")).toBeTruthy();
+    await waitFor(() =>
+      expect(mocks.auth.readHostOwnership).toHaveBeenCalledTimes(2),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(GIVE_LINE)).toBeNull();
   });
 });

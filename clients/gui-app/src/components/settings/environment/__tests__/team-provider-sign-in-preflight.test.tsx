@@ -54,7 +54,7 @@ describe("Team Providers sign-in preflight", () => {
           }),
           "providers.startLogin": () => teamLoginStartedAnswer(),
           "providers.awaitLogin": () =>
-            teamAwaitLoginOutcomeAnswer({ kind: "waiting-for-profile" }),
+            teamAwaitLoginOutcomeAnswer({ kind: "account-mismatch" }),
         },
         "providers",
       );

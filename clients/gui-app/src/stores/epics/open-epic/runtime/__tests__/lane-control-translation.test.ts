@@ -10,6 +10,7 @@ import {
   NO_CLOUD_SYNC_DURABILITY,
   type EpicCloudSyncDurability,
 } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import { isWritablePermissionRole } from "@traycer-clients/shared/epic/permission-role";
 import type { ControlEvent } from "@traycer-clients/shared/replica-runtime";
 import { legacyControlEventOf } from "../lane-control-translation";
@@ -19,9 +20,7 @@ function permissionChanged(role: string | null): ControlEvent {
     kind: "permission-changed",
     role,
     // What the ADAPTER computed, fail-closed, from the same value.
-    canWrite: isWritablePermissionRole(
-      role === "owner" || role === "editor" ? role : null,
-    ),
+    canWrite: isWritablePermissionRole(grantedRole(role)),
     securityEpoch: 1,
   };
 }
@@ -36,11 +35,12 @@ describe("permission role: the seam widened it, so the translation narrows it ba
     }
   });
 
-  it("narrows the retired viewer role to null - it grants nothing and is never promoted", () => {
+  it("narrows a viewer role to editor - it grants what editor grants", () => {
     expect(legacyControlEventOf(permissionChanged("viewer"))).toEqual({
       kind: "permission-changed",
-      role: null,
+      role: "editor",
     });
+    expect(permissionChanged("viewer")).toMatchObject({ canWrite: true });
   });
 
   it("narrows an UNRECOGNISED role to null, and null is unwritable", () => {

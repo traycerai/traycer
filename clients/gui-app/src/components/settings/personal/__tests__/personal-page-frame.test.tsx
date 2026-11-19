@@ -35,11 +35,6 @@ vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
 vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
   useHostProvisioningProgress: () => null,
 }));
-// The configuration status chip reads the host runtime this suite does not
-// mount, and none of these cases is about it.
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => null,
-}));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
@@ -217,20 +212,19 @@ describe("<PersonalPageFrame /> on a host that does not advertise environment.st
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    const line = await screen.findByTestId("personal-page-status");
+    const line = await screen.findByTestId("personal-page-read-only");
     expect(line.textContent).toBe(UPDATE_HOST_TEXT);
     // Outside the inert region, so assistive technology still reads it.
     expect(line.closest("[inert]")).toBeNull();
     // The page body is inside it: no edits until the host is updated.
     const edit = screen.getByRole("button", { name: "Edit the page" });
     expect(edit.closest("[inert]")).not.toBeNull();
-    // The shell skips its own copy of the line in this state.
-    expect(screen.getAllByTestId("personal-page-status")).toHaveLength(1);
+    expect(screen.getAllByTestId("personal-page-read-only")).toHaveLength(1);
   });
 });
 
 describe("<PersonalPageFrame /> on a host with a ready status", () => {
-  it("draws the status line inside the panel shell's header, and the page is not inert", async () => {
+  it("draws no line for an item still applying, and leaves the page as it was", async () => {
     renderFrame({
       section: "shell",
       methods: STATUS_METHODS,
@@ -243,79 +237,19 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
           }),
         ],
       }),
-      overrides: [],
-      target: VARIABLE_TARGET,
-    });
-    const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe("Applying LOG_LEVEL on dev-box.");
-    const header = line.closest("header");
-    if (header === null) throw new Error("the line is not inside a header");
-    expect(header.closest("[data-settings-panel-shell]")).not.toBeNull();
-    expect(within(header).getByRole("heading", { name: "Shell" })).toBeTruthy();
-    expect(line.closest("[inert]")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
-    ).toBeNull();
-  });
-
-  it("says nothing once every item applied, and leaves the page as it was", async () => {
-    renderFrame({
-      section: "shell",
-      methods: STATUS_METHODS,
-      status: environmentStatusFixture({
-        items: [itemStatusFixture({ kind: "variable", key: "LOG_LEVEL" })],
-      }),
       // The override's note appears only once the page has rendered the
       // status it read.
       overrides: [variableOverride("LOG_LEVEL")],
       target: VARIABLE_TARGET,
     });
     await screen.findByText("LOG_LEVEL: dev-box uses: local-value");
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
-    expect(screen.queryByText(/^Applied on/)).toBeNull();
+    expect(screen.queryByText("Applying LOG_LEVEL on dev-box.")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
   });
 
-  it("says a failed item did not apply, naming the host", async () => {
-    renderFrame({
-      section: "shell",
-      methods: STATUS_METHODS,
-      status: environmentStatusFixture({
-        items: [
-          itemStatusFixture({
-            kind: "variable",
-            key: "LOG_LEVEL",
-            status: "failed",
-            code: "permission_denied",
-          }),
-        ],
-      }),
-      overrides: [],
-      target: VARIABLE_TARGET,
-    });
-    const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe(
-      "LOG_LEVEL didn't apply on dev-box: permission denied.",
-    );
-  });
-
-  it("says changes wait for a reconnect while the host cannot reach the environment", async () => {
-    renderFrame({
-      section: "shell",
-      methods: STATUS_METHODS,
-      status: environmentStatusFixture({ reachability: "reconnecting" }),
-      overrides: [],
-      target: VARIABLE_TARGET,
-    });
-    const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe(
-      "Changes apply on dev-box when it reconnects.",
-    );
-  });
-
-  it("shows no line when the host has no settings of the person's yet, and leaves the page as it was", async () => {
+  it("leaves the page as it was when the host has no settings of the person's yet", async () => {
     const calls = renderFrame({
       section: "shell",
       methods: STATUS_METHODS,
@@ -326,7 +260,6 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
     await vi.waitFor(() => {
       expect(calls.status).toBeGreaterThan(0);
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -340,7 +273,6 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -399,7 +331,6 @@ describe("<PersonalPageFrame /> around a page that is not a Personal page", () =
         screen.getByRole("button", { name: "Edit the page" }),
       ).toBeTruthy();
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();

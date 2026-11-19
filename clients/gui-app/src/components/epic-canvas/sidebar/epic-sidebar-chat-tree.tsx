@@ -221,6 +221,8 @@ import {
 } from "@/lib/chats/chat-sharing-ux";
 import { AgentRoleBadges } from "./agent-role-badges";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
+import { ChatRowStartedBy } from "@/components/epic-canvas/sidebar/chat-row-started-by";
+import { useTeamChatRowStarter } from "@/hooks/chats/use-team-chat-row-starter";
 import { HoverCardGroup } from "@/components/ui/hover-card";
 import { isEditableRole } from "@/lib/epic-permissions";
 import {
@@ -3030,6 +3032,27 @@ function reachHoverContent(ownerNotReachable: boolean): ReactElement | null {
   return ownerNotReachable ? <AgentReachHoverLine /> : null;
 }
 
+/** Who started a team computer's chat, then the reach line. */
+function chatRowHoverContent(
+  hostId: string | null,
+  starterUserId: string | null,
+  ownerNotReachable: boolean,
+): ReactElement | null {
+  const reach = reachHoverContent(ownerNotReachable);
+  if (hostId === null || starterUserId === null) return reach;
+  const startedBy = (
+    <ChatRowStartedBy hostId={hostId} starterUserId={starterUserId} />
+  );
+  return reach === null ? (
+    startedBy
+  ) : (
+    <>
+      {startedBy}
+      {reach}
+    </>
+  );
+}
+
 // Only chats and terminal-agents own a resource-tracked process tree; other
 // node kinds (specs, tickets, …) never carry a resource snapshot.
 function resourceOwnerKindForNode(
@@ -3175,6 +3198,13 @@ function ChatRowButton(props: ChatRowButtonProps) {
     ownerHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
   const rowOwnerUserId = useEpicNodeOwnerUserId(nodeId);
+  const starterUserId = useTeamChatRowStarter({
+    epicId,
+    chatId: nodeId,
+    isChat: artifactType === "chat",
+    hostId: ownerHostId,
+    ownerUserId: rowOwnerUserId,
+  });
   const ownerIsUnreachable = ownerReachability.status === "unreachable";
   // Reach, not connectivity: the owner host is another principal's. Independent
   // of the lock above, which is liveness.
@@ -3503,7 +3533,11 @@ function ChatRowButton(props: ChatRowButtonProps) {
       ownerHostUnreachable={ownerIsUnreachable}
       ownerKind={ownerKind}
       roleClaims={roleClaims}
-      extraContent={reachHoverContent(ownerNotReachable)}
+      extraContent={chatRowHoverContent(
+        ownerHostId,
+        starterUserId,
+        ownerNotReachable,
+      )}
       side={popoverSide}
     />
   );

@@ -10,7 +10,6 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { TeamProfileApiKeyForm } from "@/components/settings/environment/team-profile-api-key-form";
-import { WAITING_FOR_PROFILE_TEXT } from "@/components/providers/profile-sync-copy";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   admitCurrentUserToTeamWindow,
@@ -423,7 +422,7 @@ describe("Team Providers boundary and sign-in", () => {
             ...teamLoginStartedAnswer(),
           }),
           "providers.awaitLogin": () =>
-            teamAwaitLoginOutcomeAnswer({ kind: "waiting-for-profile" }),
+            teamAwaitLoginOutcomeAnswer({ kind: "account-mismatch" }),
         },
         "providers",
       );
@@ -629,100 +628,6 @@ describe("Team Providers boundary and sign-in", () => {
           body: null,
         },
       ]);
-    },
-  );
-
-  it.each(["Done", "Close"] as const)(
-    "closes the completed sign-in waiting footer by %s, then reads one ordinary team row",
-    async (closeWith) => {
-      teamProfileRecordHttpBoundary.list = {
-        status: 200,
-        body: teamProfileRecordsBody([]),
-      };
-      let awaits = 0;
-      const harness = mountTeamPageThroughBoundary(
-        "admin",
-        {
-          ...handlers(() => []),
-          "environment.host.list": () => ({ hosts: [reachableHost] }),
-          "providers.list": () => ({
-            providers: [claudeLoginProviderRow()],
-            native: null,
-            offersSignIns: true,
-          }),
-          "providers.startLogin": () => teamLoginStartedAnswer(),
-          "providers.awaitLogin": () => {
-            awaits += 1;
-            return awaits === 1
-              ? teamAwaitLoginSignInRequestAnswer()
-              : teamAwaitLoginOutcomeAnswer({ kind: "waiting-for-profile" });
-          },
-        },
-        "providers",
-      );
-      negotiateMethods({
-        "providers.startLogin": { major: 1, minor: 5 },
-        "providers.awaitLogin": { major: 2, minor: 5 },
-      });
-      await waitFor(() => {
-        expect(useAuthStore.getState().contextMetadata?.userId).toBe(
-          "team-test-user",
-        );
-      });
-      admitCurrentUserToTeamWindow();
-      render(<TeamProviders />, { wrapper: harness.Wrapper });
-      await userEvent.click(
-        await screen.findByRole("button", { name: "Add a profile" }),
-      );
-      const addDialog = await screen.findByRole("dialog", {
-        name: "Add a profile",
-      });
-      await userEvent.click(
-        within(addDialog).getByRole("button", { name: "Sign in" }),
-      );
-
-      expect(await screen.findByText(WAITING_FOR_PROFILE_TEXT)).toBeTruthy();
-      await waitFor(() => {
-        expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
-      });
-      expect(teamProfileRecordReadCount()).toBe(2);
-      const awaitRequests = harness.paramsOf("providers.awaitLogin");
-      expect(awaitRequests[0]).not.toHaveProperty("recordedOperationId");
-      expect(awaitRequests[1]).toHaveProperty(
-        "recordedOperationId",
-        "11111111-1111-4111-8111-111111111111",
-      );
-      const footer = screen.getByRole("dialog", { name: "Add a profile" });
-      await userEvent.click(
-        within(footer).getByRole("button", { name: closeWith }),
-      );
-      await waitFor(() => {
-        expect(screen.queryByRole("dialog")).toBeNull();
-      });
-      expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
-
-      teamProfileRecordHttpBoundary.list = {
-        status: 200,
-        body: teamProfileRecordsBody([
-          teamProfileRecord({
-            profileId: "team-completed-profile",
-            harnessId: "claude",
-            name: "Team account ready",
-            readerLabel: "live",
-            kind: "oauth_code",
-          }),
-        ]),
-      };
-      fireEvent.focus(window);
-      expect(
-        await screen.findByRole("button", {
-          name: "Claude Code profile: Team account ready",
-        }),
-      ).toBeTruthy();
-      expect(teamProfileRecordReadCount()).toBe(3);
-      expect(harness.paramsOf("providers.startLogin")).toHaveLength(1);
-      expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
-      expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
     },
   );
 });

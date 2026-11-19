@@ -26,8 +26,8 @@ import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
  * non-writable, which is the safe default, where an exclusion test would grant
  * it write access silently.
  *
- * Every role a person can hold now writes - the view-only role is retired -
- * so what this predicate decides is the other half of its input: a `null` role
+ * Every role a person can hold now writes - a `viewer` grant decodes to
+ * `editor` - so what this predicate decides is the other half of its input: a `null` role
  * is a role the host could not attribute, and it must read as unwritable. That
  * is the whole reason it stays a named seam instead of a `!== null` at each
  * caller: one place states the direction every adapter has to fail in.

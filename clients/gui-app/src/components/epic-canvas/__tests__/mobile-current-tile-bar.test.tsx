@@ -5,7 +5,6 @@ import {
   fireEvent,
   render as renderTestingLibrary,
   screen,
-  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -14,10 +13,6 @@ import * as Y from "yjs";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
 import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
-import {
-  createTerminalViewerTestSession,
-  type TerminalViewerTestSession,
-} from "@/components/terminals/__tests__/terminal-viewer-test-support";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -33,7 +28,6 @@ import {
   type SurfaceSyncEntry,
 } from "@/stores/sync/surface-sync-store";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
-import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (the title it reads).
@@ -218,7 +212,6 @@ const terminalDirectory = new Map<
 >();
 const terminalDirectoryResolver: BotMemberResolver = (userId) =>
   terminalDirectory.get(userId) ?? null;
-let terminalViewerSession: TerminalViewerTestSession | null = null;
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -299,10 +292,6 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
   afterEach(() => {
     cleanup();
     queryClient.clear();
-    if (terminalViewerSession !== null) {
-      terminalViewerSession.dispose();
-      terminalViewerSession = null;
-    }
     terminalDirectory.clear();
     mocks.handle.current?.dispose();
     mocks.handle.current = null;
@@ -420,22 +409,10 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
       );
     });
 
-    it("shows the live viewer in the phone's current-tile bar", () => {
-      stubImmediateImage();
+    it("draws no pictures of attached people in the phone's current-tile bar", () => {
       terminalDirectory.set("phone-viewer", {
         displayName: "Phone Viewer",
         avatarUrl: "https://images.example.test/phone-viewer.png",
-      });
-      terminalViewerSession = createTerminalViewerTestSession(
-        TERMINAL_TILE.instanceId,
-        TERMINAL_TILE.hostId,
-        "phone-viewers-session",
-      );
-      act(() => {
-        terminalViewerSession?.emitViewers(
-          ["phone-viewer"],
-          "phone-viewers-session",
-        );
       });
 
       render(
@@ -449,12 +426,9 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         </PersonMembersContext.Provider>,
       );
 
-      const viewers = screen.getByTestId("terminal-viewers");
-      const faces = within(viewers).getAllByTestId("person-avatar");
-      expect(faces).toHaveLength(1);
-      expect(faces[0]?.querySelector("img")?.getAttribute("src")).toBe(
-        "https://images.example.test/phone-viewer.png",
-      );
+      expect(screen.getByTestId("mobile-current-tile-title")).toBeTruthy();
+      expect(screen.queryByTestId("terminal-viewers")).toBeNull();
+      expect(screen.queryAllByTestId("person-avatar")).toHaveLength(0);
     });
   });
 

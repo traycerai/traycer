@@ -44,11 +44,6 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   >()),
   useCloudChatViewerId: () => "user-me",
 }));
-// The configuration status chip reads the host runtime this suite does not
-// mount, and none of these cases is about it.
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => <span data-testid="page-chip" />,
-}));
 
 afterEach(() => {
   cleanup();
@@ -80,6 +75,10 @@ function secret(name: string): EnvironmentSecretV12 {
     updatedAt: 1,
     variables: [],
   };
+}
+
+function providerSecret(name: string): EnvironmentSecretV12 {
+  return { ...secret(name), kind: "provider" };
 }
 
 /**
@@ -149,6 +148,45 @@ describe("the Secrets page header", () => {
       "On your computers",
     );
     await expectTeamSubtitle();
+  });
+
+  it("lists no provider key, and says what secrets are when only provider keys are stored", async () => {
+    renderPanel({
+      secrets: [providerSecret("OPENAI_API_KEY")],
+      listError: { current: null },
+      role: "admin",
+      removed: [],
+    });
+
+    await screen.findByTestId("secrets-empty");
+    expect(screen.queryByText("OPENAI_API_KEY")).toBeNull();
+    expect(screen.queryByTestId("secret-row")).toBeNull();
+    await expectTeamSubtitle();
+  });
+
+  it("lists the other secrets beside a provider key it leaves out", async () => {
+    renderPanel({
+      secrets: [providerSecret("OPENAI_API_KEY"), secret("STRIPE_KEY")],
+      listError: { current: null },
+      role: "admin",
+      removed: [],
+    });
+
+    await screen.findByText("STRIPE_KEY");
+    expect(screen.queryByText("OPENAI_API_KEY")).toBeNull();
+    expect(screen.getAllByTestId("secret-row")).toHaveLength(1);
+  });
+
+  it("names no provider key to a viewer, who reads None", async () => {
+    renderPanel({
+      secrets: [providerSecret("OPENAI_API_KEY")],
+      listError: { current: null },
+      role: "viewer",
+      removed: [],
+    });
+
+    expect(await screen.findByText("No secrets.")).toBeTruthy();
+    expect(screen.queryByText("OPENAI_API_KEY")).toBeNull();
   });
 
   it("shows the subtitle once there are secrets", async () => {
@@ -273,7 +311,7 @@ describe("the Secrets page header", () => {
     expect(document.body.textContent).not.toContain("does not resolve");
   });
 
-  it("puts Details in the header beside the chip, not in the page body", async () => {
+  it("puts Details in the header, not in the page body", async () => {
     renderPanel({
       secrets: [secret("OPENAI_API_KEY")],
       listError: { current: null },
@@ -288,10 +326,6 @@ describe("the Secrets page header", () => {
     if (details === undefined) throw new Error("the page has no Details");
     const header = details.closest("header");
     if (header === null) throw new Error("Details is not inside a header");
-    expect(within(header).getByTestId("page-chip")).toBeTruthy();
-    expect(details.parentElement).toBe(
-      within(header).getByTestId("page-chip").parentElement,
-    );
     // Each secret row carries its own Details; what the body must not repeat
     // is the page's own, which belongs to the header.
     expect(

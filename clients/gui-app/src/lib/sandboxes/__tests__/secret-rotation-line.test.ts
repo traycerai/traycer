@@ -4,9 +4,11 @@ import type {
   RotationProducer,
 } from "@traycer/protocol/host/environment-schemas";
 import type { SandboxGrantRotation } from "@traycer/protocol/host/sandbox-secrets";
+import { SANDBOX_SECRET_KINDS } from "@traycer/protocol/host/secret-intake-catalogue";
 import {
   grantRotationLine,
   rotationProofPhrase,
+  rotatesToSandboxes,
   rotationProven,
   secretRotationSettled,
   secretRotationStatus,
@@ -540,4 +542,28 @@ describe("secretRotationSettled", () => {
       );
     },
   );
+});
+
+describe("rotatesToSandboxes", () => {
+  // Refused a value rotation ("managed by its own flow"), or a model
+  // provider's key, which the Providers page sends to computers.
+  const WITHOUT_SANDBOX_ROTATION: readonly string[] = [
+    "github",
+    "harness",
+    "mcp_credential",
+    "provider",
+  ];
+
+  it.each(SANDBOX_SECRET_KINDS)(
+    "answers for the %s kind as the catalogue says it rotates",
+    (kind) => {
+      expect(rotatesToSandboxes(kind)).toBe(
+        !WITHOUT_SANDBOX_ROTATION.includes(kind),
+      );
+    },
+  );
+
+  it("answers no for a kind this build does not list", () => {
+    expect(rotatesToSandboxes("newer_kind")).toBe(false);
+  });
 });

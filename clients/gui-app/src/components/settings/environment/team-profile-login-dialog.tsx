@@ -10,6 +10,7 @@ import {
 import type {
   ProviderId,
   ProviderProfile,
+  ProviderProfileAccentColor,
   ProviderCliState,
   ProviderLoginTargetRefusal,
 } from "@traycer/protocol/host/provider-schemas";
@@ -69,6 +70,10 @@ interface TeamLoginProps {
   readonly environmentId: string;
   readonly onClose: () => void;
   readonly onSelect: (profileId: string) => void;
+  readonly onCompletedUnlisted: (
+    profileId: string,
+    color: ProviderProfileAccentColor | undefined,
+  ) => void;
   readonly onAddAsNew: () => void;
 }
 
@@ -306,14 +311,22 @@ function TeamProfileReauthDialog(
       flow.start({ label: null, shareSkillsAndPlugins: false });
     }
   }, [flow]);
+  const completed = flow.state.kind === "completed";
   const settled =
     flow.state.kind === "target-refused" ||
     flow.state.kind === "target-outcome" ||
-    flow.state.kind === "failed";
+    flow.state.kind === "failed" ||
+    completed;
   const close = (): void => {
     if (!settled) flow.cancel();
     props.onClose();
   };
+  const closeOnCompleted = useRef(false);
+  useEffect(() => {
+    if (!completed || closeOnCompleted.current) return;
+    closeOnCompleted.current = true;
+    props.onClose();
+  });
   let body: ReactNode;
   if (
     flow.state.kind === "target-refused" ||

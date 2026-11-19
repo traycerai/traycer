@@ -1,7 +1,6 @@
 import {
   PROFILE_ID,
   DID_NOT_FINISH,
-  WAITING,
   SIGNED_IN,
   ALREADY_SIGNED_IN,
   LIST_KEY,
@@ -299,7 +298,6 @@ describe("Add a profile around one sign-in", () => {
   );
 
   it.each([
-    { label: "waiting-for-profile", outcome: { kind: "waiting-for-profile" } },
     { label: "account-mismatch", outcome: { kind: "account-mismatch" } },
     { label: "account-unproven", outcome: { kind: "account-unproven" } },
     {
@@ -335,9 +333,7 @@ describe("Add a profile around one sign-in", () => {
         seedCache: true,
       });
       await pressAccount();
-      if (outcome.kind === "waiting-for-profile") {
-        expect(await screen.findByText(WAITING)).toBeTruthy();
-      } else if (outcome.kind === "signed-in") {
+      if (outcome.kind === "signed-in") {
         expect(await screen.findByText(SIGNED_IN)).toBeTruthy();
       } else if (outcome.kind === "already-signed-in") {
         expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();

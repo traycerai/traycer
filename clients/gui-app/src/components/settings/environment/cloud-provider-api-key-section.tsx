@@ -15,10 +15,41 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useCloudProviderApiKeyMutation } from "@/hooks/providers/use-cloud-provider-api-key-mutation";
 import type { CloudProviderKeyScope } from "@/hooks/providers/use-cloud-provider-api-key-query";
+import { recordKeyCustodyLine } from "@/lib/providers/provider-key-custody";
 import { ConfigurationReadFailed } from "./team-read-failed";
+import { useConfigurationSource } from "./configuration-source";
+
+/**
+ * Where a saved key goes, only when the window's computer runs this
+ * environment and keeps the provider's key in its record: the computer's own
+ * `recordEnvironmentId`, absent on an older computer.
+ */
+function useRecordKeyCustodyLine(
+  environmentId: string,
+  providerId: ProviderKeyProviderId,
+): string | null {
+  const source = useConfigurationSource();
+  const providers = useProvidersList({ enabled: true, subscribed: true });
+  const environments = useEnvironmentListQuery(true);
+  const row = providers.data?.providers.find(
+    (provider) => provider.providerId === providerId,
+  );
+  if (row?.apiKey.recordEnvironmentId !== environmentId) return null;
+  const teamLabel = environments.data?.environments.find(
+    (environment) => environment.environmentId === environmentId,
+  )?.label;
+  const personal =
+    source.kind === "pool" && source.configuration === "personal";
+  return recordKeyCustodyLine(
+    providerId,
+    personal ? "Personal" : (teamLabel ?? null),
+  );
+}
 
 export function CloudProviderApiKeySection(props: {
   readonly scope: CloudProviderKeyScope;
@@ -61,6 +92,10 @@ function CloudProviderApiKeyField(props: {
       setDraft("");
     },
   );
+  const custodyLine = useRecordKeyCustodyLine(
+    props.scope.environmentId,
+    props.providerId,
+  );
   const read = useBoundedRead(props.query);
   const list = props.query.isError ? undefined : props.query.data;
   if (list?.profileSyncEnabled === false) return null;
@@ -86,36 +121,67 @@ function CloudProviderApiKeyField(props: {
     mutation.mutate({ action });
   };
   return (
+    <CloudProviderApiKeyControls
+      inputId={inputId}
+      providerId={props.providerId}
+      configured={configured}
+      draft={draft}
+      onDraft={setDraft}
+      refusal={refusal}
+      disabled={disabled}
+      pendingAction={pendingAction}
+      onChange={change}
+      custodyLine={custodyLine}
+    />
+  );
+}
+
+/** The field's markup: what the field above decided, drawn. */
+function CloudProviderApiKeyControls(props: {
+  readonly inputId: string;
+  readonly providerId: ProviderKeyProviderId;
+  readonly configured: boolean;
+  readonly draft: string;
+  readonly onDraft: (draft: string) => void;
+  readonly refusal: string | null;
+  readonly disabled: boolean;
+  readonly pendingAction: "set" | "clear" | null;
+  readonly onChange: (action: "set" | "clear") => void;
+  readonly custodyLine: string | null;
+}): ReactNode {
+  return (
     <div className="flex flex-col gap-2 rounded-lg border border-border/60 p-3">
       <div className="flex items-center justify-between gap-2">
         <label
-          htmlFor={inputId}
+          htmlFor={props.inputId}
           className="text-ui-sm font-medium text-foreground"
         >
           API key
         </label>
         <span className="text-ui-xs text-muted-foreground">
-          {configured ? "Key set" : "Not set"}
+          {props.configured ? "Key set" : "Not set"}
         </span>
       </div>
       <div className="flex items-center gap-2">
         <Input
-          id={inputId}
+          id={props.inputId}
           type="password"
           autoComplete="off"
           className="w-full"
           placeholder={
-            configured
+            props.configured
               ? "Replace stored key…"
               : `Paste your ${PROVIDER_DISPLAY_NAMES[props.providerId]} API key`
           }
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          disabled={disabled}
-          aria-invalid={refusal !== null}
-          aria-describedby={refusal === null ? undefined : `${inputId}-refusal`}
+          value={props.draft}
+          onChange={(event) => props.onDraft(event.target.value)}
+          disabled={props.disabled}
+          aria-invalid={props.refusal !== null}
+          aria-describedby={
+            props.refusal === null ? undefined : `${props.inputId}-refusal`
+          }
           onKeyDown={(event) => {
-            if (event.key === "Enter") change("set");
+            if (event.key === "Enter") props.onChange("set");
           }}
           font="mono"
           size="sm"
@@ -123,32 +189,41 @@ function CloudProviderApiKeyField(props: {
         <Button
           size="sm"
           variant="secondary"
-          onClick={() => change("set")}
-          disabled={disabled || draft.trim() === "" || refusal !== null}
+          onClick={() => props.onChange("set")}
+          disabled={
+            props.disabled ||
+            props.draft.trim() === "" ||
+            props.refusal !== null
+          }
         >
-          {pendingAction === "set" ? <MutedAgentSpinner /> : null}
+          {props.pendingAction === "set" ? <MutedAgentSpinner /> : null}
           Save
         </Button>
-        {configured ? (
+        {props.configured ? (
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => change("clear")}
-            disabled={disabled}
+            onClick={() => props.onChange("clear")}
+            disabled={props.disabled}
           >
-            {pendingAction === "clear" ? <MutedAgentSpinner /> : null}
+            {props.pendingAction === "clear" ? <MutedAgentSpinner /> : null}
             Clear
           </Button>
         ) : null}
       </div>
       <p
-        id={`${inputId}-refusal`}
+        id={`${props.inputId}-refusal`}
         role="alert"
-        hidden={refusal === null}
+        hidden={props.refusal === null}
         className="text-ui-xs text-destructive"
       >
-        {refusal}
+        {props.refusal}
       </p>
+      {props.custodyLine === null ? null : (
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {props.custodyLine}
+        </p>
+      )}
     </div>
   );
 }

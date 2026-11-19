@@ -146,7 +146,11 @@ export type ProviderProfileLoginFlowState =
     }
   | { readonly kind: "cancelled" }
   | { readonly kind: "already-signed-in"; readonly profile: ProviderProfile }
-  | { readonly kind: "waiting-for-profile" }
+  /**
+   * The host answered the duplicate check and the profile is not listed yet,
+   * or kept answering with no profile past the re-ask cap (`profileId` null).
+   */
+  | { readonly kind: "completed"; readonly profileId: string | null }
   | {
       readonly kind: "not-changed";
       readonly reason: "account-mismatch" | "account-unproven";
@@ -166,7 +170,7 @@ type ProfileOutcomeResolution =
       readonly profiles: readonly ProviderProfile[];
     }
   | { readonly kind: "already-signed-in"; readonly profile: ProviderProfile }
-  | { readonly kind: "waiting-for-profile" }
+  | { readonly kind: "completed"; readonly profileId: string | null }
   | { readonly kind: "list-unread"; readonly pending: ListedOutcome }
   | {
       readonly kind: "not-changed";
@@ -175,10 +179,6 @@ type ProfileOutcomeResolution =
   | { readonly kind: "failed" };
 
 const NOTHING_CHANGED: ProfileOutcomeResolution = { kind: "failed" };
-
-const WAITING_FOR_PROFILE: ProfileOutcomeResolution = {
-  kind: "waiting-for-profile",
-};
 
 function profileRowIn(
   profiles: readonly ProviderProfile[],
@@ -207,27 +207,33 @@ function resolveListedOutcome(
   const read = listedProfiles();
   const listed = profileRowIn(read.profiles, pending.profileId);
   if (listed !== null) return named(listed, read.profiles);
-  return read.readFailed
-    ? { kind: "list-unread", pending }
-    : WAITING_FOR_PROFILE;
+  if (read.readFailed) return { kind: "list-unread", pending };
+  // A duplicate names a record that already holds the account, so it is listed.
+  return pending.kind === "signed-in"
+    ? { kind: "completed", profileId: pending.profileId }
+    : NOTHING_CHANGED;
 }
 
 const NO_ECHOED_PROFILES = (): readonly ProviderProfile[] => [];
+
+/** What the host names; its answer with no profile is asked again, never settled. */
+type SettledProfileOutcome = Exclude<
+  ProviderLoginProfileOutcome,
+  { readonly kind: "waiting-for-profile" }
+>;
 
 /**
  * An outcome that does not belong here ends on the failed state, never a success,
  * without reading the answer's other keys.
  */
 function resolveProfileOutcome(
-  outcome: ProviderLoginProfileOutcome | null,
+  outcome: SettledProfileOutcome | null,
   mode: ProviderProfileLoginFlowMode,
   echoedProfiles: () => readonly ProviderProfile[],
   listedProfiles: () => CachedProviderProfilesRead,
 ): ProfileOutcomeResolution | null {
   if (outcome === null) return null;
   switch (outcome.kind) {
-    case "waiting-for-profile":
-      return WAITING_FOR_PROFILE;
     case "signed-in":
       return resolveListedOutcome(
         { kind: "signed-in", profileId: outcome.profileId },
@@ -235,13 +241,11 @@ function resolveProfileOutcome(
         listedProfiles,
       );
     case "already-signed-in":
-      return mode === "create"
-        ? resolveListedOutcome(
-            { kind: "already-signed-in", profileId: outcome.profileId },
-            echoedProfiles,
-            listedProfiles,
-          )
-        : null;
+      return resolveListedOutcome(
+        { kind: "already-signed-in", profileId: outcome.profileId },
+        echoedProfiles,
+        listedProfiles,
+      );
     case "account-mismatch":
     case "account-unproven":
       return mode === "reauth"
@@ -1314,6 +1318,7 @@ export function useProviderDestinationLoginFlow(
           // the constant's doc comment). Scoped to this attempt's closure -
           // an auto-restart mints a fresh attempt with a fresh budget.
           let authPendingRepolls = 0;
+          let profileLessRepolls = 0;
           let lastSeenReaderCount: number | null = null;
           let awaitProfileId = nextProfileId;
           // A resolution this attempt must no longer act on: a later attempt
@@ -1343,9 +1348,10 @@ export function useProviderDestinationLoginFlow(
             }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
             return true;
           };
-          const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
-            if (attemptAbandoned()) return;
-            const profileOutcome = result.profileOutcome ?? null;
+          const settleAwaitAnswer = (
+            result: AwaitLoginAnswer,
+            profileOutcome: SettledProfileOutcome | null,
+          ): void => {
             if (target !== null && profileOutcome !== null) {
               setState({
                 ...result,
@@ -1432,6 +1438,33 @@ export function useProviderDestinationLoginFlow(
             }
             awaitOutcomeRef.current = "notAuthenticated";
             settleAttempt(thisAttemptId);
+          };
+          // A restarted host's recovered answer, or an older host's ordinary
+          // one, can carry no profile: the await is asked again, and past the
+          // same cap as the ambient re-poll the sign-in settles as completed.
+          const askAgainWithoutProfile = (): void => {
+            if (profileLessRepolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) {
+              settleProfileOutcome(thisAttemptId, {
+                kind: "completed",
+                profileId: null,
+              });
+              return;
+            }
+            profileLessRepolls += 1;
+            repollTimerRef.current = window.setTimeout(() => {
+              repollTimerRef.current = null;
+              if (attemptAbandoned()) return;
+              awaitOnce();
+            }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+          };
+          const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
+            if (attemptAbandoned()) return;
+            const profileOutcome = result.profileOutcome ?? null;
+            if (profileOutcome?.kind === "waiting-for-profile") {
+              askAgainWithoutProfile();
+              return;
+            }
+            settleAwaitAnswer(result, profileOutcome);
           };
           const handleAwaitError = (error: unknown): void => {
             if (attemptAbandoned()) return;
