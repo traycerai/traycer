@@ -37,6 +37,14 @@ export interface RefusalAwareAuthRevalidator extends AuthorityBoundAuthRevalidat
     hostId: string,
     refusal: FatalErrorDetails | null,
   ): Promise<RevalidateOutcome | "superseded">;
+  /**
+   * Asked as a call starts; what it returns runs once the host has answered that
+   * call, the proof that the host admitted the credential it carried.
+   */
+  readonly admissionOf?: (
+    expected: OpenFrameBearerSource,
+    hostId: string,
+  ) => () => void;
 }
 
 export function readsHostRefusal(

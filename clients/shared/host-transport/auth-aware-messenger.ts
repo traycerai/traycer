@@ -132,8 +132,17 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
     method: string,
     call: () => Promise<Response>,
   ): Promise<Response> => {
+    // An answered call was admitted, so a later refusal of its token is news again.
+    const answered = async (): Promise<Response> => {
+      const admitted = readsHostRefusal(auth)
+        ? auth.admissionOf?.(authority.bearer, authority.endpoint.hostId)
+        : undefined;
+      const response = await call();
+      admitted?.();
+      return response;
+    };
     try {
-      return await call();
+      return await answered();
     } catch (cause) {
       if (!(cause instanceof HostRpcError)) throw cause;
       const refusal = hostRefusalOf(cause);
@@ -210,7 +219,7 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
         throw cause;
       }
       try {
-        return await call();
+        return await answered();
       } catch (retryCause) {
         await reportRefusedAgain(auth, authority, retryCause);
         throw withEarlierAttemptDispatch(retryCause, method, sentEarlier);
