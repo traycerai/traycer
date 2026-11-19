@@ -10,7 +10,6 @@ import type {
 import {
   pendingUploadKeys,
   type PersonalHostState,
-  type PersonalPageStatusLine,
 } from "@/components/settings/personal/personal-page-status";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
@@ -21,7 +20,6 @@ export interface PersonalPageContextValue {
   readonly section: SettingsSectionId;
   readonly pick: EnvironmentPick;
   readonly state: PersonalHostState;
-  readonly line: PersonalPageStatusLine | null;
   readonly hostName: string;
   /** This host's machine facts: values that apply on it only. */
   readonly localOverrides: readonly LocalOverride[];

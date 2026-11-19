@@ -213,8 +213,6 @@ function runningHost(name: string, isThisComputer: boolean): RunningHost {
     name,
     kind: "personal",
     isThisComputer,
-    lastReportedAt: 1,
-    applied: [],
   };
 }
 
@@ -228,7 +226,6 @@ function runningOn(
     thisComputerUnread: false,
     collisions: [],
     retry: () => undefined,
-    reread: () => undefined,
     ...overrides,
   };
 }
@@ -606,7 +603,6 @@ describe("<EnvironmentPicker />", () => {
         { hostName: "windows-test-machine", hostIds: ["other", "mac"] },
       ],
       retry: () => undefined,
-      reread: () => undefined,
     };
     renderPicker("mac");
     openMenu();
@@ -631,7 +627,6 @@ describe("<EnvironmentPicker />", () => {
         { hostName: "windows-test-machine", hostIds: ["other", "third"] },
       ],
       retry: () => undefined,
-      reread: () => undefined,
     };
     renderPicker("mac");
     openMenu();

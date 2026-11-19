@@ -922,7 +922,6 @@ async function mountInventoryConsumers(
                     kind: "ready",
                     status: environmentStatusFixture({}),
                   },
-                  line: null,
                   hostName: HOST_NAME,
                   localOverrides: NO_OVERRIDES,
                   hostId: HOST_ID,

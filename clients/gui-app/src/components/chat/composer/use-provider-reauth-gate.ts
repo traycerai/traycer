@@ -36,7 +36,7 @@ import {
  *   persisted/memory/default non-null `profileId` must not silently reach the
  *   wire against a no-support host). Never silently falls back to ambient -
  *   blocks send and offers the confirm-first "Continue on Terminal account"
- *   affordance instead.
+ *   affordance instead, while the Terminal login is signed in.
  * - `profile_unauthenticated`: the profile still exists but its OWN auth
  *   probe is signed out (distinct from the provider-level probe above, which
  *   only reflects the ambient login and must not gate a healthy managed
@@ -60,12 +60,16 @@ export interface ProviderReauthGate {
 }
 
 /**
- * Never for the provider's own sign-out, nor for a Terminal chat a record's row
- * blocks, where continuing would change nothing.
+ * Only while the Terminal login is itself signed in: a signed-out Terminal
+ * account leaves "Sign in" alone, and the button returns once it is signed in.
+ * Never for a Terminal chat a record's row blocks, where continuing would
+ * change nothing.
  */
 export function continueOnTerminalOffered(gate: ProviderReauthGate): boolean {
   return (
-    gate.reason !== "provider_unauthenticated" && !gate.terminalPinGatedByRecord
+    gate.state !== null &&
+    isProviderAmbientAuthenticated(gate.state) &&
+    !gate.terminalPinGatedByRecord
   );
 }
 

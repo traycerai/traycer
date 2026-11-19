@@ -2,10 +2,14 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderAuth,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   pinProfile,
   providerState,
+  removedEntry,
 } from "@/components/providers/__tests__/profile-pin-fixtures";
 import {
   createProfileListHost,
@@ -17,6 +21,8 @@ import { ProviderReauthBanner } from "@/components/chat/composer/provider-reauth
 import {
   continueOnTerminalOffered,
   useLandingProviderReauthGate,
+  useProviderReauthGate,
+  type ProviderReauthGate,
 } from "@/components/chat/composer/use-provider-reauth-gate";
 import type { HostRpcRegistry } from "@/lib/host";
 
@@ -98,13 +104,9 @@ function hostFor(answer: ProfileListAnswer): ProfileListHost {
   return host;
 }
 
-function Banner(props: { readonly profileId: string | null }): ReactNode {
-  const gate = useLandingProviderReauthGate(
-    holder.client,
-    "codex",
-    props.profileId,
-    true,
-  );
+/** What both composers draw from their gate: the one banner and its one button. */
+function GateBanner(props: { readonly gate: ProviderReauthGate }): ReactNode {
+  const { gate } = props;
   if (gate.providerId === null || gate.reason === null) return <p>clear</p>;
   return (
     <ProviderReauthBanner
@@ -120,6 +122,28 @@ function Banner(props: { readonly profileId: string | null }): ReactNode {
       }
     />
   );
+}
+
+/** The landing composer's gate. */
+function Banner(props: { readonly profileId: string | null }): ReactNode {
+  const gate = useLandingProviderReauthGate(
+    holder.client,
+    "codex",
+    props.profileId,
+    true,
+  );
+  return <GateBanner gate={gate} />;
+}
+
+/** The chat composer's gate: the tab's host, and a pin its own settings hold. */
+function ChatBanner(props: { readonly profileId: string | null }): ReactNode {
+  const gate = useProviderReauthGate(
+    "codex",
+    props.profileId,
+    true,
+    "authoritative",
+  );
+  return <GateBanner gate={gate} />;
 }
 
 describe("the landing reauth banner and a Terminal pin", () => {
@@ -196,5 +220,199 @@ describe("the landing reauth banner and a Terminal pin", () => {
       ).toBeDefined();
     });
     expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+});
+
+describe("the landing reauth banner while the Terminal account is signed out", () => {
+  afterEach(() => {
+    holder.client = null;
+    cleanup();
+  });
+
+  function signedOutManagedPin(terminal: {
+    readonly providerAuth: ProviderAuth["status"];
+    readonly ambientAuth: ProviderAuth["status"] | null;
+  }): ProfileListHost {
+    return hostFor({
+      providers: [
+        providerState({
+          providerId: "codex",
+          authStatus: terminal.providerAuth,
+          profiles: [
+            ...(terminal.ambientAuth === null
+              ? []
+              : [
+                  pinProfile({
+                    profileId: "terminal-row",
+                    label: "Terminal account",
+                    kind: "ambient",
+                    enabled: true,
+                    authStatus: terminal.ambientAuth,
+                    aliases: [],
+                    personNotice: null,
+                    terminalOnThisComputer: true,
+                    otherNames: [],
+                  }),
+                ]),
+            managed({
+              profileId: "work-row",
+              label: "Work",
+              authStatus: "unauthenticated",
+              personNotice: null,
+              terminalOnThisComputer: false,
+            }),
+          ],
+        }),
+      ],
+      native: null,
+      removedProfiles: [],
+    });
+  }
+
+  it("shows only Sign in for a signed-out managed pin", async () => {
+    const host = signedOutManagedPin({
+      providerAuth: "unauthenticated",
+      ambientAuth: null,
+    });
+    render(
+      <host.Wrapper>
+        <Banner profileId="work-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue on Terminal account" }),
+    ).toBeNull();
+  });
+
+  it("hides the button when the Terminal row is signed out though the provider summary lags", async () => {
+    const host = signedOutManagedPin({
+      providerAuth: "authenticated",
+      ambientAuth: "unauthenticated",
+    });
+    render(
+      <host.Wrapper>
+        <Banner profileId="work-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue on Terminal account" }),
+    ).toBeNull();
+  });
+
+  it("hides the button while the Terminal account's sign-in is unknown", async () => {
+    const host = signedOutManagedPin({
+      providerAuth: "unknown",
+      ambientAuth: "unknown",
+    });
+    render(
+      <host.Wrapper>
+        <Banner profileId="work-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue on Terminal account" }),
+    ).toBeNull();
+  });
+
+  it("hides the button in the chat composer while the Terminal account's sign-in is unknown", async () => {
+    const host = signedOutManagedPin({
+      providerAuth: "unknown",
+      ambientAuth: "unknown",
+    });
+    render(
+      <host.Wrapper>
+        <ChatBanner profileId="work-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue on Terminal account" }),
+    ).toBeNull();
+  });
+
+  it("offers the button in the chat composer once the Terminal account is signed in", async () => {
+    const host = signedOutManagedPin({
+      providerAuth: "authenticated",
+      ambientAuth: "authenticated",
+    });
+    render(
+      <host.Wrapper>
+        <ChatBanner profileId="work-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Continue on Terminal account" }),
+      ).toBeDefined();
+    });
+  });
+
+  it("offers the button again once the Terminal account is signed in", async () => {
+    const host = signedOutManagedPin({
+      providerAuth: "authenticated",
+      ambientAuth: "authenticated",
+    });
+    render(
+      <host.Wrapper>
+        <Banner profileId="work-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Continue on Terminal account" }),
+      ).toBeDefined();
+    });
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+
+  it("shows only Manage in Settings for a removed account", async () => {
+    const host = hostFor({
+      providers: [
+        providerState({
+          providerId: "codex",
+          authStatus: "unauthenticated",
+          profiles: [],
+        }),
+      ],
+      native: null,
+      removedProfiles: [
+        removedEntry({
+          providerId: "codex",
+          profileId: "gone-row",
+          aliases: [],
+        }),
+      ],
+    });
+    render(
+      <host.Wrapper>
+        <Banner profileId="gone-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Manage in Settings" }),
+      ).toBeDefined();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue on Terminal account" }),
+    ).toBeNull();
   });
 });

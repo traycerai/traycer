@@ -2,11 +2,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   ProviderId,
   ProviderProfile,
+  ProviderProfileAccentColor,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   alreadySignedInAsText,
   signedInAsText,
-  WAITING_FOR_PROFILE_TEXT,
   differentAccountText,
   profileNotChangedText,
   SIGN_IN_UNPROVEN_TEXT,
@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { DialogFooter } from "@/components/ui/dialog";
 import { useTeamProfileColor } from "@/hooks/environment/team/use-team-profile-color";
+import { AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS } from "@/lib/providers/provider-ambient-auth";
 import { PROVIDER_STATE_UNREADABLE_COPY } from "@/lib/providers/provider-settings-unreadable-error";
 import type { SignInRecordingEnd } from "@/hooks/providers/use-providers-await-login-mutation";
 import type { ProviderTargetLoginControls } from "@/components/settings/panels/add-provider-profile-dialog";
@@ -39,6 +40,10 @@ interface TeamLoginResultOptions {
   readonly entryProfile: ProviderProfile | null;
   readonly onClose: () => void;
   readonly onSelect: (profileId: string) => void;
+  readonly onCompletedUnlisted: (
+    profileId: string,
+    color: ProviderProfileAccentColor | undefined,
+  ) => void;
   readonly onAddAsNew: () => void;
 }
 
@@ -73,14 +78,6 @@ export function TeamProfileLoginResult(
       return (
         <ResultFooter
           message={teamSignInRefusalText(outcome.reason, props.teamName)}
-          onDone={props.onClose}
-          action={null}
-        />
-      );
-    case "waiting-for-profile":
-      return (
-        <ResultFooter
-          message={WAITING_FOR_PROFILE_TEXT}
           onDone={props.onClose}
           action={null}
         />
@@ -206,6 +203,10 @@ function TeamNamedLoginResult(props: {
   readonly environmentId: string;
   readonly onClose: () => void;
   readonly onSelect: (profileId: string) => void;
+  readonly onCompletedUnlisted: (
+    profileId: string,
+    color: ProviderProfileAccentColor | undefined,
+  ) => void;
 }): ReactNode {
   const records = useTeamProviderRecords();
   const colorWrite = useTeamProfileColor(() => {});
@@ -251,6 +252,21 @@ function TeamNamedLoginResult(props: {
     profileId,
   );
   const profile = liveProfile ?? read?.profile ?? null;
+  const unlisted = useUnlistedTeamSignIn({
+    read,
+    profile,
+    already: props.already,
+    controls: props.controls,
+    switchSourceProfileId: props.switchSourceProfileId,
+    providerId,
+    profileId,
+    mounted,
+    reread,
+    setRead,
+    onCompletedUnlisted: props.onCompletedUnlisted,
+    onSelect: props.onSelect,
+    onClose: props.onClose,
+  });
   const done = (): void => {
     if (mounted.current && profile !== null) {
       if (props.switchSourceProfileId !== profileId) props.onSignedIn(profile);
@@ -316,12 +332,14 @@ function TeamNamedLoginResult(props: {
       />
     );
   if (profile === null)
-    return (
+    return props.already && unlisted ? (
       <ResultFooter
-        message={WAITING_FOR_PROFILE_TEXT}
+        message="Sign-in did not finish. Retry when you are ready."
         onDone={props.onClose}
         action={null}
       />
+    ) : (
+      <MutedAgentSpinner />
     );
   if (saveFailed)
     return (
@@ -355,6 +373,58 @@ function TeamNamedLoginResult(props: {
       saving={saving}
     />
   );
+}
+
+/**
+ * The host has answered its duplicate check, so a profile the records do not
+ * list yet is not waited for: the dialog closes and the picked color waits for
+ * the row. A switch needs the row to start its move, so only that reads the
+ * records again.
+ */
+function useUnlistedTeamSignIn(args: {
+  readonly read: NamedProfileRead | null;
+  readonly profile: ProviderProfile | null;
+  readonly already: boolean;
+  readonly controls: ProviderTargetLoginControls | null;
+  readonly switchSourceProfileId: string | null;
+  readonly providerId: ProviderId;
+  readonly profileId: string;
+  readonly mounted: { readonly current: boolean };
+  readonly reread: TeamProviderRecords["reread"] | undefined;
+  readonly setRead: (read: NamedProfileRead) => void;
+  readonly onCompletedUnlisted: TeamLoginResultOptions["onCompletedUnlisted"];
+  readonly onSelect: (profileId: string) => void;
+  readonly onClose: () => void;
+}): boolean {
+  const { read, reread, mounted, setRead, providerId, profileId } = args;
+  const unlisted = read !== null && !read.failed && args.profile === null;
+  const holdsForSwitch = unlisted && args.switchSourceProfileId !== null;
+  useEffect(() => {
+    if (!holdsForSwitch || reread === undefined) return;
+    const timer = window.setTimeout(() => {
+      void reread().then((providers) => {
+        if (!mounted.current) return;
+        setRead({
+          profile:
+            providers
+              ?.find((provider) => provider.providerId === providerId)
+              ?.profiles.find((row) => row.profileId === profileId) ?? null,
+          failed: providers === null,
+        });
+      });
+    }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [holdsForSwitch, read, reread, mounted, setRead, providerId, profileId]);
+  const completes = unlisted && !holdsForSwitch && !args.already;
+  const completed = useRef(false);
+  useEffect(() => {
+    if (!completes || completed.current) return;
+    completed.current = true;
+    args.onCompletedUnlisted(profileId, args.controls?.accentColor);
+    args.onSelect(profileId);
+    args.onClose();
+  });
+  return unlisted;
 }
 
 function TeamNamedSuccessFooter(props: {

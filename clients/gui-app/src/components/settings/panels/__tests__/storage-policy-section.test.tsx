@@ -54,9 +54,6 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const useHostScope = () => hostScopeFixture({ host: null });
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => null,
-}));
 
 import { useAuthStore } from "@/stores/auth/auth-store";
 

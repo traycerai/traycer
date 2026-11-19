@@ -6,11 +6,13 @@
  * `dropAllOnViewerDowngrade()` only clears the map when the rooms replica's
  * OWN internal ledger (`availabilityByRoom`) is non-empty, so a state faked
  * by `store.setState(...)` alone would not exercise the drop this test's
- * third assertion depends on.
+ * access-loss test depends on.
  *
  * Same rig shape as `replica-runtime-behavior-identity.test.ts`'s
- * viewer-downgrade pin (`applyRootSnapshot`'s `rooms.dropAllOnViewerDowngrade()`
- * call) - reused here through the actual hook rather than the bare store.
+ * access-loss pin (`applyRootSnapshot`'s `rooms.dropAllOnViewerDowngrade()`
+ * call, driven by a role nothing recognises) - reused here through the actual
+ * hook rather than the bare store. A `viewer` role reads as `editor`, so it
+ * loses nothing: its own test below pins that.
  */
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -40,10 +42,12 @@ function emptySnapshot(): Uint8Array {
 
 /** Same shape as `replica-runtime-behavior-identity.test.ts`'s `buildMeta`. */
 function buildMeta(
-  role: "owner" | "editor" | "viewer" | null,
+  role: "owner" | "editor" | "viewer" | "supervisor" | null,
   hostDoc: Y.Doc,
 ): SnapshotMetaEpic {
-  return {
+  // `"supervisor"` stands for a role nothing recognises. It never parses on the
+  // wire, so it is handed over the way a decoder that let it through would.
+  const meta: SnapshotMetaEpic = {
     schemaVersion: "1.0",
     epicLight:
       role === null
@@ -62,7 +66,7 @@ function buildMeta(
             createdBy: "u",
             version: "1",
           },
-    permissionRole: role,
+    permissionRole: null,
     repos: [],
     workspaces: [],
     repoMapping: [],
@@ -70,6 +74,7 @@ function buildMeta(
     unresolvedRepos: [],
     hostStateVectorBase64: stateVectorBase64(hostDoc),
   };
+  return Object.assign(meta, { permissionRole: role });
 }
 
 /** Same shape as `replica-runtime-behavior-identity.test.ts`'s helper. */
@@ -142,7 +147,11 @@ describe("useEpicArtifactBodySubscribeAnswered", () => {
     for (const handle of handles.splice(0)) handle.dispose();
   });
 
-  it("is false before any body-plane frame, true once the artifact has an availability entry, and false again after dropAllOnViewerDowngrade() clears the map", () => {
+  function openAnsweredSession(): {
+    readonly result: { readonly current: boolean };
+    readonly streamHandle: () => FakeStreamHandle;
+    readonly donor: Y.Doc;
+  } {
     const { factory, handle: streamHandle } = fakeFactory();
     const handle = openStoreForTest({
       epicId: "epic-subscribe-answered",
@@ -179,19 +188,37 @@ describe("useEpicArtifactBodySubscribeAnswered", () => {
     // The room's own snapshot lands: the artifact now has an availability
     // entry, answered or not.
     expect(result.current).toBe(true);
+    return { result, streamHandle, donor };
+  }
+
+  it("is false before any body-plane frame, true once the artifact has an availability entry, and false again after a role nothing recognises clears the map (dropAllOnViewerDowngrade)", () => {
+    const { result, streamHandle, donor } = openAnsweredSession();
 
     act(() => {
-      // A reconnect snapshot that downgrades the role to viewer. Per
+      // A reconnect snapshot whose role grants nothing. Per
       // `applyRootSnapshot`, an unwritable role fails closed:
       // `rooms.dropAllOnViewerDowngrade()` clears every room's availability
       // entry - this artifact goes back to "not answered", not to a
       // host-refusal verdict.
+      streamHandle().callbacks.onSnapshot(
+        buildMeta("supervisor", donor),
+        Y.encodeStateAsUpdate(donor),
+      );
+    });
+
+    expect(result.current).toBe(false);
+  });
+
+  it("stays true after a reconnect snapshot naming viewer: a viewer role reads as editor, so no room's availability is dropped", () => {
+    const { result, streamHandle, donor } = openAnsweredSession();
+
+    act(() => {
       streamHandle().callbacks.onSnapshot(
         buildMeta("viewer", donor),
         Y.encodeStateAsUpdate(donor),
       );
     });
 
-    expect(result.current).toBe(false);
+    expect(result.current).toBe(true);
   });
 });

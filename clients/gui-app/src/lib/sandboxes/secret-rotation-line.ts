@@ -3,6 +3,7 @@ import type {
   RotationProducer,
 } from "@traycer/protocol/host/environment-schemas";
 import type { SandboxGrantRotation } from "@traycer/protocol/host/sandbox-secrets";
+import { SANDBOX_SECRET_FORM_KINDS } from "@traycer/protocol/host/secret-intake-catalogue";
 
 /**
  * What a replaced value has done, in words: on the sandbox card per grant, and
@@ -175,6 +176,21 @@ function producerLines(
     key: `worker:${workerClass}`,
     text: workerClassLine(workerClass, incarnations),
   }));
+}
+
+/**
+ * The kinds whose new value rotates to sandbox incarnations: the ones with
+ * routes served by sandbox workers. The add form's kinds are every kind but
+ * the three made by their own flows (`github`, `harness`, `mcp_credential`),
+ * which are refused a value rotation, so they are the catalogue's source for
+ * it; a model provider's key goes to computers by the Providers page and is
+ * left out. A kind this build does not list has no line either.
+ */
+const SANDBOX_ROTATING_KINDS: readonly string[] =
+  SANDBOX_SECRET_FORM_KINDS.filter((kind) => kind !== "provider");
+
+export function rotatesToSandboxes(kind: string): boolean {
+  return SANDBOX_ROTATING_KINDS.includes(kind);
 }
 
 /**

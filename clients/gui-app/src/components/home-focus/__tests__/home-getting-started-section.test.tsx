@@ -170,8 +170,6 @@ function personalHost(hostId: string): RunningHost {
     name: hostId,
     kind: "personal",
     isThisComputer: false,
-    lastReportedAt: null,
-    applied: [],
   };
 }
 

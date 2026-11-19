@@ -12,7 +12,6 @@ import {
   PersonalPageContext,
 } from "@/components/settings/personal/personal-page-context";
 import { PersonalPageNotices } from "@/components/settings/personal/personal-page-notices";
-import { PageChip } from "@/components/settings/personal/page-chip";
 import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-header-details";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
@@ -20,9 +19,8 @@ import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-
 import { HostMinimumVersionGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
   personalPageItemKinds,
-  personalPageStatusLine,
+  UPDATE_HOST_TEXT,
   type PersonalHostState,
-  type PersonalPageStatusLine,
 } from "@/components/settings/personal/personal-page-status";
 import {
   useEnvironmentLocalOverridesRead,
@@ -51,7 +49,6 @@ import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { UnresolvedEnvironmentPage } from "@/components/settings/environment/unresolved-environment-page";
 import { useTeamEnvironmentReviewRead } from "@/hooks/environment/use-team-environment-review";
 import { environmentReadData } from "@/hooks/environment/environment-read-data";
-import { cn } from "@/lib/utils";
 
 interface WindowHostEnvironment {
   readonly state: PersonalHostState;
@@ -120,10 +117,9 @@ function teamNameOf(state: PersonalHostState): string | null {
 }
 
 /**
- * Wraps a Personal page: its status line (rendered by `SettingsPanelShell`
- * under the page's description) and, on a host whose version predates these
- * settings, the read-only rendering the flows give it: the page shows the
- * host's own values and takes no edits until the host is updated.
+ * Wraps a Personal page: on a host whose version predates these settings,
+ * the read-only rendering the flows give it: the page shows the host's own
+ * values and takes no edits until the host is updated.
  *
  * Which source an Environment page reads is decided here, one rule per pick:
  * a team reads the cloud; a Local row reads that computer's own pages;
@@ -307,7 +303,6 @@ function HostPageContents(props: {
           section: props.section,
           pick,
           state: { kind: "unknown" },
-          line: null,
           hostName: "",
           hostId: null,
           client: null,
@@ -372,7 +367,6 @@ function TeamPageFrame(props: {
         section: props.section,
         pick: props.pick,
         state: { kind: "unknown" },
-        line: null,
         hostName: scope.viewingHost?.hostLabel ?? "",
         hostId: scope.viewingHost?.hostId ?? null,
         client: scope.client,
@@ -397,16 +391,15 @@ function PersonalPageFrameForKinds(props: {
 }): ReactNode {
   const pick = useEnvironmentPick();
   const environment = useWindowHostEnvironmentState(props.kinds);
-  const { state, hostName } = environment;
+  const { state } = environment;
   // A save on this page that lost to a change made elsewhere re-reads it.
   useRereadOnStaleWrite(environment.hostId, null);
-  const line = personalPageStatusLine(state, props.kinds, hostName);
   // Read-only on a host whose version predates these settings, and on a
   // team's host, whose settings are the team's.
   const readOnly = state.kind === "unsupported" || teamNameOf(state) !== null;
   return (
     <PersonalPageContext.Provider
-      value={{ ...environment, line, section: props.section, pick }}
+      value={{ ...environment, section: props.section, pick }}
     >
       {readOnly ? (
         <div className="contents">
@@ -424,7 +417,8 @@ function PersonalPageFrameForKinds(props: {
 
 /**
  * The read-only page's note, outside the inert region so it stays readable
- * by assistive technology; the shell skips its own line in that state.
+ * by assistive technology; the shell skips its own header content in that
+ * state.
  */
 function PersonalPageReadOnlyLine(): ReactNode {
   const value = useContext(PersonalPageContext);
@@ -432,39 +426,26 @@ function PersonalPageReadOnlyLine(): ReactNode {
   const teamName = teamNameOf(value.state);
   let content: ReactNode = null;
   if (teamName !== null) content = <TeamOwnedLine teamName={teamName} />;
-  else if (value.line !== null) {
-    content = <PersonalPageStatusBanner line={value.line} />;
+  else if (value.state.kind === "unsupported") {
+    content = (
+      <p
+        data-testid="personal-page-read-only"
+        role="status"
+        className="max-w-[72ch] rounded-md border border-info/30 bg-info/10 px-3 py-1.5 text-ui-sm text-info-foreground"
+      >
+        {UPDATE_HOST_TEXT}
+      </p>
+    );
   }
   if (content === null) return null;
   return <div className="mx-auto w-full max-w-5xl px-5 pt-5">{content}</div>;
 }
 
-const TONE_CLASSES: Readonly<Record<PersonalPageStatusLine["tone"], string>> = {
-  info: "border-info/30 bg-info/10 text-info-foreground",
-  warning: "border-warning/30 bg-warning/10 text-warning-foreground",
-};
-
-function PersonalPageStatusBanner(props: {
-  readonly line: PersonalPageStatusLine;
-}): ReactNode {
-  return (
-    <p
-      data-testid="personal-page-status"
-      role="status"
-      className={cn(
-        "max-w-[72ch] rounded-md border px-3 py-1.5 text-ui-sm",
-        TONE_CLASSES[props.line.tone],
-      )}
-    >
-      {props.line.text}
-    </p>
-  );
-}
-
 /**
- * The status line inside a Personal page's header, for `SettingsPanelShell`.
- * Nothing outside a Personal page, and nothing on a read-only one, whose line
- * the frame draws above the inert page instead.
+ * What a Personal page's header holds under its description, for
+ * `SettingsPanelShell`: Secrets' `Details` and the page's notices. Nothing
+ * outside a Personal page, and nothing on a read-only one, whose note the
+ * frame draws above the inert page instead.
  */
 export function PersonalPageHeaderStatus(): ReactNode {
   const value = useContext(PersonalPageContext);
@@ -472,7 +453,7 @@ export function PersonalPageHeaderStatus(): ReactNode {
   if (value.pick.kind === "team")
     return (
       <>
-        <PageChipRow section={value.section} pick={value.pick} />
+        <SecretsDetailsRow section={value.section} />
         <PersonalPageNotices />
       </>
     );
@@ -481,26 +462,15 @@ export function PersonalPageHeaderStatus(): ReactNode {
   }
   return (
     <>
-      <PageChipRow section={value.section} pick={value.pick} />
-      {value.line === null ? null : (
-        <PersonalPageStatusBanner line={value.line} />
-      )}
+      <SecretsDetailsRow section={value.section} />
       <PersonalPageNotices />
     </>
   );
 }
 
-/** The page's chip, and on Secrets the page's own `Details` beside it. */
-function PageChipRow(props: {
+/** On Secrets, the page's own `Details`. */
+function SecretsDetailsRow(props: {
   readonly section: SettingsSectionId;
-  readonly pick: EnvironmentPick;
 }): ReactNode {
-  if (props.section !== "secrets")
-    return <PageChip section={props.section} pick={props.pick} />;
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <PageChip section={props.section} pick={props.pick} />
-      <SecretsHeaderDetails />
-    </div>
-  );
+  return props.section === "secrets" ? <SecretsHeaderDetails /> : null;
 }

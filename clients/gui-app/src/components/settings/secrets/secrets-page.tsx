@@ -12,6 +12,7 @@ import { AddSecretDialog } from "@/components/settings/secrets/add-secret-dialog
 import { RemovedSecretRow } from "@/components/settings/secrets/removed-secret-row";
 import { SecretRow } from "@/components/settings/secrets/secret-row";
 import { HeldItemsLine } from "@/components/settings/secrets/held-items-line";
+import { isListedSecret } from "@/components/settings/secrets/listed-secrets";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
 import { useSecretsEnvironment } from "@/hooks/environment/use-environment-secrets-calls";
@@ -50,7 +51,9 @@ function secretRows(list: SecretsList | undefined): {
   if (list === undefined) return { secrets: null, removing: [] };
   return {
     secrets: list.secrets.filter(
-      (secret) => !list.removed.some((entry) => entry.id === secret.secretId),
+      (secret) =>
+        isListedSecret(secret) &&
+        !list.removed.some((entry) => entry.id === secret.secretId),
     ),
     removing: list.removed.filter(
       (entry) => entry.removal.outcome !== "destroyed",
