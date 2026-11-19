@@ -10,7 +10,8 @@ export type { PermissionRole };
  * The roles the sharing panel may assign: every role a grant can name except
  * `owner`, which is never handed out from here.
  *
- * The view-only role is retired, so this is now a single role. The list stays
+ * The view-only role is no longer offered (a stored or sent `viewer` gives the
+ * access of `editor`), so this is now a single role. The list stays
  * derived rather than written out as `["editor"]`, because every control that
  * offers a role reads it, and {@link roleChangeHasTarget} is what decides
  * whether offering one is a choice at all.

@@ -483,7 +483,7 @@ describe("home-page history helpers", () => {
     });
   });
 
-  it("projects a shared task granted the retired viewer role as holding no role", () => {
+  it("projects a shared task granted the viewer role as holding the editor role", () => {
     const sharedTask = (
       id: string,
       role: "viewer" | "editor",
@@ -520,7 +520,7 @@ describe("home-page history helpers", () => {
 
     const items = buildHistoryItemsFromTasks(
       [
-        sharedTask("epic-retired", "viewer"),
+        sharedTask("epic-viewer", "viewer"),
         sharedTask("epic-editor", "editor"),
       ],
       Date.parse("2026-04-22T12:00:00.000Z"),
@@ -529,14 +529,16 @@ describe("home-page history helpers", () => {
     );
 
     const byId = new Map(items.map((item) => [item.epicId, item]));
-    const retired = byId.get("epic-retired");
+    const viewer = byId.get("epic-viewer");
     const editor = byId.get("epic-editor");
-    if (retired === undefined || editor === undefined) {
+    if (viewer === undefined || editor === undefined) {
       throw new Error("expected both shared tasks to project");
     }
-    expect(retired.permissionRole).toBeNull();
-    expect(canDeleteHistoryItem(retired, true)).toBe(false);
-    expect(canEditHistoryItemTitle(retired, true)).toBe(false);
+    expect(viewer.permissionRole).toBe("editor");
+    expect(canDeleteHistoryItem(viewer, true)).toBe(
+      canDeleteHistoryItem(editor, true),
+    );
+    expect(canEditHistoryItemTitle(viewer, true)).toBe(true);
     expect(editor.permissionRole).toBe("editor");
     expect(canEditHistoryItemTitle(editor, true)).toBe(true);
   });

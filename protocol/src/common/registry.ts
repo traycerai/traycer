@@ -324,8 +324,7 @@ export type AttachmentMentionNode = RecordValue<
   "attachment-mention-node"
 >;
 /**
- * Every role the `permission-role` record decodes, the retired `viewer`
- * among them. A decoder's type: `grantedRole`
+ * Every role the `permission-role` record decodes, `viewer` among them. A decoder's type: `grantedRole`
  * (`protocol/common/permission-role`) turns one of these into the access it
  * gives, and `PermissionRole` is that narrower result.
  */

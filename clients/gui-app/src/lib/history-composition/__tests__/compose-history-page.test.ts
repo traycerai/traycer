@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import type {
   ListTaskLight,
@@ -148,7 +149,11 @@ describe("composeHistoryPage", () => {
 
     expect(composed.tasks).toHaveLength(1);
     expect(composed.tasks[0]?.epic?.light?.updatedAt).toBe(9);
-    expect(composed.tasks[0]?.epic?.permission?.role).toBe("viewer");
+    // Compared as access: a `viewer` role gives the access of `editor`, which
+    // is less than the local home's owner.
+    expect(grantedRole(composed.tasks[0]?.epic?.permission?.role ?? null)).toBe(
+      "editor",
+    );
     expect(composed.completeness).toMatchObject({
       facets: "partial",
       localRows: "present",
