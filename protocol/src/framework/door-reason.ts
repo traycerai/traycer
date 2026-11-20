@@ -20,6 +20,12 @@ export const HOST_DOOR_REASONS = [
    * computer's local door) takes its owner's sign-in now.
    */
   "owner_sign_in",
+  /**
+   * The open carried {@link NO_HOST_TOKEN_PROBE} on a personal computer's local
+   * door, and the computer has no owner yet. Its `reason` is the host's own
+   * sentence for the person.
+   */
+  "not_provisioned",
 ] as const;
 
 export type HostDoorReason = (typeof HOST_DOOR_REASONS)[number];

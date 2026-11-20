@@ -510,6 +510,7 @@ async function requestWithHostToken<
               : null;
           },
           releasedHosts: releasedSignOn.hosts,
+          surfacesNotProvisioned: true,
         }),
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),

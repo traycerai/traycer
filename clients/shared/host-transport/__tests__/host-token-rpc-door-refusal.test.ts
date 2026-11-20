@@ -170,6 +170,12 @@ const RECOGNISED_RPC_DOOR_OUTCOMES: Record<HostDoorReason, RpcDoorOutcome> = {
     expectedRequests: 1,
     refuseAgainAfterMint: false,
   },
+  not_provisioned: {
+    expectedKind: null,
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
 };
 
 const RPC_DOOR_CASES: readonly RpcDoorReasonCase[] = [

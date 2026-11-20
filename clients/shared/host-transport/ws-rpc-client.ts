@@ -285,6 +285,12 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    * released is sent the sign-in first. Without it, this client keeps its own.
    */
   readonly releasedHosts?: ReleasedHostMemory;
+  /**
+   * A probe answered `not_provisioned` fails with the host's own refusal, whose
+   * reason is the host's sentence for the person; otherwise with the same error
+   * as no token at all. The command line prints it, as a released one did.
+   */
+  readonly surfacesNotProvisioned?: boolean;
 }
 
 /**
@@ -391,6 +397,7 @@ export class WsRpcClient<
   /** Authorities carrying `NO_HOST_TOKEN_PROBE` in place of a host-only token that cannot be had. */
   private readonly probeAuthorities = new WeakSet<HostRequestAuthority>();
   private readonly releasedHosts: ReleasedHostMemory;
+  private readonly surfacesNotProvisioned: boolean;
   /** Authorities carrying the sign-in only because `releasedHosts` remembers the host as released. */
   private readonly rememberedAuthorities = new WeakSet<HostRequestAuthority>();
   /** A remembered released host named its reason: it was updated, and the door has not heard of it. */
@@ -410,6 +417,7 @@ export class WsRpcClient<
     this.hostBearerFor = options.hostBearerFor;
     this.releasedSignOnFor = options.releasedSignOnFor;
     this.releasedHosts = options.releasedHosts ?? createReleasedHostMemory();
+    this.surfacesNotProvisioned = options.surfacesNotProvisioned === true;
     this.registry = options.registry;
     this.requestIdProvider = options.requestId;
     this.webSocketFactory = options.webSocketFactory;
@@ -523,10 +531,10 @@ export class WsRpcClient<
         ) {
           // Only a refusal naming its reason is a current host's answer; a
           // transport failure or any other answer leaves the next call to probe again.
-          if (
-            cause.fatalDetails === null ||
-            readDoorReason(cause.fatalDetails.doorReason) === "absent"
-          )
+          if (cause.fatalDetails === null) throw cause;
+          const reason = readDoorReason(cause.fatalDetails.doorReason);
+          if (reason === "absent") throw cause;
+          if (reason === "not_provisioned" && this.surfacesNotProvisioned)
             throw cause;
           throw noHostTokenError(this.requestIdProvider(), method);
         }

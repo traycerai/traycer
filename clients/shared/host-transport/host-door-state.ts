@@ -153,6 +153,8 @@ const DOOR_REASON_STATES: Readonly<
   session_revoked: null,
   // Answered by the owner's sign-in on the next dial.
   owner_sign_in: null,
+  // Given only to the probe, which raises no state.
+  not_provisioned: null,
 };
 
 export function hostRefusalOf(error: HostRpcError): FatalErrorDetails | null {
