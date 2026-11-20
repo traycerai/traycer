@@ -360,6 +360,27 @@ window.addEventListener("unhandledrejection", (event) => {
       : String(event.reason),
   );
 });
+/** What one React commit rendered; see the counting hook in the html. */
+interface CommitCount {
+  readonly rows: number;
+  readonly mounted: number;
+  readonly panel: number;
+}
+interface CommitLog {
+  on: boolean;
+  row: string;
+  panel: string;
+  commits: CommitCount[];
+}
+function isCommitLog(value: unknown): value is CommitLog {
+  return typeof value === "object" && value !== null && "commits" in value;
+}
+function commitLog(): CommitLog {
+  const log: unknown = Reflect.get(window, "__chatTreeCommits");
+  if (!isCommitLog(log))
+    throw new Error("the page's commit counter is missing");
+  return log;
+}
 const probe = {
   ready: false,
   errors,
@@ -371,6 +392,20 @@ const probe = {
   viewport: () => {
     const box = scroller().getBoundingClientRect();
     return { top: box.top, bottom: box.bottom };
+  },
+  /** Counts each commit's renders of the `row` and `panel` components from now on. */
+  startCommitCount: (row: string, panel: string) => {
+    const log = commitLog();
+    log.commits.length = 0;
+    log.row = row;
+    log.panel = panel;
+    log.on = true;
+  },
+  /** The commits counted since `startCommitCount`, counting off. */
+  stopCommitCount: (): CommitCount[] => {
+    const log = commitLog();
+    log.on = false;
+    return [...log.commits];
   },
   seedCloudChats,
   recordCloud: (specs: readonly CloudSpec[], frames: number) =>
