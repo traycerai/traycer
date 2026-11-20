@@ -184,7 +184,7 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
   return (
     <ChatTreeVirtualContext.Provider value={api}>
       <VirtualRowPinContext.Provider value={pinStore}>
-        <ChatTreeListEffects />
+        <ChatTreeListEffects tabId={tabId} />
         <ul
           ref={listRef}
           role="tree"
@@ -214,8 +214,8 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
 }
 
 /** Runs the effects seam with the live API, as its own leaf. */
-function ChatTreeListEffects(): null {
-  useChatTreeListEffects(useChatTreeVirtual());
+function ChatTreeListEffects(props: { readonly tabId: string }): null {
+  useChatTreeListEffects(useChatTreeVirtual(), props.tabId);
   return null;
 }
 
