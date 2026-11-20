@@ -1,9 +1,22 @@
 import { SandboxArtifactServer } from "../app/sandbox-artifact-server";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
+import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
 import { registerSandboxArtifactIpc } from "./sandbox-artifact-ipc";
 import type { BrowserDesktopControl } from "../browser-sessions/browser-desktop-control";
-import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import {
+  app,
+  ipcMain,
+  shell,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+} from "electron";
 import { randomUUID } from "node:crypto";
-import { config } from "../../config";
+import { join } from "node:path";
+import { canRecordSoundtrack, config } from "../../config";
 import { describeLogError, log } from "../app/logger";
 import { resolveIapKeyFilePath } from "../auth/iap-proxy-token";
 import type { DesktopTrayController } from "../tray/tray";
@@ -60,6 +73,7 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
   TokenStoreChange,
+  SignInSaveResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import {
   DesktopAuthSession,
@@ -114,6 +128,11 @@ import {
 import type { LocalHostCapability } from "../../ipc-contracts/host-lifecycle-types";
 import { registerPowerIpc } from "./power-ipc";
 import { registerSoundtrackIpc } from "./soundtrack-ipc";
+import {
+  registerSoundtrackRecordingIpc,
+  type FinishSoundtrackRecordings,
+} from "./soundtrack-recording-ipc";
+import { SessionRecordings } from "../soundtrack/session-recordings";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
@@ -288,10 +307,12 @@ export interface IpcDesktopAuthSession {
  */
 export interface IpcAuthTokenStore {
   get(): Promise<StoredCredentials | null>;
+  getSignInStorageLow(): boolean;
+  subscribeSignInStorageLow(listener: (low: boolean) => void): () => void;
   signIn(
     tokens: StoredAuthTokens,
     identity: StoredCredentialsIdentity,
-  ): Promise<void>;
+  ): Promise<SignInSaveResult>;
   rotate(expected: {
     readonly userId: string;
     readonly token: string;
@@ -565,6 +586,8 @@ export interface RunnerIpcOptions {
   // Absent in tests / the single-window shell: defaults to a null store. The
   // real desktop startup always injects a `FileTokenStore`.
   readonly authTokenStore: IpcAuthTokenStore | undefined;
+  /** The person's host-only tokens; tests that leave it out get an in-memory table. */
+  readonly hostTokens?: HostTokenSource;
   readonly tray: DesktopTrayController | null;
   readonly window: IpcManagedWindow;
   readonly zoomController: IpcZoomController | undefined;
@@ -577,6 +600,8 @@ export interface RunnerIpcRegistryOptions {
   readonly authnBaseUrl: string;
   readonly authRedirectUri: string | null;
   readonly authTokenStore: IpcAuthTokenStore | undefined;
+  /** The person's host-only tokens; tests that leave it out get an in-memory table. */
+  readonly hostTokens?: HostTokenSource;
   readonly tray: DesktopTrayController | null;
   readonly windowRegistry: IpcWindowRegistry;
   readonly ownership: IpcEpicWindowOwnership;
@@ -628,6 +653,7 @@ export class RunnerIpcBridge {
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly authTokenStore: IpcAuthTokenStore;
+  readonly hostTokens: HostTokenSource;
   readonly support: IpcSupportService;
   readonly zoomController: IpcZoomController;
   readonly quitState: IpcShellQuitState;
@@ -691,6 +717,7 @@ export class RunnerIpcBridge {
   private browserViewManager: BrowserViewManager | null = null;
   private browserSessions: BrowserSessionsRegistry | null = null;
   private browserPreparation: BrowserDesktopControl | null = null;
+  private finishRecordings: FinishSoundtrackRecordings | null = null;
 
   readonly sandboxArtifacts: SandboxArtifactServer;
 
@@ -702,6 +729,20 @@ export class RunnerIpcBridge {
       );
     this.options = options;
     this.authTokenStore = options.authTokenStore ?? new NullAuthTokenStore();
+    this.hostTokens =
+      options.hostTokens ??
+      createHostTokenSource({
+        persistence: createMemoryHostTokenPersistence(),
+        mint: (hostId, signInToken, signal) =>
+          mintHostTokenViaHttp(
+            options.authnBaseUrl,
+            hostId,
+            signInToken,
+            signal,
+          ),
+        signIn: null,
+        now: Date.now,
+      });
     if ("windowRegistry" in options) {
       this.windowRegistry = options.windowRegistry;
       this.ownership = options.ownership;
@@ -779,10 +820,25 @@ export class RunnerIpcBridge {
       keyFilePath: resolveIapKeyFilePath(process.resourcesPath),
       audience: config.iapAudience,
       set: "team",
+      manifestVersion: 2,
       fetch: globalThis.fetch,
       now: Date.now,
       warn: (message) => log.warn(message),
     });
+    this.finishRecordings = registerSoundtrackRecordingIpc(
+      this,
+      canRecordSoundtrack
+        ? new SessionRecordings({
+            folder: () => join(app.getPath("userData"), "soundtrack-sessions"),
+            now: () => new Date(),
+            newId: randomUUID,
+            reveal: (path) => {
+              shell.showItemInFolder(path);
+            },
+            warn: (message) => log.warn(message),
+          })
+        : null,
+    );
   }
 
   /**
@@ -1034,6 +1090,14 @@ export class RunnerIpcBridge {
    */
   async captureFinalBrowserState(): Promise<void> {
     await this.browserSessions?.captureFinalPrimaryProfiles(null);
+  }
+
+  /**
+   * Finishes every recording of the music before the quit takes its channels
+   * down, waiting no longer than `deadlineMs`.
+   */
+  finishSoundtrackRecordings(deadlineMs: number): Promise<void> {
+    return this.finishRecordings?.(deadlineMs) ?? Promise.resolve();
   }
 
   notifySystemResumed(): void {
@@ -1665,16 +1729,29 @@ class NeverQuittingShellState implements IpcShellQuitState {
 // caller (tests) that omits `authTokenStore`: signed-out, writes no-op. The real
 // desktop startup always injects a `FileTokenStore`.
 class NullAuthTokenStore implements IpcAuthTokenStore {
+  subscribeSignInStorageLow(): () => void {
+    return () => undefined;
+  }
+
+  getSignInStorageLow(): boolean {
+    return false;
+  }
+
   get(): Promise<StoredCredentials | null> {
     return Promise.resolve(null);
   }
 
-  signIn(): Promise<void> {
-    return Promise.resolve();
+  signIn(): Promise<SignInSaveResult> {
+    return Promise.resolve("saved");
   }
 
   rotate(): Promise<TokenRotateResult> {
-    return Promise.resolve({ outcome: "deleted", pair: null, rejection: null });
+    return Promise.resolve({
+      outcome: "deleted",
+      pair: null,
+      rejection: null,
+      diskPressure: null,
+    });
   }
 
   delete(): Promise<void> {

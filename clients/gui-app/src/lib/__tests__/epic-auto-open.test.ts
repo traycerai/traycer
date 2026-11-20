@@ -150,6 +150,28 @@ describe("resolveAutoOpenTarget", () => {
     },
   );
 
+  it.each(["html", "canvas", "file"] as const)(
+    "does not land on a %s artifact when nothing was requested",
+    (type) => {
+      const records = [record({ id: "node-1", name: "Node One", type })];
+
+      const target = resolveAutoOpenTarget(records, null, null, NO_RECENCY);
+
+      expect(target).toBeNull();
+    },
+  );
+
+  it("lands on the chat past an html artifact that heads the tree", () => {
+    const records = [
+      record({ id: "html-1", name: "Page", type: "html" }),
+      record({ id: "chat-1", name: "Chat One", type: "chat" }),
+    ];
+
+    const target = resolveAutoOpenTarget(records, null, null, NO_RECENCY);
+
+    expect(target?.id).toBe("chat-1");
+  });
+
   it("ignores recency carried by a node that cannot be opened", () => {
     const records = [
       record({ id: "chat-1", name: "Chat One", type: "chat" }),

@@ -390,6 +390,7 @@ function SampleAgentsBody(): ReactNode {
               badges={
                 <>
                   <ResourceUsageChip
+                    app={{ hostCpuCount: 1 }}
                     {...agent.resources}
                     pssBytes={null}
                     metrics={resourceMetrics}

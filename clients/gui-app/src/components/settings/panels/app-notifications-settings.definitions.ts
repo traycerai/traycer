@@ -1,5 +1,6 @@
 import {
-  alwaysAvailable,
+  isSetPiecesRowAvailable,
+  isSoundtrackRecordingRowAvailable,
   isPlaybackControlsRowAvailable,
   isSoundtrackRowAvailable,
 } from "@/lib/settings/settings-availability";
@@ -7,60 +8,14 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 
 // The Sounds page. Its id still says notifications because ids are a
 // compatibility surface (see the section table in `lib/settings-sections.ts`).
+// It holds only the soundtrack - the chimes are on Alerts - so the page exists
+// only where the soundtrack does.
 export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
   page: {
-    availableWhen: alwaysAvailable,
+    availableWhen: isSoundtrackRowAvailable,
     label: "Sounds",
-    description: "Which chime plays for each kind of alert.",
-    keywords: ["sound", "chime", "audio", "beep", "volume", "mute", "ding"],
-  },
-  // The chime card shows no heading — the page already names it — so it is not
-  // a destination of its own; it and its rows fold into the page.
-  chimes: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "Chimes",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  chimeNeedsAction: {
-    kind: "row",
-    group: "chimes",
-    search: { contributesTo: "page" },
-    label: "Needs action",
-    description: "Approvals and interviews.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  chimeFailure: {
-    kind: "row",
-    group: "chimes",
-    search: { contributesTo: "page" },
-    label: "Failure",
-    description: "Errored turns, stalls, crashes, and rate limits.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  chimeDone: {
-    kind: "row",
-    group: "chimes",
-    search: { contributesTo: "page" },
-    label: "Done",
-    description: "Completed or intentionally stopped turns.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  chimeInfo: {
-    kind: "row",
-    group: "chimes",
-    search: { contributesTo: "page" },
-    label: "Info",
-    description:
-      "Sharing, comments, access changes, and other informational notifications.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
+    description: "Music while you work.",
+    keywords: ["sound", "audio", "volume", "music"],
   },
   soundtrack: {
     kind: "group",
@@ -89,6 +44,15 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
     availableWhen: isPlaybackControlsRowAvailable,
     keywords: ["music", "skip"],
   },
+  soundtrackSetPieces: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-set-pieces" },
+    label: "Set pieces",
+    description: "Turn off to hear and record only generative music.",
+    availableWhen: isSetPiecesRowAvailable,
+    keywords: ["music", "composed", "generative", "recording"],
+  },
   soundtrackVolume: {
     kind: "row",
     group: "soundtrack",
@@ -106,5 +70,33 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
     description: "What the music changes with.",
     availableWhen: isSoundtrackRowAvailable,
     keywords: ["music", "activity"],
+  },
+  soundtrackRecording: {
+    kind: "row",
+    group: "soundtrack",
+    search: { anchor: "sounds-soundtrack-recording" },
+    label: "Record session",
+    description: "Saves the music, and why it changed, to this computer.",
+    availableWhen: isSoundtrackRecordingRowAvailable,
+    keywords: ["recording", "music", "capture", "save", "audio file"],
+  },
+  // Drawn under the switch, and found through it.
+  soundtrackRecordingLimit: {
+    kind: "row",
+    group: "soundtrack",
+    search: { contributesTo: "soundtrackRecording" },
+    label: "Stop after",
+    description: null,
+    availableWhen: isSoundtrackRecordingRowAvailable,
+    keywords: ["length", "duration", "limit"],
+  },
+  soundtrackRecordingQuality: {
+    kind: "row",
+    group: "soundtrack",
+    search: { contributesTo: "soundtrackRecording" },
+    label: "Quality",
+    description: "Compressed uses about 60 MB an hour, lossless about 700 MB.",
+    availableWhen: isSoundtrackRecordingRowAvailable,
+    keywords: ["lossless", "compressed", "wav", "size"],
   },
 });

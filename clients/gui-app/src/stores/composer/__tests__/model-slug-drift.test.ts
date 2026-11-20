@@ -49,8 +49,10 @@ function catalog(models: ReadonlyArray<ModelOption>): ComposerToolbarCatalog {
       },
     ],
     modelsHarnessId: "claude",
+    modelsProfileId: null,
     models,
     modelsLoaded: true,
+    modelsFailed: false,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
     ultracodeCarried: false,
@@ -258,6 +260,7 @@ describe("composer toolbar model slug drift", () => {
     store.getState().setCatalog({
       ...catalog([model("default", null, "Default")]),
       modelsLoaded: false,
+      modelsFailed: false,
     });
 
     expect(store.getState().selection.modelSlug).toBe("remembered-slug");

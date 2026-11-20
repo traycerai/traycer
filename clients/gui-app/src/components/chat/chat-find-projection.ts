@@ -825,7 +825,7 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
       return [
         normalizeSearchableText(
           [
-            "Workspace setup",
+            "Folder setup",
             segment.model.aggregate.state,
             ...segment.model.workspaces.flatMap((workspace) => [
               workspace.label,

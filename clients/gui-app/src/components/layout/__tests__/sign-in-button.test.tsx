@@ -45,6 +45,7 @@ import {
 } from "@/lib/auth/link-login-deep-link-routing";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { DISK_FULL_SIGN_IN_MESSAGE } from "@traycer-clients/shared/auth/sign-in-storage";
 import { useLinkLoginDeepLinkOutcomeStore } from "@/stores/auth/link-login-deep-link-outcome-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
@@ -339,6 +340,7 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
 
   beforeEach(() => {
     useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setSignInStorageLow(false);
     restoreFetch = installFetch(() =>
       Promise.resolve(new Response(null, { status: 401 })),
     );
@@ -810,6 +812,7 @@ describe("<SignInButton />", () => {
 
   beforeEach(() => {
     useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setSignInStorageLow(false);
     useDesktopDialogStore.setState({
       activeDialog: null,
       reportIssueAvailable: false,
@@ -827,6 +830,7 @@ describe("<SignInButton />", () => {
   afterEach(() => {
     cleanup();
     useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setSignInStorageLow(false);
     useDesktopDialogStore.setState({
       activeDialog: null,
       reportIssueAvailable: false,
@@ -1142,6 +1146,41 @@ describe("<SignInButton />", () => {
       result.cleanupClient();
     }
   });
+
+  it.each([
+    { code: "ENOSPC", copy: DISK_FULL_SIGN_IN_MESSAGE },
+    { code: "EDQUOT", copy: DISK_FULL_SIGN_IN_MESSAGE },
+    { code: "EACCES", copy: "Sign-in failed - please try again." },
+  ])(
+    "shows the correct interactive save error for $code",
+    async ({ code, copy }) => {
+      restoreFetch();
+      restoreFetch = installFetch(() => okWithProfile());
+      const host = buildHost();
+      host.tokenStore.signIn = () =>
+        Promise.reject(
+          Object.assign(new Error("credentials write failed"), { code }),
+        );
+      const result = mountSignInButton(host, "compact");
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("runtime-fallback")).toBeNull();
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      await waitFor(() => expect(host.deviceFlow.startCalls).toBe(1));
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "interactive-save-error-token",
+        refreshToken: "interactive-save-error-refresh",
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("signin-error").textContent).toContain(copy);
+      });
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      result.cleanupClient();
+    },
+  );
 
   it("renders an expired approval status without the waiting spinner", async () => {
     const cleanupClient = mountDeviceCodeProgress(buildHost());

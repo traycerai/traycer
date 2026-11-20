@@ -11,7 +11,6 @@ import {
   sandboxGrantViews,
   sandboxHasBrokeredGrant,
   sandboxRouteAddresses,
-  sandboxSecretsSummary,
 } from "@/lib/sandboxes/sandbox-grants-view";
 
 function grant(overrides: Partial<SandboxGrant>): SandboxGrant {
@@ -343,63 +342,6 @@ describe("sandboxGrantViews", () => {
     expect(views.map((view) => view.secretName)).toEqual(["A", "B"]);
     expect(views[0].routes[0].readiness).toBe("pending");
     expect(views[1].routes[0].readiness).toBe("ready");
-  });
-});
-
-describe("sandboxSecretsSummary", () => {
-  it("does not say all working when a grant has no routes", () => {
-    expect(
-      sandboxSecretsSummary(summary([grant({ routes: [] })]), [], "ready"),
-    ).toEqual({ label: "1 secret", notWorking: false });
-  });
-
-  it("names the failing secret in the singular when it is the only one", () => {
-    expect(
-      sandboxSecretsSummary(
-        summary([grant({})]),
-        [readiness("route-1", "unavailable", "grant_missing")],
-        "degraded",
-      ),
-    ).toEqual({ label: "1 of 1 secret not working", notWorking: true });
-  });
-
-  it("agrees the noun with the total, not the failure count", () => {
-    const grants = [
-      grant({ secretName: "A" }),
-      grant({
-        secretName: "B",
-        routes: [
-          {
-            route: "route-b",
-            destination: "b.internal",
-            port: 1,
-            unready: null,
-          },
-        ],
-      }),
-      grant({
-        secretName: "C",
-        routes: [
-          {
-            route: "route-c",
-            destination: "c.internal",
-            port: 2,
-            unready: null,
-          },
-        ],
-      }),
-    ];
-    expect(
-      sandboxSecretsSummary(
-        summary(grants),
-        [
-          readiness("route-1", "unavailable", "grant_missing"),
-          readiness("route-b", "ready", null),
-          readiness("route-c", "ready", null),
-        ],
-        "degraded",
-      ),
-    ).toEqual({ label: "1 of 3 secrets not working", notWorking: true });
   });
 });
 

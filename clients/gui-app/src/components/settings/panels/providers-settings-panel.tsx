@@ -1,3 +1,4 @@
+import { useAccountProfileSetEnabledForClient } from "@/hooks/providers/use-account-profile-set-enabled";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import {
   createContext,
@@ -20,10 +21,10 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import {
   SettingsDetailHeader,
   SettingsMasterDetail,
+  SettingsMasterSelect,
 } from "@/components/settings/settings-master-detail";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { ProviderCatalogTimeoutGroup } from "@/components/settings/panels/provider-catalog-timeout-group";
@@ -38,11 +39,11 @@ import { Button } from "@/components/ui/button";
 import {
   isProviderSettingsUnreadableError,
   PROVIDER_SETTINGS_UNREADABLE_COPY,
+  PROVIDER_STATE_UNREADABLE_COPY,
 } from "@/lib/providers/provider-settings-unreadable-error";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import { Plus } from "lucide-react";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useProvidersSettingsFileStatus } from "@/hooks/providers/use-providers-settings-file-status-query";
@@ -51,10 +52,7 @@ import {
   useHostSupportsMethod,
 } from "@/hooks/host/use-host-supports-method";
 import { catalogLineKnowsAutoMode } from "@/components/home/data/landing-options";
-import {
-  useProviderProfileEnablementPending,
-  useProvidersSetProfileEnabledForClient,
-} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
+import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useHostClient } from "@/lib/host";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
@@ -68,16 +66,9 @@ import {
   usePersonalHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
-import { LocalRowNote } from "@/components/settings/environment/local-row-note";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
-import {
-  ambientLoginConfigured,
-  providerRailStateWord,
-} from "./provider-rail-state-word";
-import {
-  isProviderAmbientAuthenticated,
-  isProviderAmbientSignedOut,
-} from "@/lib/providers/provider-ambient-auth";
+import { providerRailStateWord } from "./provider-rail-state-word";
+
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -112,7 +103,11 @@ import { providerRowUnreadableCopy } from "./provider-row-reset-copy";
 import {
   defaultSelectedProfileId,
   profileCommitId,
+  removedProfilesForProvider,
+  resolvedProfileRow,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
+import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
 import { providerPackPreparingForProvider } from "@/components/providers/provider-pack-readiness";
 import { providerCanStartProfileOauth } from "@/components/providers/provider-signin-availability";
 import { ProviderApiKeySection } from "./provider-api-key-section";
@@ -120,7 +115,6 @@ import { ProviderRailControls } from "./provider-rail-controls";
 import {
   DEFAULT_PROVIDER_RAIL_VIEW,
   filterProviderRail,
-  isProviderRailViewActive,
   type ProviderRailView,
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
@@ -132,7 +126,6 @@ import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
-  providerKeyTab,
   providerTabInputs,
   supportedTabsFor as resolveSupportedTabs,
   tabsForView,
@@ -200,27 +193,18 @@ function initialActiveProviderId(
 /**
  * The tabs `state` shows on the page `view` draws.
  *
- * The key has one place. When Profiles & Limits is also supported, the key
- * is that tab's first block and Account is not shown. A key provider with
- * no usage tab (amp) keeps Account.
+ * The key has one place: Account, whenever this provider takes a key.
+ * Profiles & Limits stays the profiles and usage tab and does not take the key.
  */
 function viewTabs(
   state: ProviderCliState,
   permissionsTab: boolean,
   view: ProvidersPanelView,
 ): readonly ProviderTabKey[] {
-  const tabs = tabsForView(
+  return tabsForView(
     resolveSupportedTabs(providerTabInputs(state, permissionsTab)),
     view,
   );
-  const keyTab = providerKeyTab({
-    apiKeySupported: state.apiKey.supported,
-    usageAdvertised: state.nativeCapabilities.supportedTabs.includes("usage"),
-  });
-  if (keyTab !== null && keyTab.tab === "usage") {
-    return tabs.filter((tab) => tab !== "account");
-  }
-  return tabs;
 }
 
 /** Which page this panel is drawn as; Providers unless a section says so. */
@@ -325,15 +309,31 @@ function resolveTabForProvider(
 
 function initialSelectedProfileId(
   profiles: readonly ProviderProfile[],
+  removedProfiles: readonly RemovedProviderProfile[],
   focusProfileId: string | null,
 ): string | null {
   if (focusProfileId !== null) {
-    const focused = profiles.find(
-      (profile) => profile.profileId === focusProfileId,
+    const focused = focusedSettingsProfile(
+      profiles,
+      removedProfiles,
+      focusProfileId,
     );
-    if (focused !== undefined) return profileCommitId(focused);
+    if (focused !== null) return profileCommitId(focused);
   }
   return defaultSelectedProfileId(profiles);
+}
+
+/** A removed or unknown id focuses nothing; the page opens on its first row. */
+function focusedSettingsProfile(
+  profiles: readonly ProviderProfile[],
+  removedProfiles: readonly RemovedProviderProfile[],
+  focusProfileId: string,
+): ProviderProfile | null {
+  return resolvedProfileRow(
+    profiles,
+    removedProfiles,
+    focusProfileId === AMBIENT_PROFILE_ID_SENTINEL ? null : focusProfileId,
+  );
 }
 
 // NOTE: the per-tab "has content" dot that used to render here is gone on
@@ -625,9 +625,6 @@ function ProvidersSettingsPanelInner({
           hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
         />
-        {/* The Link dialog: mounted once, inside the scoped
-            host, so its calls go to the host this page shows. */}
-        <ProviderLinkDialog />
       </HostScopeGate>
     </SettingsPanelShell>
   );
@@ -854,7 +851,7 @@ function ProvidersPanelBody({
     }
     return (
       <div className="flex flex-wrap items-center gap-2 px-6 py-8 text-ui-sm text-destructive">
-        Couldn't load provider state.
+        {PROVIDER_STATE_UNREADABLE_COPY}
         {retryButton}
         <ReportIssueAction
           context={createReportIssueContext({
@@ -1143,13 +1140,6 @@ function ProvidersRailLayout({
     () => filterProviderRail(orderedProviders, railView),
     [orderedProviders, railView],
   );
-  const railFiltered = isProviderRailViewActive(railView);
-  // One disclosure for both widths. Both lists stay mounted: the master-detail
-  // shell shows one with `md:` and hides the other, including on a wide window
-  // of the installed phone layout, where the viewport hook and that class
-  // would disagree.
-  const [addProviderOpen, setAddProviderOpen] = useState(false);
-
   const onSelectProvider = (providerId: ProviderId): void => {
     setInitialFocus({ harnessId: null, profileId: null, startSignIn: false });
     setActiveId(providerId);
@@ -1166,27 +1156,28 @@ function ProvidersRailLayout({
     // viewport: on shorter screens it shrinks to fit the modal instead of
     // overflowing it. Below `md` the card is content-sized and the settings
     // surface scrolls, so there is no height to fill and none is claimed.
-    // Below md the same wrapping list stacks above the detail pane. It lists
-    // `orderedProviders`, not the rail's filtered `visibleProviders` — search
-    // is a pointer affordance and must never narrow what a phone can reach.
-    // A search that is active shows its matches flat; an idle rail groups
-    // unconfigured providers behind Add provider.
+    // Below md the rail collapses into one full-width select of every
+    // provider. It lists `orderedProviders`, not the rail's filtered
+    // `visibleProviders` — search is a pointer affordance and must never
+    // narrow what a phone can reach. The detail pane stays the desktop one.
     <SettingsMasterDetail
-      railLabel="Configured providers"
+      railLabel="Providers"
       mobileSelect={
-        <nav
-          aria-label="Configured providers"
-          className="flex min-w-0 flex-col gap-1"
-        >
-          <HostProviderRailList
-            providers={orderedProviders}
-            activeId={active.providerId}
-            grouped
-            addOpen={addProviderOpen}
-            onToggleAdd={() => setAddProviderOpen((open) => !open)}
-            onSelect={onSelectProvider}
-          />
-        </nav>
+        <SettingsMasterSelect
+          label="Provider"
+          value={active.providerId}
+          options={orderedProviders.map((provider) => ({
+            value: provider.providerId,
+            label: PROVIDER_DISPLAY_NAMES[provider.providerId],
+            icon: (
+              <HarnessIcon
+                harnessId={providerIdToGuiHarnessId(provider.providerId)}
+              />
+            ),
+            trailing: null,
+          }))}
+          onSelect={onSelectProvider}
+        />
       }
       rail={
         // The search row is a pinned SIBLING of the scroll box rather than the
@@ -1208,9 +1199,6 @@ function ProvidersRailLayout({
               <HostProviderRailList
                 providers={visibleProviders}
                 activeId={active.providerId}
-                grouped={!railFiltered}
-                addOpen={addProviderOpen}
-                onToggleAdd={() => setAddProviderOpen((open) => !open)}
                 onSelect={onSelectProvider}
               />
             )}
@@ -1237,70 +1225,19 @@ function ProvidersRailLayout({
   );
 }
 
-/**
- * A provider already has something on this computer: it is off, it has a
- * profile or a key, its own login has a verdict, or that check is still
- * running. Anything else (nothing known, or a check that did not answer)
- * sits behind Add provider.
- */
-function hostProviderConfigured(state: ProviderCliState): boolean {
-  if (!state.enabled) return true;
-  if (state.profiles.some((profile) => profile.kind === "managed")) return true;
-  if (state.apiKey.configured) return true;
-  if (isProviderAmbientSignedOut(state)) return true;
-  if (
-    state.providerId !== "traycer" &&
-    (isProviderAmbientAuthenticated(state) || ambientLoginConfigured(state))
-  ) {
-    return true;
-  }
-  if (state.authPending) return true;
-  return false;
-}
-
-function managedProfileCountWord(managed: number): string | null {
-  if (managed === 0) return null;
-  if (managed === 1) return "1 profile";
-  return `${managed} profiles`;
-}
-
-/** Profile count, plus off / signed out / not checked when that is the rail word. */
+/** The rail's one word from `providerRailStateWord`. */
 function hostRailSubtitle(state: ProviderCliState): string | null {
-  const managed = state.profiles.filter(
-    (profile) => profile.kind === "managed",
-  ).length;
-  const count = managedProfileCountWord(managed);
-  const word = providerRailStateWord(state);
-  const standing =
-    word === "off" || word === "signed out" || word === "not checked"
-      ? word
-      : null;
-  if (count !== null && standing !== null) return `${count} · ${standing}`;
-  return count ?? standing;
+  return providerRailStateWord(state);
 }
 
 function HostProviderRailList(props: {
   readonly providers: readonly ProviderCliState[];
   readonly activeId: ProviderId;
-  readonly grouped: boolean;
-  readonly addOpen: boolean;
-  readonly onToggleAdd: () => void;
   readonly onSelect: (providerId: ProviderId) => void;
 }): ReactNode {
-  const primary = props.grouped
-    ? props.providers.filter((state) => hostProviderConfigured(state))
-    : props.providers;
-  const unconfigured = props.grouped
-    ? props.providers.filter((state) => !hostProviderConfigured(state))
-    : [];
-  const selectedFolded =
-    unconfigured.find((state) => state.providerId === props.activeId) ?? null;
-  const behindAdd = unconfigured.filter(
-    (state) => state.providerId !== props.activeId,
-  );
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      {primary.map((state) => (
+      {props.providers.map((state) => (
         <HostProviderRailButton
           key={state.providerId}
           state={state}
@@ -1308,38 +1245,6 @@ function HostProviderRailList(props: {
           onSelect={props.onSelect}
         />
       ))}
-      {selectedFolded === null ? null : (
-        <HostProviderRailButton
-          state={selectedFolded}
-          selected
-          onSelect={props.onSelect}
-        />
-      )}
-      {behindAdd.length === 0 ? null : (
-        <button
-          type="button"
-          aria-expanded={props.addOpen}
-          className={hostRailButtonClass(false)}
-          onClick={props.onToggleAdd}
-        >
-          <span className="flex min-w-0 items-start gap-1.5">
-            <Plus className="mt-0.5 size-3.5 shrink-0" />
-            <span className="min-w-0 whitespace-normal break-words">
-              Add provider
-            </span>
-          </span>
-        </button>
-      )}
-      {props.addOpen
-        ? behindAdd.map((state) => (
-            <HostProviderRailButton
-              key={state.providerId}
-              state={state}
-              selected={false}
-              onSelect={props.onSelect}
-            />
-          ))
-        : null}
     </div>
   );
 }
@@ -1356,6 +1261,8 @@ function HostProviderRailButton(props: {
       type="button"
       aria-current={props.selected ? "true" : undefined}
       onClick={() => props.onSelect(props.state.providerId)}
+      data-settings-provider-id={props.state.providerId}
+      data-settings-provider-enabled={props.state.enabled}
       className={hostRailButtonClass(props.selected)}
     >
       <span className="flex min-w-0 items-start gap-2">
@@ -1563,11 +1470,20 @@ function ProviderDetail({
   // keys `<ProviderDetail>` by `active.providerId`, remounting this component
   // (and this `useState`'s lazy initializer) whenever the active provider
   // changes.
+  const removedProfiles = removedProfilesForProvider(
+    useProvidersList({ enabled: true, subscribed: true }).data,
+    providerId,
+  );
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
-    () => initialSelectedProfileId(state.profiles, initialProfileId),
+    () =>
+      initialSelectedProfileId(
+        state.profiles,
+        removedProfiles,
+        initialProfileId,
+      ),
   );
   const setEnabled = useProvidersSetEnabled();
-  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+  const setProfileEnabled = useAccountProfileSetEnabledForClient(
     hostClient,
     providerId,
   );
@@ -1622,9 +1538,11 @@ function ProviderDetail({
   const focusedProfile =
     initialProfileId === null
       ? null
-      : (state.profiles.find(
-          (profile) => profile.profileId === initialProfileId,
-        ) ?? null);
+      : focusedSettingsProfile(
+          state.profiles,
+          removedProfiles,
+          initialProfileId,
+        );
   const shouldStartInReauth =
     initialSignIn &&
     focusedProfile !== null &&
@@ -1716,13 +1634,11 @@ function ProviderDetail({
         }
       />
       <div className="flex flex-1 flex-col md:min-h-0">
-        {/* Nothing renders between the provider header and the tab rail but
-            the Local row's note, which says whose settings these are. The
+        {/* Nothing renders between the provider header and the tab rail. The
             key is the first block of Profiles & Limits when that tab exists,
             and the whole body of Account when that is the only key home.
             The rail is PINNED: a block parked here would occupy fixed height
             at the top of the pane forever, not just until you scrolled. */}
-        <LocalRowNote />
         <Tabs
           value={activeTab}
           onValueChange={(value) => {
@@ -1847,6 +1763,8 @@ function ProviderDetail({
       </div>
       {addProfileOpen ? (
         <AddProviderProfileDialog
+          target={null}
+          targetResult={null}
           key={state.providerId}
           state={state}
           client={hostClient}
@@ -1932,17 +1850,11 @@ function AccountManagedCredentialsLine(): ReactNode {
   );
 }
 
-/** The Env tab: a provider with a key sends its own key variable to that key's tab. */
 function ProviderEnvTab(props: {
   readonly state: ProviderCliState;
-  readonly onActiveTabChange: (tab: ProviderTabKey) => void;
 }): ReactNode {
-  const { state, onActiveTabChange } = props;
+  const { state } = props;
   const configurationKey = useConfigurationKey();
-  const keyTab = providerKeyTab({
-    apiKeySupported: state.apiKey.supported,
-    usageAdvertised: state.nativeCapabilities.supportedTabs.includes("usage"),
-  });
   return (
     <ProviderEnvOverridesSection
       // Keyed by configuration and provider: a row's draft stays with the
@@ -1951,14 +1863,6 @@ function ProviderEnvTab(props: {
       providerId={state.providerId}
       overrides={state.envOverrides}
       envOverrideScope={state.nativeCapabilities.envOverrideScope}
-      keyHome={
-        keyTab === null
-          ? null
-          : {
-              label: keyTab.label,
-              open: () => onActiveTabChange(keyTab.tab),
-            }
-      }
     />
   );
 }
@@ -1976,46 +1880,15 @@ function ProviderOffHint(props: {
 }
 
 /**
- * The key on Profiles & Limits. The pane's own inert gate spares this tab for
- * the profile controls, which the key is not, so it takes the Account tab's
- * gate itself: out of reach and dimmed while the provider is off.
+ * Where a sandbox says credentials live, on a provider that has no Account
+ * tab to say it. A provider with a key says it on Account. Any other host
+ * renders nothing.
  */
-function ProviderUsageKeySection(props: {
+function ProviderUsageCredentialsNote(props: {
   readonly state: ProviderCliState;
-  readonly inert: boolean;
-  readonly draft: string;
-  readonly onDraftChange: (draft: string) => void;
 }): ReactNode {
-  if (!props.state.apiKey.supported) {
-    // A sandbox still says where credentials live when this provider has no
-    // key field. On any other host this renders nothing.
-    return (
-      <CredentialsManagedInAccountOr>{null}</CredentialsManagedInAccountOr>
-    );
-  }
-  return (
-    <section className="flex flex-col gap-3" aria-label="Key">
-      {props.inert ? (
-        <ProviderOffHint providerId={props.state.providerId} />
-      ) : null}
-      <div
-        className={cn(
-          "flex flex-col gap-3 transition-opacity duration-150",
-          props.inert && "pointer-events-none opacity-50",
-        )}
-        {...(props.inert ? { inert: true } : {})}
-      >
-        <h2 className="text-ui-sm font-medium">Key</h2>
-        <CredentialsManagedInAccountOr>
-          <ProviderApiKeySection
-            state={props.state}
-            draft={props.draft}
-            onDraftChange={props.onDraftChange}
-          />
-        </CredentialsManagedInAccountOr>
-      </div>
-    </section>
-  );
+  if (props.state.apiKey.supported) return null;
+  return <CredentialsManagedInAccountOr>{null}</CredentialsManagedInAccountOr>;
 }
 
 function ProviderTabBody({
@@ -2074,11 +1947,8 @@ function ProviderTabBody({
       // that echo belongs to one provider. Switching providers must discard it.
       return <ProviderAutoJudgeSection key={state.providerId} state={state} />;
     case "env":
-      return (
-        <ProviderEnvTab state={state} onActiveTabChange={onActiveTabChange} />
-      );
-    // Account is the key's place only when Profiles & Limits is absent
-    // (`viewTabs` drops it otherwise). The draft is threaded in because this
+      return <ProviderEnvTab state={state} />;
+    // Account is the key's place. The draft is threaded in because this
     // body unmounts with the tab (Radix `TabsContent`).
     case "account":
       return (
@@ -2087,18 +1957,15 @@ function ProviderTabBody({
             state={state}
             draft={apiKeyDraft}
             onDraftChange={onApiKeyDraftChange}
+            expectedEnvironmentId={null}
+            environmentName={null}
           />
         </CredentialsManagedInAccountOr>
       );
     case "usage":
       return (
         <div className="flex flex-col gap-3">
-          <ProviderUsageKeySection
-            state={state}
-            inert={detailPaneInert}
-            draft={apiKeyDraft}
-            onDraftChange={onApiKeyDraftChange}
-          />
+          <ProviderUsageCredentialsNote state={state} />
           <ProviderProfileScopedSection
             state={state}
             {...profileTab}
@@ -2161,6 +2028,7 @@ function ProviderTabBody({
           // is what tells the tab to render that as a WAIT rather than a
           // failure - see `ModelProvidersBody`.
           packPreparing={providerPackPreparingForProvider(state)}
+          hiddenModelProviders={state.hiddenModelProviders}
         />
       );
     }

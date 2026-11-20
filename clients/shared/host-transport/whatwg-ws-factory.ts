@@ -39,6 +39,7 @@ class WhatwgWebSocket implements WebSocketLike {
   private readonly nativeCtor: typeof WebSocket;
   private readonly url: string;
   private readonly ticket: DialTicket;
+  readonly dialStarted: Promise<void>;
   private native: WebSocket | null = null;
   /** Guards against emitting a second close for a socket already given up on. */
   private closeRequested = false;
@@ -52,6 +53,7 @@ class WhatwgWebSocket implements WebSocketLike {
     this.ticket = hostDialGate.acquire(priority, () => {
       this.dial();
     });
+    this.dialStarted = this.ticket.granted;
   }
 
   private dial(): void {

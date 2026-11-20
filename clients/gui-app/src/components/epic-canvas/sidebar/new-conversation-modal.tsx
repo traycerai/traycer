@@ -1,4 +1,5 @@
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -83,9 +84,17 @@ import {
   usePrimaryActionShortcut,
 } from "@/hooks/use-primary-action-shortcut";
 import {
-  isAttachmentIngestPending,
+  composerAttachmentsHoldSend,
+  useComposerFileRoute,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { useStagedTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
+import {
+  containsPendingFileAttachment,
+  settleFileNodeInContent,
+} from "@/lib/composer/file-attachments";
+import type { FileNodeSettle } from "@/lib/composer/file-attachment-upload";
+import { useDraftsPutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import {
   mentionRootsFromWorktreeIntent,
@@ -94,6 +103,7 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import {
+  pressedSignInCurrent,
   isAttachEnvironmentUnsupported,
   toastAttachEnvironmentNeedsOwnHost,
   useEpicAttachmentClient,
@@ -206,6 +216,8 @@ import {
   stagedTerminalLaunchOnHost,
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useSignedOutTerminalDefaultAccount } from "@/hooks/providers/use-signed-out-terminal-default-account";
+import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
@@ -230,6 +242,7 @@ import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-to
 import {
   catalogSettledFor,
   chipModelName,
+  withoutDefaultAccount,
 } from "@/stores/composer/composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
@@ -392,6 +405,18 @@ function useHasSubmittableContent(
     (state) => (state.byEpicId[epicId]?.length ?? 0) > 0,
   );
   return hasText || hasCards;
+}
+
+/** A file still uploading holds send, as an image still preparing does. */
+function useHasPendingFileAttachment(
+  epicId: string,
+  seed: NewConversationModalSeed,
+): boolean {
+  return useNewConversationModalStore((state) =>
+    containsPendingFileAttachment(
+      state.draftPatchesByEpicId[epicId]?.content ?? seed.content,
+    ),
+  );
 }
 
 /**
@@ -790,7 +815,7 @@ function NewConversationModalDialog(props: {
         // popovers portal into THIS node (see `DialogOverlayBoundaryContext`)
         // and an overflow container that is also their containing block - this
         // one is, it carries a transform - would clip them.
-        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem)] flex-col sm:max-w-[min(92vw,48rem)]"
+        className="flex max-h-[calc(var(--spacing-safe-dvh)-2rem)] w-[min(92vw,48rem)] max-w-[min(92vw,48rem,var(--safe-area-width))] flex-col overflow-visible sm:max-w-[min(92vw,48rem)]"
         data-testid="epic-sidebar-new-conversation-modal"
         data-leader-scope={LEADER_SCOPE_NEW_CONVERSATION_MODAL}
         // A pointer-down the body's React tree already saw is the body's own
@@ -830,7 +855,7 @@ function NewConversationModalDialog(props: {
         {open ? (
           <div
             ref={attachBody}
-            className="min-h-0 flex-1 overflow-y-auto"
+            className="-m-1 min-h-0 flex-1 overflow-y-auto p-1"
             data-testid="epic-sidebar-new-conversation-modal-body"
           />
         ) : null}
@@ -1042,6 +1067,7 @@ export function NewConversationModalBody(props: {
     workspace: draftWorkspace,
   } = useNewConversationDraftFields(epicId, seed);
   const hasSubmittableContent = useHasSubmittableContent(epicId, seed);
+  const hasPendingFileAttachment = useHasPendingFileAttachment(epicId, seed);
   const [initialContent] = useState<JsonContent>(
     () =>
       useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
@@ -1104,11 +1130,15 @@ export function NewConversationModalBody(props: {
   const setEpicRunSettings = useComposerRunSettingsStore(
     (state) => state.setEpicRunSettings,
   );
+  const setAccountFollowsDefault = useNewConversationModalStore(
+    (state) => state.setAccountFollowsDefault,
+  );
   const handleToolbarSettingsChange = useCallback(
-    (settings: ChatRunSettings): void => {
+    (settings: ChatRunSettings, accountChosen: boolean): void => {
       setSettings(epicId, settings);
+      setAccountFollowsDefault(epicId, !accountChosen);
     },
-    [epicId, setSettings],
+    [epicId, setAccountFollowsDefault, setSettings],
   );
   // `draftSettings` can fall back to `runSettingsSeed`/`latestSettingsSeed`
   // (see `useNewConversationModalSeed`), neither of which is host-scoped or
@@ -1150,6 +1180,21 @@ export function NewConversationModalBody(props: {
       onShownPickKept: (settings) => setSettings(epicId, settings),
     });
   }, [epicId, setSettings, toolbarStore]);
+  // A draft whose account a person chose keeps it; otherwise its Terminal login
+  // starts on the default account.
+  const draftAccountFollowsDefault = useNewConversationModalStore((state) => {
+    const patch = state.draftPatchesByEpicId[epicId];
+    return (
+      patch === undefined ||
+      patch.settings === null ||
+      patch.accountFollowsDefault === true
+    );
+  });
+  useLayoutEffect(() => {
+    toolbarStore.getState().setAccountChosen(!draftAccountFollowsDefault);
+  }, [draftAccountFollowsDefault, toolbarStore]);
+  const surfaceActive = useSurfaceActivity();
+  useSignedOutTerminalDefaultAccount(toolbarStore, surfaceActive, hostClient);
   const harnessId = useStore(
     toolbarStore,
     (state) => state.selection.harnessId,
@@ -1268,11 +1313,36 @@ export function NewConversationModalBody(props: {
   const workspaceCanStart = workspaceGate.canStart;
   const draftWorkspaceFolderCount = draftWorkspace.folders.length;
   const runnerHost = useRunnerHost();
-  const paste = useComposerHashPaste(
-    editorRef,
-    runnerHost.fileDrops,
-    mentionRoots,
+  // Files go to the placement host, the one the chat is created on. A create
+  // on another host (the picker moved) pulls them by hash from the cloud copy
+  // that host publishes.
+  const putFileBlob = useDraftsPutFileBlob();
+  const settleDraftFile = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      const store = useNewConversationModalStore.getState();
+      const content =
+        store.draftPatchesByEpicId[epicId]?.content ?? seed.content;
+      const next = settleFileNodeInContent(content, id, settlement);
+      if (next !== null) store.setContent(epicId, next);
+    },
+    [epicId, seed.content],
   );
+  const fileRoute = useComposerFileRoute({
+    hostId: resolvedHostId,
+    client: hostClient,
+    putFileBlob,
+    settleDraft: settleDraftFile,
+  });
+  const pathsReachTarget = useStagedTypedPathsReach(
+    stagingSurfaceKey(sandboxStaging),
+    resolvedHostId,
+  );
+  const paste = useComposerHashPaste(editorRef, {
+    fileDrops: runnerHost.fileDrops,
+    mentionRoots,
+    fileRoute,
+    pathsReachTarget,
+  });
   const {
     ingestPastedComposerImages,
     reingestPendingImages,
@@ -1282,7 +1352,10 @@ export function NewConversationModalBody(props: {
     runPendingImageJob: paste.runPendingImageJob,
     draftId: null,
   });
-  const attachmentPending = isAttachmentIngestPending(paste);
+  const attachmentPending = composerAttachmentsHoldSend(
+    paste,
+    hasPendingFileAttachment,
+  );
   const pickedModelSlug = useStore(
     toolbarStore,
     (state) => state.values.selection.modelSlug,
@@ -1407,7 +1480,7 @@ export function NewConversationModalBody(props: {
     chooseAnotherHostLabel,
   });
   const composerDisabledHint =
-    mutationDisabledHint(permissionRole, isDisconnected, "make changes") ??
+    mutationDisabledHint(permissionRole, isDisconnected) ??
     workspaceGate.disabledHint ??
     agentHint;
   const epicImagePresence = useEpicAttachmentBytesPresence();
@@ -1632,8 +1705,10 @@ export function NewConversationModalBody(props: {
       // new-chat carries them forward, mirroring the chat-tile composer's
       // on-send write. Keyed by the host the chat is actually created on
       // (`activeHostId`: the pinned host, else the active one resolved above).
-      setGlobalRunSettings(activeHostId, settings, now);
-      setEpicRunSettings(epicId, activeHostId, settings, now);
+      // A default account is nobody's last choice, so it is not remembered.
+      const lastRunSettings = withoutDefaultAccount(settings, toolbar);
+      setGlobalRunSettings(activeHostId, lastRunSettings, now);
+      setEpicRunSettings(epicId, activeHostId, lastRunSettings, now);
       const profile = useAuthStore.getState().profile;
       const userId = profile?.userId ?? null;
       const worktreeIntent = worktreeIntentForSubmit();
@@ -2493,6 +2568,7 @@ export function NewConversationModalBody(props: {
   // no agent there.
   useLayoutEffect(() => {
     const providers = stagedProviders.data?.providers;
+    const removedProfiles = stagedProviders.data?.removedProfiles ?? [];
     stagedSubmitRef.current =
       stagedTerminalLaunch === null
         ? () => false
@@ -2501,6 +2577,7 @@ export function NewConversationModalBody(props: {
               stagedTerminalLaunch,
               toolbarStore.getState(),
               providers,
+              removedProfiles,
             );
             if (launch === null) return false;
             return dispatchStartTerminal(launch)
@@ -2638,6 +2715,7 @@ function useStagedTaskAttachment(input: {
     input.sessionClient ?? input.placementClient,
   );
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "modal");
+  const takeOperation = useEnvironmentCloud();
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
   const stageAttachmentRef = useRef<StagedSandbox | null>(null);
   // A team's sandbox can serve this task only after the person's own host
@@ -2658,6 +2736,8 @@ function useStagedTaskAttachment(input: {
         return;
       }
       const userId = useAuthStore.getState().profile?.userId ?? null;
+      // The sign-in taken at the press.
+      const operation = takeOperation === null ? null : takeOperation();
       const generation = captureComposerSubmitGeneration(
         () =>
           useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
@@ -2672,13 +2752,16 @@ function useStagedTaskAttachment(input: {
             current: generation.stillCurrent(),
             owns: true,
             epicConfirmed: true,
-            accountActive:
-              (useAuthStore.getState().profile?.userId ?? null) === userId,
+            accountActive: pressedSignInCurrent(operation, userId),
             stageCurrent: readStagedSandbox(surfaceKey) === staged,
           },
         ).effects.includes("handoff");
       stageAttachmentRef.current = staged;
-      void attachEnvironmentAsync({ epicId, teamId: configuration.teamId })
+      void attachEnvironmentAsync({
+        epicId,
+        teamId: configuration.teamId,
+        operation,
+      })
         .then(() => {
           if (stillCurrent()) hand();
         })
@@ -2691,7 +2774,13 @@ function useStagedTaskAttachment(input: {
           }
         });
     },
-    [attachClient, attachEnvironmentAsync, epicId, taskHostTeamId],
+    [
+      attachClient,
+      attachEnvironmentAsync,
+      epicId,
+      takeOperation,
+      taskHostTeamId,
+    ],
   );
   return {
     isSubmitting: input.otherCreatePending || attachEnvironment.isPending,

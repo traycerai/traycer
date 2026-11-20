@@ -40,6 +40,7 @@ import {
   type DevHostSignIn,
 } from "./dev-host-discovery";
 import { installNativeHttpToken } from "./native-http-token";
+import { installManualRedirectFetch } from "../manual-redirect-fetch";
 import { AuthSession, MobileAuthSheet } from "../auth-sheet";
 import { SANDBOXES_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/sandbox-control";
 import { MobileRunnerHost } from "../mobile-runner-host";
@@ -50,6 +51,7 @@ import { MobileLinkCodeScanner } from "../link-code-scanner";
 import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
 import { MobileStatusBarTap } from "../status-bar-tap";
 import { MobileSystemBack } from "../system-back";
+import { DeviceDictation, MobileDeviceDictation } from "../device-dictation";
 import { MobileVoiceAudio, VoiceAudio } from "../voice-audio";
 import {
   WindowBackground,
@@ -187,6 +189,9 @@ function bootstrap(): void {
       "[mobile] native HTTP token or server URL missing: native HTTP requests will fail",
     );
   }
+  // Before the app's first request: a request that carries a credential
+  // says `redirect: "manual"`, which Capacitor's patched `fetch` drops.
+  if (Capacitor.isNativePlatform()) installManualRedirectFetch(window);
   document.documentElement.classList.add("traycer-mobile-client");
   restrictFramesToSandboxLoader();
   // LAYOUT policy: the installed app runs the phone layout at every width, an
@@ -377,6 +382,10 @@ async function mount(input: {
     // settings page to open, and `getUserMedia` raises the browser's prompt.
     voiceAudio: Capacitor.isNativePlatform()
       ? new MobileVoiceAudio(VoiceAudio, openAppSettings)
+      : null,
+    // Present where the app project carries the native recognizer.
+    deviceDictation: Capacitor.isPluginAvailable("DeviceDictation")
+      ? new MobileDeviceDictation(DeviceDictation)
       : null,
     // The one place this difference is allowed to be named. WKWebView honours
     // an image clipboard write; Android's WebView RESOLVES it having written

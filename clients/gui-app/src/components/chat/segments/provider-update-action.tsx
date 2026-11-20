@@ -1,6 +1,8 @@
+import { useContext } from "react";
 import { PROVIDER_OUTDATED_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -26,7 +28,9 @@ export function ProviderUpdateAction({
   readonly harnessId: GuiHarnessId | null;
 }) {
   const transcript = useMaybeChatTranscript();
+  const readOnly = useContext(ChatStatusReadOnlyContext);
   if (
+    readOnly ||
     code !== PROVIDER_OUTDATED_ERROR_CODE ||
     harnessId === null ||
     transcript === null

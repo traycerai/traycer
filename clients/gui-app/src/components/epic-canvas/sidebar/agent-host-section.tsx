@@ -41,7 +41,6 @@ import {
   hoverAwakeMinutes,
   hoverMoreSessions,
   hoverSandboxIdentity,
-  hoverSessionCount,
   hoverTaskConfiguration,
   hoverTodayCost,
   KEEP_THIS_SANDBOX,
@@ -138,7 +137,9 @@ function TaskHostSection(props: {
         </p>
       ) : null}
       {others.length === 0 ? null : (
-        <p className="text-muted-foreground">{hoverAlsoInTask(others)}</p>
+        <div className="max-h-40 min-w-0 max-w-full overflow-y-auto overscroll-contain break-words text-muted-foreground">
+          <p>{hoverAlsoInTask(others)}</p>
+        </div>
       )}
       {props.host.sandboxEnd === null ? (
         <HostFilesAction hostId={null} />
@@ -170,7 +171,10 @@ function AuthorizedHostSection(props: {
 }): ReactNode {
   const { sandbox } = props;
   const configurations = useSandboxConfigurations();
-  const configuration = hoverConfiguration(sandbox, configurations);
+  const { label: configuration, ownership } = hoverConfiguration(
+    sandbox,
+    configurations,
+  );
   const awake = sandbox.state === "awake" && !sandbox.frozen;
   return (
     <section className="space-y-1 px-3 py-2 text-ui-xs" aria-label={HOST_LABEL}>
@@ -187,7 +191,7 @@ function AuthorizedHostSection(props: {
       <HostIdentityLine
         sandbox={sandbox}
         epicId={props.epicId}
-        configuration={configuration}
+        ownership={ownership}
         awake={awake}
       />
       <HostIdlePolicy sandbox={sandbox} />
@@ -210,27 +214,34 @@ function AuthorizedHostSection(props: {
   );
 }
 
+type HostOwnership = "team" | "personal" | "unknown";
+
 /**
  * The configuration the sandbox runs under, the line under its name: the
- * sandbox's bound environment, read against the person's teams (Personal
- * once every team has answered and none is its). An absent environment is
- * unknown; `null` only while its name is still unread. The summary keeps this
- * available while the sandbox is suspended or stopped.
+ * sandbox's bound environment, read against the person's teams as
+ * `sandboxConfigurationOf` reads it. An absent environment is unknown, and so
+ * is a row that is still not known once the teams have answered (a team
+ * agent sandbox of a team that is not the person's); the label is `null` only
+ * while its name is still unread. The summary keeps this available while the
+ * sandbox is suspended or stopped.
  */
 function hoverConfiguration(
   sandbox: SandboxSummary,
   configurations: SandboxConfigurations,
-): string | null {
-  if (sandbox.environmentId === null) return "unknown";
-  const configuration = sandboxConfigurationOf(
-    sandbox,
-    configurations.configurations,
-  );
-  if (configuration?.kind === "team") return configuration.teamName;
-  return configurations.complete &&
-    !configurations.teamEnvironmentIds.has(sandbox.environmentId)
-    ? "Personal"
-    : null;
+): { readonly label: string | null; readonly ownership: HostOwnership } {
+  if (sandbox.environmentId === null) {
+    return { label: "unknown", ownership: "unknown" };
+  }
+  const configuration = sandboxConfigurationOf(sandbox, configurations);
+  if (configuration?.kind === "team") {
+    return { label: configuration.teamName, ownership: "team" };
+  }
+  if (configuration?.kind === "personal") {
+    return { label: "Personal", ownership: "personal" };
+  }
+  return configurations.complete
+    ? { label: "unknown", ownership: "unknown" }
+    : { label: null, ownership: "unknown" };
 }
 
 function HostHeading(props: {
@@ -262,17 +273,17 @@ function HostHeading(props: {
 function HostIdentityLine(props: {
   readonly sandbox: SandboxSummary;
   readonly epicId: string;
-  readonly configuration: string | null;
+  readonly ownership: HostOwnership;
   readonly awake: boolean;
 }): ReactNode {
   const { sandbox } = props;
+  const personal = props.ownership === "personal";
   const costs = useSandboxCosts();
   useRefreshSandboxCosts();
   const viewerUserId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
   const createdBy = memberName(sandbox.createdBy, viewerUserId);
-  const payer = memberName(sandbox.wakePayer, viewerUserId);
   const creatorName = useMaybeEpicStore((state) => {
     const id = sandbox.createdByAgentId;
     if (id === null || sandbox.createdByTaskId !== props.epicId) return null;
@@ -285,10 +296,11 @@ function HostIdentityLine(props: {
   const cost = costs.data?.sandboxes.find(
     (row) => row.sandboxId === sandbox.id,
   );
-  const payerName =
-    payer ?? (props.configuration === "Personal" ? "you" : null);
-  const startedBy =
-    createdBy ?? (props.configuration === "Personal" ? "you" : null);
+  // A team's credits pay for its sandbox, so no member is named as payer.
+  const payerName = personal
+    ? (memberName(sandbox.wakePayer, viewerUserId) ?? "you")
+    : null;
+  const startedBy = createdBy ?? (personal ? "you" : null);
   return (
     <p className="text-muted-foreground">
       <HostIdentity
@@ -539,75 +551,37 @@ function HostActivity(props: {
     ),
   ];
   const more = Math.max(0, count - here.length - runningTerminals.length);
-  const hostWide = sandboxHostActivityLine(
-    sandboxSessionKinds(status.data?.sessions ?? null),
-  );
-  const listed = status.data?.sessions ?? null;
   return (
-    <HostSessionDisclosure
-      names={names}
+    <HostActivityLines
+      hostWide={sandboxHostActivityLine(
+        sandboxSessionKinds(status.data?.sessions ?? null),
+      )}
+      names={names.join(", ")}
       more={more}
-      hostWide={hostWide}
-      total={hoverReportedSessionCount({
-        listedOnHost:
-          listed === null
-            ? null
-            : listed.agents.length + listed.terminals.length,
-        busySessionCount: count,
-        taskSessions: here.length + runningTerminals.length,
-      })}
     />
   );
 }
 
 /**
- * The hover's session summary. Closed, it is only the count. Open, it is the
- * lines the hover used to show flat: kinds, this task's names, and sessions
- * the busy count places in other tasks. Nothing, when every one of those
- * lines would be empty.
+ * What a held sandbox report says is running, in the card: kinds, this task's
+ * titles, and sessions the busy count places in other tasks. A long list
+ * wraps and scrolls. An empty report draws nothing.
  */
-function HostSessionDisclosure(props: {
-  readonly names: readonly string[];
-  readonly more: number;
+function HostActivityLines(props: {
   readonly hostWide: string | null;
-  readonly total: number;
+  readonly names: string;
+  readonly more: number;
 }): ReactNode {
   if (props.hostWide === null && props.names.length === 0 && props.more === 0) {
     return null;
   }
   return (
-    <details
-      data-testid="agent-host-sessions"
-      className="min-w-0 max-w-full break-words"
-    >
-      <summary className="w-fit max-w-full cursor-pointer text-start break-words">
-        {hoverSessionCount(props.total)}
-      </summary>
-      <div className="text-muted-foreground">
-        {props.hostWide === null ? null : (
-          <p data-testid="agent-host-activity">{props.hostWide}</p>
-        )}
-        {props.names.length === 0 ? null : <p>{props.names.join(", ")}</p>}
-        {props.more > 0 ? <p>{hoverMoreSessions(props.more)}</p> : null}
-      </div>
-    </details>
+    <div className="max-h-40 min-w-0 max-w-full space-y-1 overflow-y-auto overscroll-contain break-words text-muted-foreground">
+      {props.hostWide === null ? null : (
+        <p data-testid="agent-host-activity">{props.hostWide}</p>
+      )}
+      {props.names.length === 0 ? null : <p>{props.names}</p>}
+      {props.more > 0 ? <p>{hoverMoreSessions(props.more)}</p> : null}
+    </div>
   );
-}
-
-/**
- * Sessions the hover can account for. The host's own list is the full count.
- * Without one, the task's sessions plus those the busy count places in other
- * tasks. A missing report never becomes a zero; that path says so above.
- */
-function hoverReportedSessionCount(input: {
-  readonly listedOnHost: number | null;
-  readonly busySessionCount: number;
-  readonly taskSessions: number;
-}): number {
-  const accounted =
-    input.taskSessions +
-    Math.max(0, input.busySessionCount - input.taskSessions);
-  return input.listedOnHost === null
-    ? accounted
-    : Math.max(input.listedOnHost, accounted);
 }

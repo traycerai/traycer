@@ -12,6 +12,7 @@ import {
 } from "vitest";
 import { Command, CommanderError } from "commander";
 import { buildProgram } from "../index";
+import * as cgroupRelocationModule from "../host/cgroup-relocation";
 import * as hostApplyModule from "../commands/host-apply";
 import * as hostEnsureModule from "../commands/host-ensure";
 import * as hostFreePortAndRestartModule from "../commands/host-free-port-and-restart";
@@ -188,6 +189,14 @@ async function parseCommand(
 describe("--lifecycle-origin on the eight start-capable commands", () => {
   let exitSpy: MockInstance;
   beforeEach(() => {
+    vi.spyOn(
+      cgroupRelocationModule,
+      "relocateOutOfHostCgroupIfNeeded",
+    ).mockResolvedValue({ kind: "not-needed" });
+    vi.spyOn(
+      cgroupRelocationModule,
+      "acknowledgeRelocationEntry",
+    ).mockImplementation(() => undefined);
     exitSpy = vi
       .spyOn(process, "exit")
       .mockImplementation((code: string | number | null | undefined): never => {

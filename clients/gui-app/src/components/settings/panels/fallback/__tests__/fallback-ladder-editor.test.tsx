@@ -63,33 +63,31 @@ describe("FallbackLadderEditor", () => {
     expect(labels[1]).toContain(FALLBACK_RUNG_COPY.notify.label);
   });
 
-  it("states the ladder consequence and keeps session and reorder details under collapsed Help", () => {
+  it("shows each step's description beside its controls and the shared session cost once", () => {
     renderLadder(vi.fn(), vi.fn(), ALL_ENABLED);
-    expect(
-      screen.getByText(
-        "Try another account or model, wait for reset, then notify you if needed.",
-      ),
-    ).toBeDefined();
-    const help = screen.getByText("Help").closest("details");
-    expect(help).not.toBeNull();
-    if (help === null) return;
-    expect(help).toHaveProperty("open", false);
-    for (const rung of Object.values(FALLBACK_RUNG_COPY)) {
-      expect(screen.getByText(rung.description).closest("details")).toBe(help);
-    }
-    fireEvent.click(screen.getByText("Help"));
-    expect(help).toHaveProperty("open", true);
-    for (const rung of Object.values(FALLBACK_RUNG_COPY)) {
-      expect(within(help).getByText(rung.description)).toBeDefined();
+    const rows = screen.getAllByRole("listitem");
+    const descriptions = [
+      "Switches to a different account you're signed in to. Starts a fresh session from this transcript.",
+      "Traycer notifies you and stops trying. Later steps won't run.",
+      "Tries a backup model from the Equivalent models tab. Starts a fresh session from this transcript.",
+      "If the provider gives a reset time within your longest wait, Traycer waits until then and retries the message.",
+    ];
+    for (const [index, description] of descriptions.entries()) {
+      expect(
+        within(rows[index]).getByText(description).closest("details"),
+      ).toBeNull();
     }
     expect(
-      within(help).getByText(
-        /Switching accounts or models starts a new agent session/,
+      screen.getAllByText(
+        "Switching accounts or models starts a new agent session using this chat's history, and retries the blocked message there. Messages waiting to run use the new account or model too.",
       ),
-    ).toBeDefined();
-    expect(
-      within(help).getByText(/Reorder with Move up and Move down/),
-    ).toBeDefined();
+    ).toHaveLength(1);
+    expect(screen.queryByText("Help")).toBeNull();
+    const instructions = screen.getByText(/Reorder with Move up and Move down/);
+    expect(instructions.closest("details")).toBeNull();
+    expect(instructions.textContent).toContain(
+      "Turning a step off leaves it in place. When you reopen this page, steps still off appear just above “Notify me”.",
+    );
   });
 
   it("AX7: the drag handle is hidden from assistive technology and out of the tab order, for EVERY row - not just `notify`", () => {

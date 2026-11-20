@@ -202,14 +202,17 @@ export function useJudgeToolbarStore(input: {
   // resolves it. Fetched only while that provider is available - the picker's
   // own gate - so an unavailable provider's slug is held as stored.
   const harnessId = useStore(store, (state) => state.selection.harnessId);
+  const profileId = useStore(store, (state) => state.selection.profileId);
   const available =
     harnesses?.find((row) => row.id === harnessId)?.available === true;
   const modelsQuery = useGuiHarnessModelsQuery(harnessId, null, {
+    profileId,
     enabled: available,
     subscribed: true,
   });
   const models = modelsQuery.data?.models;
   const modelsLoaded = models !== undefined;
+  const modelsFailed = modelsQuery.isError && models === undefined;
   useEffect(() => {
     store.getState().setCatalog({
       hostId: null,
@@ -217,13 +220,23 @@ export function useJudgeToolbarStore(input: {
       ultracodeCarried: false,
       harnesses,
       modelsHarnessId: harnessId,
+      modelsProfileId: profileId,
       models: models ?? EMPTY_JUDGE_MODELS,
       modelsLoaded,
+      modelsFailed,
       tuiOnly: false,
       // A setting, not a run: nothing is swapped here in the first place.
       keepsUnavailablePick: false,
     });
-  }, [store, harnesses, harnessId, models, modelsLoaded]);
+  }, [
+    store,
+    harnesses,
+    harnessId,
+    profileId,
+    models,
+    modelsLoaded,
+    modelsFailed,
+  ]);
 
   // The writer is installed through the store's setter, not baked in at
   // creation, so it never writes through a stale closure. The store never

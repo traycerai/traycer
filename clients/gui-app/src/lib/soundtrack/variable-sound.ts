@@ -152,6 +152,7 @@ export interface Bookend {
 }
 
 export interface VariableTrack {
+  readonly kind?: "generative";
   readonly name: string;
   readonly title: string;
   /**

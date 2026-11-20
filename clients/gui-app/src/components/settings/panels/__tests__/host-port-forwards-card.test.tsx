@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -473,27 +474,17 @@ describe("<HostPortForwardsCard />", () => {
         ).toBeTruthy();
       });
       const row = screen.getByTestId("host-port-forward-owned-owned-1");
-      expect(row.classList.contains("flex-wrap")).toBe(true);
-      const name = row.querySelector(".wrap-anywhere");
-      expect(name?.textContent).toBe("api server");
-      expect(name?.classList.contains("truncate")).toBe(false);
-      expect(
-        screen
-          .getByTestId("host-port-forward-stop-owned-1")
-          .classList.contains("max-w-full"),
-      ).toBe(true);
+      expect(within(row).getByText("api server")).toBeTruthy();
+      expect(within(row).getByRole("button", { name: "Stop" })).toBeTruthy();
       expect(row.textContent).toContain(":8080");
       expect(row.textContent).toContain("Forwarding");
       expect(row.textContent).toContain("To another host · 1 connection");
       expect(row.textContent).not.toContain("open connection");
-      const details = row.querySelector("details");
-      expect(details?.textContent).toContain(
-        "My machine:8080 → another host:3000",
+      const telemetry = within(row).getByText(
+        "My machine:8080 → another host:3000 · 100 B in · 200 B out",
       );
-      expect(details?.textContent).toContain("Received");
-      expect(details?.textContent).toContain("100 B");
-      expect(details?.textContent).toContain("Sent");
-      expect(details?.textContent).toContain("200 B");
+      expect(telemetry.closest("details")).toBeNull();
+      expect(within(row).queryByText("Details")).toBeNull();
     });
 
     it("pluralizes the open-connections count", async () => {
@@ -634,12 +625,11 @@ describe("<HostPortForwardsCard />", () => {
       expect(row.textContent).toContain("Interrupted");
       expect(row.textContent).toContain("the target refused the connection");
       expect(row.textContent).not.toMatch(/\d+ connection/);
-      const details = row.querySelector("details");
-      expect(details?.textContent).toContain(
-        "My machine:8080 → another host:3000",
-      );
-      expect(details?.textContent).not.toContain("Received");
-      expect(details?.textContent).not.toContain("Sent");
+      expect(
+        within(row).getByText("My machine:8080 → another host:3000"),
+      ).toBeTruthy();
+      expect(row.textContent).not.toContain(" B in");
+      expect(row.textContent).not.toContain(" B out");
     });
 
     it("labels the button Stop while active and Clear while interrupted", async () => {
@@ -726,19 +716,11 @@ describe("<HostPortForwardsCard />", () => {
       expect(row.textContent).toContain("Nothing is listening yet");
       expect(row.textContent).not.toContain("open connection");
       expect(row.textContent).not.toContain(" in · ");
-      const details = row.querySelector("details");
-      expect(details?.textContent).toContain(
-        "My machine:9090 → another host:3000",
-      );
-      // The badge is the request. The other `:9090` is the endpoint inside
-      // Details, not a second bound-port badge.
-      const outsideDetails = row.textContent.replace(
-        details?.textContent ?? "",
-        "",
-      );
-      expect(outsideDetails.replace("requested :9090", "")).not.toContain(
-        ":9090",
-      );
+      expect(
+        within(row).getByText("My machine:9090 → another host:3000"),
+      ).toBeTruthy();
+      expect(within(row).getByText("requested :9090")).toBeTruthy();
+      expect(within(row).queryByText(":9090", { exact: true })).toBeNull();
       expect(
         screen.getByTestId("host-port-forward-stop-owned-1").textContent,
       ).toBe("Stop");
@@ -767,7 +749,9 @@ describe("<HostPortForwardsCard />", () => {
       expect(row.textContent).toContain("Stopped");
       expect(row.textContent).toContain("the user stopped it");
       expect(row.textContent).not.toMatch(/\d+ connection/);
-      expect(row.querySelector("details")?.textContent).toContain("Endpoints");
+      expect(
+        within(row).getByText("My machine:8080 → another host:3000"),
+      ).toBeTruthy();
       expect(
         screen.getByTestId("host-port-forward-stop-owned-1").textContent,
       ).toBe("Clear");
@@ -841,19 +825,12 @@ describe("<HostPortForwardsCard />", () => {
         ).toBeTruthy();
       });
       const row = screen.getByTestId("host-port-forward-held-lease-1");
-      expect(row.classList.contains("flex-wrap")).toBe(true);
-      const name = row.querySelector(".wrap-anywhere");
-      expect(name?.textContent).toBe("reverse tunnel");
-      expect(name?.classList.contains("truncate")).toBe(false);
+      expect(within(row).getByText("reverse tunnel")).toBeTruthy();
       expect(row.textContent).toContain(":9090");
       expect(row.textContent).toContain("To Owner box · 2 connections");
       expect(row.textContent).not.toContain("Listening");
       expect(row.querySelector("details")).toBeNull();
-      expect(
-        screen
-          .getByTestId("host-port-forward-cut-lease-1")
-          .classList.contains("max-w-full"),
-      ).toBe(true);
+      expect(within(row).getByRole("button", { name: "Cut" })).toBeTruthy();
     });
 
     it("labels a target-role lease as coming from the owner machine", async () => {

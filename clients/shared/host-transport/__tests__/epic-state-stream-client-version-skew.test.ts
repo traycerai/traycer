@@ -231,4 +231,65 @@ describe("the epic state stream client across host minors", () => {
       anchoredThread.data,
     );
   });
+
+  it("preserves @1.6 markdown metadata in snapshots and deltas", () => {
+    const client = open();
+    const objectHead = {
+      files: {
+        "revision.json": {
+          sha256: SHA,
+          byteLength: 12,
+          mediaType: "application/json",
+          status: "published",
+          seq: 1,
+          scalars: { kind: "spec", title: "A spec" },
+        },
+      },
+      capturedAt: 1,
+    };
+    const specRow = {
+      kind: "spec",
+      id: "spec-object-1",
+      folderName: "spec-object-1",
+      title: "A spec",
+      createdAt: 1,
+      updatedAt: 1,
+      createdManually: false,
+      parentId: null,
+      layout: "folder",
+      head: objectHead,
+      markdownBody: "object",
+      revision: 1,
+    };
+
+    client.emit({ ...SNAPSHOT_V11, artifactRecords: [specRow] });
+    client.emit({
+      ...DELTA_V11,
+      roleClaims: null,
+      artifactUpserts: [specRow],
+    });
+
+    expect(client.snapshots).toHaveLength(1);
+    expect(client.deltas).toHaveLength(1);
+    const snapshotRow = client.snapshots[0]?.artifactRecords[0];
+    const deltaRow = client.deltas[0]?.artifactUpserts[0];
+    expect(
+      snapshotRow !== undefined && "head" in snapshotRow
+        ? snapshotRow.head
+        : null,
+    ).toEqual(objectHead);
+    expect(
+      snapshotRow !== undefined && "markdownBody" in snapshotRow
+        ? snapshotRow.markdownBody
+        : null,
+    ).toBe("object");
+    expect(
+      deltaRow !== undefined && "head" in deltaRow ? deltaRow.head : null,
+    ).toEqual(objectHead);
+    expect(
+      deltaRow !== undefined && "markdownBody" in deltaRow
+        ? deltaRow.markdownBody
+        : null,
+    ).toBe("object");
+  });
 });

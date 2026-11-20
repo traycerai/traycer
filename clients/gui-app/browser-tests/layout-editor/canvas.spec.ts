@@ -370,6 +370,8 @@ test.describe("the canvas at the top placement", () => {
 
   test("a real right-click on the mic at rest opens the quick-verb menu, though its named element has no box", async () => {
     const page = getPage();
+    // The named microphone menu requires Voice input to be enabled.
+    await probe(page, "setVoiceInputEnabled(true)");
     const names = await probeValue<Readonly<Partial<Record<string, string>>>>(
       page,
       "names",
@@ -982,9 +984,9 @@ const DROP_OVERSHOOT = 18;
  * Files joined the rail, and the measured geometry the overshoot is tuned on
  * is unchanged.
  *
- * `stack:railAgents+railArtifacts` and `stack:railGitDiff+railPullRequests`
- * are the shipped rail's stack LINKS (L-166), each named after the PAIR it
- * joins. A link is a member of the order like any other entry, so they are
+ * `stack:railAgents+railArtifacts`, `stack:railBrowsers+railSimulators` and
+ * `stack:railGitDiff+railPullRequests` are the shipped rail's stack LINKS
+ * (L-166), each named after the PAIR it joins. A link is a member of the order like any other entry, so they are
  * named here; the rail draws each pair as one icon (G3).
  */
 const TERMINALS_ABOVE_THE_DIVIDER = [
@@ -994,6 +996,7 @@ const TERMINALS_ABOVE_THE_DIVIDER = [
   "railTerminals",
   "divider:1",
   "railBrowsers",
+  "stack:railBrowsers+railSimulators",
   "railSimulators",
   "railGitDiff",
   "stack:railGitDiff+railPullRequests",

@@ -377,7 +377,6 @@ function keyTabLabel(
 ): "Account" | "Profiles & Limits" | null {
   const tab = providerKeyTab({
     apiKeySupported: state.apiKey.supported,
-    usageAdvertised: state.nativeCapabilities.supportedTabs.includes("usage"),
   });
   return tab === null ? null : tab.label;
 }

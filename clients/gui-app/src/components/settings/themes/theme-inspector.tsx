@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { themeTokens, type ThemeToken } from "@/lib/themes/theme-definition";
 import { findThemeTokenUsage, inspectThemeElement } from "./theme-inspection";
 
@@ -31,13 +32,14 @@ export function ThemeInspector({
   onSelect: (token: ThemeToken) => void;
   onStop: () => void;
 }) {
+  const signOutQuestionOpen = useSignOutConfirmStore((state) => state.open);
   const highlightIds = useRef(new WeakMap<Element, string>());
   const [hover, setHover] = useState<Element | null>(null);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    if (!inspecting) return;
+    if (!inspecting || signOutQuestionOpen) return;
     let pending: Element | null = null;
     let frame = 0;
     const move = (event: PointerEvent) => {
@@ -97,9 +99,10 @@ export function ThemeInspector({
       document.removeEventListener("click", click, true);
       document.removeEventListener("keydown", key, true);
     };
-  }, [inspecting, onSelect, onStop]);
+  }, [inspecting, onSelect, onStop, signOutQuestionOpen]);
 
   useEffect(() => {
+    if (signOutQuestionOpen) return;
     let frame = 0;
     let rescan = false;
     // ponytail: usage discovery scans the mounted DOM on selection; index token dependencies if very large documents make this slow.
@@ -163,9 +166,9 @@ export function ThemeInspector({
       window.removeEventListener("resize", schedule);
       document.removeEventListener("scroll", schedule, true);
     };
-  }, [hover, inspecting, token]);
+  }, [hover, inspecting, token, signOutQuestionOpen]);
 
-  if (!inspecting && !token) return null;
+  if (signOutQuestionOpen || (!inspecting && !token)) return null;
   return createPortal(
     <div
       data-theme-inspector

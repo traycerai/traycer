@@ -4,7 +4,7 @@ import {
 } from "@traycer/protocol/host/agent/tui/unary-schemas";
 import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import {
-  callHostRpc,
+  callAgentHostRpc,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -58,7 +58,7 @@ export function buildAgentTurnEndedFromHookCommand(opts: {
     // Host-not-running is benign - the hook fires unconditionally and the
     // host may simply not be up. Other RPC errors (auth, etc.) surface.
     const rpcResult = await toAgentCliError(
-      callHostRpc("agent.tui.turnEnded", request),
+      callAgentHostRpc("agent.tui.turnEnded", request),
     ).catch((err: unknown) => {
       if (
         err instanceof CliError &&

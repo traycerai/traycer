@@ -10,6 +10,7 @@ import {
 import { appLogger } from "@/lib/logger";
 import { MIX_TUNING } from "../mix-tuning";
 import { TrackPlayer } from "../player";
+import { SoundtrackLogRelay } from "../session-log";
 import type { StemSource } from "../stems";
 import type {
   Bookend,
@@ -105,6 +106,7 @@ function observedPlayer(
     output,
     stems,
     random: () => 0,
+    log: new SoundtrackLogRelay(),
     silenceSeconds: [5, 5],
     resumeAt: 0,
     onRunStart: () => undefined,

@@ -11,10 +11,11 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
+import { emptyBotMentionHostListsMock } from "@/components/bots/__tests__/bot-mention-host-test-support";
 import {
   botListChangedMock,
   botListQueryMock,
@@ -38,6 +39,8 @@ import {
   tabHostProviderMock,
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
+import { usePublishPresentedBotConversation } from "@/hooks/notifications/use-publish-presented-bot-conversation";
+import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/notification-presence";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
 import { ComposerPromptEditor } from "@/components/chat/composer/composer-prompt-editor";
@@ -52,7 +55,16 @@ import { StrictMode, useContext, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -65,19 +77,41 @@ import type {
   BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
-import { __setAgentActivityStateForTests } from "@/stores/agent-activity-store";
+import {
+  __setAgentActivityPlaneAnsweringForTests,
+  __setAgentActivityStateForTests,
+} from "@/stores/agent-activity-store";
 import {
   BOT,
   BOT_ID,
+  BOUND_HOST,
   endBotTabSurfaceCase,
+  admitBotDrafts,
   resetBotTabSurfaceMocks,
   snapshot,
   TAB_HOST,
   trackingTask,
 } from "./bot-tab-surface-harness";
 
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
+
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
+}));
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
+}));
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => null,
+}));
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => null,
+}));
+vi.mock("@/components/notifications/mobile-notifications-button", () => ({
+  MobileNotificationsButton: () => null,
 }));
 vi.mock("@/lib/tab-navigation", async (importOriginal) =>
   tabNavigationMock(
@@ -109,9 +143,15 @@ vi.mock(
   () => hostClientForHostIdMock,
 );
 vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
+// The Activity count needs the notification host to read as reachable before
+// a quiet task may leave the list.
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: "reachable" }),
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
@@ -269,70 +309,68 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     openMemory: BotOpenMemory | null;
     onOpenMemory: (open: BotOpenMemory | null) => void;
     onOpenTurn: BotTurnOpen;
-    onOpenSession: BotSessionOpen;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
     setupHistory: ReactNode;
     tiles: number | null;
-  }) => (
-    <div
-      data-testid="stub-channel"
-      data-tiles={String(props.tiles)}
-      data-host-id={props.hostId}
-      data-bound-host-id={props.boundHostId ?? "none"}
-      data-bot-title={props.botTitle}
-      data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
-      data-open-thread={props.openThread?.anchorMessageId ?? "none"}
-      data-land-on={props.landOn?.messageId ?? "none"}
-      data-land-on-thread={props.landOn?.threadId ?? "none"}
-      data-open-memory={String(props.openMemory !== null)}
-      data-trunk-chat-id={props.trunkChatId}
-      data-teammate-name={
-        props.resolveMember("user-teammate")?.displayName ?? "unresolved"
-      }
-    >
-      <button
-        type="button"
-        data-testid="stub-channel-open-memory"
-        onClick={() => props.onOpenMemory({ back: null })}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-turn"
-        onClick={() => props.onOpenTurn(REPLY_TURN, null)}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-thread-session"
-        onClick={() =>
-          props.onOpenSession({
-            chatId: "session-thread-1",
-            threadId: "thread-1",
-            messageId: null,
-            sendPostId: null,
-          })
+  }) => {
+    // The real publisher, so the tab surface's own mount and unmount of this
+    // view is what the presence follows.
+    usePublishPresentedBotConversation(
+      props.botId,
+      null,
+      props.appConversationChatId,
+    );
+    return (
+      <div
+        data-testid="stub-channel"
+        data-tiles={String(props.tiles)}
+        data-host-id={props.hostId}
+        data-bound-host-id={props.boundHostId ?? "none"}
+        data-bot-title={props.botTitle}
+        data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
+        data-open-thread={props.openThread?.anchorMessageId ?? "none"}
+        data-land-on={props.landOn?.messageId ?? "none"}
+        data-land-on-thread={props.landOn?.threadId ?? "none"}
+        data-open-memory={String(props.openMemory !== null)}
+        data-trunk-chat-id={props.trunkChatId}
+        data-teammate-name={
+          props.resolveMember("user-teammate")?.displayName ?? "unresolved"
         }
-      />
-      {props.setupHistory}
-      <MentionsProbe />
-      {/* The two boxes' places in the real view: the channel's own, and one
+      >
+        <button
+          type="button"
+          data-testid="stub-channel-open-memory"
+          onClick={() => props.onOpenMemory({ back: null })}
+        />
+        <button
+          type="button"
+          data-testid="stub-channel-open-turn"
+          onClick={() => props.onOpenTurn(REPLY_TURN, null)}
+        />
+        {props.setupHistory}
+        <MentionsProbe />
+        {/* The two boxes' places in the real view: the channel's own, and one
           inside the thread panel, which the header tells apart by its marker. */}
-      <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-        <textarea aria-label="Channel box" />
-      </div>
-      <section data-bot-thread-panel="">
         <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-          <textarea aria-label="Thread box" />
+          <textarea aria-label="Channel box" />
         </div>
-      </section>
-    </div>
-  ),
+        <section data-bot-thread-panel="">
+          <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
+            <textarea aria-label="Thread box" />
+          </div>
+        </section>
+      </div>
+    );
+  },
 }));
 // The session view is driven in `bot-session-view.test.tsx`; here, what the
 // tab hands it and what its links do to the tab.
 vi.mock("@/components/bots/bot-session-view", () => ({
   BotSessionView: (props: {
+    hostId: string;
+    boundHostId: string | null;
     session: BotOpenSession;
     onClose: () => void;
     onOpenChannel: (messageId: string | null) => void;
@@ -340,6 +378,8 @@ vi.mock("@/components/bots/bot-session-view", () => ({
   }) => (
     <div
       data-testid="stub-session"
+      data-host-id={props.hostId}
+      data-bound-host-id={props.boundHostId ?? "none"}
       data-chat-id={props.session.chatId}
       data-thread-id={props.session.threadId ?? "none"}
       data-land-on={props.session.landOn?.messageId ?? "none"}
@@ -379,12 +419,27 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
   BotActivityPage: (props: {
     boundHere: boolean;
     active: { rows: ReadonlyArray<{ task: { taskId: string } }> };
+    trunkChatId: string;
+    onOpenSession: BotSessionOpen;
   }) => (
     <div
       data-testid="stub-activity"
       data-is-this-host={String(props.boundHere)}
       data-row-ids={props.active.rows.map((row) => row.task.taskId).join(",")}
-    />
+    >
+      <button
+        type="button"
+        data-testid="stub-activity-open-trunk"
+        onClick={() =>
+          props.onOpenSession({
+            chatId: props.trunkChatId,
+            threadId: null,
+            messageId: null,
+            sendPostId: null,
+          })
+        }
+      />
+    </div>
   ),
 }));
 vi.mock("@/components/bots/bot-threads-view", () => ({
@@ -437,10 +492,22 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 }));
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
+import { tabItemId } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import {
+  installShellForm,
+  SHELL_WIDTH_MENU,
+  type ShellFormHarness,
+} from "../../../../__tests__/mobile-level2-form-harness";
 
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   boxInput,
   typeInto,
@@ -483,7 +550,34 @@ beforeEach(() => {
   resetBotTabSurfaceMocks();
 });
 
+/** The Activity count over a cloud feed that is connected with its snapshot, so a quiet seen task has been proved quiet by every source. */
+function renderInCloudFeed(children: ReactNode): void {
+  useCloudNotificationsStore.setState({
+    hasSnapshot: true,
+    connectionState: "connected",
+  });
+  render(
+    <NotificationFeedModeContext.Provider value="cloud">
+      {children}
+    </NotificationFeedModeContext.Provider>,
+  );
+}
+
+function renderOverCloudFeed(): void {
+  renderInCloudFeed(surface());
+}
+
+function renderOverCloudFeedUnderHeader(): void {
+  renderInCloudFeed(
+    <MobileBotHeaderSlotProvider>
+      <MobileAppHeader />
+      {surface()}
+    </MobileBotHeaderSlotProvider>,
+  );
+}
+
 afterEach(() => {
+  useCloudNotificationsStore.getState().reset();
   endBotTabSurfaceCase(queryClient);
 });
 
@@ -620,7 +714,7 @@ describe("<BotTabSurface /> views", () => {
         };
       }
 
-      beforeEach(() => {
+      beforeEach(async () => {
         useAuthStore.setState({
           profile: {
             userId: VIEWER,
@@ -629,6 +723,7 @@ describe("<BotTabSurface /> views", () => {
             avatarUrl: null,
           },
         });
+        await admitBotDrafts();
         mocks.homeTasks = [ownedDirectly(TASK_HOME, "Roadmap")];
       });
 
@@ -638,6 +733,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Olive Owner",
             ownerKind: "user",
+            providerHandle: null,
           },
         ];
 
@@ -654,6 +750,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Acme",
             ownerKind: "organization",
+            providerHandle: null,
           },
         ];
 
@@ -670,7 +767,7 @@ describe("<BotTabSurface /> views", () => {
       const mentionMenu = (): Element | null =>
         document.querySelector('[data-slot="composer-menu"]');
 
-      beforeEach(() => {
+      beforeEach(async () => {
         useAuthStore.setState({
           status: "signed-in",
           profile: {
@@ -680,6 +777,7 @@ describe("<BotTabSurface /> views", () => {
             avatarUrl: null,
           },
         });
+        await admitBotDrafts();
         // A personal bot: the viewer is its one member, so there are no
         // members to wait for.
         mocks.state.environments = [
@@ -687,6 +785,7 @@ describe("<BotTabSurface /> views", () => {
             environmentId: "env-team",
             label: "Olive Owner",
             ownerKind: "user",
+            providerHandle: null,
           },
         ];
         useStandaloneBotsStore.setState({
@@ -819,6 +918,33 @@ describe("<BotTabSurface /> views", () => {
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
   });
 
+  it("presents the channel to the notification presence on Messages, nothing on Activity, and the channel again on return", async () => {
+    const user = userEvent.setup();
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    onTestFinished(() => hasFocus.mockRestore());
+    render(surface());
+    const channelId = screen
+      .getByTestId("stub-channel")
+      .getAttribute("data-app-conversation-chat-id");
+    if (channelId === null || channelId === "none")
+      throw new Error("the bot has no channel conversation");
+
+    expect(readFocusedHostNotificationPresenceEntity()).toEqual({
+      epicId: BOT_ID,
+      chatId: channelId,
+    });
+
+    await user.click(activityTab());
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(readFocusedHostNotificationPresenceEntity()).toBeNull();
+
+    await user.click(screen.getByTestId("bot-tab-view-messages"));
+    expect(readFocusedHostNotificationPresenceEntity()).toEqual({
+      epicId: BOT_ID,
+      chatId: channelId,
+    });
+  });
+
   /** The tab's words as a sighted person reads them: no screen-reader text. */
   function visibleTabText(): string {
     const copy = activityTab().cloneNode(true);
@@ -828,7 +954,7 @@ describe("<BotTabSurface /> views", () => {
     return copy.textContent;
   }
 
-  it("rule 6: counts the rows the Activity list shows, one number and no words, whatever puts a task there", async () => {
+  it("rule 6: lists every row whatever puts a task there, and the tab carries no count", async () => {
     const user = userEvent.setup();
     useAuthStore.setState({
       status: "signed-in",
@@ -839,6 +965,7 @@ describe("<BotTabSurface /> views", () => {
       },
       contextMetadata: { userId: "user-ada", username: "ada" },
     });
+    await admitBotDrafts();
     mocks.unreadTaskIds.add("task-unseen");
     mocks.state.snapshot = {
       ...snapshot(),
@@ -869,15 +996,24 @@ describe("<BotTabSurface /> views", () => {
         },
         { ...trackingTask("task-unseen"), cadence: { kind: "on-completion" } },
         trackingTask("task-periodic"),
-        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+          // Known to wait on no one: `null` would say the host cannot tell.
+          inputNeeded: [],
+        },
       ],
     };
+    __setAgentActivityPlaneAnsweringForTests();
     __setAgentActivityStateForTests(
       { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
-      "local",
-      null,
+      "cloud",
+      "connected",
     );
-    render(surface());
+    renderOverCloudFeed();
     await user.click(activityTab());
 
     const shown = screen
@@ -885,29 +1021,74 @@ describe("<BotTabSurface /> views", () => {
       .dataset.rowIds?.split(",");
     expect(shown).toHaveLength(4);
     expect(shown).not.toContain("task-quiet");
-    const badge = within(activityTab()).getByTestId("bot-tab-activity-count");
-    expect(badge.textContent).toContain(String(shown?.length));
-    expect(visibleTabText()).toBe(`Activity${String(shown?.length)}`);
-    // jsdom joins the name's parts without the spaces a browser puts in.
-    expect(
-      screen.getByRole("tab", {
-        name: new RegExp(`^Activity\\s*${String(shown?.length)}\\s*active$`),
-      }),
-    ).toBe(activityTab());
+    expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
+    expect(visibleTabText()).toBe("Activity");
+    expect(screen.getByRole("tab", { name: "Activity" })).toBe(activityTab());
+    expect(activityTab().textContent).not.toMatch(/\d|active/);
     expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
   });
 
-  it("rule 6: shows no count when no task is active", () => {
+  it("rule 6: shows no count when no task is active", async () => {
+    // The indicator read is made for a signed-in member.
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "user-ada",
+        userName: "Ada",
+        email: "ada@example.com",
+      },
+      contextMetadata: { userId: "user-ada", username: "ada" },
+    });
+    await admitBotDrafts();
     mocks.state.snapshot = {
       ...snapshot(),
       tasks: [
-        { ...trackingTask("task-quiet"), cadence: { kind: "on-completion" } },
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+          // Known to wait on no one: `null` would say the host cannot tell.
+          inputNeeded: [],
+        },
       ],
     };
-    render(surface());
+    // The whole fleet is vouched, so the quiet task may leave the list.
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests({}, "cloud", "connected");
+    renderOverCloudFeed();
 
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
     expect(visibleTabText()).toBe("Activity");
+  });
+
+  it("the Activity tab's trunk door swaps the whole Tabs view for the trunk's own session, not a thread", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(activityTab());
+    expect(screen.getByTestId("stub-activity")).toBeTruthy();
+
+    await user.click(screen.getByTestId("stub-activity-open-trunk"));
+
+    const session = screen.getByTestId("stub-session");
+    expect(session.getAttribute("data-chat-id")).toBe(
+      snapshot().bot.trunkChatId,
+    );
+    expect(session.getAttribute("data-thread-id")).toBe("none");
+    expect(screen.queryByTestId("stub-activity")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toEqual([]);
+  });
+
+  it("hands the session the tab's host for its reads and the bot's bound host, not the tab's, as the host whose payer its error rows read", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(activityTab());
+    await user.click(screen.getByTestId("stub-activity-open-trunk"));
+
+    const session = screen.getByTestId("stub-session");
+    expect(session.getAttribute("data-host-id")).toBe(TAB_HOST);
+    expect(session.getAttribute("data-bound-host-id")).toBe(BOUND_HOST);
   });
 
   it("shows Threads from the column in place of the channel and its views, through the tab's host, and its own channel row lands back where it was", async () => {
@@ -941,7 +1122,7 @@ describe("<BotTabSurface /> views", () => {
     async (_way, testId) => {
       const user = userEvent.setup();
       render(surface());
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
       expect(screen.getByTestId("stub-session")).toBeTruthy();
       await user.click(screen.getByTestId("stub-sidebar-threads"));
 
@@ -1020,5 +1201,494 @@ describe("<BotTabSurface /> views", () => {
       screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
     ).toBe("false");
     expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+  });
+});
+
+function signInAda(): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: {
+      userId: "user-ada",
+      userName: "Ada",
+      email: "ada@example.com",
+    },
+    contextMetadata: { userId: "user-ada", username: "ada" },
+  });
+}
+
+describe("the Channel actions trigger's active count in the compact header", () => {
+  let shell: ShellFormHarness;
+  beforeEach(() => {
+    shell = installShellForm(SHELL_WIDTH_MENU);
+    const tracy = { kind: "tracy", id: "tracy" } as const;
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(tracy), ref: tracy }],
+      activeItemId: tabItemId(tracy),
+      stripOrder: [tracy],
+    });
+  });
+  afterEach(() => {
+    shell.dispose();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
+
+  it("draws no count on the trigger, which keeps its name, and shows the Activity item's own count matching the Activity list", async () => {
+    const user = userEvent.setup();
+    signInAda();
+    await admitBotDrafts();
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [
+        { ...trackingTask("task-working"), cadence: { kind: "on-completion" } },
+        trackingTask("task-periodic"),
+      ],
+    };
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests(
+      { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
+      "cloud",
+      "connected",
+    );
+    renderOverCloudFeedUnderHeader();
+
+    const trigger = screen.getByRole("button", {
+      name: /^Channel actions,?\s*\d+\s*active/,
+    });
+    expect(
+      within(trigger).queryByTestId("bot-channel-actions-activity-count"),
+    ).toBeNull();
+    expect(trigger.textContent).not.toMatch(/\d/);
+
+    await user.click(trigger);
+    const item = await screen.findByRole("menuitemradio", {
+      name: /^Activity/,
+    });
+    const itemCount = within(item).getByTestId(
+      "bot-channel-actions-menu-activity-count",
+    );
+    await user.click(item);
+    const count = screen
+      .getByTestId("stub-activity")
+      .dataset.rowIds?.split(",").length;
+    expect(count).toBeGreaterThan(0);
+    expect(itemCount.textContent).toContain(String(count));
+    expect(
+      screen.getByRole("button", {
+        name: new RegExp(`^Channel actions,?\\s*${String(count)}\\s*active`),
+      }).textContent,
+    ).not.toMatch(/\d/);
+  });
+
+  it("draws no count and the plain name when no task is active", async () => {
+    signInAda();
+    await admitBotDrafts();
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+          inputNeeded: [],
+        },
+      ],
+    };
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests({}, "cloud", "connected");
+    renderOverCloudFeedUnderHeader();
+
+    expect(
+      screen.queryByTestId("bot-channel-actions-activity-count"),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Channel actions" }),
+    ).toBeTruthy();
+  });
+});
+
+describe("a landing on a thread's message while the tab reads its thread list", () => {
+  /** The bot's own conversation: the one `BOT` names as its app conversation. */
+  const MAIN = "conversation-app";
+
+  function threadOf(
+    conversationId: string,
+    anchored: boolean,
+  ): (typeof mocks.state.threads)[number] {
+    return {
+      threadId: "thread-1",
+      conversationId,
+      sessionChatId: "session-thread-1",
+      anchor: anchored
+        ? {
+            messageId: "post-7",
+            requestId: "req-7",
+            senderUserId: "user-1",
+            sentAt: 1_000,
+            resolvedAt: null,
+            excerpt: null,
+          }
+        : null,
+      replyCount: 1,
+      lastReplyAt: 2_000,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+  }
+
+  function requestThreadLanding(
+    threadId: string | null,
+    messageId: string,
+  ): void {
+    act(() => {
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { kind: "thread", threadId, messageId });
+    });
+  }
+
+  function landedOn(): {
+    readonly row: string;
+    readonly thread: string;
+    readonly open: string;
+  } {
+    const channel = screen.getByTestId("stub-channel");
+    return {
+      row: channel.getAttribute("data-land-on") ?? "",
+      thread: channel.getAttribute("data-land-on-thread") ?? "",
+      open: channel.getAttribute("data-open-thread") ?? "",
+    };
+  }
+
+  const NOWHERE = { row: "none", thread: "none", open: "none" };
+
+  function spent(): boolean {
+    return !Object.hasOwn(useBotTabLandingStore.getState().byBotId, BOT_ID);
+  }
+
+  /** The list the tab holds lacks the thread, and a read of it is in flight. */
+  function listBeingRead(failedBefore: boolean): {
+    readonly rerender: () => void;
+  } {
+    mocks.state.threads = [];
+    mocks.state.threadsFetching = true;
+    mocks.state.threadsError = failedBefore;
+    const { rerender } = render(surface());
+    return { rerender: () => rerender(surface()) };
+  }
+
+  function answer(threads: typeof mocks.state.threads, failed: boolean): void {
+    mocks.state.threads = threads;
+    mocks.state.threadsFetching = false;
+    mocks.state.threadsError = failed;
+  }
+
+  beforeEach(() => {
+    useBotTabLandingStore.setState({ byBotId: {} });
+    const toastError = vi.spyOn(toast, "error").mockReturnValue("toast");
+    onTestFinished(() => toastError.mockRestore());
+  });
+
+  describe("of the channel", () => {
+    it.each([
+      ["has not answered and a read is in flight", false, true, false],
+      ["failed", false, false, true],
+      ["failed and is being read again", false, true, true],
+    ])(
+      "lands on the exact message at once when the thread list %s",
+      (_name, held, fetching, failed) => {
+        mocks.state.threadsHeld = held;
+        mocks.state.threadsFetching = fetching;
+        mocks.state.threadsError = failed;
+        render(surface());
+
+        requestThreadLanding(null, "post-9");
+
+        expect(landedOn()).toEqual({
+          ...NOWHERE,
+          row: "post-9",
+          thread: "none",
+        });
+        expect(spent()).toBe(true);
+      },
+    );
+  });
+
+  describe("of a thread", () => {
+    it.each([[true], [false]])(
+      "waits for the read in flight over a list lacking the thread (failed before: %s), keeps the tab where it was, and lands the exact message once the answer has the thread",
+      (failedBefore) => {
+        const view = listBeingRead(failedBefore);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+        requestThreadLanding("thread-1", "reply-9");
+        view.rerender();
+        view.rerender();
+
+        expect(spent()).toBe(false);
+        expect(landedOn()).toEqual(NOWHERE);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+
+        answer([threadOf(MAIN, true)], false);
+        view.rerender();
+
+        expect(landedOn()).toEqual({
+          row: "reply-9",
+          thread: "thread-1",
+          open: "post-7",
+        });
+        expect(spent()).toBe(true);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(
+          movesBefore + 1,
+        );
+      },
+    );
+
+    it("waits for the read in flight even over a held list that already names the thread, then lands the exact message once the read has settled", () => {
+      const view = listBeingRead(false);
+      mocks.state.threads = [threadOf(MAIN, true)];
+      view.rerender();
+      const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+      requestThreadLanding("thread-1", "reply-9");
+      view.rerender();
+
+      expect(spent()).toBe(false);
+      expect(landedOn()).toEqual(NOWHERE);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+
+      answer([threadOf(MAIN, true)], false);
+      view.rerender();
+
+      expect(landedOn()).toEqual({
+        row: "reply-9",
+        thread: "thread-1",
+        open: "post-7",
+      });
+      expect(spent()).toBe(true);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(
+        movesBefore + 1,
+      );
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("refuses at once, landing nothing, when the host is known not to list threads, unlike a host not yet known to", () => {
+      mocks.state.threadListSupport = false;
+      const { rerender } = render(surface());
+      const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+      requestThreadLanding("thread-1", "reply-9");
+      rerender(surface());
+
+      expect(spent()).toBe(true);
+      expect(landedOn()).toEqual(NOWHERE);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+      expect(toast.error).toHaveBeenCalledTimes(1);
+    });
+
+    describe("on a host that names no conversation for the channel", () => {
+      beforeEach(() => {
+        mocks.state.snapshot = {
+          ...snapshot(),
+          bot: { ...BOT, appConversationChatId: null },
+        };
+      });
+
+      it("lands the exact message of a thread the settled list carries with its post", () => {
+        const view = listBeingRead(false);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+        requestThreadLanding("thread-1", "reply-9");
+        expect(spent()).toBe(false);
+
+        answer([threadOf(MAIN, true)], false);
+        view.rerender();
+
+        expect(landedOn()).toEqual({
+          row: "reply-9",
+          thread: "thread-1",
+          open: "post-7",
+        });
+        expect(spent()).toBe(true);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(
+          movesBefore + 1,
+        );
+        expect(toast.error).not.toHaveBeenCalled();
+      });
+
+      it("still lands nothing, and says so once, for a thread whose post is gone", () => {
+        const view = listBeingRead(false);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+        requestThreadLanding("thread-1", "reply-9");
+
+        answer([threadOf(MAIN, false)], false);
+        view.rerender();
+
+        expect(spent()).toBe(true);
+        expect(landedOn()).toEqual(NOWHERE);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+        expect(toast.error).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("opens a thread itself, naming no message, from a held list at once, though a read is in flight and the thread belongs to another conversation", () => {
+      mocks.state.threads = [threadOf("conversation-other", true)];
+      mocks.state.threadsFetching = true;
+      render(surface());
+      const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "thread",
+          threadId: "thread-1",
+          messageId: null,
+        });
+      });
+
+      expect(landedOn()).toEqual({ ...NOWHERE, open: "post-7" });
+      expect(spent()).toBe(true);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(
+        movesBefore + 1,
+      );
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("waits while the host's thread list is not yet known to be supported, rather than reading it as empty", () => {
+      mocks.state.threadListSupport = null;
+      mocks.state.threadsFetching = false;
+      const { rerender } = render(surface());
+      const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+      requestThreadLanding("thread-1", "reply-9");
+
+      expect(spent()).toBe(false);
+      expect(landedOn()).toEqual(NOWHERE);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+
+      mocks.state.threadListSupport = true;
+      mocks.state.threads = [threadOf(MAIN, true)];
+      rerender(surface());
+
+      expect(landedOn()).toEqual({
+        row: "reply-9",
+        thread: "thread-1",
+        open: "post-7",
+      });
+      expect(spent()).toBe(true);
+    });
+
+    it.each([
+      ["the thread is not in the list", [], false],
+      ["the list failed", [], true],
+      ["the thread has no anchor", [threadOf(MAIN, false)], false],
+      [
+        "the thread belongs to another conversation",
+        [threadOf("conversation-other", true)],
+        false,
+      ],
+    ] as const)(
+      "lands nothing and moves nothing once the read has settled and %s",
+      (_name, threads, failed) => {
+        const view = listBeingRead(true);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+        requestThreadLanding("thread-1", "reply-9");
+        expect(spent()).toBe(false);
+
+        answer([...threads], failed);
+        view.rerender();
+
+        expect(spent()).toBe(true);
+        expect(landedOn()).toEqual(NOWHERE);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+        expect(toast.error).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("is spent unlanded when the person moves the tab while it waits, and a later answer brings nothing", async () => {
+      const user = userEvent.setup();
+      const view = listBeingRead(true);
+      requestThreadLanding("thread-1", "reply-9");
+      expect(spent()).toBe(false);
+
+      await user.click(screen.getByTestId("bot-tab-view-activity"));
+      view.rerender();
+      expect(spent()).toBe(true);
+
+      answer([threadOf(MAIN, true)], false);
+      view.rerender();
+
+      expect(screen.queryByTestId("stub-channel")).toBeNull();
+      expect(spent()).toBe(true);
+    });
+  });
+
+  describe("of a chat the bot names", () => {
+    it("lands a landing on the channel's own chat on the exact message at once, while the host is not yet known to list threads", () => {
+      mocks.state.threadListSupport = null;
+      mocks.state.threadsHeld = false;
+      render(surface());
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "chat",
+          chatId: MAIN,
+          messageId: "post-5",
+          sendPostId: null,
+        });
+      });
+
+      expect(landedOn()).toEqual({ ...NOWHERE, row: "post-5" });
+      expect(spent()).toBe(true);
+    });
+
+    it("still waits for the thread list when the chat it names is not the channel's, then lands once the list names it", () => {
+      mocks.state.threadListSupport = null;
+      mocks.state.threadsHeld = false;
+      const { rerender } = render(surface());
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "chat",
+          chatId: "thread-1",
+          messageId: "reply-9",
+          sendPostId: null,
+        });
+      });
+      expect(landedOn()).toEqual(NOWHERE);
+      expect(spent()).toBe(false);
+
+      mocks.state.threadListSupport = true;
+      mocks.state.threadsHeld = true;
+      mocks.state.threads = [threadOf(MAIN, true)];
+      rerender(surface());
+
+      expect(landedOn()).toEqual({
+        row: "reply-9",
+        thread: "thread-1",
+        open: "post-7",
+      });
+      expect(spent()).toBe(true);
+    });
+
+    it("still lands a thread's own chat on the exact message once the list names it", () => {
+      mocks.state.threads = [threadOf(MAIN, true)];
+      render(surface());
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "chat",
+          chatId: "thread-1",
+          messageId: "reply-9",
+          sendPostId: null,
+        });
+      });
+
+      expect(landedOn()).toEqual({
+        row: "reply-9",
+        thread: "thread-1",
+        open: "post-7",
+      });
+      expect(spent()).toBe(true);
+    });
   });
 });

@@ -91,6 +91,10 @@ export interface DesktopPerWindowLandingDraft {
   readonly closed: boolean | null;
   /** The sandbox a given-back message was going to; present only while set. */
   readonly returnedSandbox?: DesktopJsonValue;
+  /** Present, as `true`, only while nobody chose the draft's account. */
+  readonly accountFollowsDefault?: boolean;
+  /** The host the draft was opened for; present only while set. */
+  readonly namedHostId?: string;
 }
 
 export interface DesktopPerWindowSnapshot {

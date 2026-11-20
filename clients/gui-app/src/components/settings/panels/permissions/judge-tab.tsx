@@ -60,6 +60,7 @@ import {
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import {
+  judgeProfileUnavailable,
   judgeWarningCause,
   offeredJudgeProfileIds,
 } from "@/components/settings/panels/auto-judge-selection";
@@ -85,7 +86,7 @@ import {
   judgeCauseShortLabel,
   judgeFaceDimmed,
   judgeFaceInert,
-  judgePickAccount,
+  judgeFaceAccount,
   judgePickerDisabled,
   judgeSeedSelection,
   judgeSelectionMarked,
@@ -230,20 +231,34 @@ function presentedPick(
  * whether a last pick can run. Read while the provider is available only:
  * a provider that cannot run is reported before its model is, and a read
  * would start its server for nothing.
+ *
+ * The pick's own account's catalog: a managed profile can offer a model the
+ * ambient account does not, and the ambient list would report that pick as
+ * no longer offered. A pick whose profile the provider no longer offers reads
+ * the ambient list - the removed-account notice is what reports it.
  */
 function useShownPickModels(
   shown: AutoJudgeSelection | null,
   harnesses: ReadonlyArray<GuiHarnessOption> | undefined,
+  providers: ReadonlyArray<ProviderCliState> | undefined,
 ): ReadonlyArray<GuiAgentModelOption> | undefined {
   const row =
     shown === null
       ? undefined
       : harnesses?.find((candidate) => candidate.id === shown.harnessId);
   const available = row?.available === true;
+  const profileId =
+    shown === null ||
+    judgeProfileUnavailable(
+      shown.profileId,
+      offeredJudgeProfileIds(providers, shown.harnessId),
+    )
+      ? null
+      : shown.profileId;
   const models = useGuiHarnessModelsQuery(
     row?.id ?? IDLE_MODELS_HARNESS_ID,
     null,
-    { enabled: available, subscribed: available },
+    { profileId, enabled: available, subscribed: available },
   ).data?.models;
   return row === undefined ? undefined : models;
 }
@@ -314,6 +329,7 @@ function AutoJudgeCard(props: { readonly hostId: string | null }): ReactNode {
   const shownModels = useShownPickModels(
     shownJudgePick(record, pick.draft),
     harnesses,
+    providers,
   );
   const state = judgeTileState({
     record,
@@ -681,7 +697,7 @@ function PickTileContent(
           // the palette's "Change model…" belong to the chat behind Settings.
           registerActivation={false}
           // The machine Settings is scoped to, for the catalog and for
-          // "Create new profile", whose flow mounts outside Settings' binding.
+          // "Add a profile", whose flow mounts outside Settings' binding.
           // `null` only while Settings follows the effective host, where the
           // two are the same machine.
           createProfileHostId={props.hostId}
@@ -864,8 +880,9 @@ function useJudgePicker(props: JudgeTilesProps): JudgePicker {
  * The provider icon, the model's catalog label (else its slug), the effort
  * the host runs it at when the model advertises one and the host applies it
  * (the stored effort while the model still offers it, else its lowest -
- * `effectiveJudgeReasoningEffort`, the host's own rule), and the account when
- * that provider has more than one here.
+ * `effectiveJudgeReasoningEffort`, the host's own rule), and the account
+ * when the composer button would name it: one account of a provider that
+ * can have profiles, or two of any other.
  */
 function judgeFace(input: {
   readonly state: JudgeTileState;
@@ -886,7 +903,7 @@ function judgeFace(input: {
       inert,
     };
   }
-  const account = judgePickAccount(input.providers, shown);
+  const account = judgeFaceAccount(input.providers, shown);
   const blocker =
     state.lastCause === null ? null : judgeCauseShortLabel(state.lastCause);
   const effort =

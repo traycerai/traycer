@@ -231,7 +231,12 @@ new-conversation modal's host). `null` means "this surface owns its
 placement", and the two surfaces that own one resolve it differently:
 
 - the **landing composer** resolves its WINDOW-keyed pin ?? `effective`
-  (`useComposerPlacement`);
+  (`useComposerPlacement`), except for a draft opened FOR one machine
+  (`LandingDraftTab.namedHostId`, today Settings' "Set up with an agent"),
+  whose named host is its override: picker fixed, Send refused while it is
+  dead, its own staging surface (`landingDraftSurfaceKey`), the landing
+  terminal panel beside it on the same host and surface, and never adopted
+  by the mirror, so it stays on the device that named it until it is sent;
 - the **in-Epic new-conversation modal** resolves its per-**EPIC** pin ?? the
   Epic session's host ?? `effective` (`useEpicConversationPlacement`). The
   per-Epic pin is that Epic's _last created chat's host_: the picker writes
@@ -380,13 +385,29 @@ frame.contentWindow` (the origin is always `"null"`), armed by the loader's
   `McpAppRpc` seam (`lib/sandbox/mcp-app-rpc.ts`).
 - **Links.** Every `ui/open-link` shows `SandboxLinkConfirm` (D42), on every
   client: the frame cannot prove the reader clicked. Never open a frame's link
-  without it.
-- **Fullscreen** (`lib/sandbox/overlay-owner.ts`). One app per window. It is
+  without it. The one exception: a link from an artifact page into this Epic's
+  artifacts tree opens in an app tile without the confirm. The app cannot prove
+  that click either, so the path must never reach anything outside the tree (no
+  workspace file, no other Epic, no URL). Every other frame link keeps it.
+- **Fullscreen** (`lib/sandbox/overlay-owner.ts`). One TOP-LAYER SURFACE per
+  window, counting both a fullscreen app and an expanded artifact
+  (`components/artifacts/artifact-expansion.tsx`), so the two are mutually
+  exclusive. It is
   refused, or ends, while anything needs the reader: an approval or download
-  confirm, a link confirm, an agent question, any dialog, composer focus. The
-  row stays mounted while fullscreen. The surface is a manual popover (moving
-  the frame reloads the app), insets the safe area itself, claims the blocking
-  layer, and leaves on Escape, which is how the phone's back button reaches it.
+  confirm, a link confirm, an agent question, any dialog outside the
+  claimant's own surface, composer focus. A claimant that raises its own
+  layers INSIDE its surface names it with `FullscreenClaim.surface` — a popover
+  is a `role="dialog"`, so the canvas Pages list would otherwise end the
+  expansion it belongs to — and that exempts the surface and nothing else; an
+  app passes `null`, its confirms being siblings, so every dialog blocks it.
+  The row stays mounted while fullscreen. Either surface is promoted IN PLACE,
+  never moved (moving the frame reloads the app or the artifact's page), undoes
+  the UA styles of whatever promoted it, insets the safe area itself, claims
+  the blocking layer, and leaves on Escape, which is how the phone's back
+  button reaches it. The app's surface is a manual popover; the artifact's is a
+  native `<dialog>`, always open so the collapsed surface lays out in place and
+  raised with `showModal()`, whose inertness is what keeps Tab, a press and a
+  screen reader out of the task behind it.
   An Escape pressed inside the app reaches it too: while the host context
   says `fullscreen`, the bootstrap forwards bare Escape on the shortcut
   channel, and the bridge accepts it only from the proven page in that mode.
@@ -450,18 +471,6 @@ dispatch - is a Playwright spec in `browser-tests/` against a fixture page in
 `src/__tests__/browser/`; read `browser-tests/README.md` first. Run one file
 with `bun run test:browser browser-tests/<file>.spec.ts`; CI runs them all in
 `browser-regressions.yml`. Everything else stays in Vitest.
-
-## Skills (use when matched)
-
-| Skill                             | When                           |
-| --------------------------------- | ------------------------------ |
-| `shadcn`                          | Init/add/primitives            |
-| `tailwind-v4-shadcn`              | Theme tokens, dark mode, TW v4 |
-| `react-best-practices`            | React / `.tsx`                 |
-| `frontend-design`                 | New UI / visual work           |
-| `vite` / `vitest` / `zod` / `bun` | As named                       |
-
-Materialized from `skills-lock.json` under `.agents/` / `.claude/`.
 
 ## Status colors
 

@@ -1,3 +1,4 @@
+import { BotReadObservedRow } from "@/components/bots/bot-transcript-reading";
 import { memo, useContext, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
 import type {
@@ -19,6 +20,7 @@ import { AutoJudgeUnattendedDenialSegment } from "./segments/auto-judge-unattend
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import { BotExchangeLineSegment } from "./segments/bot-exchange-line-segment";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import type { TranscriptRowPart } from "@/stores/chats/assistant-turn-parts";
 
@@ -271,11 +273,14 @@ function ChatMessageImpl(props: ChatMessageProps) {
   // transcript's.
   if (botPresentation !== null && message.role !== "system") {
     return (
-      <ChatBotMessage
-        message={message}
-        presentation={botPresentation}
-        hoverActions
-      />
+      <BotReadObservedRow message={message}>
+        <ChatBotMessage
+          message={message}
+          presentation={botPresentation}
+          hoverActions
+          timeLink={null}
+        />
+      </BotReadObservedRow>
     );
   }
   if (message.role === "assistant") {
@@ -297,7 +302,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
   // Timestamps setting can hide it, and a lone separator after the label is
   // worse than no stamp at all.
   const sentAt = message.sentAt ?? message.createdAt;
-  const overline = (
+  const senderLine = (
     <ChatSenderOverline
       label={label}
       sentAt={sentAt}
@@ -305,6 +310,21 @@ function ChatMessageImpl(props: ChatMessageProps) {
       instanceId={message.id}
     />
   );
+  // `senderUserId` is set only for another person.
+  const overline =
+    message.senderUserId === undefined ? (
+      senderLine
+    ) : (
+      <span className="flex items-center gap-1.5">
+        <PersonAvatar
+          userId={message.senderUserId}
+          name={senderLabel}
+          avatarUrl={message.senderAvatarUrl ?? null}
+          size="xs"
+        />
+        {senderLine}
+      </span>
+    );
   return (
     <div
       className={cn(

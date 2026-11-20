@@ -61,12 +61,18 @@ export function useComposerDictation(
   const runnerHost = useRunnerHost();
   useEffect(() => {
     if (dictationError === null) return;
+    const permissionMessage =
+      dictationFailureClass === "speech_recognition_denied"
+        ? "Speech recognition permission was unavailable."
+        : "Microphone permission was unavailable.";
     reportableErrorToast(
       dictationError,
       dictationPermissionDenied
         ? {
             description:
-              "Enable microphone access for Traycer, then try again.",
+              dictationFailureClass === "speech_recognition_denied"
+                ? "Enable speech recognition for Traycer, then try again."
+                : "Enable microphone access for Traycer, then try again.",
             action: {
               label: "Open Settings",
               onClick: () => {
@@ -81,9 +87,7 @@ export function useComposerDictation(
       // real error text stays in the private capture.
       createReportIssueDraftContext({
         title: "Dictation failed",
-        message: dictationPermissionDenied
-          ? "Microphone permission was unavailable."
-          : null,
+        message: dictationPermissionDenied ? permissionMessage : null,
         code: dictationFailureClass,
         source: "Dictation",
         capture:
@@ -106,7 +110,10 @@ export function useComposerDictation(
   // self-heals a missing model and keeps the mic (and the OS permission prompt)
   // hidden where the engine/model isn't available. While it downloads, a
   // preparing indicator shows in the mic slot.
-  const dictationAvailability = useDictationAvailability(voiceInputEnabled);
+  const dictationAvailability = useDictationAvailability(
+    voiceInputEnabled,
+    voiceLanguage,
+  );
   const dictationActive = dictationAvailability.ready;
   // If availability drops mid-session (model evicted / host swap), the mic +
   // stop UI disappear - cancel so the OS mic isn't left open with no affordance.

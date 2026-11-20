@@ -20,8 +20,6 @@ import {
   mount,
   mountInChat,
   createChatCalls,
-  getSetupAction,
-  findSetupAction,
   listAnswers,
   type Deferred,
   deferred,
@@ -130,7 +128,7 @@ describe("choosing Stop on an unclaimed send", () => {
         failure: { kind: "settings", code: "SBX-0520" },
       });
     });
-    fireEvent.click(await findSetupAction("sandbox-setup-stop"));
+    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
     return mounted;
   }
 
@@ -325,7 +323,7 @@ describe("choosing Stop on an unclaimed send", () => {
     });
     // The list request leaves before Stop is chosen and answers after it.
     const sentAt = Date.now();
-    fireEvent.click(await findSetupAction("sandbox-setup-stop"));
+    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
     await waitFor(() => {
       expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
     });
@@ -342,7 +340,7 @@ describe("choosing Stop on an unclaimed send", () => {
       await Promise.resolve();
     });
     expectSendKept();
-    expect(getSetupAction("sandbox-setup-stop")).toBeDefined();
+    expect(screen.getByTestId("sandbox-setup-stop")).toBeDefined();
     await settleStop(answer);
   });
 
@@ -1203,7 +1201,7 @@ describe("choosing Stop on an unclaimed send", () => {
         await screen.findByTestId("sandbox-setup-retry-applying"),
       );
       expect(mocks.repairFinishers).toHaveLength(1);
-      fireEvent.click(await findSetupAction("sandbox-setup-stop"));
+      fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
       await waitFor(() => {
         expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
       });
@@ -1272,7 +1270,7 @@ describe("choosing Stop on an unclaimed send", () => {
         failure: { kind: "settings", code: "SBX-0520" },
       });
     });
-    fireEvent.click(await findSetupAction("sandbox-setup-stop"));
+    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
     await waitFor(() => {
       expect(mocks.stopSandbox).toHaveBeenCalledTimes(1);
     });
@@ -1659,7 +1657,7 @@ describe("choosing Stop on an unclaimed send", () => {
         failure: { kind: "settings", code: "SBX-0520" },
       });
     });
-    fireEvent.click(await findSetupAction("sandbox-setup-stop"));
+    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
     await waitFor(() => {
       expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
     });
@@ -1748,7 +1746,7 @@ describe("choosing Stop on an unclaimed send", () => {
         failure: { kind: "settings", code: "SBX-0520" },
       });
     });
-    const stop = await findSetupAction("sandbox-setup-stop");
+    const stop = await screen.findByTestId("sandbox-setup-stop");
 
     const originalSetItem = localStorage.setItem.bind(localStorage);
     const failedWrite = vi

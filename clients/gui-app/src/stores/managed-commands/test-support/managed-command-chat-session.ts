@@ -34,6 +34,7 @@ export interface ManagedCommandChatSessionStub {
    * reading an empty set as "deleted".
    */
   readonly setCommands: (commands: readonly ManagedCommand[]) => void;
+  readonly sendSnapshot: (commands: readonly ManagedCommand[]) => void;
   /**
    * A change frame with no snapshot before it - the pre-hydration window a
    * surface must not mistake for the host's answer.
@@ -131,20 +132,25 @@ export function installManagedCommandChatSession(args: {
     });
   };
 
+  const sendSnapshot = (commands: readonly ManagedCommand[]): void => {
+    snapshotDelivered = true;
+    callbacks().onSnapshot({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId,
+      chatId,
+      snapshot: emptyChatSnapshot({ chatId, hostId, commands }),
+    });
+  };
+
   return {
+    sendSnapshot,
     setCommands: (commands) => {
       if (snapshotDelivered) {
         changeFrame(commands);
         return;
       }
-      snapshotDelivered = true;
-      callbacks().onSnapshot({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        epicId,
-        chatId,
-        snapshot: emptyChatSnapshot({ chatId, hostId, commands }),
-      });
+      sendSnapshot(commands);
     },
     setCommandsWithoutSnapshot: (commands) => {
       changeFrame(commands);

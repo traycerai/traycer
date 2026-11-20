@@ -47,16 +47,13 @@ const RUNNING_SHELL: ManagedCommand = {
 const mockSessionState = vi.hoisted<{
   readonly activityTiers: Map<string, "turn" | "background">;
   existingHandle: ChatSessionStoreHandle | null;
-  epicPermissionRole: "owner" | "editor" | "viewer" | null;
 }>(() => ({
   activityTiers: new Map<string, "turn" | "background">(),
   existingHandle: null,
-  epicPermissionRole: "owner",
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicAgentActivityTiers: () => mockSessionState.activityTiers,
-  useRegisteredEpicPermissionRole: () => mockSessionState.epicPermissionRole,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", () => ({
@@ -74,7 +71,6 @@ afterEach(() => {
   cleanup();
   mockSessionState.activityTiers.clear();
   mockSessionState.existingHandle = null;
-  mockSessionState.epicPermissionRole = "owner";
   for (const handle of createdHandles.splice(0)) {
     handle.dispose();
   }
@@ -104,7 +100,6 @@ describe("<ChatProgressIcon />", () => {
     const handle = createHandle();
     setChatAccess(handle, "viewer");
     mockSessionState.existingHandle = handle;
-    mockSessionState.epicPermissionRole = "editor";
 
     const { container } = renderIcon();
 
@@ -121,7 +116,6 @@ describe("<ChatProgressIcon />", () => {
   it("does not show the unopened-chat fallback lock until session access is known", () => {
     const handle = createHandle();
     mockSessionState.existingHandle = handle;
-    mockSessionState.epicPermissionRole = "viewer";
 
     const { container } = renderIcon();
 
@@ -131,11 +125,10 @@ describe("<ChatProgressIcon />", () => {
     expect(container.querySelector(".lucide-message-square-lock")).toBeNull();
   });
 
-  it("does not lock a known chat owner even when the Epic fallback is viewer", () => {
+  it("does not lock a known chat owner", () => {
     const handle = createHandle();
     setChatAccess(handle, "owner");
     mockSessionState.existingHandle = handle;
-    mockSessionState.epicPermissionRole = "viewer";
 
     const { container } = renderIcon();
 
@@ -145,14 +138,15 @@ describe("<ChatProgressIcon />", () => {
     expect(container.querySelector(".lucide-message-square-lock")).toBeNull();
   });
 
-  it("uses an accessible viewer fallback for unopened chats", () => {
-    mockSessionState.epicPermissionRole = "viewer";
-
+  // Every task role may write, so the task's role no longer stands in for a
+  // chat's own access: an unopened row claims nothing until its session says
+  // the chat is somebody else's.
+  it("does not lock an unopened chat", () => {
     renderIcon();
 
     expect(
-      screen.getByRole("status", { name: "Read-only agent" }),
-    ).toBeDefined();
+      screen.queryByRole("status", { name: "Read-only agent" }),
+    ).toBeNull();
   });
 
   it("keeps the spinner visible from runStatus when awareness is missing", () => {

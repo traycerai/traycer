@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { TeardownCommitDialog } from "@/components/worktree/teardown-commit-dialog";
+import { expectScrollableDialogLayout } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 
 const HOLDER: WorktreeBusyHolder = {
   ownerRef: {
@@ -94,6 +95,7 @@ describe("TeardownCommitDialog", () => {
       />,
     );
     const dialog = screen.getByTestId("teardown-commit-dialog");
+    expectScrollableDialogLayout(dialog);
     const label = screen.getByTestId("teardown-holder-label");
     const confirm = screen.getByTestId("teardown-commit-immediate");
     const footer = confirm.closest("[data-slot='dialog-footer']");

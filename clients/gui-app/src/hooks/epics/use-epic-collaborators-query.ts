@@ -5,6 +5,7 @@ import type {
   ListEpicCollaboratorsResponse,
   PermissionRole,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -159,6 +160,15 @@ export function useEpicCollaboratorsQuery(
   };
 }
 
+/**
+ * "People with access", from the rows the host answered with.
+ *
+ * A row whose role resolves to no access is not a row about access: a role
+ * this client does not recognise gives none. Dropping it here keeps the list
+ * and the authority the same answer, rather than listing a grant nothing
+ * honours. A `viewer` row, which a host that predates the decode still
+ * answers, resolves to editor and is listed as one.
+ */
 export function projectCollaborators(
   entries: ReadonlyArray<CollaboratorEntry>,
 ): EpicCollaboratorsView {
@@ -167,7 +177,10 @@ export function projectCollaborators(
   let ownerTeam: EpicTeamCollaboratorView | null = null;
   const flatRows: EpicCollaboratorView[] = [];
 
-  entries.forEach((entry, i) => {
+  entries.forEach((wireEntry, i) => {
+    const role = grantedRole(wireEntry.role);
+    if (role === null) return;
+    const entry = { ...wireEntry, role };
     const user = entry.user;
     if (user !== null && user !== undefined) {
       const row = buildUserView({
@@ -222,7 +235,10 @@ export function flattenCollaborators(
 }
 
 interface BuildUserViewArgs {
-  readonly entry: CollaboratorEntry;
+  /** Role already resolved by {@link projectCollaborators}. */
+  readonly entry: Omit<CollaboratorEntry, "role"> & {
+    readonly role: PermissionRole;
+  };
   readonly userId: string;
   readonly profile: {
     avatarUrl: string;

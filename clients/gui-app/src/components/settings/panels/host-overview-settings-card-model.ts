@@ -1,14 +1,14 @@
+import { unresolvedSetupText } from "@/components/settings/environment/environment-picker-model";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import { planesOfferStopSharing } from "@/components/settings/move/status-planes";
-import { isReportedItemKind } from "@/components/settings/environment/status-chip-page-kinds";
 import {
   localRowCohort,
   type LocalRowVerb,
 } from "@/components/settings/environment/local-row-cohort";
 import {
   moveIsPastTheAccept,
-  MOVE_STOPPED_REASONS,
+  moveStoppedReason,
 } from "@/lib/environment/move-in-progress";
 
 /**
@@ -38,9 +38,38 @@ export type HostSettingsCardState =
   | { readonly kind: "moved"; readonly acceptedAt: number }
   | { readonly kind: "other" };
 
+/** Never `0 of 0`: no count until the move has registered an item. */
+export function moveProgressText(applied: number, total: number): string {
+  return total === 0
+    ? "Moving this computer's settings to Personal"
+    : `Moving this computer's settings to Personal · ${String(applied)} of ${String(total)} items applied`;
+}
+
 /** `Moving stopped: it timed out. 3 items left.` */
 export function moveStoppedText(reason: string, left: number): string {
   return `Moving stopped: ${reason}. ${left === 1 ? "1 item" : `${String(left)} items`} left.`;
+}
+
+/**
+ * Kinds no count reports: a configuration's sandbox defaults, storage policy
+ * and snapshot policy change nothing on a host (every host answers them
+ * applied).
+ */
+const UNREPORTED_ITEM_KINDS: ReadonlySet<string> = new Set([
+  "sandbox_defaults",
+  "storage_policy",
+  "snapshot_policy",
+]);
+
+export function moveItemCounts(status: EnvironmentStatusResponseV11): {
+  readonly applied: number;
+  readonly total: number;
+} {
+  const items = status.items.filter(
+    (item) => !UNREPORTED_ITEM_KINDS.has(item.kind),
+  );
+  const applied = items.filter((item) => item.status === "applied").length;
+  return { applied, total: items.length + status.pendingUploads.length };
 }
 
 export function hostSettingsCardState(
@@ -48,11 +77,9 @@ export function hostSettingsCardState(
 ): HostSettingsCardState {
   const setup = status.setup;
   if (setup !== null && moveIsPastTheAccept(status)) {
-    const items = status.items.filter((item) => isReportedItemKind(item.kind));
-    const applied = items.filter((item) => item.status === "applied").length;
-    const total = items.length + status.pendingUploads.length;
-    const reason = MOVE_STOPPED_REASONS[setup.state];
-    if (reason !== undefined) {
+    const { applied, total } = moveItemCounts(status);
+    const reason = moveStoppedReason(setup.state);
+    if (reason !== null) {
       return { kind: "move_stopped", reason, left: total - applied };
     }
     return { kind: "moving", applied, total };
@@ -66,32 +93,41 @@ export function hostSettingsCardState(
     : { kind: "moved", acceptedAt: status.consent.acceptedAt };
 }
 
-interface HostSettingsRowOption {
+export interface HostSettingsRowOption {
   readonly value: "personal" | "local";
   readonly label: string;
-  readonly description: string;
-  readonly action: "move" | "stop_sharing";
+  /** The sentence under the name in the menu. Hidden in the closed trigger. */
+  readonly detail: string;
+  readonly action: "move" | "stop_sharing" | "none";
 }
 
-const HOST_SETTINGS_OPTIONS: readonly HostSettingsRowOption[] = [
-  {
-    value: "personal",
-    label: "Personal",
-    description: "Your Personal settings reach this computer.",
-    action: "move",
-  },
-  {
-    value: "local",
-    label: "This computer only",
-    description: "Uses the settings stored here.",
-    action: "stop_sharing",
-  },
-];
+const RUNS_PERSONAL = "Runs Personal";
+const RUNS_OWN_SETTINGS = "Runs its own settings, not in Personal yet";
 
-type HostSettingsRowModel =
+function hostSettingsOptions(
+  hostName: string,
+): readonly HostSettingsRowOption[] {
+  return [
+    {
+      value: "personal",
+      label: "Personal",
+      detail: RUNS_PERSONAL,
+      action: "move",
+    },
+    {
+      value: "local",
+      label: hostName,
+      detail: "its own settings, not in Personal yet",
+      action: "stop_sharing",
+    },
+  ];
+}
+
+export type HostSettingsRowModel =
   | { readonly kind: "loading" }
   | {
       readonly kind: "team";
+      readonly environmentId: string;
       readonly label: string;
       readonly description: string;
     }
@@ -109,16 +145,38 @@ type HostSettingsRowModel =
       readonly options: readonly HostSettingsRowOption[];
     };
 
-/** Settings place comes from status; the binding answers only which team. */
+/**
+ * Settings place comes from status; the binding answers only which team. A
+ * computer that runs its own settings is in no team, and no binding is read
+ * for it (`useEnvironmentHostReadQuery`), so its row does not wait for one.
+ */
 export function hostSettingsRowModel(
   status: EnvironmentStatusResponseV11 | null,
   binding: EnvironmentHostBinding | null,
+  hostName: string,
 ): HostSettingsRowModel {
-  if (status === null || binding === null) return { kind: "loading" };
-  if (binding.explicit && binding.environment.ownerKind === "organization") {
-    const label = binding.environment.label;
-    const possessive = label.endsWith("s") ? `${label}'` : `${label}'s`;
-    return { kind: "team", label, description: `Runs ${possessive} settings.` };
+  if (status === null) return { kind: "loading" };
+  if (localRowCohort(status).kind !== "local") {
+    if (binding === null) return { kind: "loading" };
+    if (binding.explicit && binding.environment.ownerKind === "organization") {
+      return {
+        kind: "team",
+        environmentId: binding.environment.environmentId,
+        label: binding.environment.label,
+        description: `Runs ${binding.environment.label}`,
+      };
+    }
+  }
+  const setup = unresolvedSetupText(status);
+  if (setup !== null) {
+    return {
+      kind: "select",
+      value: "local",
+      description: setup,
+      options: [
+        { value: "local", label: hostName, detail: setup, action: "none" },
+      ],
+    };
   }
   const state = hostSettingsCardState(status);
   if (state.kind === "moving" || state.kind === "move_stopped")
@@ -128,11 +186,8 @@ export function hostSettingsRowModel(
   return {
     kind: "select",
     value,
-    description:
-      value === "local"
-        ? "Uses the settings stored on this computer. Changes stay here."
-        : "Your Personal providers, keys, variables and skills reach this computer.",
-    options: HOST_SETTINGS_OPTIONS.filter(
+    description: value === "local" ? RUNS_OWN_SETTINGS : RUNS_PERSONAL,
+    options: hostSettingsOptions(hostName).filter(
       (option) =>
         option.value === value || option.action === "move" || offerStop,
     ),

@@ -20,6 +20,16 @@ export interface EpicRouteFocus {
   readonly migrationSource: "phase" | undefined;
 }
 
+/**
+ * A task opened by a link in a Tracy transcript: the bot whose channel, thread
+ * or session the link was read in, taken when it was clicked. It is the only
+ * opening that leaves the task a way back to Tracy; every other opener
+ * carries `null`.
+ */
+export interface TracyTranscriptOrigin {
+  readonly botId: string;
+}
+
 export type EpicPostResolvePreparation =
   | {
       readonly kind: "open-tile";
@@ -101,6 +111,8 @@ export type TabActivationIntent =
       /** Canvas work that needs the exact resolved tab id. */
       readonly preparation: EpicPostResolvePreparation | null;
       readonly includeNestedFocus: boolean;
+      /** Set only through {@link fromTracyTranscript}. */
+      readonly tracyOrigin: TracyTranscriptOrigin | null;
     }
   | {
       readonly kind: "open-phase-migration";
@@ -184,6 +196,7 @@ export function openEpicTabIntent(input: {
     replaceEmptyDraftId: null,
     preparation: null,
     includeNestedFocus: false,
+    tracyOrigin: null,
   };
 }
 
@@ -208,6 +221,7 @@ export function openEpicFromListIntent(input: {
     replaceEmptyDraftId: input.replaceEmptyDraftId,
     preparation: null,
     includeNestedFocus: false,
+    tracyOrigin: null,
   };
 }
 
@@ -228,6 +242,7 @@ export function resourceEpicTabIntent(input: {
     replaceEmptyDraftId: null,
     preparation: input.preparation,
     includeNestedFocus: input.includeNestedFocus,
+    tracyOrigin: null,
   };
 }
 
@@ -246,7 +261,20 @@ export function openExactEpicTabIntent(input: {
     replaceEmptyDraftId: null,
     preparation: null,
     includeNestedFocus: false,
+    tracyOrigin: null,
   };
+}
+
+/**
+ * A task opening made by a link in a Tracy transcript. The link reads its
+ * `origin` where it is drawn (`useTracyTranscriptOrigin`); `null`, a link
+ * drawn anywhere else, leaves the opening as it was.
+ */
+export function fromTracyTranscript(
+  intent: Extract<TabActivationIntent, { kind: "open-epic" }>,
+  origin: TracyTranscriptOrigin | null,
+): Extract<TabActivationIntent, { kind: "open-epic" }> {
+  return origin === null ? intent : { ...intent, tracyOrigin: origin };
 }
 
 export function openPhaseMigrationIntent(input: {

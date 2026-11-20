@@ -13,6 +13,7 @@ import {
   listAgentsResponseSchemaV92,
   listAgentsResponseSchemaV100,
   listAgentsResponseSchemaV101,
+  listAgentsResponseSchemaV102,
   listAgentsResponseSchema,
 } from "@traycer/protocol/host/agent/shared";
 import {
@@ -36,6 +37,11 @@ import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
+  providersListResponseSchemaV108Preimage,
+  providersListResponseSchemaV109Preimage,
+  providersListResponseSchemaV1010Preimage,
+  providersListResponseSchemaV1011Preimage,
+  providersListResponseSchemaV1012Preimage,
   providersListResponseSchemaV100Preimage,
   providersListResponseSchemaV101Preimage,
   providersListResponseSchemaV102Preimage,
@@ -63,8 +69,10 @@ import {
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
   getChatRunSettingsResponseSchemaV30,
+  getChatRunSettingsResponseSchemaV41,
   getChatRunSettingsBatchResponseSchema,
   getChatRunSettingsBatchResponseSchemaV10,
+  getChatRunSettingsBatchResponseSchemaV21,
 } from "@traycer/protocol/host/epic/chat-records";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
@@ -158,9 +166,12 @@ const LIVE_FROZEN_EXPORTS = {
   // 10.1 froze when 10.2 opened to put `reach` and `hostConnectivity` on the
   // row. Its dump did not change by the freeze.
   "agent.list@10.1": listAgentsResponseSchemaV101,
-  // The head line, holding 10.1's old job: it names the LIVE schema, so the
-  // next attempt to grow the agent summary fails here first.
-  "agent.list@10.2": listAgentsResponseSchema,
+  // 10.2 froze when 10.3 opened for serviceTier; its dump did not change by
+  // the freeze.
+  "agent.list@10.2": listAgentsResponseSchemaV102,
+  // The head line. It dumps LIVE, so the next attempt to grow the agent
+  // summary goes red on this line.
+  "agent.list@10.3": listAgentsResponseSchema,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,
@@ -177,9 +188,8 @@ const LIVE_FROZEN_EXPORTS = {
   // records what a line served, so undoing the growth that triggered it does
   // not un-freeze it.
   "providers.list@7.0": providersListResponseSchemaV70,
-  // The head line holds v7.0's old job, and today that is `providers.list@10.0`
-  // below: it names the LIVE schema, so the next attempt to grow it fails there
-  // first.
+  // The current registry line has its own binding. Released rows below retain
+  // their preimages independently of additions to that current line.
   //
   // What that red means depends on whether the line has SHIPPED, and the two
   // answers are opposites - read this before reaching for either:
@@ -270,12 +280,8 @@ const LIVE_FROZEN_EXPORTS = {
   // 9.2 froze when `commandcode` opened 10.0 (`1.5.0` shipped 9.2); its dump
   // did not change by the freeze.
   "providers.list@9.2": providersListResponseSchemaV92,
-  // The head line, holding 9.2's old job: it names the LIVE schema, so the next
-  // attempt to grow the provider state fails here first. Note what that guard
-  // could NOT do while 9.1 held this job - it moves with the live schema by
-  // design, so the two markers landing on the live capability regenerated it
-  // without complaint. The rows above are the ones that refuse; a line earns
-  // one the moment a host advertising it is published.
+  // A published line keeps its preimage even after a later line opens. Shared
+  // nested leaves must be frozen before the current provider state grows.
   // 10.0 froze when MCP remedies and notices opened 10.1: its MCP rows, notices
   // and `applyRemedy` capability scopes are the pre-remedy shape, so a released
   // 10.0 reader never sees a field it cannot spell. Its dump did not change by
@@ -303,9 +309,23 @@ const LIVE_FROZEN_EXPORTS = {
   // 10.7 froze when `nativeMemory` and `nativeMemorySupported` opened 10.8.
   // Its dump did not change by the freeze.
   "providers.list@10.7": providersListResponseSchemaV107Preimage,
-  // The head line: it names the LIVE schema, so the next growth of the provider
-  // state fails here first.
-  "providers.list@10.8": providersListResponseSchema,
+  // 10.8 froze when credential projections opened 10.9; its released shape
+  // must stay byte-identical.
+  "providers.list@10.8": providersListResponseSchemaV108Preimage,
+  // 10.9 froze when `hiddenModelProviders` opened 10.10. Its dump did not
+  // change by the freeze.
+  "providers.list@10.9": providersListResponseSchemaV109Preimage,
+  // 10.10 froze when the profile-sync keys opened 10.11. Its dump did not
+  // change by the freeze.
+  "providers.list@10.10": providersListResponseSchemaV1010Preimage,
+  // 10.11 froze when the sign-in offer flag opened 10.12. Its dump did not
+  // change by the freeze.
+  "providers.list@10.11": providersListResponseSchemaV1011Preimage,
+  // 10.12 froze when the key-record environment fact opened 10.13.
+  "providers.list@10.12": providersListResponseSchemaV1012Preimage,
+  // The head line. It names the LIVE response, so the next attempt to grow the
+  // provider state goes red on this line.
+  "providers.list@10.13": providersListResponseSchema,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,
@@ -331,12 +351,19 @@ const LIVE_FROZEN_EXPORTS = {
   // The head line: it names the LIVE response, so the next attempt to grow the
   // settings tuple fails here first.
   "epic.getChatRunSettings@4.0": getChatRunSettingsResponseSchema,
+  // 4.1 froze when the portable profile binding opened 4.2: its tuple carries
+  // the Ultracode request and no binding, so a released 4.1 reader never sees a
+  // key it cannot spell.
+  "epic.getChatRunSettings@4.1": getChatRunSettingsResponseSchemaV41,
   // 1.0 froze when `commandcode` opened 2.0 (`1.5.0` shipped 1.0); its dump did
   // not change by the freeze.
   "epic.getChatRunSettingsBatch@1.0": getChatRunSettingsBatchResponseSchemaV10,
   // The head line: it names the LIVE response, so the next attempt to grow a
   // batch entry fails here first.
   "epic.getChatRunSettingsBatch@2.0": getChatRunSettingsBatchResponseSchema,
+  // 2.1 froze when the portable profile binding opened 2.2, for the reason 4.1
+  // did above.
+  "epic.getChatRunSettingsBatch@2.1": getChatRunSettingsBatchResponseSchemaV21,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
 } as const;

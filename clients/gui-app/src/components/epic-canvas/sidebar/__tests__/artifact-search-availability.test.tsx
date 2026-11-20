@@ -170,7 +170,7 @@ describe("useArtifactSearchAvailable against a real Epic store", () => {
     expect(availability()).toBe("yes");
   });
 
-  it("answers no for a viewer even when artifacts exist", () => {
+  it("answers no once the role is lost, even when artifacts exist", () => {
     const handle = openStore();
     act(() => {
       seedArtifact(handle.doc, "art-1");
@@ -182,11 +182,11 @@ describe("useArtifactSearchAvailable against a real Epic store", () => {
     );
     expect(availability()).toBe("yes");
 
-    // A read-only device never runs epic file sync, so the search RPC's disk
-    // mirror never materializes; the gate hides search rather than offering a
-    // permanently "still syncing" dead end.
+    // A device with no writable role never runs epic file sync, so the search
+    // RPC's disk mirror never materializes; the gate hides search rather than
+    // offering a permanently "still syncing" dead end.
     act(() => {
-      handle.store.setState({ permissionRole: "viewer" });
+      handle.store.setState({ permissionRole: null });
     });
 
     expect(availability()).toBe("no");

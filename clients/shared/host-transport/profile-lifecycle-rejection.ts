@@ -16,8 +16,11 @@
  * rejection view (`gui-app/src/lib/tui-fork-profile-rejection.ts`) and the
  * CLI's host-error mapper (`traycer-cli/src/internal/host-rpc.ts`).
  */
+const UNKNOWN_PROFILE_MESSAGE_PATTERN =
+  /^No profile ".*" is registered for provider ".*"\./;
+
 const PROFILE_LIFECYCLE_MESSAGE_PATTERNS: ReadonlyArray<RegExp> = [
-  /^No profile ".*" is registered for provider ".*"\./,
+  UNKNOWN_PROFILE_MESSAGE_PATTERN,
   /^Profile ".*" for provider ".*" was removed and can no longer be used\./,
   /^Profile ".*" for provider ".*" is still completing setup and cannot be used yet\./,
   /^Provider ".*" does not support managed profiles\./,
@@ -35,5 +38,19 @@ export function isProfileLifecycleRejection(
   if (code !== "RPC_ERROR") return false;
   return PROFILE_LIFECYCLE_MESSAGE_PATTERNS.some((pattern) =>
     pattern.test(message),
+  );
+}
+
+/**
+ * For the CLI's mapper only, so the refusal prints what an unknown id prints. The
+ * app must not use it: the computer's sentence carries the profile id.
+ */
+export function isRemovedProfileRefusal(
+  code: string,
+  message: string,
+): boolean {
+  return (
+    code === "removed-by-person" &&
+    UNKNOWN_PROFILE_MESSAGE_PATTERN.test(message)
   );
 }

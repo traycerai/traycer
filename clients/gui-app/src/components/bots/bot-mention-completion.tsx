@@ -1,3 +1,6 @@
+import { BotMemoryContext } from "@/components/bots/bot-memory-context";
+import { useEnvironmentHostLists } from "@/hooks/bots/use-environment-host-lists-query";
+import { useHostMentionEntries } from "@/hooks/composer/use-host-mention-entries";
 import {
   useCallback,
   useContext,
@@ -11,8 +14,9 @@ import {
 } from "react";
 import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { Bot, Layers, Users } from "lucide-react";
+import { Layers, Users } from "lucide-react";
 import { NamedBotAvatar, PersonAvatar } from "@/components/bots/bot-avatars";
+import { TracyGlyph } from "@/components/bots/tracy-glyph";
 import {
   useBotIdentity,
   type BotIdentity,
@@ -101,7 +105,7 @@ const CATEGORIES: ReadonlyArray<BotMentionCategory> = [
     providerId: "bots",
     label: "Bots",
     description: "Other bots",
-    icon: () => <Bot className={MENU_ICON_CLASS} aria-hidden />,
+    icon: () => <TracyGlyph size="xs" className="text-muted-foreground" />,
   },
   {
     kind: "task",
@@ -131,6 +135,7 @@ export function useBotMentionCompletion(args: {
 }): BotMentionCompletion {
   const { replyRow } = args;
   const identity = useBotIdentity();
+  const hostSource = useBotMentionHosts();
   const directory = useContext(BotMentionsContext);
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
   const everyone = useMemo(
@@ -155,10 +160,11 @@ export function useBotMentionCompletion(args: {
   const menuShown = menuOpen && paneFocused;
   const activeIndex = useStore(pickerStore, (state) => state.activeIndex);
   const rowCount = useStore(pickerStore, (state) => state.items.length);
-  const listed = useMemo(
+  const namesListed = useMemo(
     () => menuEntries(step, query, offered),
     [offered, query, step],
   );
+  const listed = useHostMentionEntries(step, query, namesListed, hostSource);
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
     () =>
       listed.entries.map((entry) => ({ id: entry.id, kind: "mention", entry })),
@@ -168,7 +174,12 @@ export function useBotMentionCompletion(args: {
   // An `@` is prose once its search matched nothing with every name read, or
   // where there is nothing to name.
   const nothingToName =
-    (answered && offered.length === 0) ||
+    (answered &&
+      hostSource.answered &&
+      step.kind === "root" &&
+      query.trim().length === 0 &&
+      listed.entries.length === 0) ||
+    (answered && listed.entries.length === 0 && listed.matchedCount === 0) ||
     shouldCloseMentionForNoMatches({
       stepKind: step.kind,
       query,
@@ -244,6 +255,34 @@ export function useBotMentionCompletion(args: {
   };
 }
 
+function useBotMentionHosts(): {
+  hosts: ReadonlyArray<{ hostId: string; label: string }>;
+  answered: boolean;
+} {
+  const memory = useContext(BotMemoryContext);
+  const environmentId = memory?.environmentId ?? null;
+  const hostLists = useEnvironmentHostLists(
+    environmentId === null ? [] : [environmentId],
+    environmentId !== null,
+  );
+  const environmentHosts =
+    environmentId === null
+      ? undefined
+      : hostLists.hostsByEnvironmentId.get(environmentId);
+  const mentionHosts = useMemo(
+    () =>
+      (environmentHosts ?? []).map((host) => ({
+        hostId: host.hostId,
+        label: host.hostLabel ?? host.hostId,
+      })),
+    [environmentHosts],
+  );
+  return {
+    hosts: mentionHosts,
+    answered: environmentId === null || environmentHosts !== undefined,
+  };
+}
+
 /**
  * The menu's rows for `step` and what follows the `@`, by the agent
  * composer's rules: with nothing typed, the first level is one row per
@@ -256,6 +295,9 @@ function menuEntries(
   query: string,
   offered: ReadonlyArray<BotMentionCandidate>,
 ): RankedRootSearch {
+  if (step.kind === "provider" && step.providerId === "hosts") {
+    return { entries: [], matchedCount: null };
+  }
   if (step.kind === "root") {
     if (query.trim().length === 0) {
       return {
@@ -325,7 +367,8 @@ function categoryOf(step: MentionFlowStep): BotMentionCategory {
 }
 
 function botMentionMenuCopy(step: MentionFlowStep): MentionMenuCopy {
-  if (step.kind === "root") return mentionProviderRegistry.menuCopy(step);
+  if (step.kind === "root" || step.providerId === "hosts")
+    return mentionProviderRegistry.menuCopy(step);
   const { label } = categoryOf(step);
   return { header: label, empty: `No matching ${label.toLowerCase()}` };
 }

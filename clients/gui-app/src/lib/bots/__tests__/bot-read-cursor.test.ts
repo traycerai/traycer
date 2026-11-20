@@ -84,41 +84,39 @@ describe("threadHasNewReplies", () => {
     { [THREAD]: position(2_000) },
   );
 
-  it("is true for a followed thread whose newest reply is past the cursor", () => {
-    expect(threadHasNewReplies(behind, THREAD, null, true)).toBe(true);
+  it("is true for a followed thread whose newest row is past the cursor", () => {
+    expect(threadHasNewReplies(behind, THREAD, true)).toBe(true);
+  });
+
+  it("is true for a followed thread with a row and no cursor", () => {
+    expect(
+      threadHasNewReplies(
+        read({ [THREAD]: position(3_000) }, {}),
+        THREAD,
+        true,
+      ),
+    ).toBe(true);
   });
 
   it("is false for a thread the person does not follow", () => {
-    expect(threadHasNewReplies(behind, THREAD, 9_000, false)).toBe(false);
+    expect(threadHasNewReplies(behind, THREAD, false)).toBe(false);
   });
 
   it("is false until the read has answered", () => {
-    expect(threadHasNewReplies(undefined, THREAD, 9_000, true)).toBe(false);
+    expect(threadHasNewReplies(undefined, THREAD, true)).toBe(false);
   });
 
-  it("takes the later of the host's row and the list's lastReplyAt", () => {
+  it("is false when the host has no row for the thread", () => {
+    expect(threadHasNewReplies(read({}, {}), THREAD, true)).toBe(false);
+  });
+
+  it("is false when the cursor sits on the newest row, the same answer advanceTarget gives", () => {
     const caughtUp = read(
-      { [THREAD]: position(2_000) },
-      { [THREAD]: position(2_000) },
+      { [THREAD]: position(3_000) },
+      { [THREAD]: position(3_000) },
     );
-    expect(threadHasNewReplies(caughtUp, THREAD, 2_500, true)).toBe(true);
-    expect(threadHasNewReplies(caughtUp, THREAD, 1_500, true)).toBe(false);
-  });
-
-  it("falls back to lastReplyAt when the host has no row for the thread", () => {
-    expect(threadHasNewReplies(read({}, {}), THREAD, 500, true)).toBe(true);
-    expect(threadHasNewReplies(read({}, {}), THREAD, null, true)).toBe(false);
-  });
-
-  it("is false when the cursor sits on the newest reply", () => {
-    expect(
-      threadHasNewReplies(
-        read({ [THREAD]: position(3_000) }, { [THREAD]: position(3_000) }),
-        THREAD,
-        3_000,
-        true,
-      ),
-    ).toBe(false);
+    expect(threadHasNewReplies(caughtUp, THREAD, true)).toBe(false);
+    expect(advanceTarget(caughtUp, THREAD)).toBeNull();
   });
 });
 

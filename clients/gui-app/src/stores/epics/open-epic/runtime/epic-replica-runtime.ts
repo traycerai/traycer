@@ -1,3 +1,4 @@
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * The composition root: the object the 3,600-line closure was cut into.
@@ -647,13 +648,8 @@ export function createEpicReplicaRuntime(
         // Rooms first, then the root: the root's publish recomputes divergence,
         // and it has to see rooms that are already clear.
         tier.clearAllPending();
-        records.clearLocalWritePaths({ clearCoverage: true });
+        records.clearLocalWritePaths();
       },
-      clearLocalWritePaths: () => {
-        tier.clearAllPending();
-        records.clearLocalWritePaths({ clearCoverage: false });
-      },
-      requestFreshSnapshot: () => requestFreshSnapshot(),
       drainWritePathsAfterReconnect: () => drainWritePathsAfterReconnect(),
       emitRootAwareness: () => records.emitCurrentAwareness(),
     },
@@ -927,7 +923,7 @@ export function createEpicReplicaRuntime(
     cancelRootSettle();
     rootSettledBytes = update.byteLength;
     accounting.settleRootBytes(update.byteLength);
-    control.adoptSnapshotRole(meta.permissionRole);
+    control.adoptSnapshotRole(grantedRole(meta.permissionRole));
     records.publishSnapshotLanded(meta, divergence);
     // The mapping half of the availability fan-out. A `@1` room reports `ready`
     // independently of any snapshot, so a room frame can arrive BEFORE the
@@ -935,10 +931,10 @@ export function createEpicReplicaRuntime(
     // becomes visible only now, when the artifacts naming that room appear.
     // Gated inside, so a snapshot that moved no artifact costs no publish.
     rooms.republishAvailability();
-    control.noteSnapshotLanded(meta.permissionRole);
+    control.noteSnapshotLanded(grantedRole(meta.permissionRole));
     if (!control.facts.isWritableRole()) {
-      // Fail closed: a viewer (or a client whose role the snapshot revoked)
-      // keeps no body state at all. The divergence republish is unconditional
+      // Fail closed: a client whose role the snapshot revoked keeps no body
+      // state at all. The divergence republish is unconditional
       // because the closure's write here was.
       rooms.dropAllOnViewerDowngrade();
       records.publishDivergence();

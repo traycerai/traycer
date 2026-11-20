@@ -6,6 +6,7 @@ import { config } from "../../config";
 import { DEV_DESKTOP_SLOT_ENV } from "../../store/dev-desktop-slot";
 import { readCredentials } from "../../store/credentials";
 import { validateStoredCredentials } from "../validate";
+import type { MutationResult } from "@traycer/protocol/config/credentials-mutation";
 
 // Access-only validation (§3/§7): the spend/write goes through the locked store.
 // Keep the real (pure) identity projection, stub the network probe, and inject a
@@ -13,25 +14,34 @@ import { validateStoredCredentials } from "../validate";
 // `createCliCredentialsStore` alone would NOT work: `runWithCliStore` calls it
 // intra-module, so we mock `runWithCliStore` / `withCommitRetry` instead and steer
 // `updateProfile` / `rotate` per-test.
-const { fakeStore, updateProfileMock, rotateMock } = vi.hoisted(() => {
-  const updateProfileMock = vi.fn();
-  const rotateMock = vi.fn();
-  return {
-    updateProfileMock,
-    rotateMock,
-    fakeStore: {
-      read: vi.fn(),
-      rotate: rotateMock,
-      signIn: vi.fn(),
-      signOut: vi.fn(),
-      updateProfile: updateProfileMock,
-      guardedSignIn: vi.fn(),
-      migrateFirstWrite: vi.fn(),
-      hasPendingContinuation: () => false,
-      dispose: vi.fn(),
-    },
-  };
-});
+const { fakeStore, updateProfileMock, rotateMock, withCommitRetryMock } =
+  vi.hoisted(() => {
+    const updateProfileMock = vi.fn();
+    const rotateMock = vi.fn();
+    const withCommitRetryMock =
+      vi.fn<
+        (
+          op: () => Promise<MutationResult>,
+          signal: AbortSignal | null,
+        ) => Promise<MutationResult>
+      >();
+    return {
+      updateProfileMock,
+      rotateMock,
+      withCommitRetryMock,
+      fakeStore: {
+        read: vi.fn(),
+        rotate: rotateMock,
+        signIn: vi.fn(),
+        signOut: vi.fn(),
+        updateProfile: updateProfileMock,
+        guardedSignIn: vi.fn(),
+        migrateFirstWrite: vi.fn(),
+        hasPendingContinuation: () => false,
+        dispose: vi.fn(),
+      },
+    };
+  });
 
 vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
   const actual =
@@ -60,19 +70,19 @@ vi.mock("../../store/credentials", async (importOriginal) => {
   return { ...actual, readCredentials: vi.fn() };
 });
 
-// Mirrors the real `withCommitRetry`'s retry-on-`commit-failed` shape (see
-// `store/credentials-store.ts`) closely enough to exercise it: re-drive `op`
-// while the outcome is `commit-failed`, capped, no artificial delay. A flat
-// `(op) => op()` would call `store.rotate` at most once per test and could
-// never reproduce "a retried continuation lands and resurfaces as
-// `superseded`" - exactly the case the fix under test depends on.
 const RETRY_CAP = 3;
 vi.mock("../../store/credentials-store", () => ({
   createCliCredentialsStore: () => fakeStore,
   runWithCliStore: (fn: (store: unknown) => unknown) => fn(fakeStore),
-  withCommitRetry: async (
-    op: () => Promise<{ outcome: string }>,
-  ): Promise<{ outcome: string }> => {
+  withCommitRetry: withCommitRetryMock,
+}));
+
+const RETRY_COPY =
+  "Disk is full: could not save your sign-in. Free up some space and run the command again.\n";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  withCommitRetryMock.mockImplementation(async (op) => {
     let result = await op();
     for (
       let attempt = 0;
@@ -82,8 +92,8 @@ vi.mock("../../store/credentials-store", () => ({
       result = await op();
     }
     return result;
-  },
-}));
+  });
+});
 
 const identityMock = vi.mocked(validateAuthTokenIdentityAccessOnly);
 const readMock = vi.mocked(readCredentials);
@@ -108,8 +118,14 @@ function userWith(id: string, email: string, name: string): AuthenticatedUser {
 const unchangedUser = userWith("u1", "old@traycer.ai", "Old");
 const changedUser = userWith("u1", "ada@traycer.ai", "Ada");
 
+async function useRealCommitRetry(): Promise<void> {
+  const actual = await vi.importActual<
+    typeof import("../../store/credentials-store")
+  >("../../store/credentials-store");
+  withCommitRetryMock.mockImplementation(actual.withCommitRetry);
+}
+
 beforeEach(() => {
-  vi.clearAllMocks();
   config.environment = "dev";
   process.env[DEV_DESKTOP_SLOT_ENV] = "test-slot";
   readMock.mockResolvedValue(storedCreds);
@@ -119,15 +135,19 @@ beforeEach(() => {
     outcome: "applied",
     credentials: null,
     rejection: null,
+    diskPressure: "clear",
   });
   rotateMock.mockResolvedValue({
     outcome: "applied",
     credentials: null,
     rejection: null,
+    diskPressure: "clear",
   });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   config.environment = ORIGINAL_ENVIRONMENT;
   if (ORIGINAL_SLOT === undefined) {
     delete process.env[DEV_DESKTOP_SLOT_ENV];
@@ -145,6 +165,8 @@ describe("validateStoredCredentials", () => {
         ...storedCreds,
         user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
       },
+      rejection: null,
+      diskPressure: "clear",
     });
 
     const outcome = await validateStoredCredentials();
@@ -183,6 +205,8 @@ describe("validateStoredCredentials", () => {
         savedAt: "2026-03-01T00:00:00.000Z",
         user: storedCreds.user,
       },
+      rejection: null,
+      diskPressure: null,
     });
 
     const outcome = await validateStoredCredentials();
@@ -203,6 +227,7 @@ describe("validateStoredCredentials", () => {
       outcome: "commit-failed",
       credentials: null,
       rejection: null,
+      diskPressure: null,
     });
 
     const outcome = await validateStoredCredentials();
@@ -281,6 +306,8 @@ describe("validateStoredCredentials", () => {
         savedAt: "2026-02-01T00:00:00.000Z",
         user: storedCreds.user,
       },
+      rejection: null,
+      diskPressure: "clear",
     });
 
     const outcome = await validateStoredCredentials();
@@ -304,6 +331,7 @@ describe("validateStoredCredentials", () => {
       outcome: "refresh-rejected-credential",
       credentials: null,
       rejection: null,
+      diskPressure: null,
     });
     // The server refused the refresh token, so nothing was minted and nothing
     // was written - `none` here is a fact, not an assumption.
@@ -323,11 +351,66 @@ describe("validateStoredCredentials", () => {
       outcome: "refresh-network",
       credentials: null,
       rejection: null,
+      diskPressure: null,
     });
     expect(await validateStoredCredentials()).toEqual({
       kind: "network-error",
       effect: "token-rotation-unconfirmed",
     });
+  });
+
+  it("prints the disk-full instruction once when the real rotate retry helper returns disk-full", async () => {
+    identityMock.mockResolvedValue({ kind: "rejected" });
+    rotateMock.mockResolvedValue({
+      outcome: "disk-full",
+      credentials: null,
+      rejection: null,
+      diskPressure: "low",
+    });
+    await useRealCommitRetry();
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+
+    expect(await validateStoredCredentials()).toEqual({
+      kind: "network-error",
+      effect: "none",
+    });
+
+    expect(rotateMock).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(RETRY_COPY);
+  });
+
+  it("prints once when real rotate retries end with commit-failed+low", async () => {
+    vi.useFakeTimers();
+    identityMock.mockResolvedValue({ kind: "rejected" });
+    rotateMock.mockResolvedValue({
+      outcome: "commit-failed",
+      credentials: {
+        token: "minted-token",
+        refreshToken: "minted-refresh",
+        savedAt: "2026-02-01T00:00:00.000Z",
+        user: storedCreds.user,
+      },
+      rejection: null,
+      diskPressure: "low",
+    });
+    await useRealCommitRetry();
+    const write = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
+    const pending = validateStoredCredentials();
+    await vi.runAllTimersAsync();
+
+    expect(await pending).toMatchObject({
+      kind: "valid",
+      credentials: { token: "minted-token" },
+      effect: "token-rotation-unconfirmed",
+    });
+    expect(rotateMock).toHaveBeenCalledTimes(4);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(RETRY_COPY);
   });
 
   // The contrast that gives the case above its meaning: these two are guards
@@ -357,6 +440,8 @@ describe("validateStoredCredentials", () => {
         savedAt: "2026-02-01T00:00:00.000Z",
         user: { id: "u2", email: "other@traycer.ai", name: "Other" },
       },
+      rejection: null,
+      diskPressure: null,
     });
     expect(await validateStoredCredentials()).toEqual({
       kind: "rejected",
@@ -374,6 +459,8 @@ describe("validateStoredCredentials", () => {
         savedAt: "2026-02-01T00:00:00.000Z",
         user: storedCreds.user,
       },
+      rejection: null,
+      diskPressure: null,
     });
     expect(await validateStoredCredentials()).toMatchObject({
       kind: "valid",
@@ -397,6 +484,8 @@ describe("validateStoredCredentials", () => {
         savedAt: "2026-02-01T00:00:00.000Z",
         user: storedCreds.user,
       },
+      rejection: null,
+      diskPressure: null,
     });
     expect(await validateStoredCredentials()).toMatchObject({
       kind: "valid",
@@ -418,6 +507,7 @@ describe("validateStoredCredentials", () => {
         outcome: "commit-failed",
         credentials: null,
         rejection: null,
+        diskPressure: null,
       })
       .mockResolvedValueOnce({
         outcome: "superseded",
@@ -427,6 +517,8 @@ describe("validateStoredCredentials", () => {
           savedAt: "2026-02-01T00:00:00.000Z",
           user: storedCreds.user,
         },
+        rejection: null,
+        diskPressure: null,
       });
 
     const outcome = await validateStoredCredentials();
@@ -462,8 +554,15 @@ describe("validateStoredCredentials", () => {
             savedAt: "2026-03-01T00:00:00.000Z",
             user: storedCreds.user,
           },
+          rejection: null,
+          diskPressure: null,
         })
-        .mockResolvedValueOnce({ outcome, credentials: null });
+        .mockResolvedValueOnce({
+          outcome,
+          credentials: null,
+          rejection: null,
+          diskPressure: null,
+        });
 
       expect(await validateStoredCredentials()).toEqual({
         kind,
@@ -479,6 +578,7 @@ describe("validateStoredCredentials", () => {
       outcome: "tombstoned",
       credentials: null,
       rejection: null,
+      diskPressure: null,
     });
     expect(await validateStoredCredentials()).toEqual({
       kind: "rejected",

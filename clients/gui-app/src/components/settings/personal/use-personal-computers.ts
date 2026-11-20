@@ -14,7 +14,7 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 
 /**
- * The computers running Personal, as the page chip counts them: the person's
+ * The computers running Personal, as the host list counts them: the person's
  * computers (no sandbox) whose own status names Personal and that are not a
  * Local row. Each holds a copy of Personal's values. None is read while
  * `enabled` is false.

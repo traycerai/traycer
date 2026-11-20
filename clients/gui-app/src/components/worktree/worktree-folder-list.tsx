@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 
 /**
- * Searchable "Workspaces" list over an epic's worktree bindings, shared by every
+ * Searchable "Folders" list over an epic's worktree bindings, shared by every
  * surface that picks a worktree (git diff panel, terminal creation, file
  * tree). Rows are rendered in the order given - callers own sorting and the
  * per-row filesystem path (`secondaryLabel`).
@@ -75,11 +75,11 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
 
   return (
     <section
-      aria-label="Workspaces"
+      aria-label="Folders"
       className="p-2.5"
       data-testid="worktree-folder-list"
     >
-      <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+      <DropdownMenuLabel>Folders</DropdownMenuLabel>
       <FilePathRevealProvider>
         <Command variant="embedded" selection="flat">
           <CommandInput

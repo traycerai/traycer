@@ -343,6 +343,16 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   },
   { path: "host", options: [], args: [] },
   {
+    path: "host claim",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--yes", mandatory: false },
+    ],
+    args: [],
+  },
+  {
     path: "host start",
     options: [
       { flags: "--cwd <path>", mandatory: false },
@@ -358,6 +368,11 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--has <capability>", mandatory: false },
       { flags: "--json", mandatory: false },
     ],
+    args: [],
+  },
+  {
+    path: "host pin",
+    options: [],
     args: [],
   },
   {
@@ -482,6 +497,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--no-service-register", mandatory: false },
       { flags: "--quiet", mandatory: false },
       { flags: "--release <version>", mandatory: false },
+      { flags: "--team <slug>", mandatory: false },
     ],
     args: [],
   },
@@ -490,6 +506,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       { flags: "--accept-store-format-loss", mandatory: false },
       { flags: "--allow-self-invocation", mandatory: false },
+      { flags: "--bundled <path>", mandatory: false },
       { flags: "--force", mandatory: false },
       { flags: "--from <path>", mandatory: false },
       { flags: "--json", mandatory: false },
@@ -502,19 +519,18 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--no-service-register", mandatory: false },
       { flags: "--quiet", mandatory: false },
       { flags: "--release <version>", mandatory: false },
+      { flags: "--team <slug>", mandatory: false },
     ],
     args: [],
   },
-  // Tracy Bots T141: a team's own machine joins with the app's one-time
-  // install token.
   {
-    path: "host join",
+    path: "host use",
     options: [
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
     ],
-    args: [{ name: "token", required: true, variadic: false }],
+    args: [{ name: "slug", required: true, variadic: false }],
   },
   {
     path: "host apply",
@@ -807,6 +823,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
+      { flags: "--switch-account", mandatory: false },
     ],
     args: [
       { name: "provider", required: true, variadic: false },
@@ -957,6 +974,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--profile <ambient|id>", mandatory: false },
       { flags: "--quiet", mandatory: false },
       { flags: "--reasoning-effort <effort>", mandatory: false },
+      { flags: "--service-tier <id>", mandatory: false },
       { flags: "--surface <surface>", mandatory: false },
       { flags: "--workspace-entry <workspace=path>", mandatory: false },
       { flags: "--workspace-path <path>", mandatory: false },
@@ -968,12 +986,15 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       { flags: "--agent-id <id>", mandatory: true },
       { flags: "--cwd <path>", mandatory: false },
+      { flags: "--fast", mandatory: false },
       { flags: "--json", mandatory: false },
       { flags: "--name <name>", mandatory: false },
+      { flags: "--no-fast", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--permission-mode <mode>", mandatory: false },
       { flags: "--profile <ambient|id>", mandatory: false },
       { flags: "--quiet", mandatory: false },
+      { flags: "--service-tier <id>", mandatory: false },
       { flags: "--workspace-entry <workspace=path>", mandatory: false },
       { flags: "--workspace-path <path>", mandatory: false },
     ],
@@ -1002,6 +1023,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     options: [
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
+      { flags: "--profile <ambient|id>", mandatory: false },
       { flags: "--quiet", mandatory: false },
     ],
     args: [{ name: "harness", required: true, variadic: false }],
@@ -1038,6 +1060,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--profile <ambient|id>", mandatory: true },
       { flags: "--quiet", mandatory: false },
       { flags: "--reasoning-effort <effort>", mandatory: false },
+      { flags: "--service-tier <id>", mandatory: false },
     ],
     args: [],
   },
@@ -1786,6 +1809,15 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       expect(login.options.some((option) => option.long === "--token")).toBe(
         true,
       );
+    });
+
+    it("profile login --help names the switch-account option", () => {
+      const program = freshProgram();
+      const login = findByPath(program, ["profile", "login"]);
+      const help = renderHelp(login);
+
+      expect(help).toContain("--switch-account");
+      expect(help).toContain("Switch account");
     });
 
     it("agent send --help explains response-id direction", () => {

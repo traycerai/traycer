@@ -2,11 +2,15 @@
  * Select-to-quote in a bot's conversations, through the REAL `BotChannelView`
  * and `BotSessionView` over the REAL `ChatMessages` (the quote rig of the task
  * chat: `useQuoteSelection`, the popover, the native request). A quote goes
- * into the box that is open - the thread panel's while a thread is open, else
- * the channel's - as markdown quote lines; a bot's session has no box, so it
+ * into the box of the conversation it was selected in - the channel's or the
+ * open thread's - as markdown quote lines; a bot's session has no box, so it
  * offers none. Only the session registry (scripted sessions by chat id) and
  * the reads beside the transcripts are replaced.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { StrictMode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
@@ -24,6 +28,7 @@ import {
   POST_REQUEST,
   POST_SECOND_LINE,
   REPLY_ID,
+  THREAD_ID,
   THREAD_OPEN,
   botReply,
   buildScene,
@@ -52,7 +57,10 @@ import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
-import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import {
+  useBotOpenThreadStore,
+  type BotOpenThread,
+} from "@/stores/bots/bot-open-thread-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { Selection } from "@tiptap/pm/state";
 import {
@@ -66,8 +74,23 @@ const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   threads: [] as BotThreadSummary[],
+  /** Whether the thread list's read has failed, as the query says. */
+  threadListFailed: false,
+  /** Bumped by every answer of the list, which the view re-renders on. */
+  threadListVersion: 0,
+  threadListListeners: new Set<() => void>(),
+  refetchThreads: vi.fn<() => void>(),
   activity: null as BotActivity | null,
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
@@ -98,13 +121,27 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
     refetch: vi.fn(),
   }),
 }));
-vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
-  useBotThreadListQuery: () => ({
-    data: { threads: mocks.threads, threadAnchors: null },
-    isError: false,
-    refetch: vi.fn(),
-  }),
-}));
+vi.mock("@/hooks/bots/use-bot-thread-list-query", async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void): (() => void) => {
+    mocks.threadListListeners.add(listener);
+    return () => {
+      mocks.threadListListeners.delete(listener);
+    };
+  };
+  return {
+    useBotThreadListQuery: () => {
+      useSyncExternalStore(subscribe, () => mocks.threadListVersion);
+      return {
+        data: mocks.threadListFailed
+          ? undefined
+          : { threads: mocks.threads, threadAnchors: null },
+        isError: mocks.threadListFailed,
+        refetch: mocks.refetchThreads,
+      };
+    },
+  };
+});
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: () => ({ epics: {}, chats: {} }),
 }));
@@ -136,7 +173,6 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 const CHANNEL_TEXT = "CI is green.";
 /** Text the thread panel's transcript draws, from the thread's reply. */
 const THREAD_TEXT = "Yes, the thread agrees.";
-const SECOND_CHANNEL_TEXT = "The nightly is red.";
 const TYPED = "Agreed, but";
 
 function nonZeroRect(): DOMRect {
@@ -196,21 +232,23 @@ afterEach(() => {
   useBotOpenThreadStore.setState({ byBotId: {} });
   mocks.sessions = {};
   mocks.threads = [];
+  mocks.threadListFailed = false;
+  mocks.refetchThreads.mockClear();
   mocks.client = null;
   mocks.activity = null;
   resetBotFailedRequestSupport();
 });
 
-/** Selects the whole of `text`'s element inside `scope`, and releases the mouse. */
+/** Selects the whole of `text`'s element inside `scope`, and releases the mouse on it. */
 async function selectText(scope: HTMLElement, text: string): Promise<void> {
+  const element = within(scope).getByText(text);
   const range = document.createRange();
-  range.selectNodeContents(within(scope).getByText(text));
+  range.selectNodeContents(element);
   const selection = window.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(range);
-  const transcript = within(scope).getByTestId("chat-transcript-container");
   await act(async () => {
-    transcript.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
     await flushFrame();
   });
 }
@@ -257,8 +295,68 @@ async function mountChannelWithThread(): Promise<void> {
   await mountChannel();
 }
 
+/** The rail's thread under the bot's own post, which nobody has replied under: no thread is listed for it. */
+const UNOPENED_THREAD_OPEN: BotOpenThread = {
+  anchorMessageId: REPLY_ID,
+  announcement: true,
+  anchorKind: null,
+  sent: null,
+};
+
+/** The thread beside the channel is the bot's reply, `CHANNEL_TEXT`, with no reply under it yet. */
+async function mountChannelWithUnopenedThread(): Promise<void> {
+  mocks.threads = [];
+  useBotOpenThreadStore
+    .getState()
+    .setRail(BOT_ID, { kind: "thread", ...UNOPENED_THREAD_OPEN });
+  await mountChannel();
+}
+
+/** The rail's thread the member's post opened as its send was accepted: the list has not answered for it yet. */
+const POSTED_THREAD_OPEN: BotOpenThread = {
+  ...THREAD_OPEN,
+  sent: {
+    threadId: THREAD_ID,
+    requestId: POST_REQUEST,
+    text: POST_FIRST_LINE,
+    senderUserId: VIEWER_USER_ID,
+    sentAt: 1_000,
+    delivery: "written",
+  },
+};
+
+/** The thread the member's post opened, listed before anyone has replied. */
+function unrepliedPostThread(): BotThreadSummary {
+  return { ...postThread(), replyCount: 0, lastReplyAt: null };
+}
+
+async function mountChannelOpenOn(open: BotOpenThread): Promise<void> {
+  useBotOpenThreadStore.getState().setRail(BOT_ID, { kind: "thread", ...open });
+  await mountChannel();
+}
+
+/** The thread list answers `threads`, as the host's next read of it does. */
+async function answerThreadList(
+  threads: ReadonlyArray<BotThreadSummary>,
+): Promise<void> {
+  mocks.threads = [...threads];
+  mocks.threadListFailed = false;
+  mocks.threadListVersion += 1;
+  await act(async () => {
+    for (const listener of mocks.threadListListeners) listener();
+    await flushFrame();
+  });
+  await settleLegendList();
+}
+
 function quoteButton(): HTMLElement | null {
   return screen.queryByRole("button", { name: "Quote" });
+}
+
+async function clickQuote(user: UserEvent): Promise<void> {
+  const button = quoteButton();
+  if (button === null) throw new Error("no Quote button");
+  await user.click(button);
 }
 
 function expectSelectionCleared(): void {
@@ -355,20 +453,21 @@ describe("select-to-quote in a bot's channel while its box edits a failed messag
 });
 
 describe("select-to-quote with a thread open beside the channel", () => {
-  it("quotes a selection of the channel into the thread's box, kept under the bot, and leaves the channel's box alone", async () => {
+  it("quotes a selection of the channel into the channel's box while the thread's box holds the caret, and leaves the thread's box alone", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await mountChannelWithThread();
-    typeInto(channelBox(), TYPED);
+    typeInto(threadBox(), TYPED);
+    act(() => threadBox().focus());
 
     await selectText(channelSection(), CHANNEL_TEXT);
     const button = quoteButton();
     if (button === null) throw new Error("no Quote button");
     await user.click(button);
 
-    expect(textOf(threadBox())).toBe(`> ${CHANNEL_TEXT}`);
-    expect(keptThreadText()).toBe(`> ${CHANNEL_TEXT}`);
-    expect(textOf(channelBox())).toBe(TYPED);
-    expect(document.activeElement).toBe(threadBox());
+    expect(textOf(channelBox())).toBe(`> ${CHANNEL_TEXT}`);
+    expect(textOf(threadBox())).toBe(TYPED);
+    expect(keptThreadText()).toBe(TYPED);
+    expect(document.activeElement).toBe(channelBox());
     expectSelectionCleared();
   });
 
@@ -388,73 +487,151 @@ describe("select-to-quote with a thread open beside the channel", () => {
     expect(textOf(channelBox())).toBe("");
     expectSelectionCleared();
   });
+
+  it("quotes a selection of the post a thread opens on, before anyone has replied, into the thread's box after what it holds", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await mountChannelWithUnopenedThread();
+    typeInto(threadBox(), TYPED);
+
+    await selectText(threadPanel(), CHANNEL_TEXT);
+    const button = quoteButton();
+    if (button === null) throw new Error("no Quote button");
+    await user.click(button);
+
+    const box = threadBox();
+    expect(textOf(box)).toBe(`${TYPED}\n\n> ${CHANNEL_TEXT}`);
+    expect(document.activeElement).toBe(box);
+    expect(caretAtEnd(box)).toBe(true);
+    expect(textOf(channelBox())).toBe("");
+    expectSelectionCleared();
+  });
+
+  it("follows the thread's box for a native quote request on the post it opens on, before anyone has replied", async () => {
+    await mountChannelWithUnopenedThread();
+    await selectText(threadPanel(), CHANNEL_TEXT);
+
+    act(() => {
+      window.dispatchEvent(new Event(NATIVE_QUOTE_REQUEST_EVENT));
+    });
+
+    const box = threadBox();
+    expect(textOf(box)).toBe(`> ${CHANNEL_TEXT}`);
+    expect(document.activeElement).toBe(box);
+    expect(textOf(channelBox())).toBe("");
+    expectSelectionCleared();
+  });
 });
 
-/** Selects `text` of the channel and quotes it with the button. */
-async function quoteChannelText(user: UserEvent, text: string): Promise<void> {
-  await selectText(channelSection(), text);
-  const button = quoteButton();
-  if (button === null) throw new Error("no Quote button");
-  await user.click(button);
-}
-
-describe("select-to-quote while the open thread's box is not drawn", () => {
-  // The thread is open but not listed yet: its panel draws no box.
+describe("select-to-quote on the post a thread opens on, with nobody replied under it", () => {
   beforeEach(() => {
+    scene.sessions[THREAD_ID].store.setState({ messages: [] });
+  });
+
+  /** The region the panel draws the post in while no reply is listed. */
+  function postRegion(): HTMLElement {
+    return within(threadPanel()).getByTestId("bot-thread-post-scroll");
+  }
+
+  /** The thread is listed, so its replies' transcript, with a quote area of its own, is drawn under the post. */
+  function expectEmptyTranscriptUnderPost(): void {
+    const replies = within(threadPanel()).getByTestId("bot-thread-replies");
+    expect(replies.getAttribute("data-has-replies")).toBe("false");
+    expect(
+      within(replies).getByTestId("chat-transcript-container"),
+    ).toBeTruthy();
+  }
+
+  it("quotes a selection of the post into the box of a thread its send opened, which the list has not answered for, after what it holds", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     mocks.threads = [];
-    scene.channel.setState({
-      messages: [
-        botReply({ messageId: REPLY_ID, text: CHANNEL_TEXT, timestamp: 2_000 }),
-        botReply({
-          messageId: "reply-second",
-          text: SECOND_CHANNEL_TEXT,
-          timestamp: 3_000,
-        }),
-      ],
-    });
+    await mountChannelOpenOn(POSTED_THREAD_OPEN);
+    expect(
+      within(threadPanel()).queryByTestId("bot-thread-replies"),
+    ).toBeNull();
+    typeInto(threadBox(), TYPED);
+
+    await selectText(postRegion(), POST_FIRST_LINE);
+    await clickQuote(user);
+
+    const box = threadBox();
+    expect(textOf(box)).toBe(`${TYPED}\n\n> ${POST_FIRST_LINE}`);
+    expect(document.activeElement).toBe(box);
+    expect(textOf(channelBox())).toBe("");
+    expectSelectionCleared();
   });
 
-  it("holds the quotes for the thread's box, in order, until it is drawn", async () => {
+  it("quotes a selection of the post into the box of a listed thread with no reply once, where the empty replies' transcript draws a quote area of its own", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    await mountChannelWithThread();
-    expect(screen.queryByTestId("bot-thread-composer-input")).toBeNull();
+    mocks.threads = [unrepliedPostThread()];
+    await mountChannelOpenOn(THREAD_OPEN);
+    expectEmptyTranscriptUnderPost();
+    typeInto(threadBox(), TYPED);
 
-    await quoteChannelText(user, CHANNEL_TEXT);
-    await quoteChannelText(user, SECOND_CHANNEL_TEXT);
+    await selectText(postRegion(), POST_FIRST_LINE);
+    await clickQuote(user);
+
+    const box = threadBox();
+    expect(textOf(box)).toBe(`${TYPED}\n\n> ${POST_FIRST_LINE}`);
+    expect(document.activeElement).toBe(box);
     expect(textOf(channelBox())).toBe("");
+    expectSelectionCleared();
+  });
 
-    mocks.threads = [postThread()];
+  it("takes a native quote request on the post of a listed thread with no reply once", async () => {
+    mocks.threads = [unrepliedPostThread()];
+    await mountChannelOpenOn(THREAD_OPEN);
+    expectEmptyTranscriptUnderPost();
+    await selectText(postRegion(), POST_FIRST_LINE);
+
     act(() => {
-      useBotOpenThreadStore.getState().setRail(BOT_ID, null);
-      useBotOpenThreadStore
-        .getState()
-        .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN });
+      window.dispatchEvent(new Event(NATIVE_QUOTE_REQUEST_EVENT));
     });
 
-    expect(textOf(threadBox())).toBe(
-      `> ${CHANNEL_TEXT}\n\n> ${SECOND_CHANNEL_TEXT}`,
-    );
+    const box = threadBox();
+    expect(textOf(box)).toBe(`> ${POST_FIRST_LINE}`);
+    expect(document.activeElement).toBe(box);
+    expect(textOf(channelBox())).toBe("");
+    expectSelectionCleared();
+  });
+
+  it("holds a quote of the post while the thread list has not listed its thread, and gives it to the box once, when the box appears", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    mocks.threads = [];
+    await mountChannelOpenOn(THREAD_OPEN);
+    const panel = threadPanel();
+    expect(within(panel).getByTestId("bot-thread-loading")).toBeTruthy();
+    expect(within(panel).queryByTestId("bot-thread-composer-input")).toBeNull();
+
+    await selectText(postRegion(), POST_FIRST_LINE);
+    await clickQuote(user);
+    expect(within(panel).queryByTestId("bot-thread-composer-input")).toBeNull();
+    expectSelectionCleared();
+
+    await answerThreadList([unrepliedPostThread()]);
+
+    expect(textOf(threadBox())).toBe(`> ${POST_FIRST_LINE}`);
     expect(textOf(channelBox())).toBe("");
   });
 
-  it("keeps a quote for the thread's box when the thread is closed and the channel is quoted, each reaching its own box", async () => {
+  it("holds a quote of the post while the thread list failed, past a Retry, and gives it to the box once, when the box appears", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    await mountChannelWithThread();
-    await quoteChannelText(user, CHANNEL_TEXT);
+    mocks.threads = [];
+    mocks.threadListFailed = true;
+    await mountChannelOpenOn(THREAD_OPEN);
+    const panel = threadPanel();
+    const failure = within(panel).getByTestId("bot-thread-error");
+    expect(within(panel).queryByTestId("bot-thread-composer-input")).toBeNull();
 
-    act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
-    await quoteChannelText(user, SECOND_CHANNEL_TEXT);
-    expect(textOf(channelBox())).toBe(`> ${SECOND_CHANNEL_TEXT}`);
+    await selectText(postRegion(), POST_FIRST_LINE);
+    await clickQuote(user);
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+    expect(mocks.refetchThreads).toHaveBeenCalledTimes(1);
+    expect(within(panel).queryByTestId("bot-thread-composer-input")).toBeNull();
 
-    mocks.threads = [postThread()];
-    act(() =>
-      useBotOpenThreadStore
-        .getState()
-        .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN }),
-    );
+    await answerThreadList([unrepliedPostThread()]);
 
-    expect(textOf(threadBox())).toBe(`> ${CHANNEL_TEXT}`);
-    expect(textOf(channelBox())).toBe(`> ${SECOND_CHANNEL_TEXT}`);
+    expect(textOf(threadBox())).toBe(`> ${POST_FIRST_LINE}`);
+    expect(textOf(channelBox())).toBe("");
   });
 });
 
@@ -467,6 +644,7 @@ describe("a bot's session offers no quote", () => {
             <BotSessionView
               botId={BOT_ID}
               hostId={HOST_ID}
+              boundHostId={null}
               botTitle="Release Bot"
               session={{ chatId: CHANNEL_ID, threadId: null, landOn: null }}
               threads={[]}

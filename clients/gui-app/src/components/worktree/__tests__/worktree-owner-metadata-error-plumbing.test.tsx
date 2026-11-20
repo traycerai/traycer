@@ -154,8 +154,8 @@ describe("WorktreeOwnerMetadataTooltip error plumbing", () => {
 
     openTooltip();
 
-    expect(screen.getByText("Unable to load workspace details")).toBeTruthy();
-    expect(screen.queryByText("No workspace linked")).toBeNull();
+    expect(screen.getByText("Unable to load folder details")).toBeTruthy();
+    expect(screen.queryByText("No folder linked")).toBeNull();
   });
 
   it("still shows the inline error from the workspace metadata read alone (non-regression)", () => {
@@ -172,13 +172,13 @@ describe("WorktreeOwnerMetadataTooltip error plumbing", () => {
 
     openTooltip();
 
-    expect(screen.getByText("Unable to load workspace details")).toBeTruthy();
+    expect(screen.getByText("Unable to load folder details")).toBeTruthy();
   });
 
   it("does not show an error when neither read failed (non-regression)", () => {
     openTooltip();
 
-    expect(screen.getByText("No workspace linked")).toBeTruthy();
-    expect(screen.queryByText("Unable to load workspace details")).toBeNull();
+    expect(screen.getByText("No folder linked")).toBeTruthy();
+    expect(screen.queryByText("Unable to load folder details")).toBeNull();
   });
 });

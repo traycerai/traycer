@@ -20,6 +20,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
+import type { LandingOwnerTeam } from "@/components/home/composer/landing-owner-model";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import type { LandingStagedSandboxTaskArgs } from "@/components/home/hooks/use-landing-composer-actions";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
@@ -247,6 +248,7 @@ vi.mock(
 );
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
+    resolveOwnerForCreate: (owner: LandingOwnerTeam | null) => owner,
     submit: host.submit,
     selectTerminalAgent: vi.fn(),
     startTaskOnStagedSandbox: host.startTask,
@@ -308,6 +310,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
@@ -344,14 +347,20 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
     refetch: () => Promise.resolve({ data: null, isError: false }),
   }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({
-    data: { providers: [] },
-    isFetching: false,
-    isError: false,
-    refetch: vi.fn(),
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({
+      data: { providers: [] },
+      isFetching: false,
+      isError: false,
+      refetch: vi.fn(),
+    }),
   }),
-}));
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaultsLookup: () => () => null,
 }));
@@ -484,6 +493,8 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: host.clearEditor,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

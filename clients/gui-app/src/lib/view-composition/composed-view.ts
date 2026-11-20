@@ -1,6 +1,6 @@
 import { canonicalForMethodVersionLine } from "@traycer/protocol/framework/compat-helpers";
 import type { ManifestRegistry } from "@traycer/protocol/framework/capability-manifest";
-import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { WirePermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -68,8 +68,13 @@ export function defineComposedView(
   });
 }
 
-const ROLE_RANK: Readonly<Record<PermissionRole, number>> = {
-  viewer: 0,
+/**
+ * Ranks every role a contributor may REPORT, by the access it gives, so the
+ * lesser claim can be picked. The view-only role gives the access of editor
+ * (`grantedRole`), so it ranks with editor.
+ */
+const ROLE_RANK: Readonly<Record<WirePermissionRole, number>> = {
+  viewer: 1,
   editor: 1,
   owner: 2,
 };
@@ -80,8 +85,8 @@ const ROLE_RANK: Readonly<Record<PermissionRole, number>> = {
  * contributor's wider claim enables a control the other would refuse.
  */
 export function intersectRole(
-  left: PermissionRole,
-  right: PermissionRole,
-): PermissionRole {
+  left: WirePermissionRole,
+  right: WirePermissionRole,
+): WirePermissionRole {
   return ROLE_RANK[left] <= ROLE_RANK[right] ? left : right;
 }

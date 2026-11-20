@@ -1,6 +1,7 @@
 import type { QueryObserverResult } from "@tanstack/react-query";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import {
   userSubscription,
   userWith,
@@ -28,6 +29,7 @@ import {
   vi,
 } from "vitest";
 import { createStore } from "zustand/vanilla";
+import type { ModelOption } from "@/components/home/data/landing-options";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
@@ -36,6 +38,7 @@ import type {
   LandingTerminalAgentArgs,
   TerminalAgentLaunch,
 } from "@/components/home/hooks/use-landing-composer-actions";
+import type { LandingOwnerTeam } from "@/components/home/composer/landing-owner-model";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { LandingComposer } from "../landing-composer";
@@ -67,6 +70,11 @@ const PLACEMENT_CLIENT = vi.hoisted(() => ({ hostId: "host-test" }));
 
 const testState = vi.hoisted(() => ({
   submit: vi.fn(),
+  resolveOwnerForCreate: vi.fn<
+    (
+      owner: LandingOwnerTeam | null,
+    ) => LandingOwnerTeam | null | Promise<LandingOwnerTeam | null>
+  >((owner) => owner),
   // Dispatches, as the real action does with no refusal to give.
   selectTerminalAgent: vi.fn((args: LandingTerminalAgentArgs): null => {
     args.settled?.(true);
@@ -249,6 +257,7 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     },
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    setDraftAccountFollowsDefault: vi.fn(),
     seedUnseededDraft: vi.fn(() => false),
     createDraft: vi.fn(() => "draft-for-test"),
     // handleSnapshot's unbound-create branch now calls createDraftWithId
@@ -273,6 +282,8 @@ vi.mock("@/stores/home/landing-draft-store", () => {
   return {
     useLandingDraftStore,
     isOpenLandingDraft: (draft: { readonly closed: boolean }) => !draft.closed,
+    // Every draft in this suite is an ordinary one: none was opened for a host.
+    useLandingDraftNamedHostId: () => null,
   };
 });
 
@@ -296,48 +307,146 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
 });
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
-  const toolbarStore = createStore(() => ({
-    ultracode: false,
-    selectedModel: null,
-    selection: {
-      get harnessId() {
-        return testState.displayedHarness;
+  type ToolbarAccount = {
+    readonly harnessId: string;
+    readonly profileId: string;
+  };
+  type ToolbarSelection = {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  type ToolbarMockState = {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: ToolbarAccount | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (account: ToolbarAccount | null) => void;
+    readonly ultracode: boolean;
+    readonly selection: ToolbarSelection;
+    readonly values: {
+      readonly selection: ToolbarSelection;
+      readonly ultracode?: boolean;
+      readonly permission?: string;
+      readonly reasoning?: string;
+      readonly serviceTier?: string;
+    };
+    readonly selectedModel: ModelOption | null;
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId?: string | null;
+      readonly harnesses: ReadonlyArray<string> | undefined;
+      readonly modelsLoaded?: boolean;
+      readonly modelsHarnessId?: string;
+      readonly modelsProfileId?: string | null;
+      readonly models?: ReadonlyArray<never>;
+      readonly modelsFailed?: boolean;
+    };
+  };
+  const emptyDefaultAccount: ToolbarAccount | null = null;
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => {
+    const replaceStatePreservingCatalog = (
+      state: ToolbarMockState,
+      patch: Partial<
+        Pick<ToolbarMockState, "accountChosen" | "defaultAccount">
+      >,
+    ): void => {
+      const catalogDescriptor = Object.getOwnPropertyDescriptor(
+        state,
+        "catalog",
+      );
+      const nextState: ToolbarMockState = { ...state, ...patch };
+      if (
+        catalogDescriptor !== undefined &&
+        (typeof catalogDescriptor.get === "function" ||
+          typeof catalogDescriptor.set === "function")
+      ) {
+        Object.defineProperty(nextState, "catalog", catalogDescriptor);
+      }
+      set(nextState, true);
+    };
+
+    return {
+      accountChosen: false,
+      defaultAccount: emptyDefaultAccount,
+      setAccountChosen: (chosen: boolean) => {
+        replaceStatePreservingCatalog(get(), { accountChosen: chosen });
       },
-      get modelSlug() {
-        return testState.modelSlug;
+      setDefaultAccount: (
+        account: {
+          readonly harnessId: string;
+          readonly profileId: string;
+        } | null,
+      ) => {
+        replaceStatePreservingCatalog(get(), { defaultAccount: account });
       },
-      profileId: null,
-    },
-    get catalog() {
-      return testState.catalogHostId === null
-        ? { hostId: null, harnesses: undefined, modelsLoaded: false }
-        : {
-            hostId: testState.catalogHostId,
-            harnesses: [],
-            modelsLoaded: true,
-          };
-    },
-    // The raw pick; `selection` above is what this host's catalog shows.
-    values: {
       ultracode: false,
+      selectedModel: null,
       selection: {
         get harnessId() {
-          return testState.pickHarness;
+          return testState.displayedHarness;
         },
         get modelSlug() {
-          return testState.pickModel;
+          return testState.modelSlug;
         },
-        profileId: null,
+        get profileId() {
+          const state = get();
+          const rawSelection = state.values.selection;
+          const account = state.defaultAccount;
+          return !state.accountChosen &&
+            account !== null &&
+            rawSelection.profileId === null &&
+            rawSelection.harnessId === account.harnessId &&
+            testState.displayedHarness === account.harnessId
+            ? account.profileId
+            : rawSelection.profileId;
+        },
+      },
+      get catalog() {
+        return testState.catalogHostId === null
+          ? {
+              hostId: null,
+              harnesses: undefined,
+              modelsHarnessId: testState.displayedHarness,
+              modelsProfileId: null,
+              models: [],
+              modelsLoaded: false,
+              modelsFailed: false,
+            }
+          : {
+              hostId: testState.catalogHostId,
+              harnesses: [],
+              modelsHarnessId: testState.displayedHarness,
+              modelsProfileId: null,
+              models: [],
+              modelsLoaded: true,
+              modelsFailed: false,
+            };
+      },
+      // The raw pick; `selection` above is what this host's catalog shows.
+      values: {
+        ultracode: false,
+        selection: {
+          get harnessId() {
+            return testState.pickHarness;
+          },
+          get modelSlug() {
+            return testState.pickModel;
+          },
+          profileId: null,
+        },
+        permission: "supervised",
+        reasoning: "high",
+        serviceTier: "",
       },
       permission: "supervised",
-      reasoning: "high",
+      reasoning: "medium",
       serviceTier: "",
-    },
-    permission: "supervised",
-    reasoning: "medium",
-    serviceTier: "",
-    agentMode: "regular",
-  }));
+      agentMode: "regular",
+    };
+  });
   testState.toolbarStore = toolbarStore;
   return { useComposerToolbarStore: () => toolbarStore };
 });
@@ -411,6 +520,7 @@ vi.mock(
 
 vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   useLandingComposerActions: () => ({
+    resolveOwnerForCreate: testState.resolveOwnerForCreate,
     submit: testState.submit,
     selectTerminalAgent: testState.selectTerminalAgent,
     startTaskOnStagedSandbox: testState.startTask,
@@ -495,6 +605,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 }));
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
 }));
 vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   // Same treatment as `use-composer-dictation` above: a host-backed readiness
@@ -589,14 +700,20 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null, refetch: testState.refetchAuthUser }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({
-    data: testState.catalogue,
-    isFetching: testState.catalogueFetching,
-    isError: false,
-    refetch: testState.refetchCatalogue,
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({
+      data: testState.catalogue,
+      isFetching: testState.catalogueFetching,
+      isError: false,
+      refetch: testState.refetchCatalogue,
+    }),
   }),
-}));
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
   useSandboxDefaultsLookup: () => () => null,
 }));
@@ -672,6 +789,8 @@ afterEach(() => {
   testState.packGateCalls = [];
   testState.defaultHostPackGateReads = 0;
   testState.submit.mockClear();
+  testState.resolveOwnerForCreate.mockReset();
+  testState.resolveOwnerForCreate.mockImplementation((owner) => owner);
   testState.selectTerminalAgent.mockClear();
   testState.startTerminal = null;
   testState.bodySubmit = null;
@@ -717,6 +836,14 @@ const NEW_STAGE: StagedSandboxTarget = {
   shape: SHAPE,
   name: "",
   wakeString: null,
+};
+
+const TEAM_A_OWNER: LandingOwnerTeam = { teamId: "team-a", slug: "acme" };
+const TEAM_B_OWNER: LandingOwnerTeam = { teamId: "team-b", slug: "other" };
+
+const TEAM_STAGE: StagedSandboxTarget = {
+  ...NEW_STAGE,
+  configuration: { kind: "team", teamId: "team-a", teamName: "Acme" },
 };
 
 const EXISTING_RESUME: StagedSandboxTarget = {
@@ -819,6 +946,76 @@ function onlyPendingStage() {
 }
 
 describe("LandingComposer direct submit gate", () => {
+  it("keeps the staged draft when owner resolution is superseded", async () => {
+    testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+    const ownerResolution = Promise.withResolvers<LandingOwnerTeam | null>();
+    testState.resolveOwnerForCreate.mockReturnValue(ownerResolution.promise);
+    useStagedSandboxStore.getState().stage("landing:window-test", NEW_STAGE);
+
+    await sendFromComposer();
+    expect(testState.resolveOwnerForCreate).toHaveBeenCalledOnce();
+    expect(testState.refetchAuthUser).not.toHaveBeenCalled();
+    expect(testState.startTask).not.toHaveBeenCalled();
+
+    await act(async () => {
+      ownerResolution.reject(new SupersededAuthEraError());
+      await ownerResolution.promise.catch(() => undefined);
+    });
+
+    expect(testState.refetchAuthUser).not.toHaveBeenCalled();
+    expect(testState.startTask).not.toHaveBeenCalled();
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox("landing:window-test")?.phase).toBe("staged");
+  });
+
+  it("resolves a staged owner before balance refresh and keeps that owner for Start", async () => {
+    testState.catalogue = { providers: [], offeredAgents: ["codex"] };
+    const ownerResolution = Promise.withResolvers<LandingOwnerTeam | null>();
+    const refreshed =
+      Promise.withResolvers<
+        Pick<QueryObserverResult<AuthenticatedUser | null>, "data" | "isError">
+      >();
+    const funded = userWith(
+      userSubscription({
+        totalPlanCredits: 10,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [],
+    );
+    testState.resolveOwnerForCreate
+      .mockImplementationOnce(() => ownerResolution.promise)
+      .mockImplementation(() => TEAM_B_OWNER);
+    testState.refetchAuthUser.mockReturnValue(refreshed.promise);
+    useStagedSandboxStore.getState().stage("landing:window-test", TEAM_STAGE);
+
+    await sendFromComposer();
+    expect(testState.resolveOwnerForCreate).toHaveBeenCalledOnce();
+    expect(testState.refetchAuthUser).not.toHaveBeenCalled();
+    expect(testState.startTask).not.toHaveBeenCalled();
+
+    await act(async () => {
+      ownerResolution.resolve(TEAM_A_OWNER);
+      await ownerResolution.promise;
+    });
+    await waitFor(() =>
+      expect(testState.refetchAuthUser).toHaveBeenCalledOnce(),
+    );
+    expect(testState.startTask).not.toHaveBeenCalled();
+
+    await act(async () => {
+      refreshed.resolve({ data: funded, isError: false });
+      await refreshed.promise;
+    });
+    await waitFor(() => expect(testState.startTask).toHaveBeenCalledOnce());
+
+    expect(testState.resolveOwnerForCreate).toHaveBeenCalledOnce();
+    expect(testState.startTask.mock.calls[0]?.[0].owner).toEqual(TEAM_A_OWNER);
+    expect(testState.startTask.mock.calls[0]?.[0].sandboxTeamId).toBe("team-a");
+  });
+
   it.each(["draft", "agent"] as const)(
     "keeps a changed %s after a held auth refresh, until another Send",
     async (change) => {
@@ -973,7 +1170,11 @@ describe("LandingComposer direct submit gate", () => {
         catalog: {
           hostId: "host-test",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
       useStagedSandboxStore.getState().report("landing:window-test", {
@@ -1216,7 +1417,11 @@ describe("LandingComposer direct submit gate", () => {
         catalog: {
           hostId: "host-test",
           harnesses: [{ id: "claude", available: true, modes: ["gui", "tui"] }],
+          modelsHarnessId: "claude",
+          modelsProfileId: null,
+          models: [],
           modelsLoaded: true,
+          modelsFailed: false,
         },
       });
       useStagedSandboxStore.getState().report("landing:window-test", {
@@ -1294,7 +1499,11 @@ describe("LandingComposer direct submit gate", () => {
           catalog: {
             hostId: "host-test",
             harnesses: [{ id: "claude", ...harness }],
+            modelsHarnessId: "claude",
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           },
         });
         useStagedSandboxStore.getState().report("landing:window-test", {
@@ -1456,13 +1665,19 @@ describe("LandingComposer direct submit gate", () => {
       // is sent there, through the composer's ordinary submit.
       act(() => {
         testState.catalogHostId = "host-test";
+        testState.displayedHarness = "codex";
+        testState.modelSlug = "gpt-6.1-sol";
         testState.toolbarStore?.setState({
           catalog: {
             hostId: "host-test",
             harnesses: [
               { id: "codex", available: true, modes: ["gui", "tui"] },
             ],
+            modelsHarnessId: "codex",
+            modelsProfileId: null,
+            models: [],
             modelsLoaded: true,
+            modelsFailed: false,
           },
         });
         useStagedSandboxStore.getState().report("landing:window-test", {
@@ -2076,6 +2291,8 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: testState.clearEditor,
     setContent: () => undefined,
     syncContent: () => undefined,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
     insertImageAttachments: () => undefined,
     insertMentionAttachment: () => false,
     beginPathInsertion: () => null,

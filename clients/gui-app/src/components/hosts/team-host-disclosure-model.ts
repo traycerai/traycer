@@ -2,13 +2,14 @@ import type { EpicCollaboratorsView } from "@/hooks/epics/use-epic-collaborators
 
 /**
  * The first tab a member opens on a team host: what running there means, then
- * the two residual sentences the disclosure must carry.
+ * the two residual sentences the disclosure must carry. All three are visible
+ * at rest.
  */
 export function teamHostDisclosureSentences(
   teamName: string,
 ): readonly [string, string, string] {
   return [
-    `Agents here run as the host. Anything another member's agent does on it can read what yours can, browser sign-ins included. Agents here work with ${teamName}'s hosts only. A browser-using agent here runs its browser in the sandbox, never on your computer.`,
+    `Agents here run as the host. Another member's agent on it can read what yours can, browser sign-ins included. Agents here work with ${teamName}'s hosts only. A browser-using agent here runs its browser in the sandbox, never on your computer.`,
     "Another member's agent here can act and be charged as you while you are attached.",
     `A copy of your sign-in to this host, taken by anyone who was root here, keeps working against ${teamName}'s hosts until this host sleeps.`,
   ];

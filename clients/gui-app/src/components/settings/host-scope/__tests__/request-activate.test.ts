@@ -98,6 +98,7 @@ describe("requestActivate (Settings ▸ Activate, the only preferred-host write 
         state: "suspended",
         frozen: false,
         summary: null,
+        ownerKind: "unknown",
         teamOwned: false,
       },
     });

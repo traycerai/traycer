@@ -102,6 +102,7 @@ vi.mock("../../internal/host-rpc", () => ({
 // place when `update-recovery-evidence` resolves them.
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { RetryEpisodeOutcomeUnknownError } from "@traycer-clients/shared/host-transport/retrying-messenger";
+import { markRefusalAfterRejectedSignIn } from "../../internal/sign-in-rejection";
 import * as paths from "../../store/paths";
 import { writeHostInstallRecord } from "../../manifest/host-install";
 import { writeHostStagedRecordAt } from "../../manifest/host-staged";
@@ -1230,6 +1231,36 @@ describe("observeAttemptRecoveryEvidence - the running leg's DIAGNOSIS (Linux E1
     );
 
     expect(observation.runningDiagnosis).toBe(diagnosis);
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+  });
+
+  it("reads a refusal that followed a rejected sign-in refresh as sign-in-rejected", async () => {
+    // The host refused, and the refresh of this CLI's own sign-in was rejected
+    // too: the credential is dead and the host did nothing wrong. Without the
+    // mark the same frame reads as a host that will not authenticate us.
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("current");
+    const refusal = new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "Token expired",
+      requestId: "r",
+      method: "host.status",
+      fatalDetails: null,
+    });
+    markRefusalAfterRejectedSignIn(refusal);
+    callHostRpcMock.mockRejectedValue(refusal);
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+
+    expect(observation.runningDiagnosis).toBe("sign-in-rejected");
+    expect(observation.runningRefusal?.startsWith("UNAUTHORIZED: ")).toBe(true);
     expect(observation.evidence.running).toEqual({ kind: "unreadable" });
   });
 

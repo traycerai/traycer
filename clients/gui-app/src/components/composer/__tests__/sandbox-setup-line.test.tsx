@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
-  render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
+import { renderWithQueryClient } from "@/components/composer/__tests__/composer-query-wrapper";
+import { toast } from "sonner";
 import {
   SandboxSetupLine,
   type SandboxSetupLineActions,
@@ -33,7 +34,24 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => vi.fn(),
 }));
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.clearAllMocks();
+  useSandboxDetailsStore.setState({ sandboxId: null });
+});
+
+const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+  navigator,
+  "clipboard",
+);
+
+afterEach(() => {
+  cleanup();
+  if (clipboardDescriptor === undefined) {
+    Reflect.deleteProperty(navigator, "clipboard");
+  } else {
+    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+  }
+});
 
 const onStop = vi.fn();
 
@@ -121,7 +139,7 @@ function mountRefusal(
   smallerShapeAffordable: boolean,
   actions: SandboxSetupLineActions,
 ): HTMLElement {
-  render(
+  renderWithQueryClient(
     <SandboxSetupLine
       stage={refused(configuration, failure)}
       name="api-refactor"
@@ -164,7 +182,7 @@ describe("withdrawing a message from every refusal or failure", () => {
       const stage = created();
       const onCancel = vi.fn();
       const onOpenTerminal = vi.fn();
-      render(
+      renderWithQueryClient(
         <SandboxSetupLine
           stage={{
             ...stage,
@@ -194,27 +212,11 @@ describe("withdrawing a message from every refusal or failure", () => {
       const line =
         screen.queryByTestId("sandbox-refusal-line") ??
         screen.getByTestId("sandbox-setup-line-detail");
-      if (failure.kind === "settings") {
-        fireEvent.pointerDown(
-          within(line).getByRole("button", { name: "More" }),
-          { button: 0 },
-        );
-        const labels = screen
-          .getAllByRole("menuitem")
-          .map((item) => item.textContent);
-        expect(labels).toContain("Open terminal");
-        expect(labels).toContain("Use This computer");
-        expect(labels).toContain("Cancel the message");
-        expect(labels).toContain("Details");
-        fireEvent.click(screen.getByTestId("sandbox-setup-cancel"));
-        expect(onCancel).toHaveBeenCalledTimes(1);
-        expect(onOpenTerminal).not.toHaveBeenCalled();
-        cleanup();
-        return;
-      }
       const labels = buttonLabels(line);
+      const terminalLabel =
+        failure.kind === "settings" ? "Open terminal" : "Open terminal instead";
       const exits = [
-        ...(failure.kind === "credits" ? [] : ["Open terminal instead"]),
+        ...(failure.kind === "credits" ? [] : [terminalLabel]),
         "Use This computer",
         "Cancel the message",
         "Details",
@@ -270,13 +272,13 @@ describe("SandboxSetupLine's refusal for credits", () => {
     {
       creditSource: "team",
       shortfallMc: null,
-      expected: "Your acme credits don't cover an hour of this sandbox.",
+      expected: "acme's credits don't cover an hour of this sandbox.",
     },
     {
       creditSource: "team",
       shortfallMc: 120,
       expected:
-        "Your acme credits are short $0.12. $0.12 more wakes it for an hour.",
+        "acme's credits are short $0.12. $0.12 more wakes it for an hour.",
     },
   ])(
     "capitalizes a resumed sandbox's $creditSource refusal with shortfall $shortfallMc",
@@ -286,7 +288,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
         teamId: "team-1",
         teamName: "acme",
       };
-      render(
+      renderWithQueryClient(
         <SandboxSetupLine
           stage={{
             ...refused(configuration, {
@@ -330,7 +332,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
     ]);
   });
 
-  it("offers Add credits, host choice and Cancel on a team's allowance", () => {
+  it("offers host choice and Cancel, and no Add credits to a reader not known to be the team's Admin, on a team's allowance", () => {
     const line = mountRefusal(
       { kind: "team", teamId: "team-1", teamName: "acme" },
       { kind: "credits", creditSource: "team-allowance", shortfallMc: 120 },
@@ -344,7 +346,6 @@ describe("SandboxSetupLine's refusal for credits", () => {
       ),
     ).toBeDefined();
     expect(buttonLabels(line)).toEqual([
-      "Add credits ↗",
       "Use This computer",
       "Cancel the message",
     ]);
@@ -472,7 +473,7 @@ describe("SandboxSetupLine's failed start", () => {
   const RAW_CODE = "create:kube-create-service-account";
 
   function mountFailed(): void {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...refused(
@@ -488,25 +489,32 @@ describe("SandboxSetupLine's failed start", () => {
     );
   }
 
-  it("keeps a failed-create support code in its closed Support reference disclosure", () => {
+  it("shows the failed-create support code in the heading even when collapsed", () => {
     mountFailed();
 
-    const line = screen.getByTestId("sandbox-setup-line");
-    const disclosure = within(line).getByTestId<HTMLDetailsElement>(
-      "sandbox-setup-support-reference",
+    const toggle = screen.getByTestId("sandbox-setup-line-toggle");
+    expect(toggle.textContent).toContain("SBX-0412");
+    expect(screen.getByTestId("sandbox-setup-line").textContent).not.toContain(
+      RAW_CODE,
     );
-    expect(disclosure.open).toBe(false);
+    expect(screen.queryByText("Support reference")).toBeNull();
     expect(
-      within(line).getByTestId("sandbox-setup-line-toggle").textContent,
-    ).not.toContain("SBX-0412");
-    expect(line.textContent).not.toContain(RAW_CODE);
-    fireEvent.click(within(disclosure).getByText("Support reference"));
-    expect(disclosure.open).toBe(true);
-    expect(within(disclosure).getByText("SBX-0412")).toBeTruthy();
+      screen.getByRole("button", { name: "Copy support reference" }),
+    ).toBeTruthy();
+
+    fireEvent.click(toggle);
+
+    expect(toggle.textContent).toContain("SBX-0412");
+    expect(screen.queryByTestId("sandbox-setup-line-detail")).toBeNull();
   });
 
-  it("shows a pre-create failure's support code only after opening Support reference", () => {
-    render(
+  it("shows and copies a pre-create failure's reference before a sandbox id exists", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={refused(
           { kind: "personal" },
@@ -518,17 +526,16 @@ describe("SandboxSetupLine's failed start", () => {
       />,
     );
 
-    const line = screen.getByTestId("sandbox-setup-line");
-    const disclosure = within(line).getByTestId<HTMLDetailsElement>(
-      "sandbox-setup-support-reference",
-    );
-    expect(disclosure.open).toBe(false);
     expect(
-      within(line).getByTestId("sandbox-setup-line-toggle").textContent,
-    ).not.toContain("SBX-0412");
-    fireEvent.click(within(disclosure).getByText("Support reference"));
-    expect(disclosure.open).toBe(true);
-    expect(within(disclosure).getByText("SBX-0412")).toBeTruthy();
+      screen.getByTestId("sandbox-setup-line-toggle").textContent,
+    ).toContain("SBX-0412");
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy support reference" }),
+    );
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("SBX-0412");
+    });
   });
 
   it("copies the support reference with the created sandbox's id", async () => {
@@ -545,6 +552,29 @@ describe("SandboxSetupLine's failed start", () => {
       expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
     });
   });
+
+  it("shows an error toast when copying the support reference is rejected", async () => {
+    const writeText = vi.fn(() => Promise.reject(new Error("denied")));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const errorToast = vi.spyOn(toast, "error").mockReturnValue(0);
+    try {
+      mountFailed();
+      fireEvent.click(
+        await screen.findByTestId("sandbox-setup-copy-reference"),
+      );
+      await waitFor(() => {
+        expect(errorToast).toHaveBeenCalledWith(
+          "Couldn't copy the diagnostics.",
+        );
+      });
+      expect(writeText).toHaveBeenCalledWith("SBX-0412 · sbx_made_1");
+    } finally {
+      errorToast.mockRestore();
+    }
+  });
 });
 
 describe("SandboxSetupLine when the sandbox rested on its own", () => {
@@ -557,7 +587,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   ] as const)(
     "draws nothing for a stage at step %s with failure %j",
     (step, failure) => {
-      const { container } = render(
+      const { container } = renderWithQueryClient(
         <SandboxSetupLine
           stage={{ ...created(), step, failure }}
           name="api-refactor"
@@ -573,7 +603,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   it.each([true, undefined])(
     "draws nothing for a rested stage whose send can go back (withdrawalAllowed %s)",
     (withdrawalAllowed) => {
-      const { container } = render(
+      const { container } = renderWithQueryClient(
         <SandboxSetupLine
           stage={{ ...created(), step: "applying" }}
           name="api-refactor"
@@ -589,7 +619,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
 
   it("says the message is still pending, with Retry, when this window can't give it back", () => {
     const onRetry = vi.fn();
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{ ...created(), step: "applying" }}
         name="api-refactor"
@@ -607,7 +637,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   });
 
   it("keeps waiting on the progress line, not an alert, for a recorded rest once the row no longer rests", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -631,7 +661,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   });
 
   it("still draws the settings failure's own line", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -652,7 +682,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   });
 
   it("still says Resuming for a wake under way at the booting step", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -686,7 +716,7 @@ describe("SandboxProgressLine's queued state", () => {
   const NOT_STOPPABLE = { ...facts(false), sandboxStoppable: false };
 
   it("says Queued, with the retry time, while the vendor's quota wait is still ahead, even past the ordinary taking-longer threshold", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -714,7 +744,7 @@ describe("SandboxProgressLine's queued state", () => {
   ])(
     "falls back to the ordinary elapsed rule for %s, taking longer past the threshold exactly as before",
     (_label, rateLimit) => {
-      render(
+      renderWithQueryClient(
         <SandboxSetupLine
           stage={{
             ...created(),
@@ -735,7 +765,7 @@ describe("SandboxProgressLine's queued state", () => {
   );
 
   it("stays on the ordinary not-yet-taking-longer line for an expired quota wait before the elapsed threshold", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -756,7 +786,7 @@ describe("SandboxProgressLine's queued state", () => {
   it("stays Queued past the elapsed threshold, and expanding it by hand still offers Cancel and keep the draft and Choose another host", () => {
     const onCancel = vi.fn();
     const onChooseAnotherHost = vi.fn();
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -806,7 +836,7 @@ describe("SandboxProgressLine's queued retry label across a local midnight", () 
   });
 
   it("includes the date, not only the time, when the recorded retry falls on a different local day", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -829,7 +859,7 @@ describe("SandboxProgressLine's queued retry label across a local midnight", () 
 describe("SandboxSetupLine's Stop action", () => {
   it("stays available while the created sandbox's line is collapsed or expanded", () => {
     onStop.mockClear();
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={created()}
         name="api-refactor"
@@ -850,7 +880,7 @@ describe("SandboxSetupLine's Stop action", () => {
   });
 
   it("hides Stop in both line states when withdrawal is unavailable", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={created()}
         name="api-refactor"
@@ -870,7 +900,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
   const STEPS = { applied: ["Secrets"], notApplied: ["Providers"] };
 
   function mountSettings(sendTaken: boolean, actions: SandboxSetupLineActions) {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -897,10 +927,6 @@ describe("SandboxSetupLine when the settings did not apply", () => {
         "api-refactor is awake, but Personal's settings didn't apply",
       ),
     ).toBeTruthy();
-    const disclosure = within(detail).getByTestId<HTMLDetailsElement>(
-      "sandbox-setup-support-reference",
-    );
-    expect(disclosure.open).toBe(false);
     const lines = within(detail)
       .getAllByText(/./, { selector: "p" })
       .map((line) => line.textContent);
@@ -911,17 +937,25 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     );
   });
 
-  it("keeps the settings support code in its closed Support reference disclosure", () => {
+  it("shows and copies the fallback settings reference inline", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     const detail = mountSettings(false, ACTIONS);
-    const disclosure = within(detail).getByTestId<HTMLDetailsElement>(
-      "sandbox-setup-support-reference",
+    expect(
+      screen.getByTestId("sandbox-setup-line-toggle").textContent,
+    ).toContain("SBX-0520");
+    expect(within(detail).queryByText("Support reference")).toBeNull();
+
+    fireEvent.click(
+      within(detail).getByRole("button", { name: "Copy support reference" }),
     );
 
-    expect(disclosure.open).toBe(false);
-    fireEvent.click(within(disclosure).getByText("Support reference"));
-
-    expect(disclosure.open).toBe(true);
-    expect(within(disclosure).getByText("SBX-0520")).toBeTruthy();
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("SBX-0520 · sbx_made_1");
+    });
   });
 
   it("says the message waits only when the send was taken", () => {
@@ -935,7 +969,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(idle.textContent).not.toContain("waits until they apply");
   });
 
-  it("keeps Retry applying primary and dispatches every secondary action once from More", () => {
+  it("shows all applicable remedies inline and dispatches each once", () => {
     const onRetryApplying = vi.fn();
     const onRepairSetup = vi.fn();
     const onOpenTerminal = vi.fn();
@@ -952,31 +986,31 @@ describe("SandboxSetupLine when the settings did not apply", () => {
       onCancel,
     });
 
-    const retry = within(detail).getByTestId("sandbox-setup-retry-applying");
-    expect(retry.textContent).toContain("Retry applying");
-    expect(
-      within(detail).queryByTestId("sandbox-setup-repair-setup"),
-    ).toBeNull();
-    fireEvent.click(retry);
+    expect(buttonLabels(detail)).toEqual([
+      "Retry applying",
+      "Repair setup",
+      "Open terminal",
+      "Stop",
+      "Use This computer",
+      "Cancel the message",
+      "Details",
+      "Copy support reference",
+    ]);
+    expect(screen.queryByRole("button", { name: "More" })).toBeNull();
+    for (const label of [
+      "Retry applying",
+      "Repair setup",
+      "Open terminal",
+      "Stop",
+      "Use This computer",
+      "Cancel the message",
+      "Details",
+    ]) {
+      const button = within(detail).getByRole("button", { name: label });
+      fireEvent.click(button);
+    }
+
     expect(onRetryApplying).toHaveBeenCalledOnce();
-
-    const chooseMenuItem = (testId: string): void => {
-      fireEvent.pointerDown(
-        within(detail).getByRole("button", { name: "More" }),
-        { button: 0 },
-      );
-      expect(
-        screen.queryByRole("menuitem", { name: "Retry applying" }),
-      ).toBeNull();
-      fireEvent.click(screen.getByTestId(testId));
-    };
-    chooseMenuItem("sandbox-setup-repair-setup");
-    chooseMenuItem("sandbox-setup-open-terminal");
-    chooseMenuItem("sandbox-setup-stop");
-    chooseMenuItem("sandbox-setup-choose-another-host");
-    chooseMenuItem("sandbox-setup-cancel");
-    chooseMenuItem("sandbox-setup-details");
-
     expect(onRepairSetup).toHaveBeenCalledOnce();
     expect(onOpenTerminal).toHaveBeenCalledOnce();
     expect(onStop).toHaveBeenCalledOnce();
@@ -989,12 +1023,8 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     const onStopHere = vi.fn();
     const detail = mountSettings(true, { ...ACTIONS, onStop: onStopHere });
 
-    expect(screen.queryAllByTestId("sandbox-setup-stop")).toHaveLength(0);
-    fireEvent.pointerDown(
-      within(detail).getByRole("button", { name: "More" }),
-      { button: 0 },
-    );
-    expect(screen.getAllByTestId("sandbox-setup-stop")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
+    expect(within(detail).getByRole("button", { name: "Stop" })).toBeTruthy();
     fireEvent.click(screen.getByTestId("sandbox-setup-stop"));
     expect(onStopHere).toHaveBeenCalledTimes(1);
 
@@ -1013,14 +1043,10 @@ describe("SandboxSetupLine when the settings did not apply", () => {
     expect(
       within(detail).queryByTestId("sandbox-setup-retry-applying"),
     ).toBeNull();
-    fireEvent.pointerDown(
-      within(detail).getByRole("button", { name: "More" }),
-      { button: 0 },
-    );
     expect(screen.getByTestId("sandbox-setup-stop")).toBeTruthy();
   });
 
-  it("offers Repair setup instead of Retry applying when only the guest-only repair is available", () => {
+  it("offers Repair setup instead of Retry applying when only the older repair is available", () => {
     const onRepairSetup = vi.fn();
     const detail = mountSettings(true, {
       ...ACTIONS,
@@ -1028,10 +1054,6 @@ describe("SandboxSetupLine when the settings did not apply", () => {
       onRepairSetup,
     });
 
-    fireEvent.pointerDown(
-      within(detail).getByRole("button", { name: "More" }),
-      { button: 0 },
-    );
     fireEvent.click(screen.getByTestId("sandbox-setup-repair-setup"));
 
     expect(onRepairSetup).toHaveBeenCalledTimes(1);
@@ -1053,15 +1075,15 @@ describe("SandboxSetupLine when the settings did not apply", () => {
 
     const retry = within(detail).getByTestId("sandbox-setup-retry-applying");
     expect(retry.hasAttribute("disabled")).toBe(true);
-    fireEvent.pointerDown(
-      within(detail).getByRole("button", { name: "More" }),
-      { button: 0 },
-    );
     const repair = screen.getByTestId("sandbox-setup-repair-setup");
-    expect(repair.getAttribute("aria-disabled")).toBe("true");
+    expect(repair.hasAttribute("disabled")).toBe(true);
     fireEvent.click(repair);
     fireEvent.click(retry);
     expect(onRepairSetup).not.toHaveBeenCalled();
     expect(onRetryApplying).not.toHaveBeenCalled();
+    const stop = within(detail).getByRole("button", { name: "Stop" });
+    expect(stop.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledOnce();
   });
 });

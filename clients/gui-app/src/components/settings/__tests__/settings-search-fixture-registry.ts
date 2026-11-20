@@ -107,6 +107,8 @@ function notificationsHost(options: {
     mobileApp: false,
     phoneLayout: false,
     soundtrackOffered: false,
+    soundtrackRecordingOffered: false,
+    soundtrackSetPiecesOffered: false,
     soundtrackOn: false,
   };
 }
@@ -117,6 +119,8 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   mobileApp: false,
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: false,
 };
 
@@ -235,8 +239,6 @@ export const SETTINGS_SEARCH_FIXTURES = [
     hostScope: null,
     shells: [{ name: "every bridge absent", context: NO_BRIDGES }],
   },
-  // Sounds is not listed: its chime rows fold into the page, so it has no
-  // anchored entry to land.
   {
     section: "alerts",
     hostScope: null,
@@ -273,6 +275,22 @@ export const SETTINGS_SEARCH_FIXTURES = [
       {
         name: "a build with something to play, with Music on",
         context: { ...NO_BRIDGES, soundtrackOffered: true, soundtrackOn: true },
+      },
+      {
+        name: "a desktop that can save a recording",
+        context: {
+          ...NO_BRIDGES,
+          soundtrackOffered: true,
+          soundtrackRecordingOffered: true,
+        },
+      },
+      {
+        name: "a staging desktop with the set pieces bridge",
+        context: {
+          ...NO_BRIDGES,
+          soundtrackOffered: true,
+          soundtrackSetPiecesOffered: true,
+        },
       },
       {
         name: "the installed app, in a build with something to play",

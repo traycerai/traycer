@@ -2,14 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import {
   environmentPickerModel,
+  hostRunsPersonal,
   isStaleLocalPick,
   localPickerRow,
   personalSubtitle,
+  unresolvedSetupText,
   type EnvironmentPickerModel,
 } from "@/components/settings/environment/environment-picker-model";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
-import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import {
+  PERSONAL_PICK,
+  UNRESOLVED_PICK,
+} from "@/lib/settings-environment-pages";
 
 const V11 = { major: 1, minor: 1 } as const;
 const V10 = { major: 1, minor: 0 } as const;
@@ -41,10 +46,16 @@ const partlyMoved = environmentStatusFixture({
   // has finished (`traycer-host/.../migration/migrator.ts`, step 5). A
   // fixture that sets it here invites a reader to key on it.
 });
+const applyingStalled = environmentStatusFixture({
+  principal: null,
+  planes: { records: "moved", broker: "moved", room: "moved" },
+  setup: { stage: "applying", state: "stalled" },
+});
 
 describe("localPickerRow", () => {
   it("gives an awaiting_consent host the not-moved row with Move to Personal", () => {
     expect(localPickerRow(OLD_LAPTOP, awaiting, V11)).toEqual({
+      kind: "local",
       hostId: "old",
       name: "Old laptop",
       subtitle: "its own settings, not in Personal yet",
@@ -52,6 +63,37 @@ describe("localPickerRow", () => {
       needsUpdate: false,
       defaultsToLocal: true,
     });
+    expect(unresolvedSetupText(awaiting)).toBeNull();
+  });
+
+  it("does not offer a Local row for a team-owned computer with local planes", () => {
+    const teamStatus = environmentStatusFixture({
+      principal: { kind: "team", teamName: "Designers" },
+      planes: { records: "local", broker: "local", room: "local" },
+    });
+
+    expect(localPickerRow(OLD_LAPTOP, teamStatus, V11)).toBeNull();
+    expect(
+      environmentPickerModel({
+        hosts: [OLD_LAPTOP],
+        statuses: statusMap([["old", teamStatus]]),
+        versions: new Map([["old", V11]]),
+        windowHostId: "old",
+      }).localRows,
+    ).toEqual([]);
+  });
+
+  it("keeps an unresolved setup computer selectable after its settings moved", () => {
+    expect(localPickerRow(OLD_LAPTOP, applyingStalled, V11)).toEqual({
+      kind: "setup",
+      hostId: "old",
+      name: "Old laptop",
+      subtitle: "Setup stopped while applying your settings.",
+      verb: null,
+      needsUpdate: false,
+      defaultsToLocal: true,
+    });
+    expect(hostRunsPersonal(OLD_LAPTOP, applyingStalled, V11)).toBe(false);
   });
 
   it("gives a host with a plane still local the partly-moved row", () => {
@@ -82,6 +124,7 @@ describe("localPickerRow", () => {
         setup: { stage: "moving_settings", state: "running" },
       });
       expect(localPickerRow(OLD_LAPTOP, status, version)).toEqual({
+        kind: "local",
         hostId: "old",
         name: "Old laptop",
         subtitle: "Update to view these settings.",
@@ -191,10 +234,64 @@ describe("environmentPickerModel", () => {
     expect(
       environmentPickerModel({ ...input, windowHostId: "elsewhere" })
         .defaultPick,
-    ).toEqual(PERSONAL_PICK);
+    ).toEqual(UNRESOLVED_PICK);
     expect(
       environmentPickerModel({ ...input, windowHostId: null }).defaultPick,
     ).toEqual(PERSONAL_PICK);
+  });
+
+  it.each([
+    { label: "empty host list", hosts: [], statuses: statusMap([]) },
+    {
+      label: "unread status",
+      hosts: [OLD_LAPTOP],
+      statuses: statusMap([["old", null]]),
+    },
+    { label: "missing status", hosts: [OLD_LAPTOP], statuses: statusMap([]) },
+    {
+      label: "unlisted host with cached status",
+      hosts: [],
+      statuses: statusMap([["old", awaiting]]),
+    },
+  ])("waits for the window host with $label", ({ hosts, statuses }) => {
+    expect(
+      environmentPickerModel({
+        hosts,
+        statuses,
+        versions: new Map([["old", V11]]),
+        windowHostId: "old",
+      }).defaultPick,
+    ).toEqual(UNRESOLVED_PICK);
+  });
+
+  it("defaults an answered Personal host to Personal", () => {
+    expect(
+      environmentPickerModel({
+        hosts: [OLD_LAPTOP],
+        statuses: statusMap([["old", personalHost]]),
+        versions: new Map([["old", V11]]),
+        windowHostId: "old",
+      }).defaultPick,
+    ).toEqual(PERSONAL_PICK);
+  });
+
+  it("defaults this window to its unresolved setup computer", () => {
+    const model = environmentPickerModel({
+      hosts: [OLD_LAPTOP],
+      statuses: statusMap([["old", applyingStalled]]),
+      versions: new Map([["old", V11]]),
+      windowHostId: "old",
+    });
+
+    expect(model.localRows.map((row) => row.kind)).toEqual(["setup"]);
+    expect(model.localRows[0]?.subtitle).toBe(
+      "Setup stopped while applying your settings.",
+    );
+    expect(model.defaultPick).toEqual({
+      kind: "local",
+      hostId: "old",
+      hostName: "Old laptop",
+    });
   });
 
   it("does not default to a partly-moved or greyed window host", () => {
@@ -208,7 +305,7 @@ describe("environmentPickerModel", () => {
     expect(partly.defaultPick).toEqual(PERSONAL_PICK);
     const greyed = environmentPickerModel({
       hosts: [OLD_LAPTOP],
-      statuses: statusMap([["old", null]]),
+      statuses: statusMap([["old", awaiting]]),
       versions: new Map([["old", V10]]),
       windowHostId: "old",
     });

@@ -6,7 +6,6 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { EnvironmentConfigurationItem } from "@traycer/protocol/host/environment/configuration-contracts";
@@ -76,41 +75,34 @@ describe("Variables and shells moving between two teams", () => {
       queries: { retry: false, gcTime: Infinity },
     });
     // A fresh element each time: React skips re-rendering an identical one.
+    // Inside the harness's wrapper, which carries the sign-in the items are
+    // read with: the app reads a named environment's items from authn.
     const page = (environmentId: string): ReactNode => (
-      <QueryClientProvider client={harness.queryClient}>
+      <harness.Wrapper>
         <ConfigurationSourceContext.Provider value={teamSource(environmentId)}>
           <ShellSettingsPanel />
         </ConfigurationSourceContext.Provider>
-      </QueryClientProvider>
+      </harness.Wrapper>
     );
     const view = render(page("env-a"));
     const field = (): HTMLInputElement => {
-      const input = screen.getByLabelText("NODE_ENV value");
+      const input = screen.getByLabelText("Value for NODE_ENV");
       if (!(input instanceof HTMLInputElement)) {
-        throw new Error("NODE_ENV value is not an input");
+        throw new Error("Value for NODE_ENV is not an input");
       }
       return input;
     };
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     await waitFor(() => {
       expect(field().value).toBe("production");
     });
     fireEvent.change(field(), { target: { value: "a draft nobody saved" } });
 
     view.rerender(page("env-b"));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     await waitFor(() => {
       expect(field().value).toBe("staging");
     });
 
     view.rerender(page("env-a"));
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Edit NODE_ENV value" }),
-    );
     await waitFor(() => {
       expect(field().value).toBe("production");
     });

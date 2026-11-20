@@ -121,8 +121,8 @@ describe("FallbackBehaviorGroup - selecting a value", () => {
   });
 });
 
-describe("FallbackBehaviorGroup Help disclosures", () => {
-  it("keeps the grace, wait, and automatic-return explanations inside their collapsed Help sections", () => {
+describe("FallbackBehaviorGroup inline guidance", () => {
+  it("shows timing, session, and queued-message consequences before changing a setting", () => {
     render(
       <FallbackBehaviorGroup
         policy={policy({ returnToPreferred: "auto" })}
@@ -134,26 +134,17 @@ describe("FallbackBehaviorGroup Help disclosures", () => {
     const explanations = [
       "Traycer waits this long before switching, so you can cancel from the chat. Opening the menu to choose another account or model pauses the countdown.",
       "If the limit resets later than this, Traycer skips waiting and moves on to the next step.",
+      "Switching back also starts a new agent session using this chat's history.",
       "Messages waiting to run move back to the original account or model.",
     ];
-    const helpSummaries = screen.getAllByText("Help");
-    expect(helpSummaries).toHaveLength(3);
-
-    for (const [index, explanationText] of explanations.entries()) {
-      const summary = helpSummaries[index];
+    expect(screen.queryByText("Help")).toBeNull();
+    for (const explanationText of explanations) {
       const explanation = screen.getByText(explanationText);
-      const help = summary.closest("details");
-      expect(help).not.toBeNull();
-      expect(explanation.closest("details")).toBe(help);
-      expect(help).toHaveProperty("open", false);
-
-      fireEvent.click(summary);
-      expect(help).toHaveProperty("open", true);
-      expect(screen.getByText(explanationText)).toBe(explanation);
+      expect(explanation.closest("details")).toBeNull();
     }
   });
 
-  it("points each timing combobox directly to its explanation paragraph inside closed Help", () => {
+  it("describes each timing combobox with its inline explanation", () => {
     render(
       <FallbackBehaviorGroup
         policy={policy({})}
@@ -184,9 +175,7 @@ describe("FallbackBehaviorGroup Help disclosures", () => {
       if (explanation === null) return;
       expect(explanation.tagName).toBe("P");
       expect(explanation.textContent).toBe(explanationText);
-      const help = explanation.closest("details");
-      expect(help).not.toBeNull();
-      expect(help).toHaveProperty("open", false);
+      expect(explanation.closest("details")).toBeNull();
     }
   });
 });
@@ -237,7 +226,7 @@ describe("FallbackBehaviorGroup - AX8: the return-to-preferred radiogroup is nam
       descriptionId === null
         ? null
         : document.getElementById(descriptionId)?.closest("details"),
-    ).toHaveProperty("open", false);
+    ).toBeNull();
   });
 
   it("the 'Switch back automatically' radio carries its own consequence as an accessible description", () => {

@@ -243,8 +243,8 @@ describe("<EpicMobileSwitcherTrigger />", () => {
     }
   });
 
-  it("renders for a viewer role too - switching tabs is not permission-gated", () => {
-    holder.role = "viewer";
+  it("renders for a role that grants no write access too - switching tabs is not permission-gated", () => {
+    holder.role = "supervisor";
     mountSheetFor("tab-1");
     render(<EpicMobileSwitcherTrigger tabId="tab-1" />);
     expect(switcherTrigger().disabled).toBe(false);
@@ -509,8 +509,10 @@ describe("<MobileEpicHeaderTitle />", () => {
     expect(mutateAsyncSpy).not.toHaveBeenCalled();
   });
 
-  it("renders plain text for a viewer (no editable control)", () => {
-    holder.role = "viewer";
+  it("renders plain text for a role that grants no write access (no editable control)", () => {
+    // `"supervisor"` stands for a role nothing recognises. A `viewer` never
+    // reaches this component: it is decoded to `editor` before the store holds it.
+    holder.role = "supervisor";
     renderWithQueryClient(
       <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
     );

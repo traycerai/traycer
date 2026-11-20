@@ -38,7 +38,7 @@ export const GENERAL = defineSettingsSection("general", {
     search: { anchor: "general-voice-input" },
     label: "Voice input",
     description:
-      "Dictate prompts with the mic button or its shortcut. The microphone opens only while you are dictating, and turning this off closes it. Audio never leaves your computer.",
+      "Dictate prompts with the mic button or its shortcut. The microphone opens only while you are dictating, and turning this off closes it. Audio never leaves this device.",
     availableWhen: isVoiceInputRowAvailable,
     keywords: ["dictation", "dictate", "speech", "microphone", "mic", "audio"],
   },

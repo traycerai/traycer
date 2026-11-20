@@ -136,6 +136,10 @@ function crash(attemptId: string, exitCode: number): HostCrashTelemetry {
     stopRequested: false,
     stderrEmpty: true,
     stderrFatal: "none",
+    hostLastLine: "none",
+    errorClass: "none",
+    errorCode: "none",
+    stopIntentState: "none",
     reportMemory: NO_REPORT_MEMORY,
   };
 }
@@ -446,13 +450,17 @@ describe("host crash reports across supervisor restarts", () => {
       "cli_version",
       "crash_kind",
       "host_environment",
+      "host_error_class",
+      "host_error_code",
       "host_fatal",
+      "host_last_line",
       "host_output",
       "host_phase",
       "host_running_version",
       "host_version",
       "os_release",
       "platform",
+      "stop_intent_state",
       "stop_requested",
       "uptime_bucket",
     ]);

@@ -9,7 +9,7 @@ import type { MentionMenuEntry, MentionProviderId } from "./providers";
  */
 export interface RootSearchCandidate {
   readonly entry: MentionMenuEntry;
-  readonly providerId: MentionProviderId;
+  readonly providerId: MentionProviderId | "hosts";
   /**
    * The row's full path when it names one (files, folders): the text the
    * ranking judges beside the name, in place of the rendered `detail` /
@@ -34,7 +34,9 @@ export interface RootSearchCandidate {
  * agents, artifacts) get a mild edge over path suggestions: their short titles
  * are deliberate names, while a path substring hit is often incidental.
  */
-const PROVIDER_SCORE_BOOSTS: Readonly<Record<MentionProviderId, number>> = {
+const PROVIDER_SCORE_BOOSTS: Readonly<
+  Record<MentionProviderId | "hosts", number>
+> = {
   files: 1,
   folders: 1,
   worktree: 1,
@@ -51,6 +53,7 @@ const PROVIDER_SCORE_BOOSTS: Readonly<Record<MentionProviderId, number>> = {
   artifacts: 0.9,
   // A bot channel's people: a member's name is deliberate.
   members: 0.9,
+  hosts: 0.9,
 };
 
 /**
@@ -106,6 +109,7 @@ function documentFor(candidate: RootSearchCandidate): RootSearchDocument {
 
 export interface RankedRootSearch {
   readonly entries: ReadonlyArray<MentionMenuEntry>;
+  readonly candidates?: ReadonlyArray<RootSearchCandidate>;
   /**
    * Rows the client-side fuzzy pass actually matched, or null when no ranking
    * ran (empty query). Appended rows do not count: the dismissal policy needs
@@ -198,6 +202,7 @@ export function rankRootSearchEntries(
   const trimmedQuery = query.trim();
   if (candidates.length === 0 || trimmedQuery.length === 0) {
     return {
+      candidates,
       entries: candidates.map((candidate) => candidate.entry),
       matchedCount: trimmedQuery.length === 0 ? null : 0,
     };
@@ -220,6 +225,7 @@ export function rankRootSearchEntries(
     (_candidate, index) => !matchedIndices.has(index),
   );
   return {
+    candidates,
     entries: [
       ...matches.map((match) => match.item.candidate.entry),
       ...unmatched.map((candidate) => candidate.entry),

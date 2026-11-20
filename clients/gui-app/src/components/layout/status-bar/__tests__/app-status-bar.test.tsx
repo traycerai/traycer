@@ -25,7 +25,6 @@ import {
   dispatchAction,
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
-import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 
 /**
  * The strip depends on the host SCOPE, not on the six hooks it composes, so
@@ -233,7 +232,7 @@ const GIB = 1024 * 1024 * 1024;
 /**
  * A projection carrying real numbers, attributed to `hostId` - built the same
  * shape `status-bar-resource-segment.test.tsx` uses, so a foreign-host figure
- * ("12%") is unambiguous if it ever leaks through attribution.
+ * ("0.75%") is unambiguous if it ever leaks through attribution.
  */
 function liveHostTreeProjection(hostId: string): GlobalResourceProjection {
   return {
@@ -242,6 +241,7 @@ function liveHostTreeProjection(hostId: string): GlobalResourceProjection {
     app: {
       sampledAt: 1,
       hostTotalMemoryBytes: 16 * GIB,
+      hostCpuCount: 16,
       process: null,
       processCount: 3,
       cpuPercent: 4,
@@ -389,7 +389,7 @@ describe("<AppStatusBar />", () => {
     render(<AppStatusBar />);
 
     expect(screen.getAllByText("cpu: unavailable")).toHaveLength(1);
-    expect(screen.queryByText("12%")).toBeNull();
+    expect(screen.queryByText("0.75%")).toBeNull();
   });
 
   it("names a vanished pick for what it is", () => {
@@ -591,33 +591,6 @@ describe("<AppStatusBar /> usage panel chord", () => {
 
     expect(lastPopoverProps).toEqual({ side: "top", align: "start" });
   });
-
-  it('suppresses title-bar dragging under the id "rate-limits" only while the usage panel is open', () => {
-    render(<AppStatusBar />);
-
-    expect(useTitleBarDragStore.getState().suppressors.has("rate-limits")).toBe(
-      false,
-    );
-
-    act(() => {
-      dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER);
-    });
-
-    expect(useTitleBarDragStore.getState().suppressors.has("rate-limits")).toBe(
-      true,
-    );
-
-    // The header trigger's own id, and mutually exclusive by placement - the
-    // strip owns it while its panel is open, and hands it back when the panel
-    // closes, same as the resource popover does for its own key.
-    act(() => {
-      fireEvent.keyDown(document, { key: "Escape" });
-    });
-
-    expect(useTitleBarDragStore.getState().suppressors.has("rate-limits")).toBe(
-      false,
-    );
-  });
 });
 
 describe("<AppStatusBar /> host controls", () => {
@@ -657,7 +630,7 @@ describe("<AppStatusBar /> host controls", () => {
 
     // The readings prove the strip IS watching Office Linux - so the absent
     // name below is a deliberate omission rather than an unresolved pick.
-    expect(screen.getByText("12%")).not.toBeNull();
+    expect(screen.getByText("0.75%")).not.toBeNull();
     expect(screen.queryByTestId("settings-host-switcher")).toBeNull();
     expect(screen.queryByText("Office Linux")).toBeNull();
   });

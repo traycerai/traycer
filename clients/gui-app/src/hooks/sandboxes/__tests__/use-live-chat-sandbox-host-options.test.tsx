@@ -39,6 +39,8 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: [], isError: false, isLoading: false }),
 }));
+const PERSONAL_ENVIRONMENT_ID = vi.hoisted(() => "env-personal");
+
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-configurations",
   async (importOriginal) => ({
@@ -47,6 +49,9 @@ vi.mock(
     >()),
     useSandboxConfigurations: () => ({
       configurations: [{ kind: "personal" }],
+      teamEnvironmentIds: new Set<string>(),
+      complete: true,
+      personalEnvironmentId: PERSONAL_ENVIRONMENT_ID,
     }),
   }),
 );
@@ -94,7 +99,12 @@ function listed(state: "awake" | "stopped"): SandboxListFetchResult {
     kind: "ok",
     response: {
       sandboxes: [
-        sandboxSummaryFixture({ hostId: HOST, displayName: "test-box", state }),
+        sandboxSummaryFixture({
+          hostId: HOST,
+          displayName: "test-box",
+          environmentId: PERSONAL_ENVIRONMENT_ID,
+          state,
+        }),
       ],
     },
   };
@@ -105,7 +115,6 @@ function ChatHostStatus(): ReactNode {
   const live = useLiveChatSandboxState("epic", "chat", HOST, true);
   const view = resolveChatSandbox(live.state, {
     reachable: live.reachable,
-    canEdit: true,
     ownedByViewer: true,
     environmentOwned: false,
   });

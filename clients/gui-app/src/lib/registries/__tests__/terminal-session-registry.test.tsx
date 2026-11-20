@@ -91,6 +91,7 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     version: "1.0.0",
     transportDialability: "dialable",
     publicKey,
+    owner: null,
     relayFuseGrace: false,
     sandbox: null,
     remoteStatus: {
@@ -130,6 +131,7 @@ function fakeStreamSession(): IStreamSession {
     onStatusChange: () => undefined,
     // Never negotiates: this fake exercises no version-dependent path.
     getNegotiatedSchemaVersion: () => null,
+    hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     close: () => undefined,
   };

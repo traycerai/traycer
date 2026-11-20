@@ -12,6 +12,7 @@ import {
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { buildChatLinkPolicy } from "@/components/chat/build-chat-link-policy";
+import { useTracyTranscriptOrigin } from "@/components/bots/tracy-transcript-origin-context";
 import { toast } from "sonner";
 
 interface ChatMarkdownLinkProviderProps {
@@ -97,6 +98,7 @@ function MarkdownLinkPolicyProvider({
   const queryClient = useQueryClient();
   const tabHostClient = useTabHostClient();
   const navigate = useNavigate();
+  const tracyOrigin = useTracyTranscriptOrigin();
   const openEpicId = openEpic?.epicId ?? "";
   const epicHandle = openEpic?.handle ?? null;
   const opensFiles = workspaceRoots !== null;
@@ -144,6 +146,7 @@ function MarkdownLinkPolicyProvider({
       client: tabHostClient,
       workspaceClient: opensFiles ? tabHostClient : null,
       navigate,
+      tracyOrigin,
       openTile,
     });
   }, [
@@ -156,6 +159,7 @@ function MarkdownLinkPolicyProvider({
     tabHostClient,
     tabHostId,
     tabId,
+    tracyOrigin,
     workspaceRoots,
   ]);
 

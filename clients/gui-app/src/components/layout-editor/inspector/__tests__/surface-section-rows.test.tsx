@@ -259,7 +259,7 @@ describe("one region's ↺ restores everything its dot measures (item 10)", () =
       });
       useLayoutStore.getState().setArrangement({
         ...useLayoutStore.getState().arrangement,
-        minimapSide: "right",
+        minimapSide: "left",
       });
       useLayoutEditorStore.getState().beginSession({
         entry: "pointer",
@@ -279,14 +279,14 @@ describe("one region's ↺ restores everything its dot measures (item 10)", () =
     );
 
     expect(useLayoutStore.getState().overrides.minimap).toBeUndefined();
-    expect(useLayoutStore.getState().arrangement.minimapSide).toBe("left");
+    expect(useLayoutStore.getState().arrangement.minimapSide).toBe("right");
 
     act(() => {
       useLayoutEditorStore.getState().undo();
     });
 
     expect(useLayoutStore.getState().overrides.minimap?.shown).toBe("hidden");
-    expect(useLayoutStore.getState().arrangement.minimapSide).toBe("right");
+    expect(useLayoutStore.getState().arrangement.minimapSide).toBe("left");
   });
 
   it("keeps focus inside the row when the ↺ it was on unmounts", () => {
@@ -296,7 +296,7 @@ describe("one region's ↺ restores everything its dot measures (item 10)", () =
       });
       useLayoutStore.getState().setArrangement({
         ...useLayoutStore.getState().arrangement,
-        minimapSide: "right",
+        minimapSide: "left",
       });
     });
     render(
@@ -312,7 +312,7 @@ describe("one region's ↺ restores everything its dot measures (item 10)", () =
     fireEvent.click(revertButton);
 
     expect(useLayoutStore.getState().overrides.minimap).toBeUndefined();
-    expect(useLayoutStore.getState().arrangement.minimapSide).toBe("left");
+    expect(useLayoutStore.getState().arrangement.minimapSide).toBe("right");
     expect(
       within(row("minimap")).queryByRole("button", { name: "Revert Minimap" }),
     ).toBeNull();

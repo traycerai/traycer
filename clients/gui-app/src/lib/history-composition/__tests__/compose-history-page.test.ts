@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { LocalHistoryReadResponse } from "@traycer/protocol/host/epic/local-history";
 import type {
   ListTaskLight,
   ListTasksResponse,
-  PermissionRole,
+  WirePermissionRole,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   composeHistoryPage,
@@ -17,7 +18,7 @@ import {
 function row(
   id: string,
   overrides: {
-    readonly role: PermissionRole | null;
+    readonly role: WirePermissionRole | null;
     readonly updatedAt: number;
     readonly recentAt: number | undefined;
     readonly pinned: boolean | undefined;
@@ -148,7 +149,11 @@ describe("composeHistoryPage", () => {
 
     expect(composed.tasks).toHaveLength(1);
     expect(composed.tasks[0]?.epic?.light?.updatedAt).toBe(9);
-    expect(composed.tasks[0]?.epic?.permission?.role).toBe("viewer");
+    // Compared as access: a `viewer` role gives the access of `editor`, which
+    // is less than the local home's owner.
+    expect(grantedRole(composed.tasks[0]?.epic?.permission?.role ?? null)).toBe(
+      "editor",
+    );
     expect(composed.completeness).toMatchObject({
       facets: "partial",
       localRows: "present",
@@ -288,6 +293,47 @@ describe("composeHistoryPage", () => {
     );
 
     expect(ids(composed)).toEqual(["p", "n", "b", "a"]);
+  });
+
+  it("orders the created-desc view pinned first, then createdAt, ignoring activity", () => {
+    const created = (
+      id: string,
+      createdAt: number,
+      pinned: boolean | undefined,
+    ): ListTaskLight => {
+      const base = row(id, {
+        role: "owner",
+        updatedAt: 1,
+        recentAt: undefined,
+        pinned,
+      });
+      const epic = base.epic;
+      if (epic === undefined || epic === null || !epic.light) {
+        throw new Error("no light");
+      }
+      return {
+        ...base,
+        epic: { ...epic, light: { ...epic.light, createdAt } },
+      };
+    };
+    // The oldest-created pool row has the newest activity: creation decides.
+    const active = {
+      ...created("active", 10, undefined),
+      recentAt: 900,
+    };
+
+    const composed = composeHistoryPage({
+      page: pageOf([created("pinned", 5, true), active], {}),
+      contribution: readOf({
+        localHomeRows: [created("local-new", 100, undefined)],
+        localRows: "present",
+      }),
+      sort: "created-desc",
+      query: undefined,
+      placement: "admit",
+    });
+
+    expect(ids(composed)).toEqual(["pinned", "local-new", "active"]);
   });
 
   it("leaves rows where composed when the sort is not recent", () => {

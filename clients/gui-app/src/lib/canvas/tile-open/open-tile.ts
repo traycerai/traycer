@@ -39,7 +39,6 @@ export const commitWithoutNavigation: NavigateNestedFocus = (
   _epicId,
   _tabId,
   prepare,
-  _provenance,
 ) => prepare();
 
 export interface OpenTileOptions {

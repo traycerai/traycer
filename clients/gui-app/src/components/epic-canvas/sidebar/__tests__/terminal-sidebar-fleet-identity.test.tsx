@@ -133,6 +133,7 @@ vi.mock("@/components/resources/resource-usage-chip", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
+  useHostDirectory: () => ({ findById: () => null }),
   useHostClient: () => null,
   useHostRuntimeClient: () => ({
     resolveHostById: () => null,

@@ -11,6 +11,7 @@ import {
 } from "@/lib/layout/arrangement-persist";
 import {
   DEFAULT_RAIL,
+  BROWSERS_SIMULATORS_STACK_ID,
   GIT_DIFF_PULL_REQUESTS_STACK_ID,
   normalizeRail,
   RAIL_REGION_BY_PANEL,
@@ -119,9 +120,9 @@ const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
  * - 8: this store's shape, written only by builds before a release, with
  *   File Tree on by default.
  * - 9: this shape, whose shipped defaults differ for a NEW install: the tabs
- *   at the left edge, the minimap on the left, the task sidebar on the right
- *   with Git Diff stacked on Pull Requests and File Tree off, and the side
- *   strip listing agents. Every earlier version reads what its record does
+ *   at the left edge, the task sidebar on the right with Browsers stacked on
+ *   Simulators, Git Diff stacked on Pull Requests and File Tree off, and the
+ *   side strip listing agents. Every earlier version reads what its record does
  *   not say against the EARLIER defaults, so an install that exists keeps
  *   the layout it had. File Tree is a value, read through the record's
  *   delta, so no earlier record can leave it out: each is given it as shown.
@@ -141,22 +142,22 @@ const LAYOUT_PERSIST_VERSION = 9;
  * The fields whose shipped default changed after a release wrote records, as
  * every build before the change shipped them: what an install from one of
  * those builds was looking at wherever its record says nothing. A record at
- * 0 or 1 says nothing about any of them, or holds a minimap side that is not
- * a side.
+ * 0 or 1 says nothing about any of them.
  *
  * `DEFAULT_ARRANGEMENT` and `DEFAULT_RAIL` speak for a new install only, and
  * every reader of an earlier record falls back here instead.
  */
 const EARLIER_INSTALL_ARRANGEMENT: Pick<
   LayoutArrangement,
-  "tabStripPlacement" | "sidebarSide" | "minimapSide" | "sideStripView" | "rail"
+  "tabStripPlacement" | "sidebarSide" | "sideStripView" | "rail"
 > = {
   tabStripPlacement: "top",
   sidebarSide: "left",
-  minimapSide: "right",
   sideStripView: "layered",
   rail: DEFAULT_RAIL.filter(
-    (entry) => entry.id !== GIT_DIFF_PULL_REQUESTS_STACK_ID,
+    (entry) =>
+      entry.id !== GIT_DIFF_PULL_REQUESTS_STACK_ID &&
+      entry.id !== BROWSERS_SIMULATORS_STACK_ID,
   ),
 };
 
@@ -503,12 +504,9 @@ function fromShippedRecords(layout: Record<string, unknown>): LayoutSnapshot {
       // selection with no keys is Automatic.
       providerLimits: rateLimits.providers,
       shownProfiles: rateLimits.shownProfiles,
-      // `"hide"` is not a side, so it falls back to the side v1.4.0 drew and
-      // the minimap's Shown above is what carries the hidden state.
-      minimapSide:
-        settings.chatTurnMinimapSide === "left"
-          ? "left"
-          : EARLIER_INSTALL_ARRANGEMENT.minimapSide,
+      // `"hide"` is not a side, so the resolver falls back to the default one
+      // and the minimap's Shown above is what carries the hidden state.
+      minimapSide: settings.chatTurnMinimapSide,
       rail: carriedRail(leftPanel.panelGroups),
       taskTabLayout: settings.taskTabLayout,
       tabStripPlacement: EARLIER_INSTALL_ARRANGEMENT.tabStripPlacement,

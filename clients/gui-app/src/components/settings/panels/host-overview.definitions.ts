@@ -5,12 +5,14 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // is not gated. The page's tab triggers render for every host in every
 // state - connecting, restarting, unreachable, stopped - because the header and
 // the tab bar sit outside anything that withholds a body, and each tab body
-// decides for itself what it can show. So each tab anchors on its trigger (on a
-// phone, on the section Select, which carries the active tab's anchor), and a
-// search that lands there opens the tab. The page's own vocabulary is split
-// across the tabs; the words about the
-// header (the host itself, its name, its connection, Restart) stay on the page,
-// since the header is on every tab.
+// decides for itself what it can show. A tab that is on every host anchors on
+// its trigger (on a phone, on the section Select, which carries the active
+// tab's anchor), and a search that lands there opens the tab. Secrets and
+// Costs are drawn only for a sandbox, so they fold into the page. An anchor
+// on either would outrank the Secrets page on a computer, where that tab is
+// not drawn. The page's own vocabulary is split across the tabs; the words
+// about the header (the host itself, its name, its connection, Restart) stay
+// on the page, since the header is on every tab.
 //
 // Everything INSIDE a tab body still folds into the page: its cards come and go
 // with the host's state, so none of them is a stable destination. In the two
@@ -38,19 +40,45 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     kind: "row",
     group: null,
     search: { contributesTo: "page" },
-    label: "Settings",
-    description: null,
+    label: "Environment",
+    description: "Which environment this host runs.",
     availableWhen: alwaysAvailable,
-    keywords: ["Personal", "this computer only", "move", "stop sharing"],
+    keywords: [
+      "Personal",
+      "Local",
+      "Runs Personal",
+      "own settings",
+      "move",
+      "stop sharing",
+    ],
   },
-  sandboxTab: {
+  secretsTab: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "Secrets",
+    description: "Grants, readiness, and network events for this sandbox.",
+    breadcrumb: "Overview",
+    availableWhen: alwaysAvailable,
+    keywords: ["sandbox", "secrets", "grants", "network"],
+  },
+  costsTab: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "Costs",
+    description: "The rate, today's charge, the ledger, and the balance.",
+    breadcrumb: "Overview",
+    availableWhen: alwaysAvailable,
+    keywords: ["sandbox", "cost", "rate", "balance", "credits"],
+  },
+  sandboxFacts: {
     kind: "group",
     search: { contributesTo: "page" },
     label: "Sandbox",
-    description: "Size, idle policy, secrets, network events and cost details.",
-    breadcrumb: "Overview",
+    description:
+      "Size, region, storage rate, idle policy, and when this sandbox was last active.",
+    breadcrumb: null,
     availableWhen: alwaysAvailable,
-    keywords: ["sandbox", "secrets", "cost", "region", "idle"],
+    keywords: ["sandbox", "size", "region", "idle", "last active"],
   },
   updatesTab: {
     kind: "group",
@@ -300,7 +328,7 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
     keywords: [],
   },
   // The Installation tab's groups, top to bottom (the Danger zone is below).
-  // About this host is read from the account's record, not the host.
+  // Sandbox facts sit above About on a sandbox host; they are `sandboxFacts`.
   aboutThisHost: {
     kind: "group",
     search: { contributesTo: "page" },
@@ -500,17 +528,18 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
 });
 
 /**
- * The page's tabs, in order. The page opens on the first. The open intent's
- * `tab` names one of these (or a retired name, below); any other name is
- * ignored.
+ * The page's tabs, in order. The page opens on Installation. Secrets and Costs
+ * are drawn only for a sandbox host. The open intent's `tab` names one of
+ * these (or a retired name, below); any other name is ignored.
  */
 export const HOST_OVERVIEW_TABS = [
-  "sandbox",
   "installation",
   "updates",
   "access",
   "data",
   "ports",
+  "secrets",
+  "costs",
   "simulators",
 ] as const;
 
@@ -530,10 +559,14 @@ export function isHostOverviewTab(
  * was folded away: its update card, the account's wait and the offline notice
  * sit above the tab bar, and its update answer leads Updates. A link that
  * still names it asked for the version and the update, so it lands on Updates
- * rather than being ignored.
+ * rather than being ignored. Sandbox was folded into Installation: its facts
+ * are the first group there, and its grants and ledger are Secrets and Costs.
  */
 const RETIRED_HOST_OVERVIEW_TABS: ReadonlyMap<string, HostOverviewTab> =
-  new Map([["status", "updates"]]);
+  new Map([
+    ["status", "updates"],
+    ["sandbox", "installation"],
+  ]);
 
 /**
  * The tab an open intent's `tab` selects: one of the page's tabs, a retired
@@ -549,12 +582,13 @@ export function hostOverviewTabForIntent(
 
 /** The tab-trigger group each tab anchors on. */
 export const HOST_OVERVIEW_TAB_GROUPS = {
-  sandbox: HOST_OVERVIEW.definitions.sandboxTab,
   installation: HOST_OVERVIEW.definitions.installationTab,
   updates: HOST_OVERVIEW.definitions.updatesTab,
   access: HOST_OVERVIEW.definitions.accessTab,
   data: HOST_OVERVIEW.definitions.dataTab,
   ports: HOST_OVERVIEW.definitions.portsTab,
+  secrets: HOST_OVERVIEW.definitions.secretsTab,
+  costs: HOST_OVERVIEW.definitions.costsTab,
   simulators: HOST_OVERVIEW.definitions.simulatorsTab,
 } as const;
 

@@ -3,12 +3,16 @@
  * it opens, through the REAL `BotChannelView`, `BotThreadPanel` and
  * transcript: the receipts come from a real `bot.turn.locate` read over a
  * host client whose messenger answers it, and the rail's one slot is the real
- * open-thread store. A receipt, the reply sheet's choice or a thread's
- * "Thread session" asks the tab to open the session in the channel's place;
- * what it asked is recorded by the harness. Only the virtualised message
+ * open-thread store. A receipt or the reply sheet's choice asks the tab to
+ * open the turn's session in the channel's place; what it asked is recorded
+ * by the harness. Only the virtualised message
  * list, the chat session registry (scripted sessions by chat id) and the
  * channel's neighbouring reads are replaced.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import {
   act,
   cleanup,
@@ -73,6 +77,15 @@ const mocks = vi.hoisted(() => ({
   /** Whether the tab's host negotiated `bot.turn.locate`. */
   locateSupported: true,
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
@@ -546,22 +559,12 @@ describe("a receipt opens its turn's session", () => {
     });
   });
 
-  it("opens the thread's whole session, landed nowhere, from the thread panel's Thread session", async () => {
-    const user = userEvent.setup();
+  it("offers no whole-session button in the header of a listed thread's panel", async () => {
     mountChannel(THREAD_OPEN);
 
-    await user.click(
-      await screen.findByRole("button", { name: "Thread session" }),
-    );
+    await screen.findByRole("button", { name: "Close thread" });
 
-    expect(openedSessions).toEqual([
-      {
-        chatId: THREAD_SESSION_ID,
-        threadId: THREAD_ID,
-        messageId: null,
-        sendPostId: null,
-      },
-    ]);
+    expect(screen.queryByRole("button", { name: "Thread session" })).toBeNull();
   });
 });
 

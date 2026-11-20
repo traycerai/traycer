@@ -2,10 +2,16 @@ import { z } from "zod";
 
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
-import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
+import {
+  chatEventSchema,
+  chatEventSchemaPreProviderSelection,
+} from "@traycer/protocol/persistence/epic/chat-events";
 import {
   openChatEventSchema,
+  openChatEventSchemaPreProviderSelection,
   openMessageSchema,
+  openMessageSchemaPreFeedbackOrigin,
+  openMessageSchemaPreConversationImages,
   openMessageSchemaPreFeedbackDraft,
   openMessageSchemaPreSlack,
   openMessageSchemaPreNotApplied,
@@ -17,7 +23,7 @@ import {
   openMessageSchemaPreDelivery,
 } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 import {
-  messageSchema,
+  messageSchemaPreFeedbackOrigin,
   messageSchemaPreMessageDelivery,
   messageSchemaPreBrowser,
   messageSchemaPreFallback,
@@ -739,10 +745,10 @@ export const chatTranscriptWindowSchemaPreMessageDelivery = lazySchema(() =>
     /** Rows whose required record set is incomplete in this tail. */
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMessageDelivery),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     /**
      * What the tail's rows render WITH, by row id - see
-     * {@link chatRangeResponseSchema}'s field of the same name.
+     * {@link chatRangeResponseSchemaPreProviderSelection}'s field of the same name.
      *
      * The tail needs this for the same reason a range does and with less chance
      * of repair: the planner counts these rows hydrated, so no range is ever
@@ -755,7 +761,7 @@ export const chatTranscriptWindowSchemaPreMessageDelivery = lazySchema(() =>
   }),
 );
 
-export const chatTranscriptWindowSchema = lazySchema(() =>
+export const chatTranscriptWindowSchemaPreProviderSelection = lazySchema(() =>
   z.object({
     fromOrdinal: z.number().int().nonnegative(),
     /**
@@ -778,11 +784,11 @@ export const chatTranscriptWindowSchema = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     /** Rows whose required record set is incomplete in this tail. */
     incompleteRowIds: z.array(z.string()).optional(),
-    messages: z.array(messageSchema),
-    events: z.array(chatEventSchema),
+    messages: z.array(messageSchemaPreFeedbackOrigin),
+    events: z.array(chatEventSchemaPreProviderSelection),
     /**
      * What the tail's rows render WITH, by row id - see
-     * {@link chatRangeResponseSchema}'s field of the same name.
+     * {@link chatRangeResponseSchemaPreProviderSelection}'s field of the same name.
      *
      * The tail needs this for the same reason a range does and with less chance
      * of repair: the planner counts these rows hydrated, so no range is ever
@@ -790,6 +796,12 @@ export const chatTranscriptWindowSchema = lazySchema(() =>
      * rows are evicted. Most tails have nothing to say and omit it.
      */
     rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  }),
+);
+/** Provider dispatch provenance first rides chat.subscribe@1.44. */
+export const chatTranscriptWindowSchema = lazySchema(() =>
+  chatTranscriptWindowSchemaPreProviderSelection.extend({
+    events: z.array(chatEventSchema),
   }),
 );
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
@@ -801,49 +813,67 @@ export const openChatTranscriptWindowSchemaPreNotApplied = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(openMessageSchemaPreNotApplied),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
     rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
   }),
 );
 
 export const openChatTranscriptWindowSchemaPreHtml = lazySchema(() =>
-  chatTranscriptWindowSchema.extend({
+  chatTranscriptWindowSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreHtml),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
 export const openChatTranscriptWindowSchemaPreArtifact = lazySchema(() =>
-  chatTranscriptWindowSchema.extend({
+  chatTranscriptWindowSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreArtifact),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
 export const openChatTranscriptWindowSchemaPreCanvas = lazySchema(() =>
-  chatTranscriptWindowSchema.extend({
+  chatTranscriptWindowSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreCanvas),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
 /**
- * The live tail with senders, actors, notices, plans and steer blocks reopened
- * to the open harness id (`open-harness-wire.ts`). `rowContext` keeps the live
- * anchor union: the host withholds an anchor the peer cannot decode rather
- * than this schema widening it.
+ * The tail `chat.subscribe@1.43` ships, with senders, actors, notices, plans
+ * and steer blocks reopened to the open harness id (`open-harness-wire.ts`),
+ * and no images on a resume trigger's member's message. `rowContext` keeps the
+ * live anchor union: the host withholds an anchor the peer cannot decode
+ * rather than this schema widening it.
  */
-export const openChatTranscriptWindowSchema = lazySchema(() =>
-  chatTranscriptWindowSchema.extend({
-    messages: z.array(openMessageSchema),
-    events: z.array(openChatEventSchema),
-  }),
+export const openChatTranscriptWindowSchemaPreProviderSelection = lazySchema(
+  () =>
+    chatTranscriptWindowSchemaPreProviderSelection.extend({
+      messages: z.array(openMessageSchemaPreConversationImages),
+      events: z.array(openChatEventSchemaPreProviderSelection),
+    }),
 );
 /** The tail `chat.subscribe@1.37` through `@1.41` ship. */
 export const openChatTranscriptWindowSchemaPreFeedbackDraft = lazySchema(() =>
-  chatTranscriptWindowSchema.extend({
+  chatTranscriptWindowSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreFeedbackDraft),
+    events: z.array(openChatEventSchemaPreProviderSelection),
+  }),
+);
+/**
+ * The tail `chat.subscribe@1.44` ships: provider dispatch provenance and a
+ * resume trigger's images, no feedback draft projection or origin.
+ */
+export const openChatTranscriptWindowSchemaPreFeedbackOrigin = lazySchema(() =>
+  openChatTranscriptWindowSchemaPreProviderSelection.extend({
+    messages: z.array(openMessageSchemaPreFeedbackOrigin),
     events: z.array(openChatEventSchema),
+  }),
+);
+/** The live tail: `chat.subscribe@1.45` adds the feedback draft leaves. */
+export const openChatTranscriptWindowSchema = lazySchema(() =>
+  openChatTranscriptWindowSchemaPreFeedbackOrigin.extend({
+    messages: z.array(openMessageSchema),
   }),
 );
 export type OpenChatTranscriptWindow = z.infer<
@@ -852,7 +882,7 @@ export type OpenChatTranscriptWindow = z.infer<
 
 /** The open tail `chat.subscribe@1.42` ships: no `slack` user row. */
 export const openChatTranscriptWindowSchemaPreSlack = lazySchema(() =>
-  openChatTranscriptWindowSchema.extend({
+  openChatTranscriptWindowSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreSlack),
   }),
 );
@@ -884,7 +914,7 @@ export const chatTranscriptWindowSchemaPreFallback = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreFallback),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreFallback)
       .optional(),
@@ -905,7 +935,7 @@ export const chatTranscriptWindowSchemaPreShellHost = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreShellHost),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
       .optional(),
@@ -922,7 +952,7 @@ export const chatTranscriptWindowSchemaPreBrowser = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreBrowser),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
       .optional(),
@@ -941,7 +971,7 @@ export const chatTranscriptWindowSchemaPreReceipt = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreReceipt),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
       .optional(),
@@ -959,7 +989,7 @@ export const chatTranscriptWindowSchemaPreMcpApp = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMcpApp),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
   }),
 );
@@ -978,7 +1008,7 @@ export const chatTranscriptWindowSchemaPreCommandCode = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMcpApp),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
       .optional(),
@@ -1107,7 +1137,7 @@ export const chatRangeResponseSchemaPreMessageDelivery = lazySchema(() =>
      * its slices are in the span.
      */
     messages: z.array(messageSchemaPreMessageDelivery),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     /**
      * What the served rows render WITH, by row id.
      *
@@ -1135,7 +1165,7 @@ export const chatRangeResponseSchemaPreMessageDelivery = lazySchema(() =>
   }),
 );
 
-export const chatRangeResponseSchema = lazySchema(() =>
+export const chatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
   z.object({
     requestId: rangeRequestIdSchema,
     epoch: z.number().int().nonnegative(),
@@ -1157,8 +1187,8 @@ export const chatRangeResponseSchema = lazySchema(() =>
      * parallel array to `rowIds`. A turn's records appear once however many of
      * its slices are in the span.
      */
-    messages: z.array(messageSchema),
-    events: z.array(chatEventSchema),
+    messages: z.array(messageSchemaPreFeedbackOrigin),
+    events: z.array(chatEventSchemaPreProviderSelection),
     /**
      * What the served rows render WITH, by row id.
      *
@@ -1183,6 +1213,12 @@ export const chatRangeResponseSchema = lazySchema(() =>
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
   }),
 );
+/** Provider dispatch provenance first rides chat.subscribe@1.44. */
+export const chatRangeResponseSchema = lazySchema(() =>
+  chatRangeResponseSchemaPreProviderSelection.extend({
+    events: z.array(chatEventSchema),
+  }),
+);
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
 
 /**
@@ -1199,7 +1235,7 @@ export const chatRangeResponseSchemaPreMcpApp = lazySchema(() =>
     rowIds: z.array(z.string()),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMcpApp),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
@@ -1216,7 +1252,7 @@ export const openChatRangeResponseSchemaPreNotApplied = lazySchema(() =>
     rowIds: z.array(z.string()),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(openMessageSchemaPreNotApplied),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
     rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
@@ -1225,49 +1261,66 @@ export const openChatRangeResponseSchemaPreNotApplied = lazySchema(() =>
 );
 
 export const openChatRangeResponseSchemaPreHtml = lazySchema(() =>
-  chatRangeResponseSchema.extend({
+  chatRangeResponseSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreHtml),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
 export const openChatRangeResponseSchemaPreArtifact = lazySchema(() =>
-  chatRangeResponseSchema.extend({
+  chatRangeResponseSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreArtifact),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
 export const openChatRangeResponseSchemaPreCanvas = lazySchema(() =>
-  chatRangeResponseSchema.extend({
+  chatRangeResponseSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreCanvas),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
 /**
- * The live range response with its rows reopened, for the reason
- * {@link openChatTranscriptWindowSchema} gives.
+ * The range response `chat.subscribe@1.43` ships, its rows reopened for the
+ * reason {@link openChatTranscriptWindowSchemaPreProviderSelection} gives.
  */
-export const openChatRangeResponseSchema = lazySchema(() =>
-  chatRangeResponseSchema.extend({
-    messages: z.array(openMessageSchema),
+export const openChatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
+  chatRangeResponseSchemaPreProviderSelection.extend({
+    messages: z.array(openMessageSchemaPreConversationImages),
+    events: z.array(openChatEventSchemaPreProviderSelection),
+  }),
+);
+/**
+ * The range response `chat.subscribe@1.44` ships: provider dispatch
+ * provenance and a resume trigger's images, no feedback draft projection or
+ * origin.
+ */
+export const openChatRangeResponseSchemaPreFeedbackOrigin = lazySchema(() =>
+  openChatRangeResponseSchemaPreProviderSelection.extend({
+    messages: z.array(openMessageSchemaPreFeedbackOrigin),
     events: z.array(openChatEventSchema),
+  }),
+);
+/** The live range response: `chat.subscribe@1.45` adds the feedback draft leaves. */
+export const openChatRangeResponseSchema = lazySchema(() =>
+  openChatRangeResponseSchemaPreFeedbackOrigin.extend({
+    messages: z.array(openMessageSchema),
   }),
 );
 export type OpenChatRangeResponse = z.infer<typeof openChatRangeResponseSchema>;
 
 /** The range response `chat.subscribe@1.37` through `@1.41` ship. */
 export const openChatRangeResponseSchemaPreFeedbackDraft = lazySchema(() =>
-  chatRangeResponseSchema.extend({
+  chatRangeResponseSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreFeedbackDraft),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
 /** The open range `chat.subscribe@1.42` ships: no `slack` user row. */
 export const openChatRangeResponseSchemaPreSlack = lazySchema(() =>
-  openChatRangeResponseSchema.extend({
+  openChatRangeResponseSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreSlack),
   }),
 );
@@ -1286,7 +1339,7 @@ export const chatRangeResponseSchemaPreCommandCode = lazySchema(() =>
     rowIds: z.array(z.string()),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMcpApp),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
       .default({}),
@@ -1310,7 +1363,7 @@ export const chatRangeResponseSchemaPreReceipt = lazySchema(() =>
     rowIds: z.array(z.string()),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreReceipt),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
       .default({}),
@@ -1334,7 +1387,7 @@ export const chatRangeResponseSchemaPreFallback = lazySchema(() =>
     rowIds: z.array(z.string()),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreFallback),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreFallback)
       .default({}),
@@ -1357,7 +1410,7 @@ export const chatRangeResponseSchemaPreShellHost = lazySchema(() =>
     rowIds: z.array(z.string()),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreShellHost),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
       .default({}),
@@ -1376,7 +1429,7 @@ export const chatRangeResponseSchemaPreBrowser = lazySchema(() =>
     rowIds: z.array(z.string()),
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreBrowser),
-    events: z.array(chatEventSchema),
+    events: z.array(chatEventSchemaPreProviderSelection),
     rowContext: z
       .record(z.string(), transcriptRowContextSchemaPreCommandCode)
       .default({}),
@@ -1719,7 +1772,7 @@ export type ChatLoadRangeRequest = z.infer<typeof chatLoadRangeRequestSchema>;
 export const openChatTranscriptWindowSchemaPreMcpApp = lazySchema(() =>
   chatTranscriptWindowSchemaPreMcpApp.extend({
     messages: z.array(openMessageSchemaPreMcpApp),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
@@ -1727,7 +1780,7 @@ export const openChatTranscriptWindowSchemaPreMcpApp = lazySchema(() =>
 export const openChatRangeResponseSchemaPreMcpApp = lazySchema(() =>
   chatRangeResponseSchemaPreMcpApp.extend({
     messages: z.array(openMessageSchemaPreMcpApp),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
@@ -1736,17 +1789,17 @@ export const openChatRangeResponseSchemaPreMcpApp = lazySchema(() =>
  * the user row without `1.25`'s `conversationRequest`.
  */
 export const openChatTranscriptWindowSchemaPreConversation = lazySchema(() =>
-  chatTranscriptWindowSchema.extend({
+  chatTranscriptWindowSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreConversation),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
 /** The `1.23`/`1.24` range, with the same pre-conversation body as its tail. */
 export const openChatRangeResponseSchemaPreConversation = lazySchema(() =>
-  chatRangeResponseSchema.extend({
+  chatRangeResponseSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreConversation),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
@@ -1755,16 +1808,16 @@ export const openChatRangeResponseSchemaPreConversation = lazySchema(() =>
  * tool block without `1.29`'s `agentMessageDelivery`.
  */
 export const openChatTranscriptWindowSchemaPreDelivery = lazySchema(() =>
-  chatTranscriptWindowSchema.extend({
+  chatTranscriptWindowSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreDelivery),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 
 /** The `1.25`-`1.28` range, with the same pre-delivery body as its tail. */
 export const openChatRangeResponseSchemaPreDelivery = lazySchema(() =>
-  chatRangeResponseSchema.extend({
+  chatRangeResponseSchemaPreProviderSelection.extend({
     messages: z.array(openMessageSchemaPreDelivery),
-    events: z.array(openChatEventSchema),
+    events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );

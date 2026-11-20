@@ -5,7 +5,7 @@ import {
 } from "@traycer/protocol/agent/agent-selection-guide-format";
 import type { AgentSelectionGuideResponse } from "@traycer/protocol/host";
 import { buildAgentSelectionGuideCommand } from "../agent-selection-guide";
-import { callHostRpc } from "../../internal/host-rpc";
+import { callAgentHostRpc } from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
 import type { CommandContext } from "../../runner/runner";
 
@@ -15,11 +15,11 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpc: vi.fn(),
+    callAgentHostRpc: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpc);
+const rpcMock = vi.mocked(callAgentHostRpc);
 
 function makeCtx(): CommandContext {
   return {

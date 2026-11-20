@@ -1,4 +1,10 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlatformMock } from "@/__tests__/create-platform-mock";
 
@@ -13,6 +19,9 @@ import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
+import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-button";
+import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import {
@@ -204,14 +213,22 @@ const NOOP_PROFILE_CHANGE = (): void => undefined;
 // (`usePickerProviderLeaderForIndex` / `usePickerReasoningLeaderForIndex` /
 // `usePickerProfileLeaderForIndex`) so a test can assert exactly which surface
 // lights up, not just the raw leader state.
-function PickerBadgeProbe(props: {
+interface PickerBadgeProbeProps {
   readonly reasoningActionable: boolean;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly onProfileChange: (
     providerId: ProviderId,
     profileId: string | null,
   ) => void;
-}) {
+}
+
+function PickerBadgeProbe(props: PickerBadgeProbeProps) {
+  return <ProviderPickerBadgeProbe {...props} activeProviderId="codex" />;
+}
+
+function ProviderPickerBadgeProbe(
+  props: PickerBadgeProbeProps & { readonly activeProviderId: ProviderId },
+) {
   const reasoning: ReasoningFooterConfig = {
     value: "low",
     options: [{ id: "low", label: "Low", description: null }],
@@ -227,7 +244,7 @@ function PickerBadgeProbe(props: {
     // No Fast footer wired here - this probe is scoped to the rail/reasoning/
     // profile dimensions, and `stepServiceTier(null)` is already a no-op.
     serviceTier: null,
-    activeProviderId: "codex",
+    activeProviderId: props.activeProviderId,
     activeProviderProfiles: props.profiles,
     activeProviderProfileAdmission: null,
     profileEnablementPending: () => false,
@@ -485,6 +502,39 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expect(calls).toHaveLength(1);
     expect(first.defaultPrevented).toBe(true);
     expect(repeated.defaultPrevented).toBe(true);
+  });
+
+  it("holds app shortcuts back while an artifact is expanded, and lets them through once it is inline again", () => {
+    renderProbeWithExtra(
+      buildMutableRouterSource("/epics/e1").router,
+      <TooltipProvider>
+        <ArtifactExpansion title="Doc" commentsInline>
+          <ArtifactExpandButton />
+        </ArtifactExpansion>
+      </TooltipProvider>,
+    );
+    const calls: Array<string> = [];
+    const unregister = registerDynamicActionHandler(
+      "app.terminal.maximize",
+      () => calls.push("maximize"),
+    );
+    const press = (): void => {
+      keyDown({ code: "KeyJ", key: "j", metaKey: true, altKey: true });
+    };
+
+    press();
+    expect(calls).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
+    expect(screen.getByRole("dialog", { name: "Doc" })).toBeTruthy();
+    press();
+    expect(calls).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    press();
+    unregister();
+    expect(calls).toHaveLength(2);
   });
 
   it("flips the status-bar placement once while its rebound chord is held", () => {
@@ -1231,7 +1281,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
         <LeaderProbe />
         <PickerBadgeProbe
           reasoningActionable
-          profiles={[testProfile("a-uuid", "A")]}
+          profiles={[]}
           onProfileChange={NOOP_PROFILE_CHANGE}
         />
       </KeybindingProvider>,
@@ -1243,16 +1293,17 @@ describe("<KeybindingProvider /> visual leader hints", () => {
   });
 
   // A pending shifted session must be spent at the moment its owner is lost.
-  // If profiles drop 2→1 and return to 2 before the original 300ms timer, the
-  // hold has already crossed an ownerless state and must not revive on the
-  // stale timer - only a fresh hold after releasing leaders may show again.
+  // If profiles drop from two to none and return to two before the original
+  // 300ms timer, the hold has already crossed an ownerless state and must not
+  // revive on the stale timer - only a fresh hold after releasing leaders may
+  // show again.
   it("keeps a pending Cmd+Shift session spent across owner loss and restore before the delay", () => {
     const router = createAppRouter("/epics/e1", null);
     const twoProfiles = [
       testProfile("a-uuid", "A"),
       testProfile("b-uuid", "B"),
     ];
-    const oneProfile = [testProfile("a-uuid", "A")];
+    const noProfiles: readonly ProviderProfile[] = [];
     const view = render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
@@ -1286,7 +1337,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
         <LeaderProbe />
         <PickerBadgeProbe
           reasoningActionable
-          profiles={oneProfile}
+          profiles={noProfiles}
           onProfileChange={NOOP_PROFILE_CHANGE}
         />
       </KeybindingProvider>,
@@ -1343,7 +1394,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
         <LeaderProbe />
         <PickerBadgeProbe
           reasoningActionable
-          profiles={[testProfile("a-uuid", "A")]}
+          profiles={[]}
           onProfileChange={NOOP_PROFILE_CHANGE}
         />
       </KeybindingProvider>,
@@ -1354,15 +1405,92 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     expect(probe().getAttribute("data-mod-shift-held")).toBe("false");
   });
 
-  it("shows no profile hint while ⌘⇧ is held under 2 profiles - progressive disclosure", () => {
+  it("shows no profile hint while ⌘⇧ is held with no account", () => {
     const router = createAppRouter("/epics/e1", null);
     render(
       <KeybindingProvider router={router}>
         <LeaderProbe />
         <PickerBadgeProbe
           reasoningActionable
+          profiles={[]}
+          onProfileChange={NOOP_PROFILE_CHANGE}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({
+        code: "MetaLeft",
+        key: "Meta",
+        metaKey: true,
+        shiftKey: true,
+      });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("");
+  });
+
+  it("shows the profile hint for one Codex account and ⌘⇧1 selects it", () => {
+    const router = createAppRouter("/epics/e1", null);
+    const onProfileChange = vi.fn();
+    render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <PickerBadgeProbe
+          reasoningActionable
+          profiles={[testProfile("a-uuid", "A")]}
+          onProfileChange={onProfileChange}
+        />
+      </KeybindingProvider>,
+    );
+
+    act(() => {
+      keyDown({
+        code: "MetaLeft",
+        key: "Meta",
+        metaKey: true,
+        shiftKey: true,
+      });
+      keyDown({
+        code: "ShiftLeft",
+        key: "Shift",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+    advance(LEADER_HINT_DELAY_MS);
+
+    expect(pickerProbe().getAttribute("data-profile-leader")).toBe("modShift");
+
+    act(() => {
+      keyDown({
+        code: "Digit1",
+        key: "1",
+        metaKey: true,
+        shiftKey: true,
+      });
+    });
+
+    expect(onProfileChange).toHaveBeenCalledWith("codex", "a-uuid");
+  });
+
+  it("shows no profile hint for one account when the dropdown starts at two rows", () => {
+    const router = createAppRouter("/epics/e1", null);
+    render(
+      <KeybindingProvider router={router}>
+        <LeaderProbe />
+        <ProviderPickerBadgeProbe
+          reasoningActionable
           profiles={[testProfile("a-uuid", "A")]}
           onProfileChange={NOOP_PROFILE_CHANGE}
+          activeProviderId="opencode"
         />
       </KeybindingProvider>,
     );

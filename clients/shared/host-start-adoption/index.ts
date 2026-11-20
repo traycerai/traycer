@@ -12,7 +12,11 @@ import {
   HOST_START_ADOPTION_ACK_WAIT_MS,
   HOST_START_ADOPTION_MAX_AGE_MS,
 } from "./spawn-edge-bounds";
-import { SpawnAcknowledgementTimeoutError } from "./spawn-acknowledgement-error";
+import {
+  readSpawnAckEvidenceWithin,
+  SpawnAcknowledgementTimeoutError,
+  type SpawnAckProofState,
+} from "./spawn-acknowledgement-error";
 import { parseHostStartOrigin, type HostStartOrigin } from "./lifecycle-origin";
 
 const HOST_START_ADOPTION_FILENAME = ".host-start-adoption.json";
@@ -206,7 +210,11 @@ export async function publishHostStartAdoption(
         }
         await waitForAdoptionPoll();
       }
-      throw new SpawnAcknowledgementTimeoutError();
+      const timeout = new SpawnAcknowledgementTimeoutError();
+      timeout.attachProof(
+        await readProofState(path, nonce, timeout.evidenceDeadlineMs),
+      );
+      throw timeout;
     },
     cancel: async (): Promise<void> => {
       // Do not delete a later service edge's proof if this holder happens to
@@ -569,6 +577,29 @@ async function readOrphanedProof(
     };
   }
   return parentLive ? null : { kind: "absent" };
+}
+
+/**
+ * Where this grant's proof stands, for the timeout's evidence. Read-only,
+ * bounded and never throws: any failure reads `unreadable`.
+ */
+function readProofState(
+  path: string,
+  nonce: string,
+  deadlineMs: number,
+): Promise<SpawnAckProofState> {
+  return readSpawnAckEvidenceWithin(
+    async (): Promise<SpawnAckProofState> => {
+      const read = await readRegularFileNoFollow(path);
+      if (read.kind === "absent") return "absent";
+      if (read.kind !== "text") return "unreadable";
+      const file = parseAdoption(read.text);
+      if (file === null) return "unreadable";
+      return file.nonce === nonce ? "pending-ours" : "other-nonce";
+    },
+    "unreadable",
+    deadlineMs,
+  );
 }
 
 async function readAcknowledgement(

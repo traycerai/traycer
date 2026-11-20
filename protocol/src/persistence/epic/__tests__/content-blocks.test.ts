@@ -581,6 +581,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
       wakeTriggers: undefined,
@@ -672,6 +673,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
         mcp: null,
         managedCommand: null,
         live: false,
+        conversationMessage: null,
       },
     ]);
     expect("wakeTriggers" in parsed).toBe(false);
@@ -705,6 +707,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
       mcp: null,
       managedCommand: null,
       live: false,
+      conversationMessage: null,
     });
     expect("wakeTriggers" in parsed).toBe(false);
   });
@@ -746,6 +749,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
     };
@@ -773,6 +777,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
         {
           kind: "wakeup",
@@ -784,6 +789,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
     };
@@ -820,6 +826,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
     };
@@ -842,6 +849,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           mcp: null,
           managedCommand: null,
           live: false,
+          conversationMessage: null,
         },
       ],
     };
@@ -884,6 +892,64 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     expect(() =>
       toCanonicalJsonSchema(contentBlockSchema, { io: "input" }),
     ).not.toThrow();
+  });
+});
+
+describe("autonomousResumeBlockSchema conversation message images", () => {
+  const images = [
+    {
+      attachmentHash: "a1".repeat(32),
+      mediaType: "image/png",
+      fileName: "image.png",
+    },
+    {
+      attachmentHash: "b2".repeat(32),
+      mediaType: "image/png",
+      fileName: "image.png",
+    },
+  ];
+  const messageFields = {
+    conversationId: "channel-1",
+    messageId: "message-1",
+    requestId: "request-1",
+    senderUserId: "user-1",
+    postedAt: 5,
+  };
+
+  function storedBlock(conversationMessage: Record<string, unknown>) {
+    return {
+      type: "autonomous_resume",
+      blockId: "resume-1",
+      status: "completed",
+      timestamp: 1,
+      deliveryPlacement: "turn_start",
+      triggers: [
+        {
+          kind: "command",
+          title: "Message from channel-1",
+          status: "completed",
+          summary: "A member wrote to the bot.",
+          conversationMessage,
+        },
+      ],
+      wakeTriggers: [],
+    };
+  }
+
+  it("round-trips a trigger whose message carries images through decode and encode", () => {
+    const decoded = autonomousResumeBlockSchema.parse(
+      storedBlock({ ...messageFields, images }),
+    );
+    expect(decoded.triggers[0]?.conversationMessage?.images).toEqual(images);
+    const encoded = autonomousResumeBlockSchema.encode(decoded);
+    expect(encoded.triggers[0]?.conversationMessage?.images).toEqual(images);
+  });
+
+  it("defaults images to an empty list when the stored message has none", () => {
+    const decoded = autonomousResumeBlockSchema.parse(
+      storedBlock(messageFields),
+    );
+    expect(decoded.triggers[0]?.conversationMessage?.images).toEqual([]);
   });
 });
 

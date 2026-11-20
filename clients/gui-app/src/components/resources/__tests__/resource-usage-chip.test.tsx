@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type {
   EpicResourceSnapshotWireV15,
   OwnerResourceSnapshotWireV15,
@@ -19,6 +25,7 @@ import {
 import { useEpicResourcesLease } from "@/hooks/resources/use-epic-resources-lease";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
+import type { AppResourceUsage } from "@/stores/resources/resources-store";
 
 function process(
   over: Partial<ResourceProcessSnapshotWireV15>,
@@ -37,6 +44,27 @@ function process(
     ...over,
   };
 }
+
+/** A 16-processor host's app snapshot, as the stream carries it. */
+function appUsage(over: Partial<AppResourceUsage>): AppResourceUsage {
+  return {
+    sampledAt: 1_000,
+    hostTotalMemoryBytes: 16 * 1024 * 1024 * 1024,
+    hostCpuCount: 16,
+    process: null,
+    processCount: 1,
+    cpuPercent: 1,
+    rssBytes: 20 * 1024 * 1024,
+    pssBytes: null,
+    privateBytes: null,
+    ...over,
+  };
+}
+
+const SIXTEEN_CORE_HOST = appUsage({});
+
+/** A host older than @1.6: its app snapshot carries no processor count. */
+const NO_COUNT_HOST = appUsage({ hostCpuCount: undefined });
 
 function owner(
   kind: ResourceOwnerKindWire,
@@ -83,7 +111,7 @@ function projection(
   return {
     epicId: "epic-1",
     sampledAt: 1_000,
-    app: null,
+    app: SIXTEEN_CORE_HOST,
     owners: [],
     epic: null,
     epics: [],
@@ -124,7 +152,8 @@ describe("ResourceUsageChip", () => {
   it("renders every picked value in chip order with the full breakdown on the accessible label", () => {
     render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={357 * 1024 * 1024}
         pssBytes={null}
         processCount={3}
@@ -134,15 +163,16 @@ describe("ResourceUsageChip", () => {
       />,
     );
     const chip = screen.getByLabelText(
-      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
+      "Resource usage: 6.3% CPU (1.0 of 16 cores), 357 MB RSS, 3 processes",
     );
-    expect(chip.textContent).toBe("12%·357 MB RSS·3 procs");
+    expect(chip.textContent).toBe("6.3%·357 MB RSS·3 procs");
   });
 
   it("prints CPU and memory only when the process count is not picked", () => {
     render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={357 * 1024 * 1024}
         pssBytes={null}
         processCount={3}
@@ -152,17 +182,18 @@ describe("ResourceUsageChip", () => {
       />,
     );
     const chip = screen.getByLabelText(
-      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
+      "Resource usage: 6.3% CPU (1.0 of 16 cores), 357 MB RSS, 3 processes",
     );
     // The process count is still carried by the label, just not printed.
-    expect(chip.textContent).toBe("12%·357 MB RSS");
+    expect(chip.textContent).toBe("6.3%·357 MB RSS");
     expect(chip.querySelector('[data-metric="processes"]')).toBeNull();
   });
 
   it("singularises the process unit for a one-process row", () => {
     render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={357 * 1024 * 1024}
         pssBytes={null}
         processCount={1}
@@ -172,15 +203,17 @@ describe("ResourceUsageChip", () => {
       />,
     );
     expect(
-      screen.getByLabelText("Resource usage: 12% CPU, 357 MB RSS, 1 process")
-        .textContent,
+      screen.getByLabelText(
+        "Resource usage: 6.3% CPU (1.0 of 16 cores), 357 MB RSS, 1 process",
+      ).textContent,
     ).toBe("1 proc");
   });
 
   it("prints only the process count when that is the sole picked metric", () => {
     render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={357 * 1024 * 1024}
         pssBytes={null}
         processCount={3}
@@ -190,7 +223,7 @@ describe("ResourceUsageChip", () => {
       />,
     );
     const chip = screen.getByLabelText(
-      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
+      "Resource usage: 6.3% CPU (1.0 of 16 cores), 357 MB RSS, 3 processes",
     );
     // Named on screen, not only in the label: alone beside the frame's CPU
     // glyph a bare `3` would read as a percentage that lost its sign.
@@ -202,7 +235,8 @@ describe("ResourceUsageChip", () => {
   it("prints only CPU when that is the sole picked metric", () => {
     render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={357 * 1024 * 1024}
         pssBytes={null}
         processCount={3}
@@ -212,16 +246,17 @@ describe("ResourceUsageChip", () => {
       />,
     );
     const chip = screen.getByLabelText(
-      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
+      "Resource usage: 6.3% CPU (1.0 of 16 cores), 357 MB RSS, 3 processes",
     );
-    expect(chip.textContent).toBe("12%");
+    expect(chip.textContent).toBe("6.3%");
     expect(chip.querySelector('[data-metric="memory"]')).toBeNull();
   });
 
   it("prints only memory when that is the sole picked metric", () => {
     render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={357 * 1024 * 1024}
         pssBytes={null}
         processCount={3}
@@ -231,7 +266,7 @@ describe("ResourceUsageChip", () => {
       />,
     );
     const chip = screen.getByLabelText(
-      "Resource usage: 12% CPU, 357 MB RSS, 3 processes",
+      "Resource usage: 6.3% CPU (1.0 of 16 cores), 357 MB RSS, 3 processes",
     );
     expect(chip.textContent).toBe("357 MB RSS");
     expect(chip.querySelector('[data-metric="cpu"]')).toBeNull();
@@ -240,7 +275,8 @@ describe("ResourceUsageChip", () => {
   it("prints the metrics in the order it is given", () => {
     render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={357 * 1024 * 1024}
         pssBytes={null}
         processCount={3}
@@ -250,14 +286,15 @@ describe("ResourceUsageChip", () => {
       />,
     );
     expect(screen.getByLabelText(/Resource usage/).textContent).toBe(
-      "3 procs·357 MB RSS·12%",
+      "3 procs·357 MB RSS·6.3%",
     );
   });
 
   it("renders nothing at all when no metric is picked", () => {
     const { container } = render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={357 * 1024 * 1024}
         pssBytes={null}
         processCount={3}
@@ -273,7 +310,8 @@ describe("ResourceUsageChip", () => {
   it("names PSS in the visible text so two chips stay comparable", () => {
     render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={357 * 1024 * 1024}
         pssBytes={120 * 1024 * 1024}
         processCount={3}
@@ -283,7 +321,7 @@ describe("ResourceUsageChip", () => {
       />,
     );
     const chip = screen.getByLabelText(
-      "Resource usage: 12% CPU, 120 MB PSS, 3 processes",
+      "Resource usage: 6.3% CPU (1.0 of 16 cores), 120 MB PSS, 3 processes",
     );
     // The proportional reading wins, and it says so on screen rather than
     // looking like a smaller resident number.
@@ -294,7 +332,8 @@ describe("ResourceUsageChip", () => {
   it("renders unavailable memory as an em dash, never as zero", () => {
     render(
       <ResourceUsageChip
-        cpuPercent={12}
+        app={SIXTEEN_CORE_HOST}
+        cpuPercent={100}
         rssBytes={null}
         pssBytes={null}
         processCount={3}
@@ -304,7 +343,7 @@ describe("ResourceUsageChip", () => {
       />,
     );
     const chip = screen.getByLabelText(
-      "Resource usage: 12% CPU, memory unavailable, 3 processes",
+      "Resource usage: 6.3% CPU (1.0 of 16 cores), memory unavailable, 3 processes",
     );
     expect(chip.textContent).toContain("—");
     expect(chip.textContent).not.toContain("0 B");
@@ -396,7 +435,9 @@ describe("OwnerResourceChip", () => {
       );
     });
 
-    expect(screen.getByLabelText(/Resource usage: 12% CPU/)).not.toBeNull();
+    expect(
+      screen.getByLabelText(/Resource usage: 0\.75% CPU \(0\.1 of 16 cores\)/),
+    ).not.toBeNull();
   });
 
   it("stays absent for an owner with no snapshot even when others are tracked", () => {
@@ -457,8 +498,94 @@ describe("OwnerResourceChip", () => {
         }),
       );
     });
-    expect(screen.getByLabelText(/Resource usage: 88% CPU/)).not.toBeNull();
-    expect(screen.queryByLabelText(/Resource usage: 12% CPU/)).toBeNull();
+    expect(
+      screen.getByLabelText(/Resource usage: 5\.5% CPU \(0\.9 of 16 cores\)/),
+    ).not.toBeNull();
+    expect(screen.queryByLabelText(/Resource usage: 0\.75% CPU/)).toBeNull();
+  });
+
+  it("renders one busy core on a 16-processor host as 6.3% and names the core on hover", async () => {
+    const stub = installStubFactory();
+    render(
+      <OwnerResourceChip
+        epicId="epic-1"
+        kind="terminal"
+        ownerId="s1"
+        hostId="host-1"
+        metrics={["cpu"]}
+        className={undefined}
+      />,
+    );
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner("terminal", "s1", { cpuPercent: 100 })],
+        }),
+      );
+    });
+
+    const chip = screen.getByLabelText(
+      "Resource usage: 6.3% CPU (1.0 of 16 cores), 357 MB RSS, 3 processes",
+    );
+    expect(chip.textContent).toBe("6.3%");
+    fireEvent.focus(chip);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "6.3% CPU (1.0 of 16 cores)",
+    );
+  });
+
+  it("keeps two decimals for a small share so a light row never reads 0.0%", () => {
+    const stub = installStubFactory();
+    render(
+      <OwnerResourceChip
+        epicId="epic-1"
+        kind="terminal"
+        ownerId="s1"
+        hostId="host-1"
+        metrics={["cpu"]}
+        className={undefined}
+      />,
+    );
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [owner("terminal", "s1", { cpuPercent: 5 })],
+        }),
+      );
+    });
+
+    expect(
+      screen.getByLabelText(/Resource usage: 0\.31% CPU \(0\.1 of 16 cores\)/)
+        .textContent,
+    ).toBe("0.31%");
+  });
+
+  it("shows a dash and says why when the host sent no processor count, never the per-core figure", () => {
+    const stub = installStubFactory();
+    render(
+      <OwnerResourceChip
+        epicId="epic-1"
+        kind="terminal"
+        ownerId="s1"
+        hostId="host-1"
+        metrics={["cpu", "memory", "processes"]}
+        className={undefined}
+      />,
+    );
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: NO_COUNT_HOST,
+          owners: [owner("terminal", "s1", { cpuPercent: 100 })],
+        }),
+      );
+    });
+
+    const chip = screen.getByLabelText(
+      "Resource usage: CPU unavailable: This host doesn't report how many processors it has, so there is no total to take a CPU share of., 357 MB RSS, 3 processes",
+    );
+    expect(chip.textContent).toBe("—·357 MB RSS·3 procs");
+    expect(chip.textContent).not.toContain("100");
   });
 });
 
@@ -484,8 +611,35 @@ describe("EpicResourceChip", () => {
     });
 
     expect(
-      screen.getByLabelText(/Epic resource usage: 40% CPU/),
+      screen.getByLabelText(
+        /Epic resource usage: 2\.5% CPU \(0\.4 of 16 cores\)/,
+      ),
     ).not.toBeNull();
+  });
+
+  it("shows a dash for an epic on a host that sent no processor count", () => {
+    const stub = installStubFactory();
+    render(
+      <>
+        <EpicLease epicId="epic-1" />
+        <EpicResourceChip
+          epicId="epic-1"
+          metrics={["cpu"]}
+          className={undefined}
+        />
+      </>,
+    );
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          app: NO_COUNT_HOST,
+          epic: epicAggregate({ cpuPercent: 40 }),
+        }),
+      );
+    });
+
+    const chip = screen.getByLabelText(/Epic resource usage: CPU unavailable/);
+    expect(chip.textContent).toBe("—");
   });
 });
 
@@ -528,6 +682,6 @@ describe("NavigatorResourceHotspotChip", () => {
           projection({ owners: [owner("terminal", "s1", { cpuPercent: 12 })] }),
         );
     });
-    expect(screen.getByLabelText(/Resource usage: 12% CPU/)).not.toBeNull();
+    expect(screen.getByLabelText(/Resource usage: 0\.75% CPU/)).not.toBeNull();
   });
 });

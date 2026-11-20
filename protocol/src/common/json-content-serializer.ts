@@ -1,4 +1,5 @@
 import type { JsonContent } from "./registry";
+import { fileAttachmentAttrsSchema } from "./file-attachment";
 import { isDefaultGithubMentionHost } from "./github-mention-host";
 
 export enum ContextType {
@@ -65,6 +66,7 @@ export enum ContextType {
    * list bots.
    */
   Bot = "bot",
+  Host = "host",
   Execution = "execution",
   User = "user",
 }
@@ -789,6 +791,7 @@ function getValidationMarker(nodeId: string, ctx: SerializerContext): string {
 
 export interface MentionAttrs {
   contextType: string;
+  hostId?: string;
   id?: string;
   label?: string;
   relPath?: string;
@@ -818,6 +821,8 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
   if (!attrs) return "";
 
   switch (attrs.contextType) {
+    case ContextType.Host:
+      return `host:${attrs.label || attrs.hostId || attrs.id || ""}`;
     case ContextType.File:
     case ContextType.Folder:
       return attrs.relPath || attrs.id || "";
@@ -1068,6 +1073,13 @@ function formatMentionForLLMQuery(
         ? `@browser-tab:${title} [tabId is unavailable]`
         : `@browser-tab:${title} [tabId=${tabId}]`;
     }
+    case ContextType.Host: {
+      const hostId = attrs.hostId || attrs.id || "";
+      const title = attrs.label || hostId;
+      return hostId.length === 0
+        ? `@host:${title} [hostId is unavailable]`
+        : `@host:${title} [hostId=${hostId}]`;
+    }
     // The ids travel in the text, as a GitHub mention carries its URL: an
     // agent cannot list bots, and messages one with the bot id as `taskId`
     // and the trunk agent id as `toAgentId`.
@@ -1168,6 +1180,14 @@ function serializeSlashCommand(
   }
   const commandName = readStringAttr(node.attrs, "commandName");
   return `/${commandName}`;
+}
+
+// The file's name in place, in both mention formats. A node whose attrs are
+// not a file attachment's renders as an unknown node would.
+function serializeFileAttachment(node: JsonContent): string {
+  const attrs = fileAttachmentAttrsSchema.safeParse(node.attrs);
+  if (!attrs.success) return extractTextFromNode(node);
+  return `[file: ${attrs.data.fileName}]`;
 }
 
 function serializeText(node: JsonContent): string {
@@ -2127,6 +2147,8 @@ function serializeNode(node: JsonContent, ctx: SerializerContext): string {
       return serializeMention(node, ctx);
     case "slashCommand":
       return serializeSlashCommand(node, ctx);
+    case "fileAttachment":
+      return serializeFileAttachment(node);
     default:
       return extractTextFromNode(node);
   }

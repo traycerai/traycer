@@ -58,14 +58,17 @@ function catalog(input: {
   readonly modelsHarnessId: ProviderId;
   readonly models: ReadonlyArray<ModelOption>;
   readonly modelsLoaded: boolean;
+  readonly modelsFailed: boolean;
   readonly harnesses?: ReadonlyArray<HarnessOption>;
 }): ComposerToolbarCatalog {
   return {
     hostId: null,
     harnesses: input.harnesses,
     modelsHarnessId: input.modelsHarnessId,
+    modelsProfileId: null,
     models: input.models,
     modelsLoaded: input.modelsLoaded,
+    modelsFailed: input.modelsFailed,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
     ultracodeCarried: false,
@@ -121,6 +124,7 @@ describe("composer toolbar store setting purpose", () => {
       modelsHarnessId: "claude",
       models: [model("claude", "held-slug", "Held")],
       modelsLoaded: true,
+      modelsFailed: false,
     });
 
     const runStore = createStore({ purpose: "run" });
@@ -145,6 +149,7 @@ describe("composer toolbar store setting purpose", () => {
       modelsHarnessId: "claude",
       models: listed,
       modelsLoaded: true,
+      modelsFailed: false,
     });
     const settingEmitted: string[] = [];
     const runEmitted: string[] = [];
@@ -195,6 +200,7 @@ describe("composer toolbar store setting purpose", () => {
         modelsHarnessId: "claude",
         models: [model("claude", "claude-opus", "Opus")],
         modelsLoaded: true,
+        modelsFailed: false,
       }),
     );
     expect(emitted).toEqual([]);
@@ -215,6 +221,7 @@ describe("composer toolbar store setting purpose", () => {
         modelsHarnessId: "codex",
         models: [],
         modelsLoaded: false,
+        modelsFailed: false,
       }),
     );
     expect(store.getState().selection.modelSlug).toBe("");
@@ -231,6 +238,7 @@ describe("composer toolbar store setting purpose", () => {
         modelsHarnessId: "codex",
         models: loadedCodex,
         modelsLoaded: true,
+        modelsFailed: false,
       }),
     );
 
@@ -246,6 +254,7 @@ describe("composer toolbar store setting purpose", () => {
         modelsHarnessId: "codex",
         models: [...loadedCodex, model("codex", "gpt-extra", "Extra")],
         modelsLoaded: true,
+        modelsFailed: false,
       }),
     );
     expect(emitted).toHaveLength(1);
@@ -274,6 +283,7 @@ describe("composer toolbar store setting purpose", () => {
         modelsHarnessId: "codex",
         models: [],
         modelsLoaded: true,
+        modelsFailed: false,
       }),
     );
 
@@ -339,6 +349,7 @@ describe("composer toolbar store setting purpose: the no-carry effort lever", ()
       modelsHarnessId: "claude",
       models: [withEfforts],
       modelsLoaded: true,
+      modelsFailed: false,
     });
     const settingStore = createStore({ purpose: "setting" });
     const runStore = createStore({ purpose: "run" });
@@ -401,6 +412,7 @@ describe("composer toolbar store setting purpose: the commit funnel owns the set
       modelsHarnessId: "claude",
       models: [MODEL_X, MODEL_Y],
       modelsLoaded: true,
+      modelsFailed: false,
     });
   }
 

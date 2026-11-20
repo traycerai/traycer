@@ -38,6 +38,7 @@ interface MockFetchCall {
   readonly authorization: string | null;
   readonly body: string | null;
   readonly hasSignal: boolean;
+  readonly redirect?: RequestRedirect;
 }
 
 interface MockSpec {
@@ -68,6 +69,7 @@ function installMockFetch(specs: ReadonlyArray<MockSpec>): MockFetchCall[] {
       authorization: headers.get("Authorization"),
       body: typeof init?.body === "string" ? init.body : null,
       hasSignal: init?.signal instanceof AbortSignal,
+      redirect: init?.redirect,
     });
     const spec = specs[index] ?? specs[specs.length - 1];
     index++;
@@ -197,6 +199,29 @@ describe("exchangeCodeForTokens - timeout without retry", () => {
     // terminal `rejected` - proving the transient/terminal distinction holds.
     expect(result.kind).toBe("rejected");
   });
+
+  it.each([301, 302, 307, 308])(
+    "treats exchange redirect %i as network-error without following it with the code",
+    async (status) => {
+      installMockFetch([
+        { status, body: { location: "https://elsewhere.test" } },
+      ]);
+
+      const result = await exchangeCodeForTokens(
+        AUTHN_BASE_URL,
+        "pkce-code",
+        "pkce-verifier",
+      );
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        url: EXCHANGE_ENDPOINT,
+        method: "POST",
+        redirect: "manual",
+      });
+    },
+  );
 });
 
 describe("refreshOnceAbortable", () => {
@@ -234,6 +259,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "access",
       refreshToken: "refresh",
+      rotationCode: null,
       clientKind: null,
       signal: AbortSignal.abort(),
     });
@@ -256,6 +282,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: "R".repeat(43),
       clientKind: "desktop",
       signal: null,
     });
@@ -273,6 +300,7 @@ describe("refreshOnceAbortable", () => {
     expect(JSON.parse(calls[0].body ?? "null")).toEqual({
       refreshToken: "stale-refresh",
       clientKind: "desktop",
+      rotationCode: "R".repeat(43),
     });
   });
 
@@ -288,13 +316,44 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
 
     expect(result).toEqual({ kind: "network-error" });
     expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].body ?? "null")).toEqual({
+      refreshToken: "stale-refresh",
+    });
   });
+
+  it.each([301, 302, 307, 308])(
+    "treats refresh redirect %i as network-error without resending the bearer",
+    async (status) => {
+      installMockFetch([
+        { status, body: { location: "https://elsewhere.test" } },
+      ]);
+
+      const result = await refreshOnceAbortable({
+        authnBaseUrl: AUTHN_BASE_URL,
+        token: "stale-bearer",
+        refreshToken: "stale-refresh",
+        rotationCode: null,
+        clientKind: null,
+        signal: null,
+      });
+
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        url: REFRESH_ENDPOINT,
+        method: "POST",
+        authorization: "Bearer stale-bearer",
+        redirect: "manual",
+      });
+    },
+  );
 
   it("maps a 401 to rejected (dead refresh credential) in a single attempt", async () => {
     installMockFetch([{ status: 401, body: { error: "Unauthorized" } }]);
@@ -303,6 +362,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "dead-refresh",
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
@@ -329,6 +389,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
@@ -378,6 +439,7 @@ describe("refreshOnceAbortable", () => {
         authnBaseUrl: AUTHN_BASE_URL,
         token: "stale-bearer",
         refreshToken: "stale-refresh",
+        rotationCode: null,
         clientKind: null,
         signal: null,
       });
@@ -397,6 +459,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: null,
       clientKind: null,
       signal: null,
     });
@@ -989,6 +1052,7 @@ describe("the abortable auth calls on a WebView without AbortSignal.timeout or A
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      rotationCode: null,
       clientKind: null,
     } as const;
 
@@ -1133,6 +1197,7 @@ describe("caller signal composition without AbortSignal.any", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "access",
       refreshToken: "refresh",
+      rotationCode: null,
       clientKind: null,
       signal: caller.signal,
     });
@@ -1173,6 +1238,7 @@ describe("refreshOnceAbortable on a fetch that ignores its signal", () => {
     authnBaseUrl: AUTHN_BASE_URL,
     token: "stale-bearer",
     refreshToken: "stale-refresh",
+    rotationCode: null,
     clientKind: null,
     signal: null,
   } as const;

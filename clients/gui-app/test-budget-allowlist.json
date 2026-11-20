@@ -18,12 +18,15 @@
   "src/components/settings/panels/permissions/__tests__/judge-tab.test.tsx": "114 cases driving the full Judge tab by keyboard; 8.5 to 14.5 s across five runs",
   "src/lib/comm-graph/office/views/__tests__/office-plans.test.ts": "454 cases laying out and walking every office plan, path-finding included; 6.9 to 13.4 s across five runs",
   "src/components/settings/__tests__/settings-search-fixtures.test.tsx": "23 cases each rendering the Settings page once per platform to land every search result; 6.3 to 12.4 s across five runs",
-  "src/components/canvas-artifact/__tests__/canvas-artifact-editor.test.tsx": "73 cases mounting the full canvas editor; 6.0 to 12.3 s across five runs",
+  "src/components/canvas-artifact/__tests__/canvas-artifact-editor.test.tsx": "101 cases mounting the full canvas editor; 6.0 to 12.3 s across five runs at 73 cases, 9.7 s at 101",
   "src/components/bots/__tests__/bot-memory-pane.test.tsx": "16 cases on the full memory pane, 3.6 s alone; 3.7 to 12.2 s on a loaded shard across five runs",
   "src/components/epic-canvas/sidebar/__tests__/epic-sidebar-selection-mode.test.tsx": "172 cases on the full task sidebar; 8.5 to 12.1 s across five runs",
   "src/__tests__/worktree-selection-key-census.test.ts": "parses every production source file under gui-app and shared with the TypeScript compiler; 6.0 to 11.3 s across five runs",
   "src/components/home/host-workspace-selector/__tests__/in-epic-surface-primary-readonly.test.tsx": "44 cases mounting the in-task surface with its host and workspace selector; 6.1 to 11.1 s across five runs",
   "src/components/epics/__tests__/history-scope-integration.test.tsx": "76 cases on the full task history with its scope filters; 7.2 to 10.8 s across five runs",
   "src/components/layout/tabs/__tests__/side-tab-strip.test.tsx": "138 cases on the full side tab strip; 5.5 to 10.2 s across five runs",
-  "src/components/home/terminal-panel/__tests__/landing-terminal-panel.test.tsx": "154 cases on the full Start Page terminal panel; 6.0 to 11.0 s across six runs"
+  "src/components/home/terminal-panel/__tests__/landing-terminal-panel.test.tsx": "154 cases on the full Start Page terminal panel; 6.0 to 11.0 s across six runs",
+  "src/components/settings/panels/__tests__/sandboxes-settings-panel.test.tsx": "92 cases on the full Sandboxes settings panel, 3.4 s alone; 10.1 to 11.3 s on a loaded shard when over, under 10 s on two other runs",
+  "src/components/layout/header/__tests__/rate-limit-popover.test.tsx": "135 cases on the full rate-limit popover with its rail and host picker; 10.4 and 10.7 s on run 43248573260",
+  "src/components/settings/__tests__/settings-sidebar.test.tsx": "71 cases on the full Settings sidebar across builds and platforms; 4.8 s on a shard of run 43797243136, 10.1 s on the leg and 10.1 s alone on run 43800557282"
 }

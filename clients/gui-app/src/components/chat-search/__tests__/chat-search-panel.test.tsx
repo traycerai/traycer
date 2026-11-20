@@ -9,6 +9,7 @@ import type {
   ChatSearchMessageMatch,
 } from "@traycer/protocol/host/chat-search/schemas";
 import { ChatSearchPanel } from "@/components/chat-search/chat-search-panel";
+import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
 import type {
   ChatSearchBaseRequest,
   ChatSearchExpansionStatus,
@@ -205,6 +206,28 @@ describe("ChatSearchPanel: host reachability", () => {
     const base = latestBase();
     expect(base).not.toBeNull();
     expect(base?.query).toBe("hello");
+  });
+});
+
+describe("ChatSearchDialogHost layout", () => {
+  it("keeps the panel and results list inside the flex dialog scroll region", () => {
+    useChatSearchResultsMock.mockReturnValue(idleStatus());
+    useChatSearchStore.getState().setOpen(true, Date.now());
+    render(<ChatSearchDialogHost />);
+
+    const dialog = screen.getByRole("dialog", { name: "Search chats" });
+    expect(dialog.classList.contains("flex")).toBe(true);
+    expect(dialog.classList.contains("flex-col")).toBe(true);
+    const panel = screen.getByRole("searchbox", { name: "Search chats" })
+      .parentElement?.parentElement;
+    if (panel === null || panel === undefined) {
+      throw new Error("expected the chat search panel");
+    }
+    expect(panel.classList.contains("min-h-0")).toBe(true);
+    const resultsList = panel.lastElementChild;
+    if (resultsList === null) throw new Error("expected the results list");
+    expect(resultsList.classList.contains("min-h-0")).toBe(true);
+    expect(resultsList.classList.contains("overflow-y-auto")).toBe(true);
   });
 });
 

@@ -314,14 +314,18 @@ export function useArtifactImagePaste(
       fileDrops: runnerHost.fileDrops,
       mentionRoots: [],
       beginPathInsertion,
+      // A path is never inserted here (`beginPathInsertion` declines), so
+      // there is no host it could fail to reach.
+      pathsReachTarget: true,
     }),
     [beginPathInsertion, runnerHost.fileDrops],
   );
-  const paste = useComposerPasteEvents(
+  const paste = useComposerPasteEvents({
     imageIngest,
     insertAttrs,
     filePaths,
     captureImageInsertion,
-  );
+    fileAttach: null,
+  });
   return { supported: operations.supported, paste };
 }

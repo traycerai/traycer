@@ -129,7 +129,7 @@ describe.skipIf(process.platform === "win32")(
       const result = spawnSync("bun", ["--version"]);
       if (result.error !== undefined || result.status !== 0) {
         throw new Error(
-          "this suite spawns worker fixtures with Bun; install Bun 1.3.14 (repo toolchain)",
+          "this suite spawns worker fixtures with Bun; install Bun 1.4.4 (repo toolchain)",
         );
       }
     });

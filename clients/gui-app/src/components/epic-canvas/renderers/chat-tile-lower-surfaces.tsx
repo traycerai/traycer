@@ -156,6 +156,12 @@ export interface ChatLowerAccessState {
    * one for it.
    */
   readonly restingSandbox?: RestingChatSandbox;
+  /**
+   * Whether a message is parked while the host brings the chat's records back
+   * (`useEvictedChatSend`), so the composer takes one even from the pool's
+   * session, which takes none itself.
+   */
+  readonly parksEvictedSend?: boolean;
   /** The serving host has a copy, not authority over the owner's workspace. */
   readonly isCopy: boolean;
   readonly isViewer: boolean;
@@ -289,6 +295,7 @@ export interface ChatLowerComposerState {
   readonly nodeId: string;
   readonly isActive: boolean;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly runWorkingDirectory: string | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly onSubmitMessage: (
@@ -296,6 +303,7 @@ export interface ChatLowerComposerState {
   ) => boolean | Promise<boolean>;
   /** `/btw` / `/side`: fork this chat and ask there (`startSideChat`). */
   readonly onSideChat: (input: ChatComposerSideChatInput) => boolean;
+  readonly onClone: () => void;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
@@ -863,7 +871,7 @@ function ComposerSurface(props: {
       </ComposerSlotShell>
     );
   }
-  if (model.access.isViewer && model.access.restingSandbox === undefined) {
+  if (model.access.isViewer) {
     return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
@@ -949,7 +957,6 @@ function ViewerComposerSurface(props: {
   readonly layout: ComposerSurfaceLayout;
 }): ReactNode {
   const { model, layout } = props;
-  const sandboxSays = useContext(ChatSandboxLineContext);
   if (model.subagentView !== null) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -962,12 +969,19 @@ function ViewerComposerSurface(props: {
   return (
     <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
       <div className="flex flex-col gap-3">
-        {sandboxSays ? null : (
-          <ReadOnlyComposerNotice
-            notice={model.access.readOnlyNotice}
-            actions={null}
-          />
-        )}
+        <ReadOnlyComposerNotice
+          notice={model.access.readOnlyNotice}
+          actions={
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={model.composer.onClone}
+            >
+              Clone agent
+            </Button>
+          }
+        />
         {model.access.isCopy ? null : (
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}
@@ -976,6 +990,29 @@ function ViewerComposerSurface(props: {
       </div>
     </ComposerSlotShell>
   );
+}
+
+/**
+ * Whether the composer's send is blocked, and the tooltip saying why. A
+ * resting sandbox's message and an evicted chat's parked one are taken even
+ * though the serving session cannot act.
+ */
+function composerSendGate(model: ComposerSurfaceModel): {
+  readonly disabled: boolean;
+  readonly hint: string | null;
+} {
+  const editing = model.queue.editingItem !== null;
+  const restingMessage = model.access.restingSandbox !== undefined && !editing;
+  const evictedMessage = model.access.parksEvictedSend === true && !editing;
+  return {
+    disabled:
+      model.access.isViewer ||
+      (!model.access.canAct && !restingMessage && !evictedMessage),
+    hint:
+      restingMessage || evictedMessage
+        ? null
+        : chatSendDisabledHint(model.access),
+  };
 }
 
 function LiveChatComposer(props: {
@@ -987,19 +1024,16 @@ function LiveChatComposer(props: {
   const tabHostId = useTabHostId();
   const sandboxSays = useContext(ChatSandboxLineContext);
   const focusLayout = useContext(ComposerFocusLayoutContext);
-  const restingMessage =
-    model.access.restingSandbox !== undefined &&
-    model.queue.editingItem === null;
+  const sendGate = composerSendGate(model);
   return (
     <ChatComposer
       key={model.queue.editingItem?.queueItemId}
       taskId={model.composer.nodeId}
       isActive={model.composer.isActive}
-      sendDisabled={!model.access.canAct && !restingMessage}
-      sendDisabledHint={
-        restingMessage ? null : chatSendDisabledHint(model.access)
-      }
+      sendDisabled={sendGate.disabled}
+      sendDisabledHint={sendGate.hint}
       mentionRoots={model.composer.mentionRoots}
+      runWorkingDirectory={model.composer.runWorkingDirectory}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
       viewTabId={model.viewTabId}
@@ -1165,8 +1199,7 @@ function ReadOnlyComposerNotice(props: {
           with, aligned to the first line of a notice that can wrap. */}
       <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1">
-        {props.notice ??
-          "Read-only viewer. The agent owner can send prompts and manage this queue."}
+        {props.notice ?? "Read-only viewer."}
       </span>
       {props.actions}
     </div>

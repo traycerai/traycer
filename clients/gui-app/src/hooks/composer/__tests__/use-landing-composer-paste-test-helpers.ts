@@ -4,7 +4,10 @@
  */
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
-import type { ComposerPasteEditorHandle } from "@/hooks/composer/use-composer-paste";
+import type {
+  ComposerFileRoute,
+  ComposerPasteEditorHandle,
+} from "@/hooks/composer/use-composer-paste";
 
 // Default fixture for tests that don't care about file-path resolution at
 // all (pure image-ingest coverage): every resolve/copy call comes back
@@ -27,6 +30,11 @@ export function makeHandle(
   const focusCalls = { count: 0 };
   const handle: ComposerPasteEditorHandle = {
     isReady: () => true,
+    insertFileAttachment: () => false,
+    settleFileAttachment: () => false,
+    getEditorIncarnation: () => null,
+    draftGeneration: () => 0,
+    getJSON: () => ({ type: "doc", content: [] }),
     insertImageAttachments: (attrs) => inserted.push([...attrs]),
     // Paths commit independently of image insertion (A1: mixed may be 2 undo steps).
     beginPathInsertion: () => (paths) => {
@@ -42,3 +50,10 @@ export function makeHandle(
   };
   return { handle, focusCalls };
 }
+
+/** A landing paste rig with no file route to speak of: files never upload. */
+export const NO_FILE_ROUTE: ComposerFileRoute = {
+  target: null,
+  put: () => Promise.reject(new Error("no file upload in this test")),
+  settleDraft: () => undefined,
+};

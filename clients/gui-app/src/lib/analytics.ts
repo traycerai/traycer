@@ -7,6 +7,7 @@ import {
 import { LAYOUT_VALUE_ENUM_MEMBERS } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
 import { isMobileApp } from "@/lib/mobile-app";
+import { ownValue } from "@/lib/own-value";
 
 export type AnalyticsSource =
   | "direct_ui"
@@ -119,6 +120,7 @@ export type AnalyticsSettingsSection =
   | "getting-started"
   | "browser"
   | "browser-agent-access"
+  | "agent-memories"
   | "credits"
   | "mcp-servers"
   | "members"
@@ -136,6 +138,7 @@ export type AnalyticsSettingsSection =
   | "sandboxes"
   | "secrets"
   | "shell"
+  | "storage"
   | "usage"
   | "worktrees";
 
@@ -326,6 +329,7 @@ export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
  * allowed-values pinning below. */
 export type AnalyticsOnboardingStep =
   | "agent-guide"
+  | "agent-memories"
   | "command-theme"
   | "login-import"
   | "mobile-switcher"
@@ -375,12 +379,17 @@ export type AnalyticsProvider =
   | "reasonix"
   | "traycer";
 
-export type AnalyticsRole = "editor" | "owner" | "viewer";
+/**
+ * A role a share event reports. The retired view-only role is absent: no
+ * share can name it, so no event can carry it.
+ */
+export type AnalyticsRole = "editor" | "owner";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
   | "agentBrowserAccess"
   | "agentOfficeDefaultView"
+  | "useTraycerMemories"
   | "agentTabSurfacing"
   | "agentWorktreeCreate"
   | "artifactIconColorMode"
@@ -416,6 +425,10 @@ export type AnalyticsSetting =
   | "startPageWallpaperCurated"
   | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
+  | "storageArchivedChats"
+  | "storageChats"
+  | "storageFileEditSnapshots"
+  | "storageIdleTasks"
   | "summonHotkeyChord"
   | "summonHotkeyEnabled"
   | "terminalCursorBlink"
@@ -1501,6 +1514,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     "getting-started": true,
     browser: true,
     "browser-agent-access": true,
+    "agent-memories": true,
     "mcp-servers": true,
     skills: true,
     "agent-definitions": true,
@@ -1517,6 +1531,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     members: true,
     secrets: true,
     shell: true,
+    storage: true,
     usage: true,
     credits: true,
     worktrees: true,
@@ -1539,6 +1554,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     agentTabSurfacing: true,
     agentWorktreeCreate: true,
     allowPrereleaseUpdates: true,
+    useTraycerMemories: true,
     artifactIconColorMode: true,
     artifactIconColors: true,
     catalogProbeTimeout: true,
@@ -1569,6 +1585,10 @@ const ANALYTICS_SETTINGS = new Set<string>(
     startPageWallpaperCurated: true,
     startPageWallpaperTint: true,
     steerOnModEnterEnabled: true,
+    storageArchivedChats: true,
+    storageChats: true,
+    storageFileEditSnapshots: true,
+    storageIdleTasks: true,
     summonHotkeyChord: true,
     summonHotkeyEnabled: true,
     terminalCursorBlink: true,
@@ -1610,6 +1630,7 @@ const ANALYTICS_THEMES = new Set<string>([
 
 const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "agent-guide",
+  "agent-memories",
   "command-theme",
   "mobile-switcher",
   "mobile-tasks",
@@ -2212,7 +2233,7 @@ const EXACT_PROPERTY_VALUES: {
   provider: ANALYTICS_PROVIDERS,
   source_kind: new Set(["managed", "ambient"]),
   region: ANALYTICS_LAYOUT_REGIONS,
-  role: new Set(["editor", "owner", "viewer"]),
+  role: new Set(["editor", "owner"]),
   session_duration_bucket: ANALYTICS_LAYOUT_DURATION_BUCKETS,
   section: ANALYTICS_SETTINGS_SECTIONS,
   session_age_bucket: ANALYTICS_SESSION_AGE_BUCKETS,
@@ -3170,7 +3191,9 @@ function typedAnalyticsBlocker(error: unknown): AnalyticsBlocker | null {
     return null;
   }
   const code = error.code;
-  return typeof code === "string" ? (RPC_ERROR_BLOCKERS[code] ?? null) : null;
+  return typeof code === "string"
+    ? (ownValue(RPC_ERROR_BLOCKERS, code) ?? null)
+    : null;
 }
 
 export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {

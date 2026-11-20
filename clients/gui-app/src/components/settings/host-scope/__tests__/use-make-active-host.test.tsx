@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { ActivateResult } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { hostScopeOptionFixture } from "../host-scope-fixture";
 
@@ -49,10 +52,26 @@ vi.mock("@/lib/analytics", () => ({
 
 import { useMakeActiveHost } from "@/components/settings/host-scope/use-host-scope";
 
+let queryClient = new QueryClient();
+
+function renderMakeActiveHost(hosts: readonly HostScopeOption[]) {
+  return renderHook(() => useMakeActiveHost(hosts), {
+    wrapper: ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
 const hosts = [
   hostScopeOptionFixture({ hostId: "host-a" }),
   hostScopeOptionFixture({ hostId: "host-b", isActive: false }),
 ];
+
+beforeEach(() => {
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+});
 
 afterEach(async () => {
   // The latch lives on a module-level `WeakMap` keyed by `authority`, which
@@ -68,6 +87,7 @@ afterEach(async () => {
     });
   }
   cleanup();
+  queryClient.clear();
   activateCalls.length = 0;
   resolveActivate = null;
   activation = null;
@@ -75,7 +95,7 @@ afterEach(async () => {
 
 describe("useMakeActiveHost", () => {
   it("issues ONE activate when two calls land in the same batch", () => {
-    const { result } = renderHook(() => useMakeActiveHost(hosts));
+    const { result } = renderMakeActiveHost(hosts);
 
     expect(result.current.isActivating).toBe(false);
 
@@ -92,7 +112,7 @@ describe("useMakeActiveHost", () => {
   it("keeps the latch across a close-and-reopen of the surface (R1-A2)", async () => {
     // A surface can unmount while its write is pending. That write must still
     // gate the next mount, even while no component watches it.
-    const first = renderHook(() => useMakeActiveHost(hosts));
+    const first = renderMakeActiveHost(hosts);
 
     act(() => {
       activation = first.result.current.makeActive("host-b");
@@ -101,7 +121,7 @@ describe("useMakeActiveHost", () => {
 
     first.unmount();
 
-    const second = renderHook(() => useMakeActiveHost(hosts));
+    const second = renderMakeActiveHost(hosts);
     expect(second.result.current.isActivating).toBe(true);
     expect(second.result.current.activatingHostId).toBe("host-b");
 
@@ -127,8 +147,8 @@ describe("useMakeActiveHost", () => {
   });
 
   it("shares the latch between two instances mounted at once (Settings + the menu)", () => {
-    const settings = renderHook(() => useMakeActiveHost(hosts));
-    const menu = renderHook(() => useMakeActiveHost(hosts));
+    const settings = renderMakeActiveHost(hosts);
+    const menu = renderMakeActiveHost(hosts);
 
     expect(settings.result.current.isActivating).toBe(false);
     expect(menu.result.current.isActivating).toBe(false);
@@ -157,7 +177,13 @@ describe("useMakeActiveHost", () => {
         hostId,
         kind: "sandbox",
         isActive: false,
-        sandbox: { state: "awake", frozen: false, summary, teamOwned: false },
+        sandbox: {
+          state: "awake",
+          frozen: false,
+          summary,
+          ownerKind: "unknown",
+          teamOwned: false,
+        },
       });
     const rows = [
       hostScopeOptionFixture({ hostId: "host-a" }),
@@ -179,7 +205,7 @@ describe("useMakeActiveHost", () => {
     it.each(["host-burst", "host-pod", "host-unconfirmed"])(
       "writes nothing when %s is made active, and holds no latch",
       async (hostId) => {
-        const { result } = renderHook(() => useMakeActiveHost(rows));
+        const { result } = renderMakeActiveHost(rows);
 
         await act(async () => {
           await result.current.makeActive(hostId);
@@ -192,7 +218,7 @@ describe("useMakeActiveHost", () => {
     );
 
     it("does not let a refused pick block the next legal one", () => {
-      const { result } = renderHook(() => useMakeActiveHost(rows));
+      const { result } = renderMakeActiveHost(rows);
 
       act(() => {
         void result.current.makeActive("host-burst");
@@ -203,7 +229,7 @@ describe("useMakeActiveHost", () => {
     });
 
     it("still writes for a personal host and for an ordinary confirmed sandbox", async () => {
-      const { result } = renderHook(() => useMakeActiveHost(rows));
+      const { result } = renderMakeActiveHost(rows);
 
       act(() => {
         activation = result.current.makeActive("host-sandbox");

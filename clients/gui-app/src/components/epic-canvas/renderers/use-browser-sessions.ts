@@ -8,7 +8,13 @@ import {
 } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { isSandboxHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { allowsBrowserLoginSync } from "@traycer-clients/shared/host-client/browser-login-ownership";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { isPersonalRemoteHost } from "@traycer-clients/shared/host-client/personal-remote-host";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
@@ -114,8 +120,11 @@ export function useBrowserSessions(
   );
   const ownerCoordinatorKey =
     owner === null ? null : browserSessionsCoordinatorKey(scope, owner);
+  // Not across a row below the version floor: an older host cannot own the stream.
   const coordinatorKey =
     ownerCoordinatorKey !== null &&
+    (hostEntry === null ||
+      !hostDirectoryEntryNeedsUpdate(hostEntry, MINIMUM_HOST_VERSION)) &&
     (transportReady || hasBrowserSessionsCoordinator(ownerCoordinatorKey))
       ? ownerCoordinatorKey
       : null;
@@ -192,18 +201,20 @@ export function useBrowserSessions(
  * `null` for the jar-free stream the renderer opens itself.
  *
  * The bridge routes the stream through main, which carries the desktop's whole
- * cookie jar on it (snapshots, deltas, host-requested captures). A sandbox
- * must never receive that, so its stream takes the jar-free path every
- * non-desktop shell already uses, and main refuses to build a jar transport
- * for one as well (`openBrowserSessionsTransport`). A sandbox is never this
- * machine's host, so it loses no native tab: a GUI on a remote host is a
- * viewer either way.
+ * cookie jar on it (snapshots, deltas, host-requested captures). Sandboxes and
+ * team-owned computers take the jar-free path; main independently refuses
+ * their jar transport.
  */
 export function jarBridgeForHost(
   browserView: BrowserViewBridge | null,
   hostEntry: HostDirectoryEntry | null,
 ): BrowserViewBridge | null {
-  if (hostEntry !== null && isSandboxHostDirectoryEntry(hostEntry)) {
+  if (!allowsBrowserLoginSync(hostEntry)) return null;
+  if (
+    hostEntry !== null &&
+    isRemoteHostDirectoryEntry(hostEntry) &&
+    !isPersonalRemoteHost(hostEntry)
+  ) {
     return null;
   }
   return browserView;

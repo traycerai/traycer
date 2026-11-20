@@ -166,6 +166,9 @@ const stemLayer = z.union([
 ]);
 
 const stemManifest = z.strictObject({
+  recordings: z
+    .array(z.strictObject({ name: stemName, file: z.string().min(1) }))
+    .optional(),
   tracks: z.array(
     z.strictObject({ name: stemName, layers: z.array(stemLayer) }),
   ),
@@ -223,10 +226,23 @@ function stemProblems(
 
 const viewTracks = z.array(name);
 
+const composedTrack = z.strictObject({
+  kind: z.literal("composed"),
+  name: stemName,
+  title: z.string(),
+  recording: stemName,
+});
+const generativeTrack = trackShape
+  .extend({ kind: z.literal("generative") })
+  .superRefine((parsed, context) => {
+    for (const message of trackProblems(parsed))
+      context.addIssue({ code: "custom", message });
+  });
+
 const remoteManifest = z
   .strictObject({
-    version: z.literal(1),
-    tracks: z.array(track),
+    version: z.union([z.literal(1), z.literal(2)]),
+    tracks: z.array(z.union([track, generativeTrack, composedTrack])),
     views: z.strictObject({
       home: viewTracks,
       task: viewTracks,
@@ -237,7 +253,33 @@ const remoteManifest = z
   })
   .superRefine((parsed, context) => {
     const trackNames = parsed.tracks.map((item) => item.name);
+    const recordingNames =
+      parsed.stems.recordings?.map((item) => item.name) ?? [];
     const problems = [
+      ...repeatedNames(parsed.stems.tracks.map((item) => item.name)).map(
+        (name) => `Two stem tracks are named "${name}"`,
+      ),
+      ...parsed.stems.tracks.flatMap((item) =>
+        repeatedNames(item.layers.map((layer) => layer.name)).map(
+          (name) => `Track "${item.name}" has two stem layers named "${name}"`,
+        ),
+      ),
+      ...repeatedNames(recordingNames).map(
+        (recording) => `Two recordings are named "${recording}"`,
+      ),
+      ...parsed.tracks.flatMap((item) => {
+        if (parsed.version === 1 && "kind" in item)
+          return [`A v1 track cannot have a kind`];
+        if (parsed.version === 2 && !("kind" in item))
+          return [`A v2 track needs a kind`];
+        if (
+          "kind" in item &&
+          item.kind === "composed" &&
+          !recordingNames.includes(item.recording)
+        )
+          return [`Track "${item.name}" names no recording`];
+        return [];
+      }),
       ...repeatedNames(trackNames).map(
         (trackName) => `Two tracks are named "${trackName}"`,
       ),
@@ -247,10 +289,12 @@ const remoteManifest = z
           .map((trackName) => `View "${view}" names no track: "${trackName}"`),
       ),
       ...parsed.tracks.flatMap((item) =>
-        stemProblems(
-          item,
-          parsed.stems.tracks.find((stems) => stems.name === item.name),
-        ),
+        "kind" in item && item.kind === "composed"
+          ? []
+          : stemProblems(
+              item,
+              parsed.stems.tracks.find((stems) => stems.name === item.name),
+            ),
       ),
     ];
     for (const message of problems) {
@@ -261,5 +305,11 @@ const remoteManifest = z
 /** Throws, naming what is wrong, on a manifest the engine cannot play. */
 export function parseRemoteManifest(value: unknown): SoundtrackManifest {
   const { tracks, views, stems } = remoteManifest.parse(value);
-  return { tracks, views, stems };
+  return {
+    tracks: tracks.map((item) =>
+      "kind" in item ? item : { ...item, kind: "generative" as const },
+    ),
+    views,
+    stems,
+  };
 }

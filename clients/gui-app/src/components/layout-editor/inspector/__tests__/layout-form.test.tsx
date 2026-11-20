@@ -228,7 +228,7 @@ describe("Find (item 2, item 6)", () => {
     expect(result.textContent).toContain("Chat");
     // No detail matched the query itself, so the second line falls back to
     // Minimap's own current state (its side, under the default arrangement).
-    expect(result.textContent).toContain("Left");
+    expect(result.textContent).toContain("Right");
   });
 
   it("shows the empty-state copy once nothing matches", () => {

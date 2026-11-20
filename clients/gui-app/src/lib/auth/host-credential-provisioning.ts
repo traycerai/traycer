@@ -1,11 +1,10 @@
 import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
-import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
 import type {
   HostCredentialMintFlow,
   HostCredentialMintOutcome,
   HostCredentialMintRequest,
 } from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
-import { appLogger } from "@/lib/logger";
+import { appLogger, describeLogError } from "@/lib/logger";
 
 /**
  * App-wide policy for delegated host-credential provisioning.
@@ -81,6 +80,7 @@ export function resetHostCredentialProvisioning(): void {
   attemptsByHostId.clear();
   awaitingAdoptionByHostId.clear();
   mintBackoffByHostId.clear();
+  mintedBeforeOpenByHostId.clear();
 }
 
 /**
@@ -245,7 +245,12 @@ const PENDING_ADOPTION_TTL_MS = 60_000;
  */
 const awaitingAdoptionByHostId = new Map<
   string,
-  { readonly mintedAt: number; readonly generation: number }
+  {
+    readonly mintedAt: number;
+    readonly generation: number;
+    readonly familyId: string;
+    readonly provisionedAt: string;
+  }
 >();
 
 /**
@@ -328,8 +333,25 @@ interface HostCredentialAttempt {
 
 const attemptsByHostId = new Map<string, HostCredentialAttempt>();
 
+const mintedBeforeOpenByHostId = new Map<
+  string,
+  {
+    readonly generation: number;
+    readonly outcome: Extract<
+      HostCredentialMintOutcome,
+      { readonly kind: "provisioned" }
+    >;
+  }
+>();
+
 export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   const hostId = request.hostId;
+  const mintedBeforeOpen = mintedBeforeOpenByHostId.get(hostId);
+  if (mintedBeforeOpen !== undefined) {
+    mintedBeforeOpenByHostId.delete(hostId);
+    if (mintedBeforeOpen.generation === generation)
+      return Promise.resolve(mintedBeforeOpen.outcome);
+  }
   if (mintAwaitingAdoption(hostId)) {
     // A credential was minted for this host moments ago and has not been seen
     // adopted yet. The ask that brought us here is stale by construction - the
@@ -365,6 +387,9 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   }
   const current = runner;
   if (current === null) {
+    appLogger.info("Host credential mint skipped, no mint runner installed", {
+      hostId,
+    });
     return Promise.resolve({ kind: "unavailable" });
   }
 
@@ -372,7 +397,13 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   // Registered in `attemptsByHostId` BELOW, synchronously, so a second local
   // transport joins this attempt rather than starting its own.
   const settled = current(request)
-    .catch((): HostCredentialMintOutcome => ({ kind: "unavailable" }))
+    .catch((error: unknown): HostCredentialMintOutcome => {
+      appLogger.warn("Host credential mint runner threw", {
+        hostId,
+        error: describeLogError(error),
+      });
+      return { kind: "unavailable" };
+    })
     .then((outcome): HostCredentialMintOutcome => {
       if (generation !== startedAt) {
         // A reset (sign-out, or a switch to another account) overtook this
@@ -381,6 +412,10 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
         // host would reject it anyway - it asserts the access token's `id`
         // matches its own owner-gated identity - but dropping it here keeps a
         // dead 30-day refresh JWE from travelling at all.
+        appLogger.info(
+          "Host credential mint dropped, the signed-in identity changed",
+          { hostId },
+        );
         return { kind: "unavailable" };
       }
       attemptsByHostId.delete(hostId);
@@ -392,6 +427,8 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
         awaitingAdoptionByHostId.set(hostId, {
           mintedAt: Date.now(),
           generation: startedAt,
+          familyId: outcome.familyId,
+          provisionedAt: outcome.provisionedAt,
         });
         recordCompletedMint(hostId);
         return outcome;
@@ -451,31 +488,29 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   return settled.then(claim);
 };
 
+const mintsBeforeOpen = new Map<string, Promise<boolean>>();
+
 /**
- * The member credential a team host spends for the signed-in person, minted
- * through {@link appHostCredentialMintFlow}: the same runner, the same
- * identity-change drop and the same one mint in flight per host. `null` when
- * nothing was minted for this caller, which the remote session logs and goes
- * on from.
- *
- * Every GUI composition that builds a remote session passes this one function:
- * it is not part of the session cache identity, so the first acquirer's value
- * is the one every later consumer of that session inherits.
+ * This computer's own credential, minted before any host-only token can be:
+ * authn answers a computer it has no row for with a bare 404, and minting the
+ * credential is what registers it. `true` when one was minted; it is then
+ * handed to the first transport that opens the computer, which provisions it.
+ * Concurrent asks share one mint.
  */
-export async function mintAppMemberCredential(
-  hostId: string,
-): Promise<MemberCredentialHandoff | null> {
-  const outcome = await appHostCredentialMintFlow({
-    hostId,
-    reason: "missing",
-  });
-  if (outcome.kind !== "provisioned") {
-    return null;
-  }
-  return {
-    token: outcome.token,
-    refreshToken: outcome.refreshToken,
-    familyId: outcome.familyId,
-    provisionedAt: outcome.provisionedAt,
-  };
+export function mintHostCredentialBeforeOpen(hostId: string): Promise<boolean> {
+  const running = mintsBeforeOpen.get(hostId);
+  if (running !== undefined) return running;
+  const startedAt = generation;
+  const attempt = appHostCredentialMintFlow({ hostId, reason: "missing" })
+    .then((outcome) => {
+      if (outcome.kind !== "provisioned" || generation !== startedAt)
+        return false;
+      mintedBeforeOpenByHostId.set(hostId, { generation: startedAt, outcome });
+      return true;
+    })
+    .finally(() => {
+      mintsBeforeOpen.delete(hostId);
+    });
+  mintsBeforeOpen.set(hostId, attempt);
+  return attempt;
 }

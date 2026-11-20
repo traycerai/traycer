@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenMintOutcome,
+} from "@traycer-clients/shared/auth/host-token-source";
+import {
   poolHostDirectoryEntry,
   type HostDirectoryEntry,
   type HostKind,
@@ -15,8 +20,8 @@ import {
  * The jar stream carries the desktop's whole cookie jar, so main never builds
  * one for a sandbox: the Noise session would be held by a machine the user
  * does not own before any refusal could run. These pin that no remote
- * transport is even constructed for a sandbox, and that a personal host's is
- * built on the user bearer. The jar transport is an allowlist of the two
+ * transport is even constructed for a sandbox, and that a personal host's
+ * opens with main's host-only token. The jar transport is an allowlist of the two
  * kinds that are the person's own hosts: the server pool and any kind this
  * build does not know get none.
  */
@@ -70,20 +75,31 @@ const BEARER: BearerSourceProvider = () => ({
   identity: { userId: "user-1" },
 });
 
+const HOST_TOKENS = createHostTokenSource({
+  persistence: createMemoryHostTokenPersistence(),
+  mint: (): Promise<HostTokenMintOutcome> =>
+    Promise.resolve({ kind: "no-sign-in" }),
+  signIn: null,
+  now: () => Date.now(),
+});
+
 const DEPS = {
   authnBaseUrl: () => "https://authn.test",
   bearer: BEARER,
   cloudAuthorized: () => true,
   endpoint: () => null,
   appVersion: "1.5.0",
+  hostTokens: HOST_TOKENS,
 };
 
-function remoteEntry(kind: "personal" | "sandbox"): RemoteHostDirectoryEntry {
+function remoteEntry(
+  kind: "personal" | "sandbox" | "team",
+): RemoteHostDirectoryEntry {
   const item: HostListItem = {
     hostId: "host-r",
     displayName: "Remote",
     platform: "linux",
-    kind,
+    kind: kind === "sandbox" ? "sandbox" : "personal",
     publicKey: "cHVibGljS2V5",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatePolicy: "auto",
@@ -97,6 +113,9 @@ function remoteEntry(kind: "personal" | "sandbox"): RemoteHostDirectoryEntry {
     },
     ...(kind === "sandbox"
       ? { sandboxState: "awake", sandboxFrozen: false, profile: "agent" }
+      : {}),
+    ...(kind === "team"
+      ? { owner: { kind: "team", id: "team-a", name: "Alpha" } }
       : {}),
   };
   return hostListItemToDirectoryEntry(item, "wss://relay.test/attach");
@@ -166,7 +185,18 @@ describe("openBrowserSessionsTransport", () => {
     expect(remote.start).not.toHaveBeenCalled();
   });
 
-  it("builds a personal remote host's transport on the user bearer, and starts it", () => {
+  it("builds no cookie-jar transport for a physical team host", () => {
+    const entry = remoteEntry("team");
+    expect(entry.sandbox).toBeNull();
+
+    const transport = openBrowserSessionsTransport(entry, "user-1", DEPS);
+
+    expect(transport).toBeNull();
+    expect(remote.createRemoteHostTransport).not.toHaveBeenCalled();
+    expect(remote.start).not.toHaveBeenCalled();
+  });
+
+  it("builds a personal remote host's transport on the host-only token, and starts it", () => {
     const transport = openBrowserSessionsTransport(
       remoteEntry("personal"),
       "user-1",
@@ -179,7 +209,7 @@ describe("openBrowserSessionsTransport", () => {
       expect.objectContaining({
         hostId: "host-r",
         userId: "user-1",
-        openAuth: "user-bearer",
+        hostTokens: HOST_TOKENS,
       }),
     );
     expect(remote.start).toHaveBeenCalledTimes(1);

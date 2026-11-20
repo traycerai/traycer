@@ -18,6 +18,10 @@ import {
   type ProfileRateLimitSeverity,
 } from "@/lib/rate-limits/rate-limit-scope-match";
 import { providerCliIdForHarness } from "@/lib/provider-ordering";
+import {
+  useProfileRoutedModels,
+  type ModelForProfile,
+} from "./use-profile-routed-models";
 
 export type { ProfileRateLimitSeverity };
 
@@ -90,7 +94,7 @@ function hiddenPrompt(): HiddenProfileRateLimitPrompt {
 function findLimitedProfile(
   profiles: ReadonlyArray<ProviderProfile>,
   profileId: string | null,
-  selectedModel: ModelOption | null,
+  modelFor: ModelForProfile,
 ): {
   readonly current: ProviderProfile;
   readonly severity: ProfileRateLimitSeverity;
@@ -100,7 +104,10 @@ function findLimitedProfile(
     (profile) => profileCommitId(profile) === profileId,
   );
   if (current === undefined) return null;
-  const severity = effectiveProfileRateLimitSeverity(current, selectedModel);
+  const severity = effectiveProfileRateLimitSeverity(
+    current,
+    modelFor(current),
+  );
   return severity === null ? null : { current, severity };
 }
 
@@ -114,10 +121,10 @@ function findLimitedProfile(
  */
 function selectableDestination(
   profile: ProviderProfile,
-  selectedModel: ModelOption | null,
+  modelFor: ModelForProfile,
   currentSeverity: ProfileRateLimitSeverity,
 ): boolean {
-  const assessment = assessProfileRateLimit(profile, selectedModel);
+  const assessment = assessProfileRateLimit(profile, modelFor(profile));
   return (
     profile.enabled &&
     profile.auth.status === "authenticated" &&
@@ -130,11 +137,14 @@ function selectableDestination(
 /** The stricter confidence gate for the banner's one-click recommendation. */
 function recommendedDestination(
   destination: ProfileRateLimitDestination,
-  selectedModel: ModelOption | null,
+  modelFor: ModelForProfile,
   currentSeverity: ProfileRateLimitSeverity,
 ): boolean {
   if (!destination.selectable) return false;
-  const assessment = assessProfileRateLimit(destination.profile, selectedModel);
+  const assessment = assessProfileRateLimit(
+    destination.profile,
+    modelFor(destination.profile),
+  );
   return (
     assessment.known &&
     rateLimitSeverityTier(assessment.severity) <
@@ -153,14 +163,17 @@ function recommendedDestination(
  */
 function findProbeTarget(
   destinations: ReadonlyArray<ProfileRateLimitDestination>,
-  selectedModel: ModelOption | null,
+  modelFor: ModelForProfile,
 ): ProfileRateLimitDestination | null {
   return (
     destinations.find(
       (destination) =>
         destination.selectable &&
         destination.profile.auth.status === "authenticated" &&
-        !assessProfileRateLimit(destination.profile, selectedModel).known,
+        !assessProfileRateLimit(
+          destination.profile,
+          modelFor(destination.profile),
+        ).known,
     ) ?? null
   );
 }
@@ -190,7 +203,7 @@ export function initialPreviewProfileId(
 function destinationsForLimitedProfile(
   profiles: ReadonlyArray<ProviderProfile>,
   current: ProviderProfile,
-  selectedModel: ModelOption | null,
+  modelFor: ModelForProfile,
   currentSeverity: ProfileRateLimitSeverity,
 ): ReadonlyArray<ProfileRateLimitDestination> {
   return profiles
@@ -198,11 +211,7 @@ function destinationsForLimitedProfile(
     .map((profile) => ({
       profile,
       profileId: profileCommitId(profile),
-      selectable: selectableDestination(
-        profile,
-        selectedModel,
-        currentSeverity,
-      ),
+      selectable: selectableDestination(profile, modelFor, currentSeverity),
     }));
 }
 
@@ -213,10 +222,10 @@ function destinationsForLimitedProfile(
  */
 function limitedFamiliesForCopy(
   current: ProviderProfile,
-  selectedModel: ModelOption | null,
+  modelFor: ModelForProfile,
   severity: ProfileRateLimitSeverity,
 ): ReadonlyArray<string> {
-  const matching = matchingRateLimitScopes(current, selectedModel);
+  const matching = matchingRateLimitScopes(current, modelFor(current));
   if (matching === null || matching.length === 0) return NO_FAMILIES;
   if (!matching.every((scope) => scope.family !== null)) return NO_FAMILIES;
   return [
@@ -233,36 +242,32 @@ function warningProjection(input: {
   readonly providerId: ProviderId | null;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly profileId: string | null;
-  readonly selectedModel: ModelOption | null;
+  readonly modelFor: ModelForProfile;
 }): ProfileRateLimitWarningProjection | null {
   if (input.providerId === null) return null;
   const limited = findLimitedProfile(
     input.profiles,
     input.profileId,
-    input.selectedModel,
+    input.modelFor,
   );
   if (limited === null) return null;
   const destinations = destinationsForLimitedProfile(
     input.profiles,
     limited.current,
-    input.selectedModel,
+    input.modelFor,
     limited.severity,
   );
   const primaryTarget =
     destinations.find((destination) =>
-      recommendedDestination(
-        destination,
-        input.selectedModel,
-        limited.severity,
-      ),
+      recommendedDestination(destination, input.modelFor, limited.severity),
     ) ?? null;
   const probeTarget =
     primaryTarget === null
-      ? findProbeTarget(destinations, input.selectedModel)
+      ? findProbeTarget(destinations, input.modelFor)
       : null;
   const matchingScopes = matchingRateLimitScopes(
     limited.current,
-    input.selectedModel,
+    input.modelFor(limited.current),
   );
   return {
     warningKey: JSON.stringify([
@@ -298,7 +303,7 @@ function warningProjection(input: {
             `${destination.profile.profileId}\u0000${
               recommendedDestination(
                 destination,
-                input.selectedModel,
+                input.modelFor,
                 limited.severity,
               )
                 ? "1"
@@ -311,7 +316,7 @@ function warningProjection(input: {
     severity: limited.severity,
     limitedFamilies: limitedFamiliesForCopy(
       limited.current,
-      input.selectedModel,
+      input.modelFor,
       limited.severity,
     ),
     current: limited.current,
@@ -335,16 +340,24 @@ function warningProjection(input: {
  * with no selectable alternative so the user can inspect profile limits
  * instead of losing the warning entirely.
  *
+ * An alias such as `default` is matched per profile as the model it routes to
+ * in `workingDirectory`, the folder the next run starts its CLI in, when the
+ * host has that evidence (`useProfileRoutedModels`); without it the alias is
+ * gated by every family.
+ *
  * `client` is caller-resolved rather than looked up internally, so each
  * surface can scope the read to the host it actually cares about (e.g. the
  * chat composer's tab host vs. a future landing composer's default host) -
  * mirrors `useResolvedSeededProfileId`'s identical `client` parameter.
+ * `hostId` names that same host.
  */
 export function useProfileRateLimitSwitchPrompt(input: {
   readonly harnessId: GuiHarnessId;
   readonly profileId: string | null;
   readonly selectedModel: ModelOption | null;
+  readonly workingDirectory: string | null;
   readonly active: boolean;
+  readonly hostId: string | null;
   readonly client: HostClient<HostRpcRegistry> | null;
 }): ProfileRateLimitSwitchPrompt {
   const { harnessId, profileId, selectedModel, active, client } = input;
@@ -360,12 +373,21 @@ export function useProfileRateLimitSwitchPrompt(input: {
   const profiles: ReadonlyArray<ProviderProfile> =
     query.data?.providers.find((provider) => provider.providerId === providerId)
       ?.profiles ?? NO_PROFILES;
+  const modelFor = useProfileRoutedModels({
+    hostId: input.hostId,
+    client,
+    providerId,
+    profiles,
+    selectedModel,
+    workingDirectory: input.workingDirectory,
+    active: enabled,
+  });
   const projection = warningProjection({
     harnessId,
     providerId,
     profiles,
     profileId,
-    selectedModel,
+    modelFor,
   });
   const dismissed = useRateLimitSwitchPromptDismissalsStore(
     (state) =>

@@ -216,7 +216,10 @@ function renderStrip(
     createElement(
       QueryClientProvider,
       { client: harness.queryClient },
-      <ChatIndicatorHostScopes scopes={chatIndicatorHostScopes(tabs)}>
+      <ChatIndicatorHostScopes
+        freshnessMode="base"
+        scopes={chatIndicatorHostScopes(tabs)}
+      >
         {tabs.map((tab) => (
           <Probe
             key={`${tab.hostId}:${tab.chatId}`}
@@ -366,6 +369,7 @@ describe("ChatIndicatorHostScopes", () => {
       <QueryClientProvider client={harness.queryClient}>
         <NotificationIndicatorsProvider indicators={inherited}>
           <ChatIndicatorHostScopes
+            freshnessMode="base"
             scopes={chatIndicatorHostScopes([
               { hostId: HOST_A, chatId: "chat-a" },
             ])}

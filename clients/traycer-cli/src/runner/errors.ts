@@ -1,3 +1,4 @@
+import { UpdateHostHomeUnusableError } from "@traycer-clients/shared/host-update/host-home-unusable";
 import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-update-attempt";
 
 // Machine-readable error codes the runner emits in NDJSON `error` events
@@ -65,6 +66,11 @@ export const CLI_ERROR_CODES = {
   WORKTREE_BUSY: "E_WORKTREE_BUSY",
   WORKSPACE_BINDING_REQUIRED: "E_WORKSPACE_BINDING_REQUIRED",
   HOST_STORAGE_FULL: "E_HOST_STORAGE_FULL",
+  ENVIRONMENT_NOT_A_MEMBER: "E_ENVIRONMENT_NOT_A_MEMBER",
+  ENVIRONMENT_SEAT_NOT_ACCEPTED: "E_ENVIRONMENT_SEAT_NOT_ACCEPTED",
+  ENVIRONMENT_SEAT_WITHOUT_WRITE: "E_ENVIRONMENT_SEAT_WITHOUT_WRITE",
+  HOST_IS_SANDBOX: "E_HOST_IS_SANDBOX",
+  HOST_IN_ANOTHER_TEAM: "E_HOST_IN_ANOTHER_TEAM",
   // The host refused a run or launch on a provider the person turned off in
   // Settings -> Providers (HTTP 403, typed `PROVIDER_DISABLED`). Their own
   // setting stops the request and the message names the remedy.
@@ -73,6 +79,8 @@ export const CLI_ERROR_CODES = {
   // --- Auth ---
   AUTH_NO_CREDENTIALS: "E_AUTH_NO_CREDENTIALS",
   AUTH_REJECTED: "E_AUTH_REJECTED",
+  TEAM_MEMBERSHIP_REQUIRED: "E_TEAM_MEMBERSHIP_REQUIRED",
+  TEAM_MEMBERSHIP_UNAVAILABLE: "E_TEAM_MEMBERSHIP_UNAVAILABLE",
   AUTH_NETWORK: "E_AUTH_NETWORK",
 
   // --- Config ---
@@ -136,6 +144,10 @@ export const CLI_ERROR_CODES = {
   // while the command reports success. Retryable once the directory is
   // writable.
   HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
+  // A regular file sits where the host folder (or a folder above it in the
+  // data folder) belongs, so the update lock cannot be taken. Only the person
+  // can clear it; the message names the remedy.
+  HOST_HOME_UNUSABLE: "E_HOST_HOME_UNUSABLE",
   // A plain or `--if-idle` stop asked the service manager to stop the host,
   // and the host running is not the service's: `traycer host start` in a
   // terminal (a `foreground` run). The service stop reached nothing, so the
@@ -298,6 +310,8 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.FORBIDDEN,
     CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
     CLI_ERROR_CODES.AUTH_REJECTED,
+    CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
+    CLI_ERROR_CODES.TEAM_MEMBERSHIP_UNAVAILABLE,
     CLI_ERROR_CODES.AUTH_NETWORK,
     CLI_ERROR_CODES.HOST_NOT_RUNNING,
     CLI_ERROR_CODES.HOST_UNREACHABLE,
@@ -306,6 +320,7 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
     CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
+    CLI_ERROR_CODES.HOST_HOME_UNUSABLE,
     CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
     CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
     CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
@@ -357,6 +372,11 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.WORKTREE_BUSY,
     CLI_ERROR_CODES.WORKSPACE_BINDING_REQUIRED,
     CLI_ERROR_CODES.HOST_STORAGE_FULL,
+    CLI_ERROR_CODES.ENVIRONMENT_NOT_A_MEMBER,
+    CLI_ERROR_CODES.ENVIRONMENT_SEAT_NOT_ACCEPTED,
+    CLI_ERROR_CODES.ENVIRONMENT_SEAT_WITHOUT_WRITE,
+    CLI_ERROR_CODES.HOST_IS_SANDBOX,
+    CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM,
     CLI_ERROR_CODES.PROVIDER_DISABLED,
     CLI_ERROR_CODES.CONFIG_INVALID,
     CLI_ERROR_CODES.CONFIG_INVALID_VALUE,
@@ -410,6 +430,15 @@ export function isErrnoException(
 // their message and a generic UNEXPECTED code; falls back to String().
 export function toCliError(err: unknown): CliError {
   if (err instanceof CliError) return err;
+  if (err instanceof UpdateHostHomeUnusableError) {
+    return new CliError({
+      code: CLI_ERROR_CODES.HOST_HOME_UNUSABLE,
+      message:
+        "Traycer cannot create its host folder because a file is in the way. Rename or remove that file (by default ~/.traycer or ~/.traycer/host), then run this command again.",
+      details: null,
+      exitCode: 1,
+    });
+  }
   if (err instanceof Error) {
     return new CliError({
       code: CLI_ERROR_CODES.UNEXPECTED,

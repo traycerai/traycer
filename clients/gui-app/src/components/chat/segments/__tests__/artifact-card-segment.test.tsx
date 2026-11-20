@@ -77,12 +77,8 @@ const canvas = vi.hoisted(() => ({
   resolveTabIdForEpic: vi.fn(() => "tab-focused-partner"),
 }));
 
-const rawNestedFocus: NavigateNestedFocus = (
-  _epicId,
-  _tabId,
-  prepare,
-  _provenance,
-) => prepare();
+const rawNestedFocus: NavigateNestedFocus = (_epicId, _tabId, prepare) =>
+  prepare();
 
 const dnd = vi.hoisted(() => ({
   draggables: [] as CapturedDraggable[],

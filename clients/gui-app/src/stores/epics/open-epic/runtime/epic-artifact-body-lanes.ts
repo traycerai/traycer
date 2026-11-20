@@ -304,6 +304,17 @@ export function createEpicArtifactBodyLanes(
         // one down would replace a recovery the host is already running with a
         // redial it did not ask for.
         if (event.kind === "doc-unavailable" && event.terminal) {
+          if (event.code === "body-moved") {
+            // Not a refusal: the body lives somewhere else now, and the
+            // reattach is served it there. A reattach is never answered this
+            // code, so reopening at once cannot become a dial per frame.
+            closeLane(artifactId, "superseded");
+            const authorityEpoch = readAuthorityEpoch();
+            if (demand.has(artifactId) && authorityEpoch !== null) {
+              openLane(artifactId, authorityEpoch);
+            }
+            return;
+          }
           refused.add(artifactId);
           // `"superseded"` because that is what happens next: this lane object
           // is retired while its DEMAND outlives it, and the reconcile after

@@ -62,7 +62,7 @@ export function SteerSettingsConflictDialog(
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         layout="banded"
-        className="w-full min-w-0 overflow-hidden"
+        className="flex w-full min-w-0 flex-col overflow-hidden"
         style={{ maxWidth: "min(92vw, 34rem)" }}
         showCloseButton={false}
         data-testid="steer-settings-conflict-dialog"
@@ -86,12 +86,14 @@ export function SteerSettingsConflictDialog(
               ? "End the current turn to send with new settings?"
               : "End the current turn to send this now?"}
           </DialogTitle>
+        </DialogHeader>
+        <div className="min-h-0 overflow-y-auto px-5 py-4">
           <DialogDescription>
             {settingsOnly
               ? `The current turn is running with different ${changeList}. Sending this message now will end the current turn and re-send it under the new settings.`
               : `${reasons.map((reason) => reasonSentence(reason, changed)).join(" ")} Sending it now will end the current turn and start a new one with this message.`}
           </DialogDescription>
-        </DialogHeader>
+        </div>
 
         <DialogFooter className="mt-2">
           <Button

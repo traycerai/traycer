@@ -33,8 +33,10 @@ export function writeRecentWorkspacesCache(
  * Append a folder to the host's recent-workspaces list.
  *
  * New picks use this as fire-and-forget bookkeeping. Moving an active folder
- * awaits the same mutation before removing it from context, because that user
- * action must either complete both halves or leave the active folder intact.
+ * awaits the same mutation before removing it from context. A transport or
+ * write failure rejects, and the caller keeps the active folder. A host that
+ * answers `validation.ok === false` has refused the path, not failed: the
+ * caller removes the folder without it being in Recent.
  *
  * No `mutationKey`: `workspaceMutationKeys.prepareFolders()` is what
  * `useWorkspaceFolderActions` counts to drive its `isPreparing` flag, and
@@ -77,13 +79,13 @@ export function useWorkspaceRecordRecentWorkspace(args: {
       onError: (_error, variables) => {
         if (variables.failureFeedback !== "move_warning") return;
         reportableErrorToast(
-          "Workspace wasn't moved because it couldn't be saved to Recent.",
+          "Folder wasn't moved because it couldn't be saved to Recent.",
           undefined,
           {
-            title: "Could not save recent workspace",
+            title: "Could not save recent folder",
             message: null,
             code: null,
-            source: "Workspace folders",
+            source: "Folders",
           },
         );
       },

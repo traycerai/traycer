@@ -1,4 +1,19 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  readCredentialsFile,
+  writeCredentialsFile,
+} from "@traycer/protocol/config/credentials";
+import {
+  LegacyTeamHost,
+  LEGACY_TEAM,
+} from "../../host/__tests__/legacy-team-host";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -45,6 +60,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 const mocks = vi.hoisted(() => ({
   callOrder: [] as string[],
+  legacyHost: null as LegacyTeamHost | null,
   stageHostInstallSourceMock: vi.fn(),
   commitHostInstallSourceMock: vi.fn(),
   discardStagedHostInstallSourceMock: vi.fn(),
@@ -55,12 +71,45 @@ const mocks = vi.hoisted(() => ({
   serviceLabelForMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
   resolveHostAuthMock: vi.fn(),
+  validateIdentityMock: vi.fn(),
+  createStoreBackedRevalidatorMock: vi.fn(),
+  readHostOwnershipMock: vi.fn(),
   runDeviceAuthFlowMock: vi.fn(),
   provisionInstalledHostCredentialMock: vi.fn(),
   gateStoreFormatFloorMock: vi.fn(),
   readInstalledFloorOperandsMock: vi.fn(),
   publishHostStartAdoptionMock: vi.fn(),
+  completeTeamInstallMock: vi.fn(),
+  teamTokenPreparationMock: vi.fn(),
+  waitForTeamTokenInstallMock: vi.fn(),
 }));
+
+vi.mock("../../internal/host-rpc", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../internal/host-rpc")>();
+  return {
+    ...actual,
+    resolveEndpoint: async () => ({
+      hostId: "host-local",
+      websocketUrl: "ws://127.0.0.1:1/rpc",
+    }),
+    callHostRpcAtResolvedEndpoint: (
+      ...callArgs: Parameters<typeof actual.callHostRpcAtResolvedEndpoint>
+    ) => {
+      if (mocks.legacyHost === null)
+        throw new Error("No legacy host configured");
+      return mocks.legacyHost.request(callArgs[0], callArgs[1], callArgs[4]);
+    },
+    callHostRpc: async () => ({ environments: [LEGACY_TEAM] }),
+    callHostRpcWithDispatch: (
+      ...callArgs: Parameters<typeof actual.callHostRpcWithDispatch>
+    ) => {
+      if (mocks.legacyHost === null)
+        throw new Error("No legacy host configured");
+      return mocks.legacyHost.request(...callArgs);
+    },
+  };
+});
 
 vi.mock("../../installer", () => ({
   // The two swap barriers this command observes: none. Inlined rather than
@@ -192,6 +241,49 @@ vi.mock("../../internal/host-auth", () => ({
   },
 }));
 
+vi.mock("../../../../shared/auth/auth-validation", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../shared/auth/auth-validation")
+    >();
+  return {
+    ...actual,
+    validateAuthTokenIdentityAccessOnly: (
+      ...callArgs: Parameters<typeof mocks.validateIdentityMock>
+    ) => {
+      mocks.callOrder.push("sign-in-list-read");
+      return mocks.validateIdentityMock(...callArgs);
+    },
+  };
+});
+
+vi.mock("../../store/credentials-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/credentials-store")>();
+  return {
+    ...actual,
+    createStoreBackedRevalidator: (
+      ...callArgs: Parameters<typeof actual.createStoreBackedRevalidator>
+    ) => mocks.createStoreBackedRevalidatorMock(...callArgs),
+  };
+});
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-ownership",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-ownership")
+      >();
+    return {
+      ...actual,
+      readHostOwnershipViaHttp: (
+        ...callArgs: Parameters<typeof actual.readHostOwnershipViaHttp>
+      ) => mocks.readHostOwnershipMock(...callArgs),
+    };
+  },
+);
+
 vi.mock("../../auth/login-flow", () => ({
   runDeviceAuthFlow: async (
     ...callArgs: Parameters<typeof mocks.runDeviceAuthFlowMock>
@@ -231,6 +323,56 @@ vi.mock("../../host/host-start-adoption", () => ({
   },
 }));
 
+// Keep command activation real while the token file and receipt I/O have
+// their own helper suite.
+vi.mock("../../host/team-install-token", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/team-install-token")>();
+  return {
+    ...actual,
+    withTeamTokenInstall: async (
+      ...[environment, environmentId, piped, readToken, run]: Parameters<
+        typeof actual.withTeamTokenInstall
+      >
+    ) => {
+      if (environmentId === null) return run(null);
+      mocks.callOrder.push("team-token-prepare");
+      const prepared: PreparedTeamTokenInstall | null =
+        await mocks.teamTokenPreparationMock(
+          environment,
+          environmentId,
+          piped,
+          readToken,
+        );
+      if (prepared === null) return run(null);
+      try {
+        return await run(prepared);
+      } finally {
+        mocks.callOrder.push("team-token-finished");
+      }
+    },
+    waitForTeamTokenInstall: (
+      ...callArgs: Parameters<typeof actual.waitForTeamTokenInstall>
+    ) => {
+      mocks.callOrder.push("team-token-wait");
+      return mocks.waitForTeamTokenInstallMock(...callArgs);
+    },
+  };
+});
+
+// Keep the command's branch under test while the lower-level team auth and
+// binding flow has its own real-filesystem coverage in team-install-auth.test.
+vi.mock("../../host/install-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/install-auth")>();
+  return {
+    ...actual,
+    completeTeamInstall: (
+      ...callArgs: Parameters<typeof actual.completeTeamInstall>
+    ) => mocks.completeTeamInstallMock(...callArgs),
+  };
+});
+
 vi.mock("../../store/cli-lock", () => ({
   withCliLock: async (
     _opts: unknown,
@@ -252,15 +394,43 @@ vi.mock("../../store/cli-lock", () => ({
 }));
 
 import { buildHostInstallCommand, type HostInstallArgs } from "../host-install";
+import * as installAuthModule from "../../host/install-auth";
+import type { PreparedTeamTokenInstall } from "../../host/team-install-token";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import type { HostInstallRecord } from "../../manifest/host-install";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import {
   NO_INSTALL_PHASE_HOOKS,
   type StagedHostInstallSource,
 } from "../../installer";
 import type { ServiceInstallLifecycleHandle } from "../../service/install-lifecycle";
-import { hostHomeDir } from "../../store/paths";
+import {
+  cliCredentialsPath,
+  hostEnrollmentRecordPath,
+  hostHomeDir,
+  hostTeamInstallTokenPath,
+} from "../../store/paths";
+import {
+  AUTHN_UNREACHABLE_SENTENCE,
+  type InlineSignIn,
+  inlineSignIn,
+  inlineSignInCredentials,
+  MINT_FAILURES,
+  MINT_URL,
+  MINTED_ENVIRONMENT_ID,
+  MINTED_TOKEN,
+  MINTED_TOKEN_FILE,
+  mintedAnswer,
+  RETAINED_SIGN_IN_WARNING,
+  registerHostOnMachine,
+  signedInAcmeUser,
+  signedInNonMemberUser,
+  stagedTeamTokenFile,
+  stubMintAnswer,
+  TEAM_INSTALL_ROADS,
+  TEAM_SLUG_SENTENCE,
+} from "../../host/__tests__/team-install-fixtures";
 
 beforeAll(() => {
   expect(osHome.current).not.toBe("");
@@ -290,6 +460,20 @@ function sampleRecord(version: string): HostInstallRecord {
 }
 
 const stagedFixtureRoots: string[] = [];
+
+const teamBindingFixture = {
+  hostId: "host-local",
+  environment: {
+    environmentId: "environment-acme",
+    ownerKind: "organization",
+    ownerId: "organization-acme",
+    roomId: "room-acme",
+    label: "Acme",
+  },
+  explicit: true,
+  enrolledByUserId: "member-1",
+  canUnbind: true,
+} satisfies EnvironmentHostBinding;
 
 function sampleStaged(): StagedHostInstallSource {
   const fixtureRoot = mkdtempSync(
@@ -340,6 +524,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
 
 function baseArgs(overrides: Partial<HostInstallArgs>): HostInstallArgs {
   return {
+    team: null,
     versionRequest: "2.0.0",
     fromPath: null,
     enableLinger: true,
@@ -414,8 +599,25 @@ function setStdoutIsTTY(value: boolean): void {
   });
 }
 
+function inlineSignInDeviceFlow(token: string): () => Promise<InlineSignIn> {
+  return async () => {
+    mocks.resolveHostAuthMock.mockResolvedValue({
+      token,
+      authnBaseUrl: "https://authn.test",
+      userId: "test-person",
+    });
+    await writeCredentialsFile(
+      cliCredentialsPath("production"),
+      inlineSignInCredentials(token),
+      0,
+    );
+    return inlineSignIn(token);
+  };
+}
+
 describe("buildHostInstallCommand", () => {
   beforeEach(() => {
+    mocks.legacyHost = null;
     // Default stand-ins so the bytes-only branch (which now calls these
     // directly) never falls through to the real, side-effecting
     // implementations. `resetAllMocks` in `afterEach` wipes these between
@@ -469,6 +671,16 @@ describe("buildHostInstallCommand", () => {
       acceptStoreFormatLoss: false,
       site: "host install",
     });
+    mocks.validateIdentityMock.mockResolvedValue({
+      kind: "valid",
+      user: signedInAcmeUser(),
+    });
+    mocks.completeTeamInstallMock.mockResolvedValue(teamBindingFixture);
+    mocks.teamTokenPreparationMock.mockResolvedValue(null);
+    mocks.waitForTeamTokenInstallMock.mockResolvedValue({
+      hostId: "host-local",
+      environmentId: "environment-acme",
+    });
   });
 
   afterEach(() => {
@@ -476,7 +688,10 @@ describe("buildHostInstallCommand", () => {
     // mockRejectedValue configured in one test can't leak into the next -
     // matches host-update.test.ts's convention.
     vi.resetAllMocks();
+    vi.unstubAllGlobals();
     mocks.callOrder = [];
+    rmSync(hostEnrollmentRecordPath("production"), { force: true });
+    rmSync(hostTeamInstallTokenPath("production"), { force: true });
     for (const fixtureRoot of stagedFixtureRoots.splice(0)) {
       rmSync(fixtureRoot, { recursive: true, force: true });
     }
@@ -518,6 +733,604 @@ describe("buildHostInstallCommand", () => {
       "auth-resolve",
       "credential-provision",
     ]);
+  });
+
+  it("sends a successful --team install on a machine with a registered host through the shared team completion step", async () => {
+    registerHostOnMachine();
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+
+    const ctx = fakeCtx();
+    const result = await buildHostInstallCommand(
+      baseArgs({ team: "team/acme" }),
+    )(ctx);
+
+    expect(result.data).toMatchObject({ teamBinding: teamBindingFixture });
+
+    expect(mocks.completeTeamInstallMock).toHaveBeenCalledWith(
+      "team/acme",
+      expect.objectContaining({
+        preflight: { state: "signed-in", reason: null },
+        inlineSignInToken: null,
+      }),
+      ctx.progress,
+    );
+    expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeLessThan(
+      mocks.callOrder.indexOf("stage"),
+    );
+  });
+
+  it.each(
+    [
+      {
+        label: "a person who belongs to no team",
+        user: signedInNonMemberUser,
+        team: "team/acme",
+      },
+      {
+        label: "a member who mistypes the slug",
+        user: signedInAcmeUser,
+        team: "team/acmee",
+      },
+    ].flatMap((teamCase) =>
+      TEAM_INSTALL_ROADS.map((road) => ({ ...teamCase, ...road })),
+    ),
+  )(
+    "stops --team for $label on $road before anything is installed",
+    async ({ user, team, hostRegistered }) => {
+      if (hostRegistered) registerHostOnMachine();
+      const mintRequests = stubMintAnswer(() => null);
+      mocks.validateIdentityMock.mockResolvedValue({
+        kind: "valid",
+        user: user(),
+      });
+      mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+      mocks.createServiceInstallLifecycleMock.mockReturnValue(
+        sampleLifecycleHandle(),
+      );
+
+      await expect(
+        buildHostInstallCommand(baseArgs({ team }))(fakeCtx()),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: TEAM_SLUG_SENTENCE,
+        exitCode: 1,
+      });
+
+      expect(mocks.callOrder).not.toContain("stage");
+      expect(mocks.callOrder).not.toContain("commit");
+      expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+      expect(mocks.createBytesOnlyInstallLifecycleMock).not.toHaveBeenCalled();
+      expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+      expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
+      expect(mocks.legacyHost).toBeNull();
+      expect(mintRequests).toEqual([]);
+      expect(stagedTeamTokenFile()).toBeNull();
+    },
+  );
+
+  it.each(TEAM_INSTALL_ROADS)(
+    "stops --team on $road before anything is installed when the sign-in's teams cannot be read",
+    async ({ hostRegistered }) => {
+      if (hostRegistered) registerHostOnMachine();
+      const mintRequests = stubMintAnswer(() => null);
+      mocks.validateIdentityMock.mockResolvedValue({ kind: "network-error" });
+      mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+
+      await expect(
+        buildHostInstallCommand(baseArgs({ team: "team/acme" }))(fakeCtx()),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: AUTHN_UNREACHABLE_SENTENCE,
+        exitCode: 1,
+      });
+
+      expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+      expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+      expect(mintRequests).toEqual([]);
+      expect(stagedTeamTokenFile()).toBeNull();
+    },
+  );
+
+  it("uses a prepared team token before auth, waits after commit, and returns only the target receipt", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "e".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    const receipt = {
+      hostId: "host-local",
+      environmentId: "environment-acme",
+    };
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
+    mocks.waitForTeamTokenInstallMock.mockResolvedValue(receipt);
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+    const signInPreflight = vi.spyOn(installAuthModule, "runSignInPreflight");
+    const personalProvision = vi.spyOn(
+      installAuthModule,
+      "maybeProvisionCredential",
+    );
+
+    const result = await buildHostInstallCommand(
+      baseArgs({ team: "environment-acme" }),
+    )(fakeCtx());
+
+    expect(mocks.callOrder).toEqual([
+      "team-token-prepare",
+      "stage",
+      "lock-enter",
+      "commit",
+      "lock-exit",
+      "team-token-wait",
+      "team-token-finished",
+    ]);
+    expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
+      "production",
+      prepared,
+      60_000,
+    );
+    expect(signInPreflight).not.toHaveBeenCalled();
+    expect(personalProvision).not.toHaveBeenCalled();
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+    expect(result.data).toMatchObject({ teamInstallReceipt: receipt });
+    expect(JSON.stringify(result.data)).not.toContain(prepared.tokenHash);
+    expect(JSON.stringify(result.data)).not.toContain('"token"');
+  });
+
+  it("reports that a token install is still being confirmed before waiting for its receipt", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "c".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    const receipt = {
+      hostId: "host-local",
+      environmentId: "environment-acme",
+    };
+    const ctx = fakeCtx();
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+    mocks.waitForTeamTokenInstallMock.mockImplementation(async () => {
+      expect(ctx.progress).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stage: "host-team",
+          message: "Waiting for this computer to join the team…",
+        }),
+      );
+      return receipt;
+    });
+
+    await buildHostInstallCommand(baseArgs({ team: "environment-acme" }))(ctx);
+
+    expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a failing install inside the team-token operation before any receipt wait", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "f".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.stageHostInstallSourceMock.mockRejectedValue(
+      new Error("token-path staging failed"),
+    );
+
+    await expect(
+      buildHostInstallCommand(baseArgs({ team: "environment-acme" }))(
+        fakeCtx(),
+      ),
+    ).rejects.toThrow("token-path staging failed");
+
+    expect(mocks.callOrder.at(-1)).toBe("team-token-finished");
+    expect(mocks.waitForTeamTokenInstallMock).not.toHaveBeenCalled();
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates a team-token receipt timeout after the install commits", async () => {
+    const prepared = {
+      environmentId: "environment-acme",
+      tokenHash: "b".repeat(64),
+    } satisfies PreparedTeamTokenInstall;
+    mocks.teamTokenPreparationMock.mockResolvedValue(prepared);
+    mocks.waitForTeamTokenInstallMock.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: "team install receipt deadline reached",
+        details: null,
+        exitCode: 1,
+      }),
+    );
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+
+    await expect(
+      buildHostInstallCommand(baseArgs({ team: "environment-acme" }))(
+        fakeCtx(),
+      ),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.AUTH_REJECTED });
+    expect(mocks.callOrder).toEqual([
+      "team-token-prepare",
+      "stage",
+      "lock-enter",
+      "commit",
+      "lock-exit",
+      "team-token-wait",
+      "team-token-finished",
+    ]);
+    expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+  });
+
+  it("the CLI does not send a team target to a host that cannot transfer", async () => {
+    registerHostOnMachine();
+    mocks.resolveHostAuthMock.mockResolvedValue({
+      token: "test-token",
+      authnBaseUrl: "https://authn.test",
+      userId: "user-1",
+    });
+    mocks.validateIdentityMock.mockResolvedValue({
+      kind: "valid",
+      user: signedInAcmeUser(),
+    });
+    mocks.readHostOwnershipMock.mockResolvedValue({
+      kind: "ok",
+      host: {
+        hostId: "host-local",
+        owner: { kind: "user", id: "user-1" },
+        kind: "personal",
+        remoteAccess: false,
+      },
+    });
+    const legacyHost = new LegacyTeamHost();
+    mocks.legacyHost = legacyHost;
+    const actual = await vi.importActual<
+      typeof import("../../host/install-auth")
+    >("../../host/install-auth");
+    mocks.completeTeamInstallMock.mockImplementation(
+      actual.completeTeamInstall,
+    );
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "install-compat",
+    });
+
+    const ctx = fakeCtx();
+    await expect(
+      buildHostInstallCommand(baseArgs({ team: "acme" }))(ctx),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+      message: expect.stringContaining("traycer host update"),
+    });
+    expect(mocks.validateIdentityMock).toHaveBeenCalledTimes(2);
+    expect(legacyHost.requests).toEqual([]);
+    expect(ctx.progress).not.toHaveBeenCalledWith(
+      expect.objectContaining({ stage: "host-team" }),
+    );
+  });
+
+  it.each(["stage", "transfer", "post-swap"] as const)(
+    "warns about the retained sign-in when team install fails at %s through the real credentials file",
+    async (failure) => {
+      registerHostOnMachine();
+      setStdoutIsTTY(true);
+      mocks.resolveHostAuthMock.mockResolvedValue(null);
+      const token = `retained-install-${failure}`;
+      mocks.runDeviceAuthFlowMock.mockImplementation(
+        inlineSignInDeviceFlow(token),
+      );
+      const handle = sampleLifecycleHandle();
+      if (failure === "stage")
+        mocks.stageHostInstallSourceMock.mockRejectedValue(
+          new Error("stage failed"),
+        );
+      else mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+      if (failure === "transfer")
+        mocks.completeTeamInstallMock.mockRejectedValue(
+          new Error("transfer failed"),
+        );
+      if (failure === "post-swap") handle.state.postSwapError = "start failed";
+      mocks.createServiceInstallLifecycleMock.mockReturnValue(handle);
+      mocks.commitHostInstallSourceMock.mockResolvedValue({
+        record: sampleRecord("2.0.0"),
+        previous: null,
+        installGeneration: "install-warning",
+      });
+      const ctx = fakeCtx();
+      const pending = buildHostInstallCommand(baseArgs({ team: "acme" }))(ctx);
+      if (failure === "post-swap")
+        await expect(pending).resolves.toMatchObject({ exitCode: 1 });
+      else await expect(pending).rejects.toThrow(`${failure} failed`);
+      expect(
+        (await readCredentialsFile(cliCredentialsPath("production")))?.token,
+      ).toBe(token);
+      expect(ctx.output.humanRequired).toHaveBeenCalledWith(
+        RETAINED_SIGN_IN_WARNING,
+      );
+    },
+  );
+
+  it("passes the inline-created sign-in token into team completion", async () => {
+    registerHostOnMachine();
+    mocks.resolveHostAuthMock.mockResolvedValue(null);
+    mocks.runDeviceAuthFlowMock.mockImplementation(() => {
+      mocks.resolveHostAuthMock.mockResolvedValue({
+        token: "inline-team-token",
+        authnBaseUrl: "https://authn.test",
+        userId: "member-1",
+      });
+      return Promise.resolve({
+        token: "inline-team-token",
+        user: { id: "member-1", email: "member@example.test", name: "Member" },
+        authnBaseUrl: "https://authn.test",
+      });
+    });
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    mocks.createServiceInstallLifecycleMock.mockReturnValue(
+      sampleLifecycleHandle(),
+    );
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: null,
+      installGeneration: "id:install-2.0.0",
+    });
+    setStdoutIsTTY(true);
+
+    const ctx = fakeCtx();
+    await buildHostInstallCommand(baseArgs({ team: "acme" }))(ctx);
+
+    expect(mocks.completeTeamInstallMock).toHaveBeenCalledWith(
+      "acme",
+      expect.objectContaining({ inlineSignInToken: "inline-team-token" }),
+      ctx.progress,
+    );
+  });
+
+  it("signed out + noninteractive --team refuses before any staged bytes exist", async () => {
+    mocks.resolveHostAuthMock.mockResolvedValue(null);
+    const fixtureRoot = mkdtempSync(
+      join(tmpdir(), "traycer-team-install-preflight-"),
+    );
+    const stagedBytesPath = join(fixtureRoot, "staged-host-bytes");
+    mocks.stageHostInstallSourceMock.mockImplementation(async () => {
+      writeFileSync(stagedBytesPath, "host archive");
+      return sampleStaged();
+    });
+
+    try {
+      await expect(
+        buildHostInstallCommand(baseArgs({ team: "acme" }))(
+          fakeCtxWithRuntime({ nonInteractive: true, json: true }),
+        ),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS });
+
+      expect(existsSync(stagedBytesPath)).toBe(false);
+      expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  describe("--team on a machine with no host yet", () => {
+    it("mints by the resolved environment id and stages the token before download or start, with no personal credential, transfer or restart", async () => {
+      const mintRequests = stubMintAnswer(mintedAnswer);
+      const inlineToken = "inline-enrol-success";
+      setStdoutIsTTY(true);
+      mocks.resolveHostAuthMock.mockResolvedValue(null);
+      mocks.runDeviceAuthFlowMock.mockImplementation(
+        inlineSignInDeviceFlow(inlineToken),
+      );
+      mocks.validateIdentityMock.mockResolvedValue({
+        kind: "valid",
+        user: signedInAcmeUser(),
+      });
+      const tokenFileWhen: { at: string; file: string | null }[] = [];
+      mocks.stageHostInstallSourceMock.mockImplementation(() => {
+        tokenFileWhen.push({ at: "stage", file: stagedTeamTokenFile() });
+        return Promise.resolve(sampleStaged());
+      });
+      mocks.createServiceInstallLifecycleMock.mockReturnValue(
+        sampleLifecycleHandle(),
+      );
+      mocks.commitHostInstallSourceMock.mockImplementation(() => {
+        tokenFileWhen.push({ at: "start", file: stagedTeamTokenFile() });
+        return Promise.resolve({
+          record: sampleRecord("2.0.0"),
+          previous: null,
+          installGeneration: "id:install-2.0.0",
+        });
+      });
+      const receipt = {
+        hostId: "host-local",
+        environmentId: MINTED_ENVIRONMENT_ID,
+      };
+      mocks.waitForTeamTokenInstallMock.mockResolvedValue(receipt);
+
+      const ctx = fakeCtx();
+      const result = await buildHostInstallCommand(
+        baseArgs({ team: "team/acme" }),
+      )(ctx);
+
+      expect(mintRequests).toEqual([
+        {
+          url: MINT_URL,
+          authorization: `Bearer ${inlineToken}`,
+          body: { environmentId: MINTED_ENVIRONMENT_ID },
+        },
+      ]);
+      expect(tokenFileWhen).toEqual([
+        { at: "stage", file: MINTED_TOKEN_FILE },
+        { at: "start", file: MINTED_TOKEN_FILE },
+      ]);
+      expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeGreaterThan(-1);
+      expect(mocks.callOrder.indexOf("sign-in-list-read")).toBeLessThan(
+        mocks.callOrder.indexOf("stage"),
+      );
+      expect(mocks.callOrder.indexOf("team-token-wait")).toBeGreaterThan(
+        mocks.callOrder.indexOf("commit"),
+      );
+      expect(mocks.waitForTeamTokenInstallMock).toHaveBeenCalledWith(
+        "production",
+        {
+          environmentId: MINTED_ENVIRONMENT_ID,
+          tokenHash: createHash("sha256").update(MINTED_TOKEN).digest("hex"),
+        },
+        60_000,
+      );
+      expect(result.human).toContain("This computer belongs to acme.");
+      expect(result.exitCode).toBe(0);
+      expect(result.data).toMatchObject({
+        teamBinding: null,
+        teamInstallReceipt: receipt,
+      });
+      expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
+      expect(mocks.callOrder).not.toContain("credential-provision");
+      expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+      expect(mocks.legacyHost).toBeNull();
+      expect(ctx.progress).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("Restarting Traycer"),
+        }),
+      );
+      expect(JSON.stringify(result)).not.toContain(MINTED_TOKEN);
+      expect(
+        JSON.stringify(vi.mocked(ctx.output.human).mock.calls),
+      ).not.toContain(MINTED_TOKEN);
+      expect(ctx.output.humanRequired).not.toHaveBeenCalledWith(
+        RETAINED_SIGN_IN_WARNING,
+      );
+    });
+
+    it.each(MINT_FAILURES)(
+      "stops before anything is installed when $label at the token's mint",
+      async ({ answer, error }) => {
+        const mintRequests = stubMintAnswer(answer);
+        mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+        mocks.createServiceInstallLifecycleMock.mockReturnValue(
+          sampleLifecycleHandle(),
+        );
+
+        await expect(
+          buildHostInstallCommand(baseArgs({ team: "acme" }))(fakeCtx()),
+        ).rejects.toMatchObject({ ...error, exitCode: 1 });
+
+        expect(mintRequests).toHaveLength(1);
+        expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+        expect(mocks.createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+        expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+        expect(mocks.completeTeamInstallMock).not.toHaveBeenCalled();
+        expect(
+          mocks.provisionInstalledHostCredentialMock,
+        ).not.toHaveBeenCalled();
+        expect(stagedTeamTokenFile()).toBeNull();
+      },
+    );
+
+    it("reminds about an inline-created sign-in when staging fails after the token was staged", async () => {
+      const inlineToken = "inline-enrol-stage-failure";
+      setStdoutIsTTY(true);
+      mocks.resolveHostAuthMock.mockResolvedValue(null);
+      mocks.runDeviceAuthFlowMock.mockImplementation(
+        inlineSignInDeviceFlow(inlineToken),
+      );
+      mocks.validateIdentityMock.mockResolvedValue({
+        kind: "valid",
+        user: signedInAcmeUser(),
+      });
+      const mintRequests = stubMintAnswer(mintedAnswer);
+      mocks.createServiceInstallLifecycleMock.mockReturnValue(
+        sampleLifecycleHandle(),
+      );
+      mocks.stageHostInstallSourceMock.mockRejectedValue(
+        new Error("host download staging failed"),
+      );
+      const ctx = fakeCtx();
+
+      await expect(
+        buildHostInstallCommand(baseArgs({ team: "acme" }))(ctx),
+      ).rejects.toThrow("host download staging failed");
+
+      expect(mintRequests).toHaveLength(1);
+      expect(mocks.callOrder).toContain("stage");
+      expect(mocks.commitHostInstallSourceMock).not.toHaveBeenCalled();
+      expect(mocks.createServiceInstallLifecycleMock).toHaveBeenCalledTimes(1);
+      expect(mocks.waitForTeamTokenInstallMock).not.toHaveBeenCalled();
+      expect(stagedTeamTokenFile()).toBeNull();
+      expect(ctx.output.humanRequired).toHaveBeenCalledWith(
+        RETAINED_SIGN_IN_WARNING,
+      );
+      expect(
+        (await readCredentialsFile(cliCredentialsPath("production")))?.token,
+      ).toBe(inlineToken);
+    });
+
+    it("reminds a person who signed in inline that the sign-in stays when the team is refused", async () => {
+      setStdoutIsTTY(true);
+      mocks.resolveHostAuthMock.mockResolvedValue(null);
+      mocks.runDeviceAuthFlowMock.mockImplementation(
+        inlineSignInDeviceFlow("retained-refused-team"),
+      );
+      mocks.validateIdentityMock.mockResolvedValue({
+        kind: "valid",
+        user: signedInNonMemberUser(),
+      });
+      const mintRequests = stubMintAnswer(() => null);
+      mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+
+      const ctx = fakeCtx();
+      await expect(
+        buildHostInstallCommand(baseArgs({ team: "acme" }))(ctx),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+        message: TEAM_SLUG_SENTENCE,
+      });
+
+      expect(ctx.output.humanRequired).toHaveBeenCalledWith(
+        RETAINED_SIGN_IN_WARNING,
+      );
+      expect(mintRequests).toEqual([]);
+      expect(mocks.stageHostInstallSourceMock).not.toHaveBeenCalled();
+    });
   });
 
   // Every existing fixture in this file passes `lifecycleOrigin:

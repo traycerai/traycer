@@ -5,7 +5,8 @@
  * closure could silently break while every single-plane unit test still
  * passes.
  *
- * 1. A viewer-role snapshot tears down every artifact room AND republishes
+ * 1. A snapshot naming no writable role (a role nothing recognises decodes to
+ *    none; a `viewer` role decodes to `editor` and keeps its rooms) tears down every artifact room AND republishes
  *    divergence (`epic-replica-runtime.ts`'s `applyRootSnapshot`: `if
  *    (!control.facts.isWritableRole()) { rooms.dropAllOnViewerDowngrade();
  *    records.publishDivergence(); return; }`).
@@ -41,6 +42,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import type { WirePermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
@@ -67,11 +69,13 @@ function emptySnapshot(): Uint8Array {
 }
 
 function buildMeta(
-  role: "owner" | "editor" | "viewer" | null,
+  role: WirePermissionRole | "supervisor" | null,
   hostDoc: Y.Doc | null,
 ): SnapshotMetaEpic {
   const nextHostDoc = hostDoc === null ? new Y.Doc() : hostDoc;
-  return {
+  // `"supervisor"` stands for a role nothing recognises. It never parses on the
+  // wire, so it is handed over the way a decoder that let it through would.
+  const meta: SnapshotMetaEpic = {
     schemaVersion: "1.0",
     epicLight:
       role === null
@@ -90,7 +94,7 @@ function buildMeta(
             createdBy: "u",
             version: "1",
           },
-    permissionRole: role,
+    permissionRole: null,
     repos: [],
     workspaces: [],
     repoMapping: [],
@@ -98,6 +102,7 @@ function buildMeta(
     unresolvedRepos: [],
     hostStateVectorBase64: stateVectorBase64(nextHostDoc),
   };
+  return Object.assign(meta, { permissionRole: role });
 }
 
 function seedRootArtifactWithArtifactRoom(
@@ -285,7 +290,7 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     useAuthStore.getState().setSignedOut();
   });
 
-  it("a viewer-role snapshot tears down every artifact room and republishes divergence", async () => {
+  it("a snapshot naming a role nothing recognises tears down every artifact room and republishes divergence", async () => {
     const { factory, handle: streamHandle } = fakeFactory();
     handle = openStoreForTest({
       epicId: "epic-viewer-teardown",
@@ -338,17 +343,18 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     });
     expect(opened.store.getState().isDirty).toBe(true);
 
-    // A reconnect snapshot that downgrades the role to viewer. Per
+    // A reconnect snapshot naming a role nothing recognises, which decodes to no
+    // role. Per
     // `applyRootSnapshot`, an unwritable role fails closed: every room is
     // torn down (`rooms.dropAllOnViewerDowngrade()`), unconditionally, and
     // divergence is republished (`records.publishDivergence()`) - so the
     // now-empty room set clears the room-side contribution to `isDirty`.
     streamHandle().callbacks.onSnapshot(
-      buildMeta("viewer", donor),
+      buildMeta("supervisor", donor),
       Y.encodeStateAsUpdate(donor),
     );
 
-    expect(opened.store.getState().permissionRole).toBe("viewer");
+    expect(opened.store.getState().permissionRole).toBeNull();
     expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
     expect(opened.store.getState().isDirty).toBe(false);
     expect(opened.store.getState().unsyncedQueueSize).toBe(0);
@@ -372,6 +378,61 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     expect(
       opened.store.getState().artifactRooms.stateByArtifactId["art-1"],
     ).not.toBe("ready");
+  });
+
+  it("a snapshot naming viewer reads as editor: it keeps every artifact room and its offline edit", async () => {
+    const { factory, handle: streamHandle } = fakeFactory();
+    handle = openStoreForTest({
+      epicId: "epic-viewer-keeps-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const opened = handle;
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    streamHandle().callbacks.onConnectionStatus("open", null, false, null);
+    streamHandle().callbacks.onSnapshot(
+      buildMeta("editor", donor),
+      Y.encodeStateAsUpdate(donor),
+    );
+    streamHandle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      emptySnapshot(),
+      stateVectorBase64(new Y.Doc()),
+    );
+
+    const fragmentDoc = await leasedFragmentDoc(opened, "art-1");
+    expect(opened.hotArtifactRoomIdsForTests()).toEqual(["artifact-room-0"]);
+
+    streamHandle().callbacks.onConnectionStatus(
+      "reconnecting",
+      null,
+      false,
+      null,
+    );
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("offline").set("k", "v");
+    });
+    expect(opened.store.getState().isDirty).toBe(true);
+
+    // The same reconnect snapshot, naming viewer. It decodes to `editor`, so
+    // nothing is torn down: the room stays hot and the edit stays queued.
+    streamHandle().callbacks.onSnapshot(
+      buildMeta("viewer", donor),
+      Y.encodeStateAsUpdate(donor),
+    );
+
+    expect(opened.store.getState().permissionRole).toBe("editor");
+    expect(opened.hotArtifactRoomIdsForTests()).toEqual(["artifact-room-0"]);
+    expect(
+      opened.store.getState().artifactRooms.stateByArtifactId["art-1"],
+    ).toBe("ready");
+    expect(opened.store.getState().isDirty).toBe(true);
   });
 
   it("requestFreshSnapshot closes the socket before coverage is cleared and reopens after, so the reattach offer is null", () => {

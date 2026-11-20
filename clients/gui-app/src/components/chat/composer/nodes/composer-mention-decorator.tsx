@@ -5,6 +5,7 @@ import {
   GitBranch,
   GitPullRequest,
   Layers,
+  Monitor,
 } from "lucide-react";
 import type { ReactElement } from "react";
 import type {
@@ -53,6 +54,11 @@ function DecoratorIcon({
   if (mention.contextType === "folder") {
     return (
       <Folder className={cn(className, "text-muted-foreground")} aria-hidden />
+    );
+  }
+  if (mention.contextType === "host") {
+    return (
+      <Monitor className={cn(className, "text-muted-foreground")} aria-hidden />
     );
   }
   if (mention.contextType === "worktree") {

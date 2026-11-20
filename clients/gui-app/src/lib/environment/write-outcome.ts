@@ -1,5 +1,5 @@
 import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
-import type { EnvironmentWriteOutcome } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentLocalWriteOutcome } from "@traycer/protocol/host/environment-schemas";
 import { toast } from "sonner";
 import { staleWriteMessage } from "@/lib/environment/stale-write";
 
@@ -15,9 +15,12 @@ export function showStaleWriteNotice(staleWrite: EnvironmentStaleWrite): void {
  * A page edit's outcome arrives as a result, not an error, so the error path's
  * notice never sees it. `stale` gets the same notice; `pending` shows in the
  * frame's status line and `needs_grant` in the "needs you" row, both read by
- * the caller's invalidations.
+ * the caller's invalidations. `local_only` was saved on a computer bound to no
+ * configuration, and like `applied` needs no notice.
  */
-export function noticeWriteOutcome(outcome: EnvironmentWriteOutcome): void {
+export function noticeWriteOutcome(
+  outcome: EnvironmentLocalWriteOutcome,
+): void {
   if (outcome.outcome === "stale") {
     showStaleWriteNotice({
       changedBy: outcome.changedBy,

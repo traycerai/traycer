@@ -378,7 +378,7 @@ describe("FallbackSettingsPanel - a draft cannot travel to another host", () => 
     const personal = renderPanel();
     expect(
       screen.getByText(
-        "Applies to your agents on every computer and sandbox running these settings.",
+        "Applies to your agents on every computer and sandbox running Personal.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/Applies to your chat agents on/)).toBeNull();

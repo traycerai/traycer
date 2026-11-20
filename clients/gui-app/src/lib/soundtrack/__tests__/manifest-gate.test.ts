@@ -115,7 +115,7 @@ describe("readSoundtrackManifest", () => {
 
     const manifest = await readSoundtrackManifest();
 
-    expect(manifest.tracks).toEqual([AQUILO_1]);
+    expect(manifest.tracks).toEqual([{ ...AQUILO_1, kind: "generative" }]);
     expect(manifest.stems.tracks[0].layers[0].files).toEqual(signed("A", 1));
   });
 

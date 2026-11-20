@@ -1,3 +1,43 @@
+import {
+  TEAM_TRANSFER_DISCLOSURE,
+  TEAM_TRANSFER_DISCLOSURE_VERSION,
+} from "@traycer/protocol/host/environment/team-transfer-disclosure";
+import { access } from "node:fs/promises";
+import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
+import { mintTeamComputerInstallTokenViaHttp } from "@traycer-clients/shared/host-client/team-computer-install";
+import { EnvironmentCloudError } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  runEnvironmentMove,
+  type EnvironmentMoveHost,
+} from "@traycer-clients/shared/environment/environment-move-flow";
+import type { EnvironmentOperationTarget } from "@traycer/protocol/host/environment/move-contracts";
+import { createCliEnvironmentCloud } from "../internal/cli-environment-cloud";
+import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import {
+  mayHaveReachedHost,
+  type HostTransportEndpoint,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  callHostRpcAtResolvedEndpoint,
+  PLAIN_DISPATCH,
+  resolveEndpoint,
+  hostRpcToCliError,
+  toAgentCliError,
+} from "../internal/host-rpc";
+import {
+  readCredentialsFile,
+  type StoredCredentials,
+} from "@traycer/protocol/config/credentials";
+import { cliCredentialsPath, hostEnrollmentRecordPath } from "../store/paths";
+import type { Environment } from "../runner/environment";
+import {
+  AUTHN_UNREACHABLE_MESSAGE,
+  HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
+  signedOutCliError,
+  storedCredentialRejectedCliError,
+  UNWORDED_MINT_REFUSAL_MESSAGE,
+} from "../internal/host-door-words";
+import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 import { runDeviceAuthFlow } from "../auth/login-flow";
 import {
   provisionInstalledHostCredential,
@@ -9,62 +49,35 @@ import {
   readHostPidMetadata,
 } from "./pid-metadata";
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
+import { readRunningChatCount, runningChatsLine } from "./running-chat-count";
+import {
+  readSignInEnvironments,
+  type SignInEnvironment,
+} from "../internal/sign-in-environments";
 import { errorFromUnknown } from "../logger";
-import { toCliError } from "../runner/errors";
+import {
+  CLI_ERROR_CODES,
+  CliError,
+  cliError,
+  toCliError,
+} from "../runner/errors";
 import type { CommandContext } from "../runner/runner";
+import { config } from "../config";
+import { probeHostHealth } from "../service/health-probe";
 
-// The sign-in pre-flight and post-start credential provisioning shared by
-// every command that STARTS a host (client/host token split): the started
-// host reads its owner from the shared credentials file, so starting one
-// while signed out stands up a host that denies every connection
-// ("unprovisioned"). Three commands start hosts - `host install` (unless
-// `--no-service-register`), `host service install` (the deferred half of
-// the documented split flow), and `host ensure` (the idempotent
-// install+register+start) - and all three must own the same two steps, or
-// any one of them silently recreates the unprovisioned-host regression the
-// combined flow fixed.
+// Install, ensure and service-install share the sign-in pre-flight and the post-start credential
+// probe, run only when a host was started. Explicit starts and service cycles probe on the stored
+// sign-in alone, without prompting. The host receives only its delegated credential; one already
+// active is not reminted. An attended team install signs in before staging: with no host identity
+// the sign-in mints the team's install token, staged before the first start; with a registered host
+// it authorizes the give. A piped token reads no CLI sign-in.
 //
-// `host ensure` differs from the other two in one way that matters here:
-// it is idempotent, so it alone has an action that starts NOTHING. `host
-// install` always stages and swaps bytes, and `host service install`
-// always registers + starts, so running the pre-flight unconditionally is
-// right for both - whatever it reports is a fact about a host that command
-// just started. Ensure's no-op has no such standing, so it hangs the
-// pre-flight on `provisionHost`'s `beforeMutate` hook and reports
-// `not-checked` when nothing ran. Wiring a start-capable command below,
-// or giving one of the two above a no-op fast path, means answering the
-// same question: does this run actually start a host?
-//
-// Deliberately NOT wired into the remaining start-capable commands, so this
-// boundary is a decision rather than an omission:
-//   - `host start` is the service manager's own entrypoint (what launchd/
-//     systemd exec) - headless by contract, nothing to prompt, and a probe
-//     there would have the starting host dial itself;
-//   - `host restart` / `host free-port-and-restart` cycle an EXISTING
-//     host whose provisioning state was set by whichever command installed
-//     it - they create no new unprovisioned host. A host that was already
-//     unprovisioned stays that way until a minting client connects, and on
-//     a machine without Desktop nothing does on its own: `traycer login`
-//     is the CLI's way to credential a host that is already running
-//     (`provisionRunningHostCredential` below).
-//
-// A fourth entry used to sit here: `maybeAutoBootstrap`, which started a
-// host implicitly off `traycer host status`. It was excluded on the grounds
-// that a device-flow login inside a status read is indefensible - and the
-// note called itself "the weakest exclusion of the four and the one to
-// revisit first". Revisiting it settled the question the other way round:
-// the problem was never that auto-bootstrap sat outside this pre-flight, it
-// was that a read installed software at all. The path is gone (audit finding
-// CLI-001), so every remaining host-starting entry point is either an
-// explicit lifecycle command that runs the pre-flight, or one of the three
-// exclusions above.
-//
-// Pre-flight: a signed-out interactive run is offered the device-flow
+// Without --team, a signed-out interactive run is offered the device-flow
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)
-// warns and continues, and so does a declined or failed sign-in.
-// Start-now-login-later stays legal throughout: the host picks up a later
-// `traycer login` within one connection, no reinstall needed, which is why
-// the guard never hard-fails.
+// warns and continues, and so does a declined or failed sign-in. A later
+// `traycer login` can authorize the installed host without a reinstall.
+// An attended team install requires sign-in before staging. A piped install
+// token instead authorizes the host directly, without reading the CLI sign-in.
 //
 // Provisioning: a signed-in run that started a host follows up with a
 // short-lived stream connection carrying the CLI mint flow
@@ -106,7 +119,7 @@ export type HostInstallAuthPreflight =
   // host's own store, not the CLI credentials file).
   | {
       readonly state: "not-checked";
-      readonly reason: "bytes-only" | "nothing-to-start";
+      readonly reason: "bytes-only" | "nothing-to-start" | "team-install-token";
     };
 
 export const SIGN_IN_LATER_HINT =
@@ -118,12 +131,10 @@ export const SIGN_IN_LATER_HINT =
  * error - an unreadable file (EACCES on a foreign-owned credentials file,
  * EISDIR, EIO) throws.
  *
- * Neither caller here can act on that. The pre-flight's whole contract is
- * warn-and-continue, and the post-start probe runs after the bytes are
- * already swapped and the service started - letting a throw escape there would
- * report a successful command as a failure. Both read credentials
- * opportunistically, so an unreadable file is "no usable auth", logged and
- * carried on from.
+ * An unreadable file is treated as no usable auth. Ordinary installs warn
+ * and continue; a team install must sign in or refuse before staging.
+ * The post-start probe runs after the bytes are swapped and the service
+ * started, so its credential read cannot fail the completed install.
  */
 export async function resolveHostAuthOrNull(
   ctx: CommandContext,
@@ -138,9 +149,12 @@ export async function resolveHostAuthOrNull(
       {
         environment: ctx.runtime.environment,
         stage,
-        errorName: error.name,
-        errorMessage: error.message,
+        kind: "error",
       },
+    );
+    ctx.runtime.logger.debug(
+      "Host install could not read the stored credentials; treating as signed out",
+      { errorName: error.name, errorMessage: error.message },
     );
     return null;
   }
@@ -150,10 +164,16 @@ export async function runSignInPreflight(
   ctx: CommandContext,
   // Bytes-only installs start nothing, so there is no unauthenticated host
   // to prevent - the actor that later starts the service owns the sign-in
-  // question (and calls this with `bytesOnly: false`).
-  bytesOnly: boolean,
+  // question (and calls this with false). A team transfer instead requires
+  // sign-in here: a later login does not finish giving the computer to a team.
+  policy:
+    | boolean
+    | {
+        readonly requireSignIn: true;
+        readonly onInlineSignIn?: (token: string) => void;
+      },
 ): Promise<HostInstallAuthPreflight> {
-  if (bytesOnly) {
+  if (policy === true) {
     return { state: "not-checked", reason: "bytes-only" };
   }
   const auth = await resolveHostAuthOrNull(ctx, "preflight");
@@ -169,6 +189,15 @@ export async function runSignInPreflight(
     !ctx.runtime.json &&
     process.stdout.isTTY === true;
   if (!canPrompt) {
+    if (typeof policy === "object") {
+      throw cliError({
+        code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+        message:
+          "Sign in with `traycer login`, then run the command with --team again. No host files were installed.",
+        details: null,
+        exitCode: 1,
+      });
+    }
     ctx.runtime.logger.warn(
       "Host install proceeding unauthenticated; cannot prompt for sign-in",
       {
@@ -183,18 +212,23 @@ export async function runSignInPreflight(
     return { state: "unauthenticated", reason: "noninteractive-cannot-prompt" };
   }
   ctx.output.humanRequired(
-    "You are not signed in. The host this command starts runs unprovisioned\n" +
-      "and serves no work until you sign in, so let's sign in first\n" +
-      "(Ctrl+C cancels; a declined sign-in continues unauthenticated).",
+    typeof policy === "object"
+      ? "Sign in to add this computer to the team. Ctrl+C cancels."
+      : "You are not signed in. The host this command starts runs unprovisioned\n" +
+          "and serves no work until you sign in, so let's sign in first\n" +
+          "(Ctrl+C cancels; a declined sign-in continues unauthenticated).",
   );
   try {
     const login = await runDeviceAuthFlow(ctx);
+    if (typeof policy === "object") policy.onInlineSignIn?.(login.token);
+    const identity = login.user.email || login.user.name;
     ctx.output.humanRequired(
-      `Signed in as ${login.user.email || login.user.name || login.user.id}.`,
+      identity ? `Signed in as ${identity}.` : "Signed in.",
     );
     return { state: "signed-in-inline", reason: null };
   } catch (err) {
     const cliErr = toCliError(err);
+    if (typeof policy === "object") throw cliErr;
     ctx.runtime.logger.warn(
       "Host install inline sign-in did not complete; continuing unauthenticated",
       {
@@ -220,7 +254,7 @@ const CREDENTIAL_PROVISION_DEADLINE_MS = 30_000;
 export async function maybeProvisionCredential(
   ctx: CommandContext,
   postSwapAction: "start" | "install" | "none",
-  authPreflight: HostInstallAuthPreflight,
+  authPreflight: HostInstallAuthPreflight | null,
 ): Promise<HostCredentialProvisionOutcome | null> {
   // Nothing was started, so there is nothing to dial - the one gate that
   // does not depend on the operator's auth state at all. Bytes-only lands
@@ -230,8 +264,8 @@ export async function maybeProvisionCredential(
     return null;
   }
   const preflightSawSignIn =
-    authPreflight.state === "signed-in" ||
-    authPreflight.state === "signed-in-inline";
+    authPreflight?.state === "signed-in" ||
+    authPreflight?.state === "signed-in-inline";
   // Re-read rather than trusting the pre-flight's verdict in EITHER
   // direction. It was taken before a stage + install that can run for
   // minutes, and the credentials file moves both ways across that window:
@@ -339,10 +373,12 @@ async function provisionWithStoredAuth(
     ctx.runtime.logger.warn(
       "Host credential provisioning threw; the command itself was unaffected",
       {
-        environment: ctx.runtime.environment,
-        errorName: error.name,
-        errorMessage: error.message,
+        kind: "error",
       },
+    );
+    ctx.runtime.logger.debug(
+      "Host credential provisioning threw; the command itself was unaffected",
+      { errorName: error.name, errorMessage: error.message },
     );
     outcome = { kind: "error", message: error.message };
   }
@@ -351,6 +387,17 @@ async function provisionWithStoredAuth(
     outcome: outcome.kind,
   });
   return outcome;
+}
+
+interface HostCredentialProvisionSummary {
+  readonly kind: HostCredentialProvisionOutcome["kind"];
+}
+
+/** Only a fixed outcome kind crosses the new command-result boundary. */
+export function credentialProvisionForResult(
+  outcome: HostCredentialProvisionOutcome | null,
+): HostCredentialProvisionSummary | null {
+  return outcome === null ? null : { kind: outcome.kind };
 }
 
 // Terminal-line rendering of the provisioning outcome. `null` (not attempted)
@@ -372,10 +419,12 @@ export function formatCredentialProvisionNote(
   switch (outcome.kind) {
     case "active":
       return outcome.minted ? "host authorized" : null;
+    case "team-unavailable":
+      return "the team's computer is waiting to reconnect; no personal sign-in is needed";
     case "unreachable":
       return `host authorization not confirmed (the host did not respond in time) - ${nextStep}`;
     case "unsupported":
-      return "host authorization not confirmed (this version of the CLI can't authorize this host)";
+      return "host authorization not confirmed - update the Traycer CLI using your install method, run `traycer host update`, then `traycer login`";
     case "mint-unavailable":
       return `host authorization not confirmed (the authorization did not complete) - ${nextStep}`;
     case "not-adopted":
@@ -385,6 +434,539 @@ export function formatCredentialProvisionNote(
     case "unauthorized":
       return `host authorization not confirmed - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
     case "error":
-      return `host authorization not confirmed (${outcome.message}) - ${nextStep}`;
+      return `host authorization not confirmed - ${nextStep}`;
   }
+}
+
+export interface TeamInstallAuthSession {
+  readonly preflight: HostInstallAuthPreflight;
+  /** Kept only in the command; never included in its result or logs. */
+  readonly inlineSignInToken: string | null;
+}
+
+async function runTeamInstallAuthPreflight(
+  ctx: CommandContext,
+): Promise<TeamInstallAuthSession> {
+  let inlineSignInToken: string | null = null;
+  const preflight = await runSignInPreflight(ctx, {
+    requireSignIn: true,
+    onInlineSignIn: (token) => {
+      inlineSignInToken = token;
+    },
+  });
+  return { preflight, inlineSignInToken };
+}
+
+/** Failed setup retains the command-created sign-in until transfer is confirmed. */
+export async function warnIfTeamInstallSignInRemains(
+  ctx: CommandContext,
+  session: TeamInstallAuthSession | null,
+): Promise<void> {
+  if (session === null || session.inlineSignInToken === null) return;
+  let credentials: StoredCredentials | null;
+  try {
+    credentials = await readCredentialsFile(
+      cliCredentialsPath(ctx.runtime.environment),
+    );
+  } catch {
+    ctx.output.humanRequired(
+      "Your sign-in could still be on this computer. Run `traycer logout` to remove it.",
+    );
+    return;
+  }
+  if (credentials === null) return;
+  // A refresh can supersede the token this command created. Exact-token
+  // deletion must preserve a replacement, but its presence still needs the
+  // manual sign-out warning.
+  if (credentials.token !== session.inlineSignInToken) {
+    ctx.output.humanRequired(
+      "Your sign-in could still be on this computer. Run `traycer logout` to remove it.",
+    );
+    return;
+  }
+  ctx.output.humanRequired(
+    "Your sign-in stays on this computer. Run `traycer logout` to remove it.",
+  );
+}
+
+/** A team is named by its slug; `team/<slug>` is accepted as typed elsewhere. */
+function teamSlugFromSelector(team: string): string {
+  return team.startsWith("team/") ? team.slice(5) : team;
+}
+
+const NOT_A_TEAM_YOU_BELONG_TO =
+  "Enter the slug of a team you belong to, as shown in its dashboard address.";
+
+export function teamEnrolmentConfirmation(slug: string): string {
+  return `This computer belongs to ${slug}.`;
+}
+
+/**
+ * No host identity yet: enrol with a token this run mints. A registered host takes
+ * the give: authn refuses a token for a host it knows, and the token path asks no consent.
+ */
+export type AttendedTeamInstall =
+  | {
+      readonly kind: "enrol";
+      readonly session: TeamInstallAuthSession;
+      readonly slug: string;
+      /** Kept only in the command; never included in its result or logs. */
+      readonly token: string;
+      readonly environmentId: string;
+    }
+  | { readonly kind: "give"; readonly session: TeamInstallAuthSession };
+
+export async function beginAttendedTeamInstall(
+  ctx: CommandContext,
+  team: string,
+): Promise<AttendedTeamInstall> {
+  const session = await runTeamInstallAuthPreflight(ctx);
+  try {
+    return await attendedTeamInstallAfterSignIn(ctx, team, session);
+  } catch (error) {
+    // Stopped before anything was installed: a sign-in this command made is
+    // still on the computer.
+    await warnIfTeamInstallSignInRemains(ctx, session);
+    throw error;
+  }
+}
+
+async function attendedTeamInstallAfterSignIn(
+  ctx: CommandContext,
+  team: string,
+  session: TeamInstallAuthSession,
+): Promise<AttendedTeamInstall> {
+  // Checked against the sign-in's own teams before anything is staged, on
+  // either road: a slug that names none of them installs nothing.
+  const target = await resolveSignInTeam(team);
+  if (await hostIdentityMayExist(ctx.runtime.environment)) {
+    return { kind: "give", session };
+  }
+  const slug = target.label;
+  const auth = await resolveHostAuthOrNull(ctx, "preflight");
+  if (auth === null) throw signedOutCliError();
+  // Minted for the environment the sign-in's own list resolved: the shared
+  // client refuses an answer for any other, and that id is what is staged.
+  const minted = await mintTeamComputerInstallTokenViaHttp(
+    auth.authnBaseUrl,
+    auth.token,
+    target.environmentId,
+  );
+  ctx.runtime.logger.info("Team install token request settled", {
+    environment: ctx.runtime.environment,
+    outcome: minted.kind,
+    code: minted.kind === "refused" ? minted.code : null,
+  });
+  switch (minted.kind) {
+    case "ok":
+      return {
+        kind: "enrol",
+        session,
+        slug,
+        token: minted.token,
+        environmentId: minted.environmentId,
+      };
+    case "unauthorized":
+      throw storedCredentialRejectedCliError();
+    case "refused":
+      if (minted.status >= 500 && minted.status < 600)
+        throw cliError({
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: AUTHN_UNREACHABLE_MESSAGE,
+          details: null,
+          exitCode: 1,
+        });
+      throw cliError({
+        code: CLI_ERROR_CODES.FORBIDDEN,
+        message: UNWORDED_MINT_REFUSAL_MESSAGE,
+        details: null,
+        exitCode: 1,
+      });
+    case "network-error":
+      throw cliError({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: AUTHN_UNREACHABLE_MESSAGE,
+        details: null,
+        exitCode: 1,
+      });
+  }
+}
+
+/**
+ * Only the record's proven absence picks the token path: an unreadable record takes
+ * the give, which asks consent, not a token authn would refuse for a known host.
+ */
+async function hostIdentityMayExist(
+  environment: Environment,
+): Promise<boolean> {
+  try {
+    await access(hostEnrollmentRecordPath(environment));
+    return true;
+  } catch (error) {
+    return !(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    );
+  }
+}
+
+/**
+ * By environment id, else by slug with or without `team/`, and exactly one. Reads
+ * the sign-in at authn only, so it runs before anything is installed.
+ */
+export async function resolveSignInTeam(
+  team: string,
+): Promise<SignInEnvironment> {
+  const selector = teamSlugFromSelector(team);
+  const teams = (await readSignInEnvironments()).filter(
+    (environment) => environment.ownerKind === "organization",
+  );
+  const exactMatches = teams.filter(
+    (environment) => environment.environmentId === selector,
+  );
+  const matches =
+    exactMatches.length > 0
+      ? exactMatches
+      : teams.filter((environment) => environment.label === selector);
+  if (matches.length !== 1) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: NOT_A_TEAM_YOU_BELONG_TO,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  return matches[0];
+}
+
+function teamTransferNotConfirmed(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+    message:
+      "The team transfer could not be confirmed. Check this computer in the app before trying again.",
+    details: null,
+    exitCode: 1,
+  });
+}
+
+/** The give reads its plan at `@2.0`; a host below it is refused at its first call. */
+const MOVE_PLAN_FLOOR = {
+  method: "environment.move.plan",
+  version: { major: 2, minor: 0 },
+} as const;
+
+/** The one team transfer used by host use, install --team and ensure --team. */
+export async function useInstalledHostTeam(
+  team: string,
+  progress: CommandContext["progress"],
+): Promise<EnvironmentHostBinding> {
+  const dispatch = {
+    ...PLAIN_DISPATCH,
+    requiredHostMethodVersion: MOVE_PLAN_FLOOR,
+  };
+  const target = await resolveSignInTeam(team);
+  const endpoint = await resolveEndpoint();
+  const auth = await resolveHostAuth();
+  if (auth === null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+      message: "Sign in with `traycer login`, then run the command again.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  const directory = await readHostOwnershipViaHttp(
+    auth.authnBaseUrl,
+    auth.token,
+    endpoint.hostId,
+  );
+  const host = directory.kind === "ok" ? directory.host : undefined;
+  if (host === undefined) {
+    throw cliError({
+      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message: HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (host.kind === "sandbox") {
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_IS_SANDBOX,
+      message:
+        "Run this command on the computer you want to add, rather than a sandbox.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (host.owner.kind === "team") {
+    const current = await toAgentCliError(
+      callHostRpcAtResolvedEndpoint(
+        "environment.host.read",
+        {},
+        endpoint,
+        auth,
+        dispatch,
+      ),
+    );
+    if (
+      host.owner.id === target.ownerId &&
+      current.environment.environmentId === target.environmentId &&
+      current.explicit
+    ) {
+      return current;
+    }
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM,
+      message:
+        "Claim this computer from its current team before adding it to another.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  const moveTarget: EnvironmentOperationTarget = {
+    kind: "team",
+    environmentId: target.environmentId,
+    teamId: target.ownerId,
+  };
+  // Read only for its hash and its disclosure, before anything is printed.
+  const plan = await toAgentCliError(
+    callHostRpcAtResolvedEndpoint(
+      "environment.move.plan",
+      { target: moveTarget, personal: null },
+      endpoint,
+      auth,
+      dispatch,
+    ),
+  );
+  // Lines this CLI does not print are never accepted. Unreachable today: a
+  // host that serves `plan@2.0` stages disclosure version 2 for a team.
+  if (plan.disclosureVersion !== TEAM_TRANSFER_DISCLOSURE_VERSION) {
+    throw teamTransferNotConfirmed();
+  }
+  // The computer counts its own owner's chats; the environment named is the
+  // team the give is into.
+  const runningChats = runningChatsLine(
+    await readRunningChatCount(endpoint, auth, target.environmentId),
+  );
+  const disclosure =
+    runningChats === null
+      ? TEAM_TRANSFER_DISCLOSURE
+      : [...TEAM_TRANSFER_DISCLOSURE, runningChats];
+  for (const message of disclosure) {
+    progress({
+      stage: "host-team",
+      message,
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      workUnits: null,
+    });
+  }
+  // A Local computer has no environment binding to read before its transfer.
+  progress({
+    stage: "host-team",
+    message: `Restarting Traycer on this computer to run as ${target.label}…`,
+    percent: null,
+    bytes: null,
+    totalBytes: null,
+    workUnits: null,
+  });
+  return giveInstalledHostToTeam(
+    endpoint,
+    auth,
+    target,
+    moveTarget,
+    plan.planHash,
+  );
+}
+
+/**
+ * The typed command is the person's acceptance: the computer stages the give, the
+ * acceptance is recorded at authn on this sign-in, and the computer moves and restarts.
+ */
+async function giveInstalledHostToTeam(
+  endpoint: HostTransportEndpoint,
+  auth: HostAuth,
+  target: SignInEnvironment,
+  moveTarget: EnvironmentOperationTarget,
+  planHash: string,
+): Promise<EnvironmentHostBinding> {
+  const { cloud, signInRejected } = createCliEnvironmentCloud(auth);
+  // The computer can start the move and restart before `start`'s reply is
+  // sent; the staged attempt is then followed on the status instead.
+  const sent: { attemptId: string | null; startReplyLost: boolean } = {
+    attemptId: null,
+    startReplyLost: false,
+  };
+  const host: EnvironmentMoveHost = {
+    stage: async (request) => {
+      const staged = await callHostRpcAtResolvedEndpoint(
+        "environment.move.stage",
+        request,
+        endpoint,
+        auth,
+        PLAIN_DISPATCH,
+      );
+      sent.attemptId = staged.evidence.attemptId;
+      return staged;
+    },
+    start: async (request) => {
+      try {
+        return await callHostRpcAtResolvedEndpoint(
+          "environment.move.start",
+          request,
+          endpoint,
+          auth,
+          PLAIN_DISPATCH,
+        );
+      } catch (error) {
+        sent.startReplyLost = mayHaveReachedHost(error);
+        throw error;
+      }
+    },
+  };
+  let attemptId: string;
+  try {
+    const result = await runEnvironmentMove(host, cloud, {
+      hostId: endpoint.hostId,
+      target: moveTarget,
+      planHash,
+      keyChoices: [],
+      personal: null,
+    });
+    if (result.kind !== "started") throw teamTransferNotConfirmed();
+    const { outcome } = result;
+    if (outcome.state === "needs_person" || outcome.state === "not_found")
+      throw teamTransferNotConfirmed();
+    attemptId = outcome.attemptId;
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    if (error instanceof EnvironmentCloudError)
+      throw acceptanceFailure(error, signInRejected());
+    if (!sent.startReplyLost || sent.attemptId === null)
+      throw hostRpcToCliError(error);
+    attemptId = sent.attemptId;
+  }
+  const binding = await awaitGivenBinding(
+    endpoint.hostId,
+    auth,
+    target,
+    attemptId,
+  );
+  // The sign-in as the adapter holds it now: its one refresh may have rotated
+  // the token the command started with.
+  const token = cloud.onOriginSignIn() ? cloud.bearer.getBearerToken() : null;
+  if (binding === null || token === null) throw teamTransferNotConfirmed();
+  const confirmed = await readHostOwnershipViaHttp(
+    auth.authnBaseUrl,
+    token,
+    endpoint.hostId,
+  );
+  if (
+    !cloud.onOriginSignIn() ||
+    confirmed.kind !== "ok" ||
+    confirmed.host.owner.kind !== "team" ||
+    confirmed.host.owner.id !== target.ownerId
+  )
+    throw teamTransferNotConfirmed();
+  return binding;
+}
+
+/** A sign-in rejected after the one refresh is the rejected-credential line; any other failure the transfer line. */
+function acceptanceFailure(
+  error: EnvironmentCloudError,
+  signInRejected: boolean,
+): CliError {
+  if (error.kind === "unauthorized" && signInRejected)
+    return storedCredentialRejectedCliError();
+  return teamTransferNotConfirmed();
+}
+
+/**
+ * Across the restart, on the health probe's budget (each try rereads the pid record),
+ * until the computer is in the team's environment. `move` ends the wait early only
+ * when the attempt needs a person; null then, or when the budget runs out.
+ */
+async function awaitGivenBinding(
+  hostId: string,
+  auth: HostAuth,
+  target: SignInEnvironment,
+  attemptId: string,
+): Promise<EnvironmentHostBinding | null> {
+  const settled: {
+    binding: EnvironmentHostBinding | null;
+    ended: boolean;
+  } = { binding: null, ended: false };
+  const health = await probeHostHealth({
+    environment: config.environment,
+    checkProcessAlive: null,
+    checkTcpReachable: null,
+    checkReadiness: async (metadata, remainingMs) => {
+      if (metadata.hostId !== hostId || remainingMs <= 0) return false;
+      const restarted = { hostId, websocketUrl: metadata.websocketUrl };
+      const bounded = {
+        ...PLAIN_DISPATCH,
+        signal: AbortSignal.timeout(remainingMs),
+        responseTimeoutMs: Math.min(2_000, remainingMs),
+      };
+      try {
+        const { move } = await callHostRpcAtResolvedEndpoint(
+          "environment.status",
+          {},
+          restarted,
+          auth,
+          bounded,
+        );
+        if (move?.attemptId === attemptId && move.state === "needs_person") {
+          settled.ended = true;
+          return true;
+        }
+        const current = await callHostRpcAtResolvedEndpoint(
+          "environment.host.read",
+          {},
+          restarted,
+          auth,
+          bounded,
+        );
+        if (
+          !current.explicit ||
+          current.environment.environmentId !== target.environmentId
+        )
+          return false;
+        settled.binding = current;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    totalBudgetMs: null,
+    retryDelayMs: null,
+  });
+  if (!health.healthy || settled.ended) return null;
+  return settled.binding;
+}
+
+export async function completeTeamInstall(
+  team: string,
+  session: TeamInstallAuthSession,
+  progress: CommandContext["progress"],
+): Promise<EnvironmentHostBinding> {
+  const binding = await useInstalledHostTeam(team, progress);
+  if (session.inlineSignInToken !== null) {
+    const token = session.inlineSignInToken;
+    const outcome = await runWithCliStore((store) =>
+      withCommitRetry(() => store.signOutIfToken(token, null), null),
+    );
+    if (outcome.outcome !== "deleted" && outcome.outcome !== "superseded") {
+      throw cliError({
+        code: CLI_ERROR_CODES.UNEXPECTED,
+        message:
+          "The computer was added to the team, but its temporary sign-in could not be cleared. Run `traycer logout` on this computer.",
+        details: null,
+        exitCode: 1,
+      });
+    }
+  }
+  return binding;
 }

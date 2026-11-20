@@ -11,7 +11,7 @@ import type {
   EpicStreamClient,
 } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { WirePermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 
 interface FakeStream {
   callbacks: EpicStreamCallbacks;
@@ -20,7 +20,7 @@ interface FakeStream {
 
 function makeMeta(
   epicId: string,
-  permissionRole: PermissionRole | null,
+  permissionRole: WirePermissionRole | null,
 ): SnapshotMetaEpic {
   return {
     schemaVersion: "1.0",
@@ -57,7 +57,7 @@ export interface TestEpicHarness {
    * Pass `null` for both args to install with no seed and editor role. */
   readonly install: (
     seed: ((doc: Y.Doc) => void) | null,
-    permissionRole: PermissionRole | null,
+    permissionRole: WirePermissionRole | null,
   ) => void;
   readonly teardown: () => void;
 }
@@ -78,7 +78,7 @@ export function createEpicSessionTestHarness(epicId: string): TestEpicHarness {
   return {
     install: (
       seed: ((doc: Y.Doc) => void) | null,
-      permissionRole: PermissionRole | null,
+      permissionRole: WirePermissionRole | null,
     ) => {
       // THE WORKER SEAM, not the stream one. A stream factory built here
       // lives on MAIN and cannot cross `postMessage` to a runtime that lives in

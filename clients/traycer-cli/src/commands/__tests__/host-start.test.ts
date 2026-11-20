@@ -356,6 +356,10 @@ interface Recorded {
     message: string;
     fields: Record<string, unknown>;
   }>;
+  readonly loggerDebugs: Array<{
+    message: string;
+    fields: Record<string, unknown>;
+  }>;
   readonly loggerWarns: Array<{
     message: string;
     fields: Record<string, unknown>;
@@ -436,6 +440,7 @@ function makeRunStubs(
     stderrTees: [],
     loggerErrors: [],
     loggerInfos: [],
+    loggerDebugs: [],
     loggerWarns: [],
     lifecycleRecordWrites: [],
     lifecycleRecordRemovals: [],
@@ -447,7 +452,9 @@ function makeRunStubs(
   const childAsUnknown: unknown = child;
   const childAsProcess: ChildProcess = childAsUnknown as ChildProcess;
   const spyLogger: ILogger = {
-    debug: () => undefined,
+    debug: (message, fields) => {
+      recorded.loggerDebugs.push({ message, fields: { ...fields } });
+    },
     info: (message, fields) => {
       recorded.loggerInfos.push({ message, fields: { ...fields } });
     },
@@ -497,6 +504,8 @@ function makeRunStubs(
     // from a real `traycer host stop` would then be remembered as "served at
     // startup", silently changing what every intent assertion below means.
     readStopIntentIdentity: async () => null,
+    // Same hazard again: unset, it reads the real stop-intent file.
+    stopIntentState: async () => "none",
     // Same hazard class once more: a child that yields to an incumbent makes
     // the supervisor poll THAT pid, and unset this falls through to the real
     // `isProcessAlive`, which would probe whatever process happens to hold
@@ -1885,6 +1894,54 @@ describe("runHostStart - signal/exit propagation", () => {
       expect(recorded.crashReports[0]?.stderrFatal).toBe(expected);
     });
 
+    it("carries the closed-set evidence of a Node uncaught-error exit", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              stopIntentState: async () => "stale",
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(
+                    Buffer.from(
+                      "[host] layer0-acquired attempt=a fs-type=NTFS\n",
+                    ),
+                  );
+                  stderr.write(
+                    Buffer.from(
+                      "node:internal/process/promises:394\n    triggerUncaughtException(err, true);\n    ^\n\nTypeError: boom\n    at run (file.js:1:1) {\n  code: 'ERR_INVALID_ARG_TYPE'\n}\n\nNode.js v24.20.0\n",
+                    ),
+                  );
+                  stderr.end();
+                  child.emit("exit", 1, null);
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports).toHaveLength(1);
+      const report = recorded.crashReports[0];
+      expect(report?.stderrFatal).toBe("node-uncaught");
+      expect(report?.hostLastLine).toBe("layer0-acquired");
+      expect(report?.errorClass).toBe("TypeError");
+      expect(report?.errorCode).toBe("ERR_INVALID_ARG_TYPE");
+      expect(report?.stopIntentState).toBe("stale");
+      expect(report?.stopRequested).toBe(false);
+    });
+
     it("tags a SIGABRT death the same way", async () => {
       const exec = "/opt/traycer/host/install/traycer-host";
       const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
@@ -1916,6 +1973,50 @@ describe("runHostStart - signal/exit propagation", () => {
       expect(recorded.crashReports).toHaveLength(1);
       expect(recorded.crashReports[0]?.signal).toBe("SIGABRT");
       expect(recorded.crashReports[0]?.stderrFatal).toBe("v8-heap-oom");
+    });
+
+    it("carries the same closed-set evidence on a fatal-signal death", async () => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const stderr = new PassThrough();
+      Object.assign(child, { stderr });
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined) {
+        throw new Error("test spawn dependency missing");
+      }
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            {
+              ...deps,
+              stopIntentState: async () => "stale",
+              spawn: (command, args, options) => {
+                const spawned = originalSpawn(command, args, options);
+                setImmediate(() => {
+                  stderr.write(
+                    Buffer.from(
+                      "[host] layer0-acquired attempt=a fs-type=NTFS\n",
+                    ),
+                  );
+                  stderr.write(Buffer.from(oomBlock));
+                  stderr.end();
+                  child.emit("exit", null, "SIGABRT");
+                });
+                return spawned;
+              },
+            },
+          ),
+        recorded,
+      );
+      expect(recorded.crashReports).toHaveLength(1);
+      const report = recorded.crashReports[0];
+      expect(report?.signal).toBe("SIGABRT");
+      expect(report?.stderrFatal).toBe("v8-heap-oom");
+      expect(report?.hostLastLine).toBe("layer0-acquired");
+      expect(report?.errorClass).toBe("none");
+      expect(report?.errorCode).toBe("none");
+      expect(report?.stopIntentState).toBe("stale");
     });
 
     it("tags nothing-recognised as incomplete when the stderr pipe errored before it ended", async () => {
@@ -7947,21 +8048,26 @@ describe("runHostStart - supervisor.json lifecycle across outcomes", () => {
     const published = new Set<number>();
     const writeCalls: SupervisorRecords[] = [];
     const removeCalls: number[] = [];
-    const tracking = withPidTrackingLifecycle(
-      withLifecyclePolicy(
-        deps,
-        "linked",
-        async () => ({ kind: "absent" }),
-        async () => ({ kind: "absent" }),
-        async () => "indeterminate",
+    const onHostStarted = vi.fn(() => Promise.resolve());
+    const tracking = {
+      ...withPidTrackingLifecycle(
+        withLifecyclePolicy(
+          deps,
+          "linked",
+          async () => ({ kind: "absent" }),
+          async () => ({ kind: "absent" }),
+          async () => "indeterminate",
+        ),
+        published,
+        writeCalls,
+        removeCalls,
       ),
-      published,
-      writeCalls,
-      removeCalls,
-    );
+      onHostStarted,
+    };
 
     await runUntilExit(() => runHostStart(LABELLED_START, tracking), recorded);
 
+    expect(onHostStarted).not.toHaveBeenCalled();
     expect(recorded.exited).toBe(0);
     expect(writeCalls).toHaveLength(0);
     expect(removeCalls).toHaveLength(0);
@@ -9739,5 +9845,86 @@ describe("runHostStart - previous-exit record", () => {
     expect(attempts).toEqual(["write"]);
     expect(recorded.exited).toBe(7);
     expect(recorded.markers.some((m) => m.phase === "crashed")).toBe(true);
+  });
+});
+
+describe("runHostStart - advisory work after an admitted manual start", () => {
+  it("starts the advisory once across an intentional restart without waiting for it", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const scripted = withRestartAttempts(deps);
+    let releaseProbe: () => void = () => {
+      throw new Error("advisory probe gate was not initialized");
+    };
+    let probeSettled = false;
+    const probeGate = new Promise<void>((resolve) => {
+      releaseProbe = resolve;
+    });
+    const probeRun = probeGate.then(() => {
+      probeSettled = true;
+    });
+    const onHostStarted = vi.fn(() => {
+      recorded.sequence.push("credential-probe");
+      return probeRun;
+    });
+    let runSettled = false;
+    const supervision = runHostStart(
+      { environment: "production", cwd: null },
+      {
+        ...scripted.deps,
+        maxRelaunches: MAX_CONSECUTIVE_RELAUNCHES,
+        onHostStarted,
+      },
+    ).finally(() => {
+      runSettled = true;
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(recorded.spawnCalls).toHaveLength(2);
+        expect(runSettled).toBe(true);
+      });
+
+      expect(onHostStarted).toHaveBeenCalledTimes(1);
+      expect(recorded.spawnCalls).toHaveLength(2);
+      expect(recorded.exited).toBe(0);
+      expect(probeSettled).toBe(false);
+      expect(recorded.sequence.indexOf("spawn")).toBeLessThan(
+        recorded.sequence.indexOf("credential-probe"),
+      );
+    } finally {
+      releaseProbe();
+      await supervision;
+    }
+
+    await probeRun;
+    expect(probeSettled).toBe(true);
+  });
+
+  it("logs a rejected advisory diagnostic only at debug level and still supervises the child", async () => {
+    const diagnostic =
+      "manual-start-probe-marker path=/private/test/credentials body=distinctive";
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const onHostStarted = vi.fn(async () => {
+      throw new Error(diagnostic);
+    });
+    const tracking = withChildExit({ ...deps, onHostStarted }, child, 0, null);
+
+    await runUntilExit(
+      () => runHostStart({ environment: "production", cwd: null }, tracking),
+      recorded,
+    );
+    await vi.waitFor(() => expect(recorded.loggerWarns).toHaveLength(1));
+
+    expect(onHostStarted).toHaveBeenCalledTimes(1);
+    expect(recorded.exited).toBe(0);
+    expect(recorded.loggerWarns[0]).toEqual({
+      message:
+        "Host credential provisioning threw; the command itself was unaffected",
+      fields: { kind: "error" },
+    });
+    expect(JSON.stringify(recorded.loggerWarns)).not.toContain(diagnostic);
+    expect(JSON.stringify(recorded.loggerDebugs)).toContain(diagnostic);
   });
 });

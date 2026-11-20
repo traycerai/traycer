@@ -10,6 +10,8 @@ import type {
   BotDeleteResponse,
   BotOpenRequest,
   BotOpenResponse,
+  BotUpdateAppearanceRequest,
+  BotUpdateAppearanceResponse,
   BotUpdateReplyModeRequest,
   BotUpdateResponse,
   BotUpdateRunSettingsRequest,
@@ -19,22 +21,35 @@ import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type {
+import {
   HostRpcError,
-  RequiredHostMethodVersion,
+  type RequiredHostMethodVersion,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { BotSetupRow } from "@traycer-clients/shared/host-client/bot-setup";
+import { usePressCapturedMutation } from "@/hooks/use-press-captured-mutation";
+import type { VoiceCallAuthority } from "@/lib/auth/auth-service";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import {
+  BOT_CONVERSATION_ANSWER_SET_VERSION,
   BOT_CONVERSATION_ANSWER_VERSION,
   BOT_CONVERSATION_CALL_VERSION,
+  BOT_CONVERSATION_REPLY_VERSION,
   BOT_CONVERSATION_RETRY_VERSION,
 } from "@/hooks/bots/use-bot-send-version";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
+import { applyBotSettingsToViews } from "@/hooks/bots/use-bot-subscription";
+import { botSetupError } from "@/hooks/bots/bot-setup-error";
+import {
+  captureBotWriteOrigin,
+  type BotWriteOrigin,
+  type PressSignIn,
+} from "@/hooks/bots/bot-write-sign-in";
 
 /**
  * The `bot.*` writes (Tracy Bots). Every hook takes the client that carries the
@@ -45,6 +60,11 @@ import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
  *
  * The bot tab's Settings writes (rename, model, delete) carry no toast: the
  * panel states a refusal inline, under the control that made the call.
+ *
+ * The run settings, the reply mode and the delete are the exceptions to the
+ * client argument: they are the app's own calls to the server on the
+ * person's sign-in, with no host in the path, so they need no host, the
+ * bot's included.
  *
  * Each write invalidates `bot.list` on EVERY host scope rather than on one:
  * the list is cloud-backed and identical everywhere, so a create on host B
@@ -75,19 +95,33 @@ export function useBotCreateMutation(
   });
 }
 
-export function useBotDeleteMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<BotDeleteResponse, HostRpcError, BotDeleteRequest> {
+/** A repeat answers `deleted: false`, which is a success. */
+export function useBotDeleteMutation(): UseMutationResult<
+  BotDeleteResponse | null,
+  Error,
+  BotDeleteRequest
+> {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.delete">({
-    client,
-    method: "bot.delete",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.delete(),
-      onSuccess: () => {
-        invalidateBotLists(queryClient);
-      },
+  const binding = useHostBinding();
+  return usePressCapturedMutation<
+    BotDeleteResponse | null,
+    Error,
+    BotDeleteRequest,
+    BotWriteOrigin | null
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botMutationKeys.delete(),
+    mutationFn: async (request, origin) => {
+      if (origin === null) throw botSetupError({ kind: "no_response" });
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.deleteBot(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind !== "ok") throw botSetupError(result);
+      return { deleted: result.deleted };
+    },
+    onSuccess: (answer) => {
+      if (answer === null) return;
+      invalidateBotLists(queryClient);
     },
   });
 }
@@ -109,45 +143,95 @@ export function useBotUpdateTitleMutation(
   });
 }
 
-export function useBotUpdateRunSettingsMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotUpdateResponse,
-  HostRpcError,
+/**
+ * The answer is laid over every view of the bot: no host re-sends one for a change
+ * it did not make. `null`: the sign-in ended before the answer.
+ */
+export function useBotUpdateRunSettingsMutation(): UseMutationResult<
+  BotRunSettingsWrite | null,
+  Error,
   BotUpdateRunSettingsRequest
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.updateRunSettings">({
-    client,
-    method: "bot.updateRunSettings",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.updateRunSettings(),
-      onSuccess: () => {
-        invalidateBotLists(queryClient);
-      },
+  const binding = useHostBinding();
+  return usePressCapturedMutation<
+    BotRunSettingsWrite | null,
+    Error,
+    BotUpdateRunSettingsRequest,
+    BotWriteOrigin | null
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botMutationKeys.updateRunSettings(),
+    mutationFn: async (request, origin) => {
+      if (origin === null) throw botSetupError({ kind: "no_response" });
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.updateBotRunSettings(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind !== "ok") throw botSetupError(result);
+      return { bot: result.bot, signIn };
+    },
+    onSuccess: (written) => {
+      if (written === null) return;
+      applyBotSettingsToViews(queryClient, written.bot);
+      invalidateBotLists(queryClient);
     },
   });
 }
 
-export function useBotUpdateReplyModeMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotUpdateResponse,
-  HostRpcError,
+/** A later step on its answer (the fallback's retry) asks that sign-in first. */
+export interface BotRunSettingsWrite {
+  readonly bot: BotSetupRow;
+  readonly signIn: PressSignIn;
+}
+
+export function useBotUpdateReplyModeMutation(): UseMutationResult<
+  BotSetupRow | null,
+  Error,
   BotUpdateReplyModeRequest
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.updateReplyMode">({
-    client,
-    method: "bot.updateReplyMode",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.updateReplyMode(),
-      onSuccess: () => {
-        invalidateBotLists(queryClient);
-      },
+  const binding = useHostBinding();
+  return usePressCapturedMutation<
+    BotSetupRow | null,
+    Error,
+    BotUpdateReplyModeRequest,
+    BotWriteOrigin | null
+  >(() => captureBotWriteOrigin(binding?.auth ?? null), {
+    mutationKey: botMutationKeys.updateReplyMode(),
+    mutationFn: async (request, origin) => {
+      if (origin === null) throw botSetupError({ kind: "no_response" });
+      const { auth, signIn } = origin;
+      if (!signIn.isCurrent()) return null;
+      const result = await auth.updateBotReplyMode(request);
+      if (!signIn.isCurrent()) return null;
+      if (result.kind !== "ok") throw botSetupError(result);
+      return result.bot;
     },
+    onSuccess: (bot) => {
+      if (bot === null) return;
+      applyBotSettingsToViews(queryClient, bot);
+      invalidateBotLists(queryClient);
+    },
+  });
+}
+
+/**
+ * The bot's icon, colour or what it wears, each key
+ * left out kept and each `null` cleared. No toast, and no list read of its
+ * own: `useBotLookSaver` sends these in order and keeps the lists.
+ */
+export function useBotUpdateAppearanceMutation(
+  client: HostClient<HostRpcRegistry> | null,
+): UseMutationResult<
+  BotUpdateAppearanceResponse,
+  HostRpcError,
+  BotUpdateAppearanceRequest
+> {
+  return useHostMutation<HostRpcRegistry, "bot.updateAppearance">({
+    client,
+    method: "bot.updateAppearance",
+    mapVariables: (variables) => variables,
+    options: { mutationKey: botMutationKeys.updateAppearance() },
   });
 }
 
@@ -190,11 +274,17 @@ interface BotConversationSendContext {
  * toast on error - the composer states the refusal inline, under the field.
  * A retry or an edit's replacement is refused before it leaves by a host
  * below {@link BOT_CONVERSATION_RETRY_VERSION}, a question card's answer by
- * one below {@link BOT_CONVERSATION_ANSWER_VERSION}, and a call's words by one
- * below {@link BOT_CONVERSATION_CALL_VERSION}.
+ * one below {@link BOT_CONVERSATION_ANSWER_VERSION}, a card's answers sent
+ * together by one below {@link BOT_CONVERSATION_ANSWER_SET_VERSION}, a
+ * call's words by one below {@link BOT_CONVERSATION_CALL_VERSION}, and a
+ * reply to a chosen message by one below {@link BOT_CONVERSATION_REPLY_VERSION}.
  *
  * A send may change a thread, so the channel's thread list is read again on
- * the host the send went through.
+ * the host the send went through. So is a card's answers sent together, or a
+ * reply, that the bot's host does not take (`E_BOT_ANSWER_SETS_UNSUPPORTED`,
+ * `E_BOT_REPLIES_UNSUPPORTED`): the list says what that host takes, and a
+ * card answers each question on its own, and no row offers Reply, once it
+ * says so.
  */
 export function useBotConversationSendMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -224,6 +314,20 @@ export function useBotConversationSendMutation(
           context.hostId,
         );
       },
+      onError: (error, _variables, context) => {
+        const hostId = context?.hostId ?? null;
+        const refusal = finalRefusalOf(error);
+        if (
+          hostId !== null &&
+          refusal instanceof HostRpcError &&
+          (refusal.code === "E_BOT_ANSWER_SETS_UNSUPPORTED" ||
+            refusal.code === "E_BOT_REPLIES_UNSUPPORTED")
+        ) {
+          void queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
+          });
+        }
+      },
     },
   });
 }
@@ -233,6 +337,12 @@ export interface BotCallSendVariables {
   readonly hostId: string;
   /** The account signed in when the call started; `null` owns no call. */
   readonly account: string | null;
+  /**
+   * The sign-in session the call was started under, by value: when set, the
+   * send leaves only while it is still the one signed in. `null` checks no
+   * session.
+   */
+  readonly authority: VoiceCallAuthority | null;
   readonly request: BotConversationSendRequest;
 }
 
@@ -241,11 +351,13 @@ export interface BotCallSendVariables {
  * to a host the hook follows: a call's last words still go to its own host
  * after another call has started on a different one.
  *
- * A send leaves only under the account whose call it is. The check runs in
- * the client resolver, in the same synchronous step as the dispatch (no
- * `prepareRequest` stands between them), against the request context that
- * dispatch carries; a switch after it aborts the captured authority in
- * HostClient. Any other account, or none, refuses the send.
+ * A send leaves only under the account whose call it is, and, when the send
+ * names the call's sign-in session, only while that session is still the one
+ * signed in. Both checks run in the client resolver, in the same synchronous
+ * step as the dispatch (no `prepareRequest` stands between them), so after
+ * anything Query awaits before it; a switch after it aborts the captured
+ * authority in HostClient. Any other account, or none, or a session that is
+ * gone, refuses the send.
  */
 export function useBotCallSendMutation(): UseMutationResult<
   BotConversationSendResponse,
@@ -270,6 +382,13 @@ export function useBotCallSendMutation(): UseMutationResult<
       ) {
         throw new Error("The call's account is no longer signed in.");
       }
+      if (
+        variables.authority !== null &&
+        (binding === null ||
+          !binding.auth.isVoiceCallAuthorityLive(variables.authority))
+      ) {
+        throw new Error("The call's sign-in session is no longer signed in.");
+      }
       return client;
     },
     method: "bot.conversation.send",
@@ -290,14 +409,26 @@ export function useBotCallSendMutation(): UseMutationResult<
   });
 }
 
-/** The send line a request needs: a retry, an answer and a call's words came later. */
+/** The send line a request needs: a retry, an answer, a call's words, a card's answers together and a reply came later. */
 function conversationSendVersion(
   variables: BotConversationSendRequest,
 ): RequiredHostMethodVersion | null {
+  if (variables.replyTo !== undefined) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_REPLY_VERSION,
+    };
+  }
   if (variables.spoken === true || variables.origin !== undefined) {
     return {
       method: "bot.conversation.send",
       version: BOT_CONVERSATION_CALL_VERSION,
+    };
+  }
+  if (variables.answers !== undefined) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_ANSWER_SET_VERSION,
     };
   }
   if (variables.answer !== null) {

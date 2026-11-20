@@ -48,7 +48,7 @@ export function GitBindingsUnreadable(props: {
         <AlertCircle className="size-8 text-destructive/70" aria-hidden />
         <div className="space-y-1">
           <p className="text-ui-sm text-muted-foreground/70">
-            Couldn&apos;t load workspaces
+            Couldn&apos;t load folders
           </p>
           <p
             className="text-ui-xs text-muted-foreground/50"
@@ -78,7 +78,7 @@ export function GitBindingsUnreadable(props: {
         </Button>
         <ReportIssueAction
           context={createReportIssueContext({
-            title: "Couldn't load workspaces",
+            title: "Couldn't load folders",
             message: props.message,
             code: null,
             source: "Git changes",

@@ -263,6 +263,7 @@ function surfacesProps(
       nodeId: CHAT_ID,
       isActive: true,
       mentionRoots: [],
+      runWorkingDirectory: null,
       fallbackToGlobalMentionRoots: true,
       currentEpicId: EPIC_ID,
       onSubmitMessage: () => false,
@@ -276,6 +277,7 @@ function surfacesProps(
         />
       ),
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      onClone: () => undefined,
       onContinueOnTeamHosts: () => undefined,
       suggestedPrompt: undefined,
     },

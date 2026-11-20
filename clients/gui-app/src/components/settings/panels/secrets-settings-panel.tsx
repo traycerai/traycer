@@ -3,6 +3,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
+import { isListedSecret } from "@/components/settings/secrets/listed-secrets";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
@@ -10,8 +11,9 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   SECRETS_EMPTY_TEXT,
   TEAM_SECRETS_LINE,
-  TEAM_SECRETS_DESCRIPTION,
+  teamSecretsDescription,
 } from "@/lib/sandboxes/secrets-page-copy";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 
 import {
   useCanEditConfiguration,
@@ -20,6 +22,7 @@ import {
 } from "@/components/settings/environment/configuration-source";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 
 /**
@@ -43,24 +46,25 @@ export function SecretsSettingsPanel(): ReactNode {
 function TeamSecretsSettingsPanel(): ReactNode {
   const client = useHostClient();
   const personal = useConfigurationIsPersonal();
+  const name = useConfigurationName();
   const scope = useTeamViewingHost();
+  const teamDescription = teamSecretsDescription(name);
   return (
     // No Read-only tag: what the reader's role can do is said once, as the
     // page's own standing line, not as a tag over the list.
     <SecretsListPanelShell
       client={client}
-      description={
-        personal ? SECRETS.page.description : TEAM_SECRETS_DESCRIPTION
-      }
+      description={personal ? SECRETS.page.description : teamDescription}
       headerAction={undefined}
     >
       <SecretsPage
         client={client}
         hostId={client.getActiveHostId()}
-        emptyText={personal ? SECRETS_EMPTY_TEXT : TEAM_SECRETS_DESCRIPTION}
+        emptyText={personal ? SECRETS_EMPTY_TEXT : teamDescription}
         hostName={(hostId) =>
-          scope.hosts.data?.hosts.find((host) => host.hostId === hostId)
-            ?.hostLabel ?? "a host"
+          environmentReadData(scope.hosts)?.hosts.find(
+            (host) => host.hostId === hostId,
+          )?.hostLabel ?? "a host"
         }
       />
     </SecretsListPanelShell>
@@ -86,7 +90,7 @@ function SecretsListPanelShell(props: {
   const empty =
     canEdit &&
     list.data !== undefined &&
-    list.data.secrets.length === 0 &&
+    !list.data.secrets.some(isListedSecret) &&
     list.data.removed.every((entry) => entry.removal.outcome === "destroyed");
   return (
     <SettingsPanelShell

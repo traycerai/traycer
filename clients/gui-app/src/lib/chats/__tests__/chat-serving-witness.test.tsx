@@ -15,19 +15,34 @@ import {
 } from "@traycer-clients/shared/host-client/host-directory";
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import {
+  personalSandboxEntry,
   poolEntry,
   remoteEntry,
   sandboxFacts,
+  teamSandboxEntry,
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import {
   ChatServingWitnessContext,
+  useChatEvictionServing,
   useChatServing,
   useChatServingHostId,
   useChatServingSettled,
+  type ChatEvictionServing,
 } from "@/lib/chats/chat-serving-witness";
+import { holdChatOnItsHost } from "@/lib/chats/chat-continuing-on-host";
 import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
+import {
+  EpicSessionContext,
+  handleHostIds,
+} from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicRuntimeBinding,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+import { createRecordingAccountingPort } from "@/stores/epics/open-epic/test-support/accounting-port-fixture";
 
 const CHAT: ChatServingKey = {
   hostId: "host-sandbox",
@@ -326,6 +341,208 @@ describe("a chat's serving witness across the chat reaching the environment arm"
       client.drivable[0]?.emit(servingFrame(LIVE), null);
     });
     expect(peers.at(-1)).toBe(CHAT.hostId);
+    witness.dispose();
+  });
+});
+
+const INERT_RUNTIME: EpicRuntimeBinding = {
+  port: {
+    call: () => {
+      throw new Error("Unexpected runtime call");
+    },
+  },
+  command: () => {},
+  awarenessOut: () => {},
+  currentUser: () => {},
+  detach: () => {},
+  dispose: () => {},
+};
+
+const AT_REST: ChatServing = {
+  ownerHostId: CHAT.hostId,
+  state: "at-rest",
+  catchingUp: null,
+};
+
+interface MachineReading {
+  hostId: string;
+  settled: boolean;
+  eviction: ChatEvictionServing;
+}
+
+describe("a machine's chat routed by its own eviction fact", () => {
+  const released: Array<() => void> = [];
+  const machineReadings: MachineReading[] = [];
+
+  function Probe(): ReactNode {
+    machineReadings.push({
+      hostId: useChatServingHostId(CHAT),
+      settled: useChatServingSettled(CHAT),
+      eviction: useChatEvictionServing(CHAT),
+    });
+    return null;
+  }
+
+  function mount(input: {
+    readonly entry: HostDirectoryEntry;
+    readonly listHostId: string;
+  }) {
+    state.entry = input.entry;
+    state.armChats = [];
+    const epic: OpenEpicStoreHandle = createOpenEpicStore({
+      epicId: CHAT.epicId,
+      hostId: input.listHostId,
+      userId: null,
+      onWakeTransport: () => {},
+      runtime: INERT_RUNTIME,
+      accounting: createRecordingAccountingPort().port,
+    });
+    handleHostIds.set(epic, input.listHostId);
+    const client = new StatusDrivableClient(true);
+    const witness = new PoolChatServingWitness();
+    witness.setStreamClient(client);
+    render(
+      <EpicSessionContext.Provider value={epic}>
+        <ChatServingWitnessContext.Provider value={witness}>
+          <Probe />
+        </ChatServingWitnessContext.Provider>
+      </EpicSessionContext.Provider>,
+    );
+    return {
+      client,
+      witness,
+      evict: () =>
+        act(() => {
+          epic.store
+            .getState()
+            .applyChatRecordEvictions([{ chatId: CHAT.chatId, evicted: true }]);
+        }),
+      frame: (serving: ChatServing) =>
+        act(() => {
+          client.drivable[0]?.emit(servingFrame(serving), null);
+        }),
+    };
+  }
+
+  function machine(): HostDirectoryEntry {
+    return remoteEntry(CHAT.hostId, null);
+  }
+
+  afterEach(() => {
+    for (const release of released.splice(0)) release();
+    cleanup();
+    state.entry = null;
+    machineReadings.length = 0;
+  });
+
+  it("moves an evicted chat to the pool once the witness reads it at rest, and waits for the first state", () => {
+    const { client, witness, evict, frame } = mount({
+      entry: machine(),
+      listHostId: CHAT.hostId,
+    });
+    evict();
+    expect(client.subscribes).toHaveLength(1);
+    expect(machineReadings.at(-1)?.settled).toBe(false);
+
+    frame(AT_REST);
+
+    expect(machineReadings.at(-1)).toMatchObject({
+      hostId: POOL_HOST_ID,
+      settled: true,
+      eviction: { served: true, held: true },
+    });
+    witness.dispose();
+  });
+
+  it("never asks the witness about a chat its machine has not evicted", () => {
+    const { client, witness } = mount({
+      entry: machine(),
+      listHostId: CHAT.hostId,
+    });
+
+    expect(client.subscribes).toHaveLength(0);
+    expect(machineReadings.at(-1)).toMatchObject({
+      hostId: CHAT.hostId,
+      settled: true,
+      eviction: { served: false, held: false },
+    });
+    witness.dispose();
+  });
+
+  it("keeps a cross-host chat on its machine, settled, while the witness knows nothing, and moves it to the pool at rest", () => {
+    const { witness, frame } = mount({
+      entry: machine(),
+      listHostId: "host-listing",
+    });
+    expect(machineReadings.at(-1)).toMatchObject({
+      hostId: CHAT.hostId,
+      settled: true,
+    });
+
+    frame(AT_REST);
+
+    expect(machineReadings.at(-1)?.hostId).toBe(POOL_HOST_ID);
+    witness.dispose();
+  });
+
+  it("serves a held chat from its own host, counts holders, and returns it to the pool when the last one lets go", () => {
+    const { witness, evict, frame } = mount({
+      entry: machine(),
+      listHostId: CHAT.hostId,
+    });
+    evict();
+    frame(AT_REST);
+    expect(machineReadings.at(-1)?.hostId).toBe(POOL_HOST_ID);
+
+    let releaseFirst = () => {};
+    let releaseSecond = () => {};
+    act(() => {
+      releaseFirst = holdChatOnItsHost(CHAT);
+      releaseSecond = holdChatOnItsHost(CHAT);
+    });
+    released.push(releaseFirst, releaseSecond);
+    expect(machineReadings.at(-1)).toMatchObject({
+      hostId: CHAT.hostId,
+      eviction: { served: false, held: true },
+    });
+
+    act(() => releaseFirst());
+    expect(machineReadings.at(-1)?.hostId).toBe(CHAT.hostId);
+
+    act(() => releaseSecond());
+    expect(machineReadings.at(-1)).toMatchObject({
+      hostId: POOL_HOST_ID,
+      eviction: { served: true, held: true },
+    });
+    witness.dispose();
+  });
+
+  it("never asks about a personal sandbox's chat, even one the list calls evicted", () => {
+    const { client, witness, evict } = mount({
+      entry: remoteEntry(CHAT.hostId, personalSandboxEntry.sandbox),
+      listHostId: CHAT.hostId,
+    });
+    evict();
+
+    expect(client.subscribes).toHaveLength(0);
+    expect(machineReadings.at(-1)?.hostId).toBe(CHAT.hostId);
+    witness.dispose();
+  });
+
+  it("leaves a team sandbox's chat to its own witness and ignores a hold", () => {
+    const { witness, frame } = mount({
+      entry: remoteEntry(CHAT.hostId, teamSandboxEntry.sandbox),
+      listHostId: CHAT.hostId,
+    });
+    frame(AT_REST);
+    act(() => {
+      released.push(holdChatOnItsHost(CHAT));
+    });
+
+    expect(machineReadings.at(-1)).toMatchObject({
+      hostId: POOL_HOST_ID,
+      eviction: { served: false, held: false },
+    });
     witness.dispose();
   });
 });

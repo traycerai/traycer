@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -8,6 +9,9 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { PROFILE_SYNC_LINK_RPC_METHODS } from "@traycer/protocol/host/profile-sync-link-contracts";
+import { HOST_UNARY_RPC_ROUTES } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { ConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { CATALOG_PROBE_TIMEOUT_MAX_SECONDS } from "@traycer/protocol/config/schema";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
@@ -54,6 +58,7 @@ import type {
 import { UPDATE_CHECK_CLI_RECOVERY_POLL_LANE } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 
 const typedProvidersClassifier = (
   data: ResponseOfMethod<HostRpcRegistry, "providers.list"> | undefined,
@@ -121,35 +126,38 @@ function checkResponse(
   };
 }
 
-const PROFILE_SYNC_FIXED_LATEST_METHODS = [
-  "providers.profileSync.overview",
-] as const;
-
-const PROFILE_SYNC_FIFO_METHODS = [
-  "providers.profileSync.syncNow",
-  "providers.profileSync.setKeepInSync",
-  "providers.profileSync.acceptAccount",
+const EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS = [
   "host.profileSync.apply",
-  "host.profileSync.offerCredential",
   "host.profileSync.fetchCredential",
-] as const;
-
-const PROFILE_SYNC_METHODS = [
-  ...PROFILE_SYNC_FIXED_LATEST_METHODS,
-  ...PROFILE_SYNC_FIFO_METHODS,
-] as const;
+  "host.profileSync.offerCredential",
+  "providers.profileSync.acceptAccount",
+  "providers.profileSync.overview",
+  "providers.profileSync.setKeepInSync",
+  "providers.profileSync.syncNow",
+].sort();
 
 // @ts-expect-error The phantom method field must reject a policy under another key.
 const wrongKeyPolicy: ErasedConditionPollPolicy<"agent.gui.listHarnesses"> =
   typedToErasedPolicy;
 
 describe("host method poll policy table", () => {
-  it("has exactly the host registry's method keys", () => {
+  it("has no scheduling entries for retired team provider profile calls", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(Object.hasOwn(HOST_METHOD_POLL_TABLE, method)).toBe(false);
+    }
+  });
+
+  it("has exactly the client-routable host method keys", () => {
     expect(() =>
       assertExactHostMethodPollTableKeys(HOST_METHOD_POLL_TABLE),
     ).not.toThrow();
     expect(Object.keys(HOST_METHOD_POLL_TABLE).sort()).toEqual(
-      Object.keys(hostRpcRegistry).sort(),
+      Object.keys(HOST_UNARY_RPC_ROUTES).sort(),
     );
   });
 
@@ -159,7 +167,7 @@ describe("host method poll policy table", () => {
     expect(wrongKeyPolicy.method).toBe("providers.list");
   });
 
-  it("declares scheduling posture and a join timeout for every registry method", () => {
+  it("declares scheduling posture and a join timeout for every client-routable method", () => {
     for (const entry of Object.values(HOST_METHOD_POLL_TABLE)) {
       expect(
         entry.mode === "latest" ||
@@ -173,27 +181,31 @@ describe("host method poll policy table", () => {
     }
   });
 
-  it("covers every profile-sync method with an explicit scheduling posture", () => {
-    const registryProfileSyncMethods = Object.keys(hostRpcRegistry)
-      .filter((method) => method.includes("profileSync"))
-      .sort();
-    expect([...PROFILE_SYNC_METHODS].sort()).toEqual(
-      registryProfileSyncMethods,
+  it("omits exactly the protocol-retained profile-sync methods from app policy and polling", () => {
+    const protocolRetained = Object.keys(PROFILE_SYNC_LINK_RPC_METHODS).sort();
+    expect(protocolRetained).toEqual(
+      EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS,
     );
+    expect(
+      Object.keys(hostRpcRegistry)
+        .filter((method) => protocolRetained.includes(method))
+        .sort(),
+    ).toEqual(protocolRetained);
+    expect(
+      Object.keys(HOST_METHOD_POLL_TABLE).filter((method) =>
+        protocolRetained.includes(method),
+      ),
+    ).toEqual([]);
 
-    for (const method of PROFILE_SYNC_FIXED_LATEST_METHODS) {
-      expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
-        mode: "latest",
-        joinResponseTimeoutMs: null,
-        poll: { kind: "fixed", intervalMs: 5_000 },
-      });
-    }
-    for (const method of PROFILE_SYNC_FIFO_METHODS) {
-      expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
-        mode: "fifo",
-        joinResponseTimeoutMs: null,
-        poll: null,
-      });
+    const queryClient = new QueryClient();
+    const coordinator = new ConditionPollEpisodeCoordinator(queryClient);
+    try {
+      for (const method of protocolRetained) {
+        expect(coordinator.pollOptionsFor(method, true)).toEqual({});
+      }
+    } finally {
+      coordinator.dispose();
+      queryClient.clear();
     }
   });
 
@@ -350,11 +362,16 @@ describe("host method poll policy table", () => {
       "environment.configuration.items",
       "environment.configuration.skills.list",
       "environment.configuration.skills.state",
+      "environment.plans.list",
     ] as const) {
       expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
         mode: "latest",
         joinResponseTimeoutMs: null,
-        poll: { kind: "fixed", intervalMs: 5_000 },
+        poll: {
+          kind: "fixed",
+          intervalMs: 5_000,
+          requiresWindowAttention: true,
+        },
       });
     }
     for (const method of [
@@ -444,6 +461,26 @@ describe("host method poll policy table", () => {
     // retained `liveBusySessionCount` to `null` — inverting the two would make
     // a healthy query flicker between live and unknown on every tick.
     expect(intervalMs).toBeLessThan(30_000);
+  });
+
+  it("polls a running move through environment.status and never polls move.outcome", () => {
+    const statusPolicy = HOST_METHOD_POLL_TABLE["environment.status"].poll;
+    expect(
+      statusPolicy.classify(
+        environmentStatusFixture({
+          move: {
+            state: "running",
+            attemptId: "8f0c2a4e-5b1d-4c3e-9a7f-1e2d3c4b5a60",
+            acceptanceId: "c3d4e5f6-0718-4a29-8b3c-4d5e6f708192",
+          },
+        }),
+      ),
+    ).toEqual({
+      id: "environment.status.move-running",
+      initialDelayMs: 500,
+      maxDelayMs: 2_000,
+    });
+    expect(HOST_METHOD_POLL_TABLE["environment.move.outcome"].poll).toBeNull();
   });
 
   // `host.getInstallationInfo` used to have no cadence at all. It is now

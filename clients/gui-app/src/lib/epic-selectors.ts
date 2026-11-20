@@ -2572,6 +2572,19 @@ export function useEpicTreeNode(id: string): TreeNode | null {
   });
 }
 
+/**
+ * A node's title in the open epic's tree, `null` when the tree has no such
+ * node or there is no open epic: the read for a surface that also mounts
+ * outside an `<EpicSessionProvider>`, as a bot tab does.
+ */
+export function useMaybeEpicTreeNodeTitle(id: string): string | null {
+  return useMaybeEpicStore(
+    (s) =>
+      Object.hasOwn(s.tree.nodeById, id) ? s.tree.nodeById[id].title : null,
+    null,
+  );
+}
+
 export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
   const enabled = useAgentRolesEnabled();
   const claims = useEpicStore((s) =>
@@ -2820,6 +2833,20 @@ export function useArtifactById(id: string | null): ArtifactProjection | null {
     if (Object.hasOwn(s.artifacts.byId, id)) return s.artifacts.byId[id];
     return null;
   });
+}
+
+/**
+ * Whether an artifact is one loose file and not a folder. A loose HTML page
+ * carries the same kind as an HTML folder, so its change is that one file's
+ * own and never a folder of files. False outside an open epic.
+ */
+export function useIsLooseFileArtifact(id: string): boolean {
+  return useMaybeEpicStore(
+    (s) =>
+      Object.hasOwn(s.artifacts.byId, id) &&
+      s.artifacts.byId[id].layout === "file",
+    false,
+  );
 }
 
 /**

@@ -1,12 +1,13 @@
+/** Electron-native machine shares, kept distinct from host per-core values. */
 export interface DesktopAppProcessGroupUsage {
-  readonly cpuPercent: number;
+  readonly cpuSharePercent: number;
   readonly rssBytes: number;
   readonly processCount: number;
 }
 
 export interface DesktopAppResourceUsage {
   readonly sampledAt: number;
-  readonly cpuPercent: number;
+  readonly cpuSharePercent: number;
   readonly rssBytes: number;
   readonly processCount: number;
   readonly main: DesktopAppProcessGroupUsage;
@@ -17,7 +18,7 @@ export interface DesktopAppResourceUsage {
 export interface DesktopProcessMetric {
   readonly pid: number;
   readonly type: string;
-  readonly cpu: { readonly percentCPUUsage: number };
+  readonly cpu: { readonly cpuSharePercent: number };
   readonly memory: { readonly workingSetSize: number };
 }
 
@@ -80,7 +81,7 @@ interface RunnerHostWindowShape {
 }
 
 const EMPTY_GROUP: DesktopAppProcessGroupUsage = {
-  cpuPercent: 0,
+  cpuSharePercent: 0,
   rssBytes: 0,
   processCount: 0,
 };
@@ -163,10 +164,10 @@ export function desktopAppResourceUsageFromMetrics(
 
   return {
     sampledAt,
-    cpuPercent:
-      groups.main.cpuPercent +
-      groups.renderer.cpuPercent +
-      groups.other.cpuPercent,
+    cpuSharePercent:
+      groups.main.cpuSharePercent +
+      groups.renderer.cpuSharePercent +
+      groups.other.cpuSharePercent,
     rssBytes:
       groups.main.rssBytes + groups.renderer.rssBytes + groups.other.rssBytes,
     processCount:
@@ -188,7 +189,7 @@ function processMetricUsage(
   metric: DesktopProcessMetric,
 ): DesktopAppProcessGroupUsage {
   return {
-    cpuPercent: normalizeFiniteNumber(metric.cpu.percentCPUUsage),
+    cpuSharePercent: normalizeFiniteNumber(metric.cpu.cpuSharePercent),
     rssBytes: normalizeFiniteNumber(metric.memory.workingSetSize) * 1024,
     processCount: metric.pid > 0 ? 1 : 0,
   };
@@ -199,7 +200,7 @@ function addProcessGroupUsage(
   next: DesktopAppProcessGroupUsage,
 ): DesktopAppProcessGroupUsage {
   return {
-    cpuPercent: current.cpuPercent + next.cpuPercent,
+    cpuSharePercent: current.cpuSharePercent + next.cpuSharePercent,
     rssBytes: current.rssBytes + next.rssBytes,
     processCount: current.processCount + next.processCount,
   };

@@ -14,7 +14,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
-import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
+import { releasedExecutableWriteGrantSchema } from "@traycer/protocol/host/released-executable-write-grant";
 
 const textFrameFields = {
   hasBinaryPayload: lazySchema(() => z.literal(false)),
@@ -60,6 +60,7 @@ export const hostNotificationKindSchema = lazySchema(() =>
     "environment.move.stalled",
     "environment.apply.failed",
     "team.role.changed",
+    "access.readonly.retired",
     "team.host.returned",
     "secret.removed",
     "sandbox.notice",
@@ -629,6 +630,26 @@ export type HostNotificationCloudEntryV27 = z.infer<
   typeof hostNotificationCloudEntrySchemaV27
 >;
 
+const readonlyAccessRetiredEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("access.readonly.retired"),
+    outcome: z.literal("completed"),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
+
+/** CloudFeed @1.8 adds notices for retired read-only grants and seats. */
+export const hostNotificationCloudEntrySchemaV28 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...hostNotificationCloudEntrySchemaV27.options,
+    readonlyAccessRetiredEntryArm,
+  ]),
+);
+export type HostNotificationCloudEntryV28 = z.infer<
+  typeof hostNotificationCloudEntrySchemaV28
+>;
+
 /**
  * Narrows a widest-union entry to the released union. Derived from
  * {@link RELEASED_HOST_NOTIFICATION_KINDS} rather than listing the exclusions:
@@ -637,7 +658,7 @@ export type HostNotificationCloudEntryV27 = z.infer<
  * excluded by DEFAULT, not by remembering to name it here.
  */
 export function isReleasedHostNotificationEntry(
-  entry: HostNotificationCloudEntryV27,
+  entry: HostNotificationCloudEntryV28,
 ): entry is HostNotificationEntry {
   return RELEASED_HOST_NOTIFICATION_KINDS.includes(entry.kind);
 }
@@ -758,10 +779,15 @@ export const V27_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
   ...V26_HOST_NOTIFICATION_KINDS,
   "feedback.drafted",
 ];
-/** Every kind this build can carry, on the newest version of each surface. */
-export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
+/** Frozen cloudFeed @1.7 vocabulary. */
+export const V27_CLOUD_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
   ...V26_CLOUD_NOTIFICATION_KINDS,
   "feedback.drafted",
+];
+/** Every kind this build can carry, on the newest version of each surface. */
+export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
+  ...V27_CLOUD_NOTIFICATION_KINDS,
+  "access.readonly.retired",
 ];
 
 /**
@@ -834,7 +860,8 @@ export function visibleHostNotificationKinds(
     // compatibility buckets from here rather than re-deciding `minor >= 1`.
     case "host.notifications.cloudFeed.subscribe":
       if (schemaVersion.major === 1) {
-        if (schemaVersion.minor >= 7) return ALL_HOST_NOTIFICATION_KINDS;
+        if (schemaVersion.minor >= 8) return ALL_HOST_NOTIFICATION_KINDS;
+        if (schemaVersion.minor === 7) return V27_CLOUD_NOTIFICATION_KINDS;
         if (schemaVersion.minor === 6) return V26_CLOUD_NOTIFICATION_KINDS;
         if (schemaVersion.minor === 5) return V25_CLOUD_NOTIFICATION_KINDS;
         if (schemaVersion.minor === 4) return V24_HOST_NOTIFICATION_KINDS;
@@ -2280,21 +2307,6 @@ export type HostNotificationsConfigResponse = z.infer<
   typeof hostNotificationsConfigResponseSchema
 >;
 
-/**
- * How long a turn may run on this host before its person is alerted, in
- * milliseconds; `null` is off. A method pair of its own rather than a field on
- * `setConfig`: that request replaces the whole config, so a client that
- * predates the field would turn the alert off with every severity toggle.
- */
-export const hostNotificationsLongTurnAlertSchema = lazySchema(() =>
-  z.object({
-    thresholdMs: z.number().int().positive().nullable(),
-  }),
-);
-export type HostNotificationsLongTurnAlert = z.infer<
-  typeof hostNotificationsLongTurnAlertSchema
->;
-
 export const hostNotificationsListV10 = defineRpcContract({
   method: "host.notifications.list",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -3235,6 +3247,54 @@ export const hostNotificationsCloudFeedSubscribeV17 = defineStreamRpcContract({
   clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
 });
 
+export const hostNotificationsCloudFeedRowSchemaV18 = lazySchema(() =>
+  z.object({
+    ...hostNotificationsCloudFeedRowSchema.shape,
+    entry: hostNotificationCloudEntrySchemaV28,
+  }),
+);
+export type HostNotificationsCloudFeedRowV18 = z.infer<
+  typeof hostNotificationsCloudFeedRowSchemaV18
+>;
+
+const hostNotificationsCloudFeedSnapshotSchemaV18 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    connectionState: z.literal("connected"),
+    version: z.number().int().nonnegative(),
+    rows: z.array(hostNotificationsCloudFeedRowSchemaV18),
+    summary: hostNotificationsCloudFeedSummarySchema,
+  }),
+);
+const hostNotificationsCloudFeedPartitionSnapshotSchemaV18 = lazySchema(() =>
+  hostNotificationsCloudFeedSnapshotSchemaV18.extend({
+    kind: z.literal("partitionSnapshot"),
+    partition: hostNotificationsCloudPartitionSchema,
+  }),
+);
+export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV18 =
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      hostNotificationsCloudFeedPartitionSnapshotSchemaV18,
+      hostNotificationsCloudFeedSnapshotSchemaV18,
+      hostNotificationsCloudFeedConnectionStateSchemaV10,
+      hostNotificationsCloudFeedPongSchemaV10,
+    ]),
+  );
+export type HostNotificationsCloudFeedSubscribeServerFrameV18 = z.infer<
+  typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV18
+>;
+
+/** Additive minor: same open request and client frames, widened entry union. */
+export const hostNotificationsCloudFeedSubscribeV18 = defineStreamRpcContract({
+  method: "host.notifications.cloudFeed.subscribe",
+  schemaVersion: { major: 1, minor: 8 } as const,
+  openRequestSchema: hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostNotificationsCloudFeedSubscribeServerFrameSchemaV18,
+  clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
+});
+
 /**
  * The whole of a per-entry mutation: WHICH entry.
  *
@@ -3466,20 +3526,6 @@ export const hostNotificationsSetConfig = defineRpcContract({
   responseSchema: hostNotificationsConfigResponseSchema,
 });
 
-export const hostNotificationsGetLongTurnAlert = defineRpcContract({
-  method: "host.notifications.getLongTurnAlert",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: hostNotificationsConfigRequestSchema,
-  responseSchema: hostNotificationsLongTurnAlertSchema,
-});
-
-export const hostNotificationsSetLongTurnAlert = defineRpcContract({
-  method: "host.notifications.setLongTurnAlert",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: hostNotificationsLongTurnAlertSchema,
-  responseSchema: hostNotificationsLongTurnAlertSchema,
-});
-
 export const hostNotificationsIndicatorStateV10 = defineRpcContract({
   method: "host.notifications.indicatorState",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -3684,16 +3730,14 @@ export type NotificationHooksSaveRequestV10 = z.infer<
 >;
 
 /**
- * v2.0: the saved list can hold a `command` action, which the
- * host runs, so the save carries the executable-write grant. A whole-list
- * save with no per-hook write, so the grant matters when the list holds a
- * command; `null` otherwise.
+ * Frozen @2 request: the inert carrier preserves its strict released shape
+ * and major boundary. Current @3/@4 callers omit it; no host reads it.
  */
 export const notificationHooksSaveRequestSchemaV20 = lazySchema(() =>
   z
     .object({
       hooks: z.array(notificationHookConfigSchema),
-      executableWriteGrant: executableWriteGrantSchema,
+      executableWriteGrant: releasedExecutableWriteGrantSchema,
     })
     .strict(),
 );
@@ -3848,6 +3892,7 @@ export type NotificationHooksStatusResponse = z.infer<
 
 export const notificationHooksSaveRequestSchema = lazySchema(() =>
   notificationHooksSaveRequestSchemaV20
+    .omit({ executableWriteGrant: true })
     .extend({
       // Null represents a released caller's absent revision, never a fresh read.
       // The host rejects null from a direct @3 caller using ctx.schemaVersion.
@@ -3919,7 +3964,10 @@ export const hostNotificationHooksSaveUpgradeV2ToV3 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  upgradeRequest: (request) => ({ ...request, configurationRevision: null }),
+  upgradeRequest: (request) => ({
+    hooks: request.hooks,
+    configurationRevision: null,
+  }),
   upgradeResponse: upgradeHooksStatus,
 });
 export const hostNotificationHooksSaveDowngradeV30ToV20 = defineDowngradePath<
@@ -3932,7 +3980,7 @@ export const hostNotificationHooksSaveDowngradeV30ToV20 = defineDowngradePath<
     ok: true,
     value: {
       hooks: request.hooks,
-      executableWriteGrant: request.executableWriteGrant,
+      executableWriteGrant: null,
     },
   }),
   downgradeResponse: (response) => ({

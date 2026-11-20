@@ -453,6 +453,46 @@ function assistantTextSegment(
   return { id, kind: "text", markdown, isStreaming: false };
 }
 
+/**
+ * A saved reading position names a LATER PART of a turn whose first part is
+ * already drawn: the owner row measures and the restore settles on it while
+ * the named part is still on its way. `partialMessages` draws the first part
+ * only; `fullMessages` adds the part `partKey` names.
+ */
+function splitTurnFixture(
+  count: number,
+  ownerIndex: number,
+): {
+  fullMessages: ChatMessageModel[];
+  partialMessages: ChatMessageModel[];
+  partKey: string;
+} {
+  const base = makeCompletedTranscript(count);
+  const ownerId = `assistant:turn-late-part-${ownerIndex}`;
+  const owner: ChatMessageModel = {
+    ...base[ownerIndex],
+    id: ownerId,
+    role: "assistant",
+    segments: [
+      assistantTextSegment("text-first", "First block of the turn."),
+      assistantTextSegment("text-later", "Later block the reader was on."),
+    ],
+  };
+  const withOwner = (row: ChatMessageModel): ChatMessageModel[] => [
+    ...base.slice(0, ownerIndex),
+    row,
+    ...base.slice(ownerIndex + 1),
+  ];
+  return {
+    fullMessages: withOwner(owner),
+    partialMessages: withOwner({
+      ...owner,
+      segments: owner.segments.slice(0, 1),
+    }),
+    partKey: `${ownerId}#text-later`,
+  };
+}
+
 /** A pure agent-to-agent child chat - every `role: "user"` row carries
  *  `agentSenderInfo`, so ZERO rows pass `isHumanUserMessage`. Models the
  *  transcript shape `selectActiveUserMessageId`'s human-only gate
@@ -1151,6 +1191,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           taskId={taskId}
           epicId={epicId}
           hostId={null}
+          payerHostId={null}
           messages={state.messages}
           baselineEpoch={state.baselineEpoch}
           hydrationSequence={state.hydrationSequence}
@@ -1162,6 +1203,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           systemOverlayActive={state.systemOverlayActive}
           scrollRequest={state.scrollRequest}
           onScrollRequestSettled={state.onScrollRequestSettled}
+          onReaderMoved={null}
           composerOverlayHeight={state.composerOverlayHeight}
           transcriptWindow={state.transcriptWindow}
           onVisibleOrdinalRangeChange={state.onVisibleOrdinalRangeChange}
@@ -2501,6 +2543,7 @@ describe("ChatMessages scroll policy", () => {
         outputFile: null,
         mcp: null,
         managedCommand: null,
+        conversationMessage: null,
       };
       const userMsg = makeMessage(0, "user");
       const notificationRow: ChatMessageModel = {
@@ -2570,6 +2613,7 @@ describe("ChatMessages scroll policy", () => {
         outputFile: null,
         mcp: null,
         managedCommand: null,
+        conversationMessage: null,
       };
       const knownUser = makeMessage(0, "user");
       const knownAssistant: ChatMessageModel = {
@@ -2625,6 +2669,7 @@ describe("ChatMessages scroll policy", () => {
         outputFile: null,
         mcp: null,
         managedCommand: null,
+        conversationMessage: null,
       };
       const userMsg = makeMessage(0, "user");
       const notificationRow: ChatMessageModel = {
@@ -3153,6 +3198,7 @@ describe("ChatMessages scroll policy", () => {
       openAnnouncementThread: () => undefined,
       threadAnchorKinds: [],
       chooseOption: null,
+      reply: null,
       questions: null,
       failedRequest: null,
       failedRecovery: null,
@@ -3227,6 +3273,58 @@ describe("ChatMessages scroll policy", () => {
   // isolation); this one is the wiring pin that a deleted link anywhere in
   // that chain would fail.
   describe("minimap current tick via the real scroll chain (O2, ticket 16)", () => {
+    function activeTickMessageId(): string | null {
+      return (
+        document
+          .querySelector(
+            '[data-testid="chat-turn-minimap-tick"][data-active="true"]',
+          )
+          ?.getAttribute("data-message-id") ?? null
+      );
+    }
+
+    // A real content height parks the end with three of the tail's queries in
+    // full view; the follow mode, not their tie, decides the tick.
+    async function renderTwelveRowsAtEnd(scrollStateKey: string) {
+      const messages = makeCompletedTranscript(12);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      renderChatMessages({ messages, scrollStateKey });
+      await settleLegendList();
+      assertTrueBottomGeometry();
+    }
+
+    it("marks the last turn's tick while the timeline follows its end", async () => {
+      await renderTwelveRowsAtEnd("minimap-at-end");
+
+      await waitFor(() => {
+        expect(activeTickMessageId()).toBe("message-10");
+      });
+    });
+
+    it("moves the tick with the follow mode itself, with no scroll event", async () => {
+      await renderTwelveRowsAtEnd("minimap-go-live");
+      const scrollNode = getScrollNode();
+      fireEvent.wheel(scrollNode, { deltaY: -80 });
+      await fireScrollTopAndFlush(0);
+      await waitForPillVisible();
+      await waitFor(() => {
+        expect(activeTickMessageId()).toBe("message-0");
+      });
+      const pill = queryScrollToEndPill();
+      if (pill === null) throw new Error("scroll-to-end pill is not mounted");
+      let scrollEvents = 0;
+      scrollNode.addEventListener("scroll", () => {
+        scrollEvents += 1;
+      });
+
+      fireEvent.click(pill);
+
+      expect(scrollEvents).toBe(0);
+      expect(activeTickMessageId()).toBe("message-10");
+    });
+
     it("updates the current rail tick through a real fireEvent.scroll, not a direct inViewRefreshRef call", async () => {
       const messages = makeCompletedTranscript(12);
       renderChatMessages({
@@ -3745,6 +3843,35 @@ describe("ChatMessages scroll policy", () => {
       expect(
         Math.abs((atSettle.scrollTop ?? 0) - expectedRowScrollTop(targetIndex)),
       ).toBeLessThanOrEqual(1);
+    });
+
+    it("lands a boundary request on the row it names and paints no highlight on it", async () => {
+      const messages = makeCompletedTranscript(30);
+      const target = messages[10];
+      const atSettle: { highlighted: number | null } = { highlighted: null };
+      const onScrollRequestSettled = vi.fn(() => {
+        atSettle.highlighted = document.querySelectorAll(
+          "[data-navigation-highlighted]",
+        ).length;
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-boundary-no-highlight",
+        onScrollRequestSettled,
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: { kind: "boundary", rowId: target.id, requestId: 51 },
+      });
+
+      await waitFor(() => {
+        expect(onScrollRequestSettled).toHaveBeenCalledWith(51, "landed");
+      });
+      expect(atSettle.highlighted).toBe(0);
+      expect(
+        document.querySelector("[data-navigation-highlighted]"),
+      ).toBeNull();
     });
 
     it("does not let a mounted sibling part satisfy a missing later-part landing", async () => {
@@ -5993,7 +6120,7 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
     });
 
-    it("preserves the unresolved raw hydration anchor across a normalized rapid remount", async () => {
+    it("preserves the unresolved raw hydration anchor across a rapid remount parked at the tail", async () => {
       const fullMessages = makeCompletedTranscript(200);
       const anchorIndex = 20;
       const anchorId = fullMessages[anchorIndex]?.id ?? null;
@@ -6002,9 +6129,9 @@ describe("ChatMessages scroll policy", () => {
         anchorIndex * TICKET_13_ROW_HEIGHT_PX + LEGEND_LIST_HEADER_PX - 24;
       const key = `t15-hydration-remount-${Math.random().toString(36).slice(2)}`;
       const identity = makeDefaultTestIdentity(key);
-      // The partial tail is long enough that the substituted local index is
-      // measurable away from its own edge, so the normalized fallback can
-      // settle and overwrite the ordinary cache before this rapid remount.
+      // The legacy saved row is not in this partial tail, and a legacy line
+      // cannot prove it gone: the mount parks at the tail and the saved raw
+      // anchor stays durable, so this rapid remount still carries it.
       const partialMessages = fullMessages.slice(150);
 
       saveChatTabState({
@@ -6023,9 +6150,10 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
       first.unmount();
 
-      const normalizedAfterFirstUnmount = peekSavedChatTabState(identity);
-      expect(normalizedAfterFirstUnmount?.mode).toBe("free-scrolling");
-      expect(normalizedAfterFirstUnmount?.anchorMessageId).not.toBe(anchorId);
+      const retainedAfterFirstUnmount = peekSavedChatTabState(identity);
+      expect(retainedAfterFirstUnmount?.mode).toBe("free-scrolling");
+      expect(retainedAfterFirstUnmount?.anchorMessageId).toBe(anchorId);
+      expect(retainedAfterFirstUnmount?.anchorIndex).toBe(anchorIndex);
       const second = renderChatMessages({
         messages: partialMessages,
         scrollStateKey: key,
@@ -6083,9 +6211,12 @@ describe("ChatMessages scroll policy", () => {
       reopened.unmount();
     });
 
-    it("hydration catch-up does not disturb the true-deletion nearest-neighbor fallback (branch-edited anchor, never resolves)", async () => {
+    it("a legacy anchor that never resolves stays raw and parked at the tail, never replaced by an invented neighbor row", async () => {
       const messages = makeCompletedTranscript(16);
       const key = `t15-hydration-deleted-${Math.random().toString(36).slice(2)}`;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * TICKET_13_ROW_HEIGHT_PX + 40,
+      );
 
       saveChatTabState({
         identity: makeDefaultTestIdentity(key),
@@ -6099,23 +6230,22 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
       await settleLegendList();
 
-      // The round-1 stale-anchor nearest-neighbor fallback still applies
-      // exactly as before this fix. The measured neighboring-row landing is
-      // allowed to settle even while the same-mount hydration retry retains
-      // the original id, so unmount persists a coherent normalized anchor
-      // instead of re-saving the deleted id forever.
+      // A legacy line cannot prove the row gone, so no neighboring row is
+      // invented for it: the raw anchor stays durable and the mount waits at
+      // the tail for it.
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(
         screen.queryByTestId("mock-message-gone-branch-deleted"),
       ).toBeNull();
+      expect(getScrollNode().scrollTop).toBeGreaterThanOrEqual(
+        maxScrollTopFor(getScrollNode()) - 1,
+      );
 
       first.unmount();
-      const normalized = peekSavedChatTabState(makeDefaultTestIdentity(key));
-      expect(normalized?.mode).toBe("free-scrolling");
-      expect(normalized?.anchorMessageId).not.toBe("gone-branch-deleted");
-      expect(
-        messages.some((message) => message.id === normalized?.anchorMessageId),
-      ).toBe(true);
+      const retained = peekSavedChatTabState(makeDefaultTestIdentity(key));
+      expect(retained?.mode).toBe("free-scrolling");
+      expect(retained?.anchorMessageId).toBe("gone-branch-deleted");
+      expect(retained?.anchorIndex).toBe(5);
 
       const reopened = renderChatMessages({ messages, scrollStateKey: key });
       await settleLegendList();
@@ -6123,6 +6253,9 @@ describe("ChatMessages scroll policy", () => {
       expect(
         screen.queryByTestId("mock-message-gone-branch-deleted"),
       ).toBeNull();
+      expect(getScrollNode().scrollTop).toBeGreaterThanOrEqual(
+        maxScrollTopFor(getScrollNode()) - 1,
+      );
       reopened.unmount();
     });
 
@@ -6186,6 +6319,7 @@ describe("ChatMessages scroll policy", () => {
             taskId="task-1"
             epicId="epic-1"
             hostId={null}
+            payerHostId={null}
             messages={messages}
             baselineEpoch={0}
             hydrationSequence={0}
@@ -6197,6 +6331,7 @@ describe("ChatMessages scroll policy", () => {
             systemOverlayActive={false}
             scrollRequest={null}
             onScrollRequestSettled={null}
+            onReaderMoved={null}
             composerOverlayHeight={80}
             transcriptWindow={null}
             onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}
@@ -10626,7 +10761,7 @@ describe("ChatMessages scroll policy", () => {
 
     it("reaching true bottom past an in-flight clamped free restore persists following-end across remount", async () => {
       enableLegendListBrowserScrollEvents();
-      const messages = makeCompletedTranscript(80);
+      const { partialMessages: messages, partKey } = splitTurnFixture(80, 40);
       setLegendListScrollContainerScrollHeightOverride(
         LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
       );
@@ -10637,7 +10772,7 @@ describe("ChatMessages scroll policy", () => {
       saveChatTabState({
         identity,
         mode: "free-scrolling",
-        anchorMessageId: "totally-missing-id",
+        anchorMessageId: partKey,
         anchorIndex: 40,
         offset: 12,
       });
@@ -10783,49 +10918,43 @@ describe("ChatMessages scroll policy", () => {
     // module-level pending registry together), and must not be fooled by
     // automatic content/geometry movement that was never reader input.
 
-    it("past-target bottom, then the formerly-missing row hydrates: reader stays at true bottom, no yank-back", async () => {
+    it("past-target bottom, same-instance remount, then the formerly-missing part hydrates: reader stays at true bottom, no yank-back", async () => {
       enableLegendListBrowserScrollEvents();
-      const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;
-      const missingAnchorId =
-        fullMessages[missingAnchorIndexInFull]?.id ?? null;
-      expect(missingAnchorId).toBeTruthy();
-      // Genuinely absent at mount - not yet arrived, per the "missing row"
-      // scenario regression (a) describes. Everything else
-      // (before AND after it) is intact, so the clamped restore lands
-      // mid-list, not coincidentally at the tail.
-      let messages: ReadonlyArray<ChatMessageModel> = fullMessages.filter(
-        (message) => message.id !== missingAnchorId,
-      );
-      expect(messages.some((message) => message.id === missingAnchorId)).toBe(
-        false,
-      );
+      const {
+        fullMessages,
+        partialMessages,
+        partKey: missingAnchorId,
+      } = splitTurnFixture(80, missingAnchorIndexInFull);
 
       const instanceId = `ars-hydrate-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
       tileLiveness.live = true;
       saveChatTabState({
-        identity: makeDefaultTestIdentity(instanceId),
+        identity,
         mode: "free-scrolling",
         anchorMessageId: missingAnchorId,
         anchorIndex: missingAnchorIndexInFull,
         offset: 12,
       });
       setLegendListScrollContainerScrollHeightOverride(
-        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+        LEGEND_LIST_HEADER_PX + partialMessages.length * 90 + 40,
       );
-      const { rerenderMessages } = renderChatMessages({
-        messages,
+      const first = renderChatMessages({
+        messages: partialMessages,
         scrollStateKey: instanceId,
         instanceId,
       });
-      // Deliberately not settled: the clamped restore (landing at the last
-      // available row of this 30-message partial) must still be converging
-      // when the reader races past it to the true bottom below.
+      // The known owner at index 40 gives the restore a measured target
+      // while its saved later part is still pending. The reader reaches the
+      // true bottom before that restore finishes converging.
       await waitFor(() => {
         expect(
           document.querySelector('[data-testid="chat-messages-scroll"]'),
         ).not.toBeNull();
       });
+      // The saved part is pending in the registry before the reader moves.
+      expect(pendingHydrationRestore(identity)).not.toBeNull();
       const scrollNode = getScrollNode();
       for (let frame = 0; frame < 8; frame += 1) {
         act(() => {
@@ -10841,18 +10970,29 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       assertTrueBottomGeometry();
 
-      // The formerly-missing row finally hydrates.
-      messages = fullMessages;
+      // The same instance closes and reopens at the bottom before the part
+      // arrives; the part then arriving must not pull the reader back to it.
+      first.unmount();
+      tileLiveness.live = true;
+      const remounted = renderChatMessages({
+        messages: partialMessages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      await settleLegendList();
+
+      // The formerly-missing part finally hydrates.
       setLegendListScrollContainerScrollHeightOverride(
-        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+        LEGEND_LIST_HEADER_PX + fullMessages.length * 90 + 40,
       );
-      rerenderMessages(messages);
+      remounted.rerenderMessages(fullMessages);
       await settleLegendList();
 
       // Must remain at the (new) true bottom, not get yanked back to row 40.
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
       assertTrueBottomGeometry();
       expect(isJumpPillVisible()).toBe(false);
+      remounted.unmount();
     });
 
     it("pointerdown then stable past-target bottom, formerly-missing row hydrates: reader stays at true bottom, no yank-back", async () => {
@@ -10865,17 +11005,13 @@ describe("ChatMessages scroll policy", () => {
       // though the reader genuinely reached stable true bottom under
       // unchanged messages/geometry.
       enableLegendListBrowserScrollEvents();
-      const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;
-      const missingAnchorId =
-        fullMessages[missingAnchorIndexInFull]?.id ?? null;
-      expect(missingAnchorId).toBeTruthy();
-      let messages: ReadonlyArray<ChatMessageModel> = fullMessages.filter(
-        (message) => message.id !== missingAnchorId,
-      );
-      expect(messages.some((message) => message.id === missingAnchorId)).toBe(
-        false,
-      );
+      const {
+        fullMessages,
+        partialMessages,
+        partKey: missingAnchorId,
+      } = splitTurnFixture(80, missingAnchorIndexInFull);
+      let messages: ReadonlyArray<ChatMessageModel> = partialMessages;
 
       const instanceId = `ars-ptr-hydrate-${Math.random().toString(36).slice(2)}`;
       tileLiveness.live = true;
@@ -10940,17 +11076,9 @@ describe("ChatMessages scroll policy", () => {
       // Companion to the hydration case above for the close/reopen route
       // as well.
       enableLegendListBrowserScrollEvents();
-      const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;
-      const missingAnchorId =
-        fullMessages[missingAnchorIndexInFull]?.id ?? null;
-      expect(missingAnchorId).toBeTruthy();
-      const messages: ReadonlyArray<ChatMessageModel> = fullMessages.filter(
-        (message) => message.id !== missingAnchorId,
-      );
-      expect(messages.some((message) => message.id === missingAnchorId)).toBe(
-        false,
-      );
+      const { partialMessages: messages, partKey: missingAnchorId } =
+        splitTurnFixture(80, missingAnchorIndexInFull);
 
       const instanceId = `ars-ptr-close-${Math.random().toString(36).slice(2)}`;
       const reopenedInstance = `ars-ptr-close-reopen-${Math.random().toString(36).slice(2)}`;
@@ -11036,18 +11164,14 @@ describe("ChatMessages scroll policy", () => {
       // first must not weaken its own message-array fingerprint (mirror of
       // the non-pointer reorder regression, with pointer first).
       enableLegendListBrowserScrollEvents();
-      const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;
       const savedViewOffset = 12;
-      const missingAnchorId =
-        fullMessages[missingAnchorIndexInFull]?.id ?? null;
-      expect(missingAnchorId).toBeTruthy();
-      let messages: ReadonlyArray<ChatMessageModel> = fullMessages.filter(
-        (message) => message.id !== missingAnchorId,
-      );
-      expect(messages.some((message) => message.id === missingAnchorId)).toBe(
-        false,
-      );
+      const {
+        fullMessages,
+        partialMessages,
+        partKey: missingAnchorId,
+      } = splitTurnFixture(80, missingAnchorIndexInFull);
+      let messages: ReadonlyArray<ChatMessageModel> = partialMessages;
 
       const closedInstance = `ars-ptr-reorder-${Math.random().toString(36).slice(2)}`;
       const reopenedInstance = `ars-ptr-reorder-reopen-${Math.random().toString(36).slice(2)}`;
@@ -11059,10 +11183,6 @@ describe("ChatMessages scroll policy", () => {
         epicId,
         taskId,
       );
-      const expectedScrollTop =
-        missingAnchorIndexInFull * TICKET_13_ROW_HEIGHT_PX +
-        LEGEND_LIST_HEADER_PX -
-        savedViewOffset;
 
       tileLiveness.live = true;
       saveChatTabState({
@@ -11136,7 +11256,14 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
       await settleLegendList();
 
-      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      // The reopened tab lands on the part the reader was on, at the offset
+      // they were reading it, not on its owner's first part.
+      expect(
+        Math.abs(
+          viewportOffsetForKey(missingAnchorId) -
+            (savedViewOffset - LEGEND_LIST_HEADER_PX),
+        ),
+      ).toBeLessThanOrEqual(1);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(getScrollNode().scrollTop).not.toBe(
         maxScrollTopFor(getScrollNode()),
@@ -11146,17 +11273,9 @@ describe("ChatMessages scroll policy", () => {
 
     it("past-target bottom, remount, permanent close, new-instance reopen before row arrival: durable state stays following-end", async () => {
       enableLegendListBrowserScrollEvents();
-      const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;
-      const missingAnchorId =
-        fullMessages[missingAnchorIndexInFull]?.id ?? null;
-      expect(missingAnchorId).toBeTruthy();
-      const messages: ReadonlyArray<ChatMessageModel> = fullMessages.filter(
-        (message) => message.id !== missingAnchorId,
-      );
-      expect(messages.some((message) => message.id === missingAnchorId)).toBe(
-        false,
-      );
+      const { partialMessages: messages, partKey: missingAnchorId } =
+        splitTurnFixture(80, missingAnchorIndexInFull);
 
       const instanceId = `ars-close-reopen-${Math.random().toString(36).slice(2)}`;
       const reopenedInstance = `ars-close-reopen-new-${Math.random().toString(36).slice(2)}`;
@@ -11385,18 +11504,14 @@ describe("ChatMessages scroll policy", () => {
       // later force to true bottom is numerically past the issued target -
       // message reference inequality alone must still block the release.
       enableLegendListBrowserScrollEvents();
-      const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;
       const savedViewOffset = 12;
-      const missingAnchorId =
-        fullMessages[missingAnchorIndexInFull]?.id ?? null;
-      expect(missingAnchorId).toBeTruthy();
-      let messages: ReadonlyArray<ChatMessageModel> = fullMessages.filter(
-        (message) => message.id !== missingAnchorId,
-      );
-      expect(messages.some((message) => message.id === missingAnchorId)).toBe(
-        false,
-      );
+      const {
+        fullMessages,
+        partialMessages,
+        partKey: missingAnchorId,
+      } = splitTurnFixture(80, missingAnchorIndexInFull);
+      let messages: ReadonlyArray<ChatMessageModel> = partialMessages;
 
       const closedInstance = `ars-reorder-${Math.random().toString(36).slice(2)}`;
       const reopenedInstance = `ars-reorder-reopen-${Math.random().toString(36).slice(2)}`;
@@ -11408,10 +11523,6 @@ describe("ChatMessages scroll policy", () => {
         epicId,
         taskId,
       );
-      const expectedScrollTop =
-        missingAnchorIndexInFull * TICKET_13_ROW_HEIGHT_PX +
-        LEGEND_LIST_HEADER_PX -
-        savedViewOffset;
 
       tileLiveness.live = true;
       saveChatTabState({
@@ -11479,7 +11590,14 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
       await settleLegendList();
 
-      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      // The reopened tab lands on the part the reader was on, at the offset
+      // they were reading it, not on its owner's first part.
+      expect(
+        Math.abs(
+          viewportOffsetForKey(missingAnchorId) -
+            (savedViewOffset - LEGEND_LIST_HEADER_PX),
+        ),
+      ).toBeLessThanOrEqual(1);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(getScrollNode().scrollTop).not.toBe(
         maxScrollTopFor(getScrollNode()),

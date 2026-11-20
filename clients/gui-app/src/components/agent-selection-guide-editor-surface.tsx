@@ -8,7 +8,6 @@ export const AGENT_SELECTION_GUIDE_TITLE = "Agent selection guide";
 
 type AgentSelectionGuideEditorSurfaceProps = {
   readonly titleId: string;
-  readonly purpose: string;
   readonly value: string;
   readonly onValueChange: (value: string) => void;
   readonly onBlur: (() => void) | null;
@@ -26,7 +25,6 @@ type AgentSelectionGuideEditorSurfaceProps = {
 
 export function AgentSelectionGuideEditorSurface({
   titleId,
-  purpose,
   value,
   onValueChange,
   onBlur,
@@ -47,9 +45,12 @@ export function AgentSelectionGuideEditorSurface({
       className={cn("flex min-h-0 flex-col gap-3", className)}
     >
       <div className="min-w-0">
-        <p id={titleId} className="text-ui-sm text-muted-foreground">
-          {purpose}
-        </p>
+        <h2
+          id={titleId}
+          className="min-w-0 text-ui-md font-semibold text-foreground"
+        >
+          {AGENT_SELECTION_GUIDE_TITLE}
+        </h2>
       </div>
 
       <div

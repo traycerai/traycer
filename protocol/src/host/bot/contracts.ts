@@ -16,6 +16,8 @@ import {
   botListRequestSchema,
   botListResponseSchema,
   botListResponseSchemaV10,
+  botListResponseSchemaV11,
+  botListResponseSchemaV12,
   botMemorySubscribeClientFrameSchema,
   botMemorySubscribeOpenRequestSchema,
   botMemorySubscribeServerFrameSchema,
@@ -23,6 +25,8 @@ import {
   botOpenResponseSchema,
   botReadRequestSchema,
   botReadResponseSchema,
+  botReadResponseSchemaV10,
+  botReadResponseSchemaV11,
   botSubscribeClientFrameSchema,
   botSubscribeOpenRequestSchema,
   botSubscribeServerFrameSchema,
@@ -32,6 +36,8 @@ import {
   botSubscribeServerFrameSchemaV13,
   botSubscribeServerFrameSchemaV14,
   botSubscribeServerFrameSchemaV15,
+  botUpdateAppearanceRequestSchema,
+  botUpdateAppearanceResponseSchema,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -58,6 +64,8 @@ import {
   botConversationSendRequestSchemaV11,
   botConversationSendRequestSchemaV12,
   botConversationSendRequestSchemaV13,
+  botConversationSendRequestSchemaV14,
+  botConversationSendRequestSchemaV15,
   botConversationSendResponseSchema,
   botConversationSearchRequestSchema,
   botConversationSearchResponseSchema,
@@ -126,7 +134,7 @@ export const botListV11 = defineRpcContract({
   method: "bot.list",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: botListRequestSchema,
-  responseSchema: botListResponseSchema,
+  responseSchema: botListResponseSchemaV11,
 });
 export const botListUpgradeV10ToV11 = defineUpgradePath<
   typeof botListV10,
@@ -138,11 +146,80 @@ export const botListUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => ({ ...response, mainBotIds: null }),
 });
 
+/**
+ * `bot.list@1.2` (T147): each row carries the bot's appearance. A 1.1 host
+ * names none, which a reader takes as every choice at its default.
+ */
+export const botListV12 = defineRpcContract({
+  method: "bot.list",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botListRequestSchema,
+  responseSchema: botListResponseSchemaV12,
+});
+export const botListUpgradeV11ToV12 = defineUpgradePath<
+  typeof botListV11,
+  typeof botListV12
+>({
+  from: botListV11.schemaVersion,
+  to: botListV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const botListV13 = defineRpcContract({
+  method: "bot.list",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: botListRequestSchema,
+  responseSchema: botListResponseSchema,
+});
+export const botListUpgradeV12ToV13 = defineUpgradePath<
+  typeof botListV12,
+  typeof botListV13
+>({
+  from: botListV12.schemaVersion,
+  to: botListV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 export const botReadV10 = defineRpcContract({
   method: "bot.read",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botReadRequestSchema,
+  responseSchema: botReadResponseSchemaV10,
+});
+
+/** `bot.read@1.1` (T147): the row carries the bot's appearance. */
+export const botReadV11 = defineRpcContract({
+  method: "bot.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: botReadRequestSchema,
+  responseSchema: botReadResponseSchemaV11,
+});
+export const botReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof botReadV10,
+  typeof botReadV11
+>({
+  from: botReadV10.schemaVersion,
+  to: botReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const botReadV12 = defineRpcContract({
+  method: "bot.read",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botReadRequestSchema,
   responseSchema: botReadResponseSchema,
+});
+export const botReadUpgradeV11ToV12 = defineUpgradePath<
+  typeof botReadV11,
+  typeof botReadV12
+>({
+  from: botReadV11.schemaVersion,
+  to: botReadV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const botUpdateTitleV10 = defineRpcContract({
@@ -171,6 +248,18 @@ export const botUpdateReplyModeV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botUpdateReplyModeRequestSchema,
   responseSchema: botUpdateResponseSchema,
+});
+
+/**
+ * `bot.updateAppearance@1.0` (T147): the bot's icon, its colour and what it
+ * wears, each kept, set or cleared. Same optional posture as the namespace: a
+ * host without it offers none of them.
+ */
+export const botUpdateAppearanceV10 = defineRpcContract({
+  method: "bot.updateAppearance",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botUpdateAppearanceRequestSchema,
+  responseSchema: botUpdateAppearanceResponseSchema,
 });
 
 /**
@@ -364,7 +453,7 @@ export const botConversationSendUpgradeV12ToV13 = defineUpgradePath<
 export const botConversationSendV14 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 4 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV14,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
@@ -373,6 +462,47 @@ export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
 >({
   from: botConversationSendV13.schemaVersion,
   to: botConversationSendV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.5` (T167): a member's answers to every open
+ * question of a bot's card in one send (`answers`). A 1.4 request answers at
+ * most one question (`answer`).
+ */
+export const botConversationSendV15 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: botConversationSendRequestSchemaV15,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV14ToV15 = defineUpgradePath<
+  typeof botConversationSendV14,
+  typeof botConversationSendV15
+>({
+  from: botConversationSendV14.schemaVersion,
+  to: botConversationSendV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.6` (T166): the message a member chose to reply to
+ * (`replyTo`). A 1.5 request replies to none.
+ */
+export const botConversationSendV16 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV15ToV16 = defineUpgradePath<
+  typeof botConversationSendV15,
+  typeof botConversationSendV16
+>({
+  from: botConversationSendV15.schemaVersion,
+  to: botConversationSendV16.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -645,13 +775,10 @@ export const botSubscribeV13 = defineStreamRpcContract({
 });
 
 /**
- * `bot.subscribe@1.4` (T86): each task entry carries its check-in history
- * (`checkins`), and each notification subscription when it started
- * (`since`). A 1.3 subscriber's snapshot carries neither, and reads the last
- * check-in alone. Grown in place by T92 (the namespace is unreleased): each
- * entry's pause, stop and pending Run now, each received check-in's
- * requester, each subscription's digests and the stopped watches, all
- * defaulted `null`.
+ * `bot.subscribe@1.4`: each notification subscription carries when it started
+ * (`since`). A 1.3 subscriber's snapshot omits that field. Each
+ * task entry's pause, stop and pending Run now, each subscription's digests,
+ * and the stopped watches all default to `null`.
  */
 export const botSubscribeV14 = defineStreamRpcContract({
   method: "bot.subscribe",

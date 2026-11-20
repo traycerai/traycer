@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,17 +14,46 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
-import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
+import type {
+  EnvironmentStatusResponseV13,
+  SetupAttempt,
+} from "@traycer/protocol/host/environment-schemas";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import type {
+  EnvironmentHostBinding,
+  EnvironmentPreviewLocalFactsRequest,
+} from "@traycer/protocol/host/environment/contracts";
+import { environmentPreviewLocalFactsRequestSchema } from "@traycer/protocol/host/environment/contracts";
 import type {
   EnvironmentMoveStopPreviewResponseV11,
-  EnvironmentMoveStopRequest,
+  EnvironmentMoveStopRequestV11,
 } from "@traycer/protocol/host/environment/move-contracts";
+import type {
+  EnvironmentMoveStageRequest,
+  EnvironmentMoveStartRequest,
+  EnvironmentMovePlanRequestV20,
+  EnvironmentMoveOutcomeRequest,
+} from "@traycer/protocol/host/environment/move-contracts";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  fakeEnvironmentCloud,
+  type FakeEnvironmentCloud,
+} from "@/components/settings/host-scope/__tests__/host-access-test-support";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import {
   hostSettingsCardState,
   hostSettingsRowModel,
 } from "@/components/settings/panels/host-overview-settings-card-model";
 import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
+import { WithReceipt } from "@/components/settings/panels/__tests__/ownership-receipt-test-support";
+import { moveDiagnosticsExport } from "@/components/settings/move/move-diagnostics-export";
+import {
+  moveHasStopped,
+  moveIsRunning,
+} from "@/lib/environment/move-in-progress";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -31,8 +61,59 @@ import {
   pendingUploadFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { authQueryKeys, hostQueryKeys } from "@/lib/query-keys";
+import {
+  GIVE_ACCEPTANCE_ID,
+  GIVE_ATTEMPT_ID,
+  GIVE_DISCLOSURE_HASH,
+  GIVE_PLAN,
+  GIVE_PLAN_HASH,
+  GIVE_TEAM_ID,
+  giveMoveStatus,
+  giveStageFixture,
+} from "@/components/settings/panels/__tests__/team-give-test-support";
+
+const hostBindingMock = vi.hoisted(
+  (): {
+    current: {
+      readonly auth: unknown;
+      readonly directory: { refresh: () => Promise<void> };
+      readonly hostClient?: HostClient<HostRpcRegistry>;
+    } | null;
+  } => ({ current: null }),
+);
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => hostBindingMock.current,
+    useHostClient: () => {
+      const binding = hostBindingMock.current;
+      if (binding?.hostClient === undefined)
+        throw new Error("Host client is unavailable");
+      return binding.hostClient;
+    },
+  };
+});
+
+// Through the binding's id-pinned requester: the hook's own `useHostClient()` needs
+// a runtime provider.
+vi.mock("@/hooks/host/use-host-client-for-host-id", async () => {
+  const { resolveNamedHostClient } =
+    await import("@/lib/host/binding-host-client");
+  return {
+    useHostClientForHostId: (hostId: string | null) => {
+      const hostClient = hostBindingMock.current?.hostClient;
+      return hostId === null || hostClient === undefined
+        ? null
+        : resolveNamedHostClient({ hostClient }, hostId);
+    },
+  };
+});
 
 // The drawer itself has a separate suite; keep its controls real so dated
 // lines remain covered through the Details action.
@@ -59,16 +140,50 @@ vi.mock("@/components/settings/details/settings-details-button", () => ({
       </div>
     ) : null,
 }));
+interface DetailsSubjectFixture {
+  readonly environmentId: string;
+  readonly kind: "host_settings";
+  readonly key: string;
+}
+const BOUND_SUBJECT: DetailsSubjectFixture = {
+  environmentId: "env-a",
+  kind: "host_settings",
+  key: "old",
+};
+const detailsMock = vi.hoisted(
+  (): { subject: DetailsSubjectFixture | null } => ({ subject: null }),
+);
 vi.mock(
   "@/components/settings/details/use-host-settings-details-subject",
-  () => ({
-    useHostSettingsDetailsSubject: () => ({
-      environmentId: "env-a",
-      kind: "host_settings",
-      key: "old",
-    }),
+  () => ({ useHostSettingsDetailsSubject: () => detailsMock.subject }),
+);
+const poolMock = vi.hoisted((): { readsPool: boolean } => ({
+  readsPool: false,
+}));
+vi.mock(
+  "@/hooks/bots/use-host-environment-bindings-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/bots/use-host-environment-bindings-query")
+    >()),
+    readsHostBindingsFromPool: () => poolMock.readsPool,
   }),
 );
+const saveMock = vi.hoisted(() => ({
+  saveBlobToDisk:
+    vi.fn<
+      (blob: Blob, suggestedName: string, fileSave: unknown) => Promise<null>
+    >(),
+}));
+vi.mock("@/lib/files/save-blob-to-disk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/files/save-blob-to-disk")>()),
+  saveBlobToDisk: saveMock.saveBlobToDisk,
+}));
+let authnFixture: FakeEnvironmentCloud;
+let directoryAnswer: EnvironmentDirectoryResult;
+let directoryQueue: EnvironmentDirectoryResult[];
+let directoryReadCount: number;
+let roleAnswers: Map<string, string | null>;
 
 const ACCEPTED_AT = Date.UTC(2026, 9, 20, 12);
 const STOPPED_AT = Date.UTC(2026, 9, 21, 12);
@@ -98,40 +213,219 @@ const TEAM_BINDING: EnvironmentHostBinding = {
   enrolledByUserId: "user-a",
   canUnbind: true,
 };
+const CURRENT_USER: HostOwnerPrincipal = { kind: "user", id: "user-a" };
+const GIVE_HOST_ID = "8f0c2a4e-5b1d-4c3e-9a7f-1e2d3c4b5a60";
+const GIVE_ENVIRONMENT_ID = "team-admin";
+const GIVE_DIRECTORY_ROW: EnvironmentDescriptor = {
+  environmentId: GIVE_ENVIRONMENT_ID,
+  ownerKind: "organization",
+  ownerId: GIVE_TEAM_ID,
+  roomId: "room-admin",
+  label: "Admin team",
+};
+const GIVE_STAGE = giveStageFixture({
+  hostId: GIVE_HOST_ID,
+  environmentId: GIVE_ENVIRONMENT_ID,
+  teamId: GIVE_TEAM_ID,
+});
+
+interface GiveCalls {
+  readonly plans: EnvironmentMovePlanRequestV20[];
+  readonly stages: EnvironmentMoveStageRequest[];
+  readonly starts: EnvironmentMoveStartRequest[];
+  readonly outcomes: EnvironmentMoveOutcomeRequest[];
+  readonly localFacts: EnvironmentPreviewLocalFactsRequest[];
+}
+
+function giveHandlers(
+  calls: GiveCalls,
+  readStatus: () =>
+    | EnvironmentStatusResponseV13
+    | Promise<EnvironmentStatusResponseV13>,
+  activeTurns: number | null,
+): MockHandlerMap<HostRpcRegistry> {
+  return {
+    "environment.move.plan": (request) => {
+      calls.plans.push(request);
+      return GIVE_PLAN;
+    },
+    "environment.move.stage": (request) => {
+      calls.stages.push(request);
+      return GIVE_STAGE;
+    },
+    "environment.move.start": (request) => {
+      calls.starts.push(request);
+      return {
+        state: "running",
+        attemptId: GIVE_ATTEMPT_ID,
+        acceptanceId: GIVE_ACCEPTANCE_ID,
+      };
+    },
+    "environment.status": () => readStatus(),
+    "environment.move.outcome": (request) => {
+      calls.outcomes.push(request);
+      throw new Error("The give must not poll environment.move.outcome.");
+    },
+    "environment.previewLocalFacts": (request) => {
+      calls.localFacts.push(
+        environmentPreviewLocalFactsRequestSchema.parse(request),
+      );
+      return { activeTurns, terminals: null };
+    },
+  };
+}
+
+function giveCalls(): GiveCalls {
+  return { plans: [], stages: [], starts: [], outcomes: [], localFacts: [] };
+}
+
+async function openAdminGiveDialog(
+  handlers: MockHandlerMap<HostRpcRegistry>,
+  previewLocalFactsSupported: boolean,
+) {
+  setEnvironmentDirectory(
+    [GIVE_DIRECTORY_ROW],
+    [[GIVE_ENVIRONMENT_ID, "admin"]],
+  );
+  const queryClient = renderCardWithBinding(
+    environmentStatusFixture({}),
+    handlers,
+    {
+      binding: { ...PERSONAL_BINDING, hostId: GIVE_HOST_ID },
+      retrySupported: true,
+      owner: CURRENT_USER,
+      isLocalMachine: true,
+      hostId: GIVE_HOST_ID,
+      previewLocalFactsSupported,
+    },
+  );
+  const trigger = screen.getByRole("combobox", { name: "Environment" });
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.click(await screen.findByRole("option", { name: /Admin team/ }));
+  await screen.findByRole("dialog");
+  await waitFor(() => {
+    const confirm = screen.getByRole("button", {
+      name: "Confirm at this computer",
+    });
+    expect(confirm.hasAttribute("disabled")).toBe(false);
+  });
+  return queryClient;
+}
+
+async function expectGiveChatCount(
+  activeTurns: number | null,
+  expectedLine: string | null,
+): Promise<void> {
+  const calls = giveCalls();
+  const queryClient = await openAdminGiveDialog(
+    giveHandlers(
+      calls,
+      () => giveMoveStatus("running", GIVE_ATTEMPT_ID),
+      activeTurns,
+    ),
+    true,
+  );
+  await waitFor(() => expect(calls.localFacts).toHaveLength(1));
+  expect(calls.localFacts).toEqual([
+    { environmentId: "personal", subject: { kind: "computer" } },
+  ]);
+
+  if (expectedLine === null) {
+    const queryKey = hostQueryKeys.method(
+      GIVE_HOST_ID,
+      "environment.previewLocalFacts",
+      { environmentId: "personal", subject: { kind: "computer" } },
+    );
+    await waitFor(() =>
+      expect(queryClient.getQueryState(queryKey)?.status).toBe("success"),
+    );
+    expect(
+      screen.queryByText(/chat[s]? (is|are) running and will stop\./),
+    ).toBeNull();
+    expect(screen.queryByText("Running chats will stop.")).toBeNull();
+    return;
+  }
+
+  expect(await screen.findByText(expectedLine)).toBeTruthy();
+}
+
+interface CardRenderOptions {
+  readonly binding: EnvironmentHostBinding;
+  readonly retrySupported: boolean;
+  readonly owner: HostOwnerPrincipal | null;
+  readonly isLocalMachine: boolean;
+  readonly hostId?: string;
+  readonly previewLocalFactsSupported?: boolean;
+}
+
+function setEnvironmentDirectory(
+  rows: readonly EnvironmentDescriptor[],
+  roles: readonly (readonly [string, string | null])[],
+): void {
+  directoryAnswer = { kind: "ok", list: { environments: [...rows] } };
+  roleAnswers = new Map(roles);
+  useAuthStore.setState({
+    shareableTeams: rows
+      .filter((row) => row.ownerKind === "organization")
+      .map((row) => ({
+        teamId: row.ownerId,
+        slug: row.label.toLowerCase().replaceAll(" ", "-"),
+        avatarUrl: null,
+      })),
+  });
+}
 
 /**
  * The card over a fake host that negotiated the redesign's methods, so the
  * dated lines, Stop using Personal and the retrospective run their real reads.
  */
 function renderCard(
-  status: EnvironmentStatusResponseV11,
+  status: EnvironmentStatusResponseV13,
   handlers: MockHandlerMap<HostRpcRegistry>,
-): void {
-  renderCardWithRetry(status, handlers, true);
+): QueryClient {
+  return renderCardWithRetry(status, handlers, true);
 }
 
 function renderCardWithRetry(
-  status: EnvironmentStatusResponseV11,
+  status: EnvironmentStatusResponseV13,
   handlers: MockHandlerMap<HostRpcRegistry>,
   retrySupported: boolean,
-): void {
-  renderCardWithBinding(status, handlers, PERSONAL_BINDING, retrySupported);
+): QueryClient {
+  return renderCardWithBinding(status, handlers, {
+    binding: PERSONAL_BINDING,
+    retrySupported,
+    owner: null,
+    isLocalMachine: false,
+    previewLocalFactsSupported: true,
+  });
 }
 
 function renderCardWithBinding(
-  status: EnvironmentStatusResponseV11,
+  status: EnvironmentStatusResponseV13,
   handlers: MockHandlerMap<HostRpcRegistry>,
-  binding: EnvironmentHostBinding,
-  retrySupported: boolean,
-): void {
-  const { client } = buildEnvironmentClient({ hostId: "old", handlers });
-  recordNegotiatedHostManifest("old", {
-    "environment.status": { major: 1, minor: 1 },
+  options: CardRenderOptions,
+): QueryClient {
+  const hostId = options.hostId ?? "old";
+  const { client, spine } = buildEnvironmentClient({ hostId, handlers });
+  const binding = hostBindingMock.current;
+  if (binding === null) throw new Error("Host binding is unavailable");
+  hostBindingMock.current = { ...binding, hostClient: spine };
+  recordNegotiatedHostManifest(hostId, {
+    "environment.status": { major: 1, minor: 3 },
     "environment.review": { major: 1, minor: 1 },
     "environment.review.record": { major: 1, minor: 0 },
     "environment.move.stopPreview": { major: 1, minor: 0 },
     "environment.move.stop": { major: 1, minor: 0 },
-    ...(retrySupported
+    "environment.host.bind": { major: 1, minor: 1 },
+    "environment.move.plan": { major: 2, minor: 0 },
+    "environment.move.stage": { major: 1, minor: 0 },
+    "environment.move.start": { major: 1, minor: 0 },
+    "environment.move.outcome": { major: 1, minor: 0 },
+    "environment.setup.attempts": { major: 1, minor: 0 },
+    ...(options.previewLocalFactsSupported === true
+      ? { "environment.previewLocalFacts": { major: 1, minor: 0 } }
+      : {}),
+    ...(options.retrySupported
       ? { "environment.setup.retry": { major: 1, minor: 0 } }
       : {}),
   });
@@ -140,29 +434,121 @@ function renderCardWithBinding(
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <HostOverviewSettingsCard
-        client={client}
-        hostId="old"
-        hostName="Old laptop"
-        status={status}
-        binding={binding}
-      />
+      <WithReceipt>
+        {(receipt) => (
+          <HostOverviewSettingsCard
+            client={client}
+            hostId={hostId}
+            hostName="Old laptop"
+            status={status}
+            binding={
+              options.binding.hostId === hostId
+                ? options.binding
+                : { ...options.binding, hostId }
+            }
+            owner={options.owner}
+            isLocalMachine={options.isLocalMachine}
+            receipt={receipt}
+          />
+        )}
+      </WithReceipt>
     </QueryClientProvider>,
   );
+  return queryClient;
+}
+
+function renderCardOnThisComputer(
+  status: EnvironmentStatusResponseV13,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): QueryClient {
+  return renderCardWithBinding(status, handlers, {
+    binding: PERSONAL_BINDING,
+    retrySupported: true,
+    owner: CURRENT_USER,
+    isLocalMachine: true,
+    previewLocalFactsSupported: true,
+  });
 }
 
 beforeEach(() => {
+  detailsMock.subject = BOUND_SUBJECT;
+  poolMock.readsPool = false;
+  saveMock.saveBlobToDisk.mockReset();
+  saveMock.saveBlobToDisk.mockResolvedValue(null);
+  directoryAnswer = { kind: "ok", list: { environments: [] } };
+  directoryQueue = [];
+  directoryReadCount = 0;
+  roleAnswers = new Map();
+  authnFixture = fakeEnvironmentCloud((request) => {
+    const path = new URL(request.url).pathname;
+    if (path.endsWith("/hosts"))
+      return { status: 200, body: { hosts: [{ purgePending: false }] } };
+    if (path.endsWith("/members")) {
+      const environmentId = path.split("/").at(-2) ?? "";
+      return {
+        status: 200,
+        body: {
+          viewer: { effectiveRole: roleAnswers.get(environmentId) ?? null },
+        },
+      };
+    }
+    if (path.endsWith("/move-acceptances"))
+      return {
+        status: 201,
+        body: { acceptanceId: "a7b8c9d0-e1f2-4a3b-8c5d-6e7f8091a2b3" },
+      };
+    throw new Error(
+      `Unexpected environment request: ${request.method} ${path}`,
+    );
+  });
+  hostBindingMock.current = {
+    auth: {
+      currentAuthEra: () => ({
+        identity: "user-a",
+        credentialGeneration: 1,
+      }),
+      readHostOwnership: (hostId: string) =>
+        Promise.resolve({
+          kind: "ok",
+          host: {
+            hostId,
+            owner: { kind: "team", id: GIVE_TEAM_ID, name: "Admin team" },
+            kind: "personal",
+            remoteAccess: false,
+          },
+        }),
+      environmentCloud: () => authnFixture.cloud,
+      listEnvironments: () => {
+        directoryReadCount += 1;
+        return Promise.resolve(directoryQueue.shift() ?? directoryAnswer);
+      },
+    },
+    directory: {
+      refresh: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+    },
+  };
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-a", username: "user" },
+    shareableTeams: [],
+  });
   useMoveSheetStore.setState({ target: null });
   useRetrospectiveSheetStore.setState({ target: null, open: false });
+  useSettingsEnvironmentPickStore.setState({
+    pick: null,
+    defaultPick: PERSONAL_PICK,
+  });
 });
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  hostBindingMock.current = null;
+  useAuthStore.getState().setSignedOut();
 });
 
 describe("<HostOverviewSettingsCard />", () => {
-  it("shows This computer only while awaiting, and selecting Personal opens the move sheet", async () => {
+  it("shows the host name and its detail while awaiting, and selecting Personal opens the move sheet", async () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
@@ -172,23 +558,398 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: This computer only",
-    );
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Change settings source" }),
-      { button: 0 },
-    );
-    fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: /Personal/ }),
-    );
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("Old laptop")).toBeTruthy();
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(
+      within(trigger).getByText("its own settings, not in Personal yet")
+        .className,
+    ).toContain("in-data-[slot=select-trigger]:hidden");
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: /^Personal/ }));
     expect(useMoveSheetStore.getState().target).toEqual({
       hostId: "old",
       hostName: "Old laptop",
     });
   });
 
-  it("shows the Settings row label and keeps Details beside its value", () => {
+  it("does not label a team-owned computer Local when its planes are local", () => {
+    renderCard(
+      environmentStatusFixture({
+        principal: { kind: "team", teamName: "Designers" },
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      {},
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(trigger.textContent).toContain("Personal");
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Runs Personal",
+    );
+  });
+
+  it("offers team use from a computer whose unresolved setup stopped", async () => {
+    setEnvironmentDirectory(
+      [
+        {
+          environmentId: "team-a",
+          ownerKind: "organization",
+          ownerId: "org-a",
+          roomId: "room-team",
+          label: "Designers",
+        },
+      ],
+      [["team-a", "admin"]],
+    );
+    renderCardOnThisComputer(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "moved", broker: "moved", room: "moved" },
+        setup: { stage: "applying", state: "stalled" },
+      }),
+      {},
+    );
+
+    const source = screen.getByTestId("host-settings-source");
+    expect(source.textContent).toContain(
+      "Setup stopped while applying your settings.",
+    );
+    expect(source.textContent).not.toContain("Runs Personal");
+    expect(source.textContent).not.toContain("Runs its own settings");
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "local",
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+    });
+
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("Old laptop")).toBeTruthy();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const teamOption = await screen.findByRole("option", {
+      name: /Designers/,
+    });
+    expect(teamOption.textContent).toContain("Use this computer for the team");
+    fireEvent.click(teamOption);
+
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(screen.getByText("Use Old laptop for Designers?")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Confirm at this computer" }),
+    ).toBeTruthy();
+  });
+
+  it("offers only teams whose authn role is Admin or Editor", async () => {
+    const teams = [
+      ["team-admin", "Admin team", "owner-admin", "admin"],
+      ["team-editor", "Editor team", "owner-editor", "editor"],
+      ["team-viewer", "Viewer team", "owner-viewer", "viewer"],
+      ["team-unknown", "Unknown team", "owner-unknown", "billing"],
+    ] as const;
+    setEnvironmentDirectory(
+      teams.map(([environmentId, label, ownerId]) => ({
+        environmentId,
+        ownerKind: "organization",
+        ownerId,
+        roomId: `room-${environmentId}`,
+        label,
+      })),
+      teams.map(([environmentId, , , role]) => [environmentId, role] as const),
+    );
+    renderCardOnThisComputer(environmentStatusFixture({}), {});
+
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(
+      await screen.findByRole("option", { name: /Admin team/ }),
+    ).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Editor team/ })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        authnFixture.requests.filter((request) =>
+          request.url.endsWith("/members"),
+        ),
+      ).toHaveLength(4);
+    });
+    expect(screen.queryByRole("option", { name: /Viewer team/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /Unknown team/ })).toBeNull();
+  });
+
+  it("shows the number of chats that will stop when giving a computer to a team", async () => {
+    await expectGiveChatCount(3, "3 chats are running and will stop.");
+  });
+
+  it("uses the singular chat line when exactly one chat is running", async () => {
+    await expectGiveChatCount(1, "1 chat is running and will stop.");
+  });
+
+  it("shows no running-chat line when no chat is running", async () => {
+    await expectGiveChatCount(0, null);
+  });
+
+  it("keeps the running-chat count unknown when the host answers null", async () => {
+    await expectGiveChatCount(null, "Running chats will stop.");
+  });
+
+  it("keeps the running-chat count unknown when the computer does not serve the method", async () => {
+    const calls = giveCalls();
+    const handlers: MockHandlerMap<HostRpcRegistry> = {
+      ...giveHandlers(
+        calls,
+        () => giveMoveStatus("running", GIVE_ATTEMPT_ID),
+        null,
+      ),
+      "environment.previewLocalFacts": (request) => {
+        calls.localFacts.push(
+          environmentPreviewLocalFactsRequestSchema.parse(request),
+        );
+        throw new HostRpcError({
+          code: "E_HOST_UNSUPPORTED",
+          message: "unknown method",
+          requestId: "local-facts-unsupported",
+          method: "environment.previewLocalFacts",
+          fatalDetails: null,
+        });
+      },
+    };
+    await openAdminGiveDialog(handlers, true);
+
+    expect(await screen.findByText("Running chats will stop.")).toBeTruthy();
+    expect(calls.localFacts).toEqual([
+      { environmentId: "personal", subject: { kind: "computer" } },
+    ]);
+  });
+
+  it("gives a computer through the team plan, acceptance and status read", async () => {
+    const calls = giveCalls();
+    const doneStatus = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    let statusReads = 0;
+    const queryClient = await openAdminGiveDialog(
+      giveHandlers(
+        calls,
+        () => {
+          statusReads += 1;
+          return statusReads === 1
+            ? giveMoveStatus("running", GIVE_ATTEMPT_ID)
+            : doneStatus.promise;
+        },
+        0,
+      ),
+      true,
+    );
+    const ownershipKey = authQueryKeys.hostOwnershipAll();
+    queryClient.setQueryData(ownershipKey, { hosts: [] });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm at this computer" }),
+    );
+
+    const progress = await screen.findByTestId(
+      "team-computer-transfer-progress",
+    );
+    expect(progress).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Old laptop now belongs to Admin team. Any Admin or Editor of the team can claim it as their own.",
+      ),
+    ).toBeNull();
+    doneStatus.resolve(giveMoveStatus("done", GIVE_ATTEMPT_ID));
+    expect(
+      await screen.findByText(
+        "Old laptop now belongs to Admin team. Any Admin or Editor of the team can claim it as their own.",
+      ),
+    ).toBeTruthy();
+    const target = {
+      kind: "team",
+      environmentId: GIVE_ENVIRONMENT_ID,
+      teamId: GIVE_TEAM_ID,
+    } as const;
+    expect(calls.plans[0]).toEqual({ target, personal: null });
+    expect(calls.stages).toEqual([{ target, keyChoices: [], personal: null }]);
+    const [reads, writes] = [
+      authnFixture.requests.filter(({ method }) => method === "GET"),
+      authnFixture.requests.filter(({ method }) => method !== "GET"),
+    ];
+    expect(reads.map(({ url }) => new URL(url).pathname).sort()).toEqual([
+      `/api/v3/environments/${GIVE_ENVIRONMENT_ID}/hosts`,
+      `/api/v3/environments/${GIVE_ENVIRONMENT_ID}/members`,
+    ]);
+    expect(writes.map(({ method, url, body }) => [method, url, body])).toEqual([
+      [
+        "POST",
+        `https://authn.test/api/v3/hosts/${GIVE_HOST_ID}/move-acceptances`,
+        { ...GIVE_STAGE.evidence, disclosureHash: GIVE_DISCLOSURE_HASH },
+      ],
+    ]);
+    expect(calls.starts).toEqual([
+      {
+        attemptId: GIVE_ATTEMPT_ID,
+        planHash: GIVE_PLAN_HASH,
+        acceptanceId: GIVE_ACCEPTANCE_ID,
+      },
+    ]);
+    expect(calls.outcomes).toEqual([]);
+    expect(queryClient.getQueryState(ownershipKey)?.isInvalidated).toBe(true);
+    expect(hostBindingMock.current?.directory.refresh).toHaveBeenCalledOnce();
+  });
+
+  it("shows the unfinished give line for needs_person", async () => {
+    const calls = giveCalls();
+    await openAdminGiveDialog(
+      giveHandlers(
+        calls,
+        () => giveMoveStatus("needs_person", GIVE_ATTEMPT_ID),
+        0,
+      ),
+      true,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm at this computer" }),
+    );
+
+    expect(
+      (await screen.findByTestId("team-give-not-finished")).textContent,
+    ).toBe("Giving this computer to Admin team was not finished.");
+    expect(calls.outcomes).toEqual([]);
+  });
+
+  it("shows the unfinished give line when a fresh status has no attempt", async () => {
+    const calls = giveCalls();
+    await openAdminGiveDialog(
+      giveHandlers(calls, () => environmentStatusFixture({ move: null }), 0),
+      true,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm at this computer" }),
+    );
+
+    expect(
+      (await screen.findByTestId("team-give-not-finished")).textContent,
+    ).toBe("Giving this computer to Admin team was not finished.");
+    expect(calls.outcomes).toEqual([]);
+  });
+
+  it("ignores a cached status naming an older attempt until a fresh status arrives", async () => {
+    const calls = giveCalls();
+    const freshStatus = Promise.withResolvers<EnvironmentStatusResponseV13>();
+    const queryClient = await openAdminGiveDialog(
+      giveHandlers(calls, () => freshStatus.promise, 0),
+      true,
+    );
+    const statusKey = hostQueryKeys.method(
+      GIVE_HOST_ID,
+      "environment.status",
+      {},
+    );
+    queryClient.setQueryData(
+      statusKey,
+      giveMoveStatus("done", "older-attempt"),
+      { updatedAt: 1 },
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm at this computer" }),
+    );
+
+    expect(screen.queryByTestId("team-give-not-finished")).toBeNull();
+    expect(screen.getByTestId("team-computer-transfer-progress")).toBeTruthy();
+    freshStatus.resolve(giveMoveStatus("running", GIVE_ATTEMPT_ID));
+    await waitFor(() => {
+      expect(queryClient.getQueryData(statusKey)).toEqual(
+        giveMoveStatus("running", GIVE_ATTEMPT_ID),
+      );
+      expect(
+        screen.getByTestId("team-computer-transfer-progress"),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("team-give-not-finished")).toBeNull();
+    });
+    expect(calls.outcomes).toEqual([]);
+  });
+
+  it("stays silent when sign-in changes while the give acceptance is pending", async () => {
+    const calls = giveCalls();
+    const acceptanceRequested = Promise.withResolvers<void>();
+    const acceptanceAnswer = Promise.withResolvers<{
+      status: number;
+      body: unknown;
+    }>();
+    const cloud = fakeEnvironmentCloud((request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/hosts"))
+        return { status: 200, body: { hosts: [{ purgePending: false }] } };
+      if (path.endsWith("/members"))
+        return {
+          status: 200,
+          body: { viewer: { effectiveRole: "admin" } },
+        };
+      if (request.url.endsWith("/move-acceptances")) {
+        acceptanceRequested.resolve();
+        return acceptanceAnswer.promise;
+      }
+      throw new Error(
+        `Unexpected cloud request: ${request.method} ${request.url}`,
+      );
+    });
+    authnFixture = cloud;
+    await openAdminGiveDialog(
+      giveHandlers(calls, () => giveMoveStatus("done", GIVE_ATTEMPT_ID), 0),
+      true,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm at this computer" }),
+    );
+    await acceptanceRequested.promise;
+    cloud.origin.current = false;
+    acceptanceAnswer.resolve({
+      status: 201,
+      body: { acceptanceId: GIVE_ACCEPTANCE_ID },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("button", { name: "Confirm at this computer" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByTestId("team-give-not-finished")).toBeNull();
+      expect(screen.queryByText(/now belongs to Admin team/)).toBeNull();
+      expect(calls.starts).toEqual([]);
+    });
+    expect(calls.outcomes).toEqual([]);
+  });
+
+  it("offers Retry when the team list read fails", async () => {
+    directoryQueue = [{ kind: "unavailable" }];
+    renderCardOnThisComputer(environmentStatusFixture({}), {});
+
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toContain("Couldn't load teams.");
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(
+      screen.queryByRole("option", { name: /Use this computer for the team/ }),
+    ).toBeNull();
+    // An open select hides the rest of the page from the accessibility tree.
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+    fireEvent.click(within(status).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(directoryReadCount).toBe(2));
+  });
+
+  it("keeps a successful empty team list free of the read error", () => {
+    renderCardOnThisComputer(environmentStatusFixture({}), {});
+
+    expect(screen.queryByText("Couldn't load teams.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("shows the Environment row label and keeps Details beside its value", () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
@@ -198,10 +959,13 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByText(/Settings: This computer only/)).toBeTruthy();
+    expect(screen.getByText("Environment")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Details" })).toBeTruthy();
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: This computer only",
+      "Runs its own settings, not in Personal yet",
+    );
+    expect(screen.getByTestId("host-settings-source").textContent).toContain(
+      "Old laptop",
     );
   });
 
@@ -230,6 +994,9 @@ describe("<HostOverviewSettingsCard />", () => {
     ).toBe(
       "Moving this computer's settings to Personal · 2 of 4 items applied",
     );
+    const source = screen.getByRole("combobox", { name: "Environment" });
+    expect(source.textContent).toBe("Personal");
+    expect(source.hasAttribute("disabled")).toBe(true);
     const row = screen.getByTestId("host-settings-card-progress").parentElement;
     expect(row?.contains(screen.getByRole("button", { name: "Details" }))).toBe(
       true,
@@ -253,6 +1020,20 @@ describe("<HostOverviewSettingsCard />", () => {
     ).toBe("Moving this computer's settings to Personal");
   });
 
+  it("keeps a move moving whose state is named like an inherited property", () => {
+    const status = environmentStatusFixture({
+      setup: { stage: "moving_settings", state: "constructor" },
+    });
+
+    renderCard(status, {});
+
+    expect(screen.getByTestId("host-settings-card-progress")).toBeTruthy();
+    expect(screen.queryByTestId("host-settings-card-move-stopped")).toBeNull();
+    expect(moveHasStopped(status)).toBe(false);
+    expect(moveIsRunning(status)).toBe(true);
+    expect(moveDiagnosticsExport(status, null, 0).stopReason).toBeNull();
+  });
+
   describe("when the move stopped", () => {
     const stoppedStatus = (state: "stalled" | "failed") =>
       environmentStatusFixture({
@@ -271,6 +1052,10 @@ describe("<HostOverviewSettingsCard />", () => {
       expect(
         screen.getByTestId("host-settings-card-move-stopped").textContent,
       ).toBe("Moving stopped: it timed out. 3 items left.");
+      const stopped = screen.getByRole("combobox", { name: "Environment" });
+      expect(within(stopped).getByText("Old laptop")).toBeTruthy();
+      expect(within(stopped).queryByText("Local")).toBeNull();
+      expect(stopped.hasAttribute("disabled")).toBe(true);
       expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Details" }));
       expect(screen.getByTestId("overview-stop-sharing")).toBeTruthy();
@@ -293,6 +1078,11 @@ describe("<HostOverviewSettingsCard />", () => {
         },
       });
 
+      expect(
+        screen
+          .getByRole("button", { name: "Retry" })
+          .getAttribute("data-variant"),
+      ).toBe("ghost");
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
       await waitFor(() => expect(retries).toEqual([{}]));
@@ -316,6 +1106,58 @@ describe("<HostOverviewSettingsCard />", () => {
       );
 
       expect(screen.getByTestId("details-dialog").dataset.tab).toBe("export");
+      expect(saveMock.saveBlobToDisk).not.toHaveBeenCalled();
+    });
+
+    it("saves the move's own diagnostics file from Export diagnostics when the computer has no binding", async () => {
+      detailsMock.subject = null;
+      const attempt: SetupAttempt = {
+        attemptId: "retry-1",
+        scriptHash: "hash-of-the-script",
+        itemRevision: 1,
+        trigger: "retry",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        exitStatus: 1,
+        stageReached: "applying",
+        result: "failed",
+      };
+      renderCard(stoppedStatus("stalled"), {
+        "environment.setup.attempts": () => ({ attempts: [attempt] }),
+      });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Export diagnostics" }),
+      );
+      await waitFor(() =>
+        expect(saveMock.saveBlobToDisk).toHaveBeenCalledOnce(),
+      );
+      const call = saveMock.saveBlobToDisk.mock.calls.at(0);
+      if (call === undefined) throw new Error("nothing was saved");
+
+      expect(call[1]).toBe("traycer-move-diagnostics.json");
+      const anyExportTime: unknown = expect.any(Number);
+      expect(JSON.parse(await call[0].text())).toEqual({
+        version: 1,
+        exportedAt: anyExportTime,
+        setup: { stage: "moving_settings", state: "stalled" },
+        stopReason: "it timed out",
+        items: { applied: 1, total: 4 },
+        pendingUploads: 1,
+        attempts: [
+          {
+            attemptId: "retry-1",
+            trigger: "retry",
+            itemRevision: 1,
+            startedAt: 1_000,
+            endedAt: 2_000,
+            exitStatus: 1,
+            stageReached: "applying",
+            result: "failed",
+          },
+        ],
+      });
+      expect(screen.queryByTestId("details-dialog")).toBeNull();
     });
   });
 
@@ -354,7 +1196,7 @@ describe("<HostOverviewSettingsCard />", () => {
     );
 
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: Personal",
+      "Personal",
     );
     expect(screen.queryByText("Moved to Personal on 20 Oct")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
@@ -373,9 +1215,12 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: This computer only",
-    );
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("Old laptop")).toBeTruthy();
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(
+      within(trigger).getByText("its own settings, not in Personal yet"),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByTestId("overview-stop-sharing")).toBeTruthy();
   });
@@ -393,7 +1238,7 @@ describe("<HostOverviewSettingsCard />", () => {
     );
 
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: Personal",
+      "Personal",
     );
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(
@@ -411,19 +1256,42 @@ describe("<HostOverviewSettingsCard />", () => {
     });
   });
 
-  it("shows the team's fixed Settings source without Change", () => {
-    renderCardWithBinding(environmentStatusFixture({}), {}, TEAM_BINDING, true);
-
-    expect(screen.getByText("Designers")).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Change settings source" }),
-    ).toBeNull();
-    expect(screen.getByText("Designers").parentElement?.textContent).toBe(
-      "Settings: Designers",
+  it("shows the team's fixed Settings source in the disabled selector", () => {
+    renderCardWithBinding(
+      environmentStatusFixture({}),
+      {},
+      {
+        binding: TEAM_BINDING,
+        retrySupported: true,
+        owner: null,
+        isLocalMachine: false,
+      },
     );
+
+    const selector = screen.getByRole("combobox", { name: "Environment" });
+    expect(selector.textContent).toBe("Designers");
+    expect(selector.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText("Runs Designers")).toBeTruthy();
   });
 
-  it("opens the Stop sharing review when This computer only is selected", async () => {
+  it("says Runs and the team name on a team-owned computer, and the selector value is that name", () => {
+    renderCardWithBinding(
+      environmentStatusFixture({}),
+      {},
+      {
+        binding: TEAM_BINDING,
+        retrySupported: true,
+        owner: null,
+        isLocalMachine: false,
+      },
+    );
+
+    const selector = screen.getByRole("combobox", { name: "Environment" });
+    expect(screen.getByText("Runs Designers")).toBeTruthy();
+    expect(selector.textContent).toBe("Designers");
+  });
+
+  it("opens the Stop sharing review when the host's own settings are selected", async () => {
     renderCard(
       environmentStatusFixture({
         planes: {
@@ -440,13 +1308,10 @@ describe("<HostOverviewSettingsCard />", () => {
       },
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Change settings source" }),
-      { button: 0 },
-    );
-    fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: /This computer only/ }),
-    );
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Environment" }), {
+      key: "ArrowDown",
+    });
+    fireEvent.click(await screen.findByRole("option", { name: /^Old laptop/ }));
 
     expect(
       await screen.findByTestId("stop-sharing-managed-empty"),
@@ -456,7 +1321,7 @@ describe("<HostOverviewSettingsCard />", () => {
     ).toBe(false);
   });
 
-  it("shows This computer only after every plane stopped using Personal", () => {
+  it("shows the host name and its detail after every plane stopped using Personal", () => {
     renderCard(
       environmentStatusFixture({
         principal: null,
@@ -466,9 +1331,12 @@ describe("<HostOverviewSettingsCard />", () => {
       {},
     );
 
-    expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: This computer only",
-    );
+    const trigger = screen.getByRole("combobox", { name: "Environment" });
+    expect(within(trigger).getByText("Old laptop")).toBeTruthy();
+    expect(within(trigger).queryByText("Local")).toBeNull();
+    expect(
+      within(trigger).getByText("its own settings, not in Personal yet"),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(
       screen.getByText("This computer stopped using Personal on 21 Oct"),
@@ -479,7 +1347,7 @@ describe("<HostOverviewSettingsCard />", () => {
   it("shows Personal for an unrecorded shared computer", () => {
     renderCard(environmentStatusFixture({ setup: null }), {});
     expect(screen.getByTestId("host-settings-source").textContent).toContain(
-      "Settings: Personal",
+      "Personal",
     );
   });
 });
@@ -559,7 +1427,7 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
       { managed: [], needsChoice: [logLevel, editor] },
     ];
     let previewReads = 0;
-    const sent: EnvironmentMoveStopRequest[] = [];
+    const sent: EnvironmentMoveStopRequestV11[] = [];
     renderCard(environmentStatusFixture({}), {
       "environment.status": () => environmentStatusFixture({}),
       "environment.move.stopPreview": () => {
@@ -598,6 +1466,8 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
 
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toEqual({
+      profileMode: null,
+      profileSignIns: [],
       choices: [
         { kind: "variable", key: "LOG_LEVEL", choice: "keep_locally" },
         {
@@ -672,6 +1542,7 @@ describe("hostSettingsRowModel", () => {
     const model = hostSettingsRowModel(
       environmentStatusFixture(overrides),
       PERSONAL_BINDING,
+      "Old laptop",
     );
     if (expected === "progress") {
       expect(model.kind).toBe("progress");
@@ -684,18 +1555,62 @@ describe("hostSettingsRowModel", () => {
       "Designers",
     );
     expect(model.options.map((option) => option.label)).toContain("Personal");
-    expect(model.options.map((option) => option.label)).toContain(
-      "This computer only",
+    expect(model.options.map((option) => option.label)).toContain("Old laptop");
+  });
+
+  it("names Personal and this host, and hides the detail sentences in the closed trigger", () => {
+    const model = hostSettingsRowModel(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      PERSONAL_BINDING,
+      "Old laptop",
     );
+    expect(model).toMatchObject({
+      kind: "select",
+      value: "local",
+      description: "Runs its own settings, not in Personal yet",
+      options: [
+        {
+          value: "personal",
+          label: "Personal",
+          detail: "Runs Personal",
+        },
+        {
+          value: "local",
+          label: "Old laptop",
+          detail: "its own settings, not in Personal yet",
+        },
+      ],
+    });
+  });
+
+  it("shows Personal rather than a Local selection for a team-owned computer with local planes", () => {
+    expect(
+      hostSettingsRowModel(
+        environmentStatusFixture({
+          principal: { kind: "team", teamName: "Designers" },
+          planes: { records: "local", broker: "local", room: "local" },
+        }),
+        PERSONAL_BINDING,
+        "Old laptop",
+      ),
+    ).toMatchObject({ kind: "select", value: "personal" });
   });
 
   it("uses the team's name as a fixed value", () => {
     expect(
-      hostSettingsRowModel(environmentStatusFixture({}), TEAM_BINDING),
+      hostSettingsRowModel(
+        environmentStatusFixture({}),
+        TEAM_BINDING,
+        "Old laptop",
+      ),
     ).toEqual({
       kind: "team",
+      environmentId: "team",
       label: "Designers",
-      description: "Runs Designers' settings.",
+      description: "Runs Designers",
     });
   });
 
@@ -708,16 +1623,143 @@ describe("hostSettingsRowModel", () => {
         room: "shared_unrecorded",
       },
     });
-    expect(hostSettingsRowModel(status, PERSONAL_BINDING)).toMatchObject({
+    expect(
+      hostSettingsRowModel(status, PERSONAL_BINDING, "Old laptop"),
+    ).toMatchObject({
       kind: "select",
       value: "personal",
     });
   });
 
+  it("keeps unresolved setup on this computer with its status as the detail", () => {
+    expect(
+      hostSettingsRowModel(
+        environmentStatusFixture({
+          principal: null,
+          planes: { records: "moved", broker: "moved", room: "moved" },
+          setup: { stage: "applying", state: "stalled" },
+        }),
+        PERSONAL_BINDING,
+        "Old laptop",
+      ),
+    ).toEqual({
+      kind: "select",
+      value: "local",
+      description: "Setup stopped while applying your settings.",
+      options: [
+        {
+          value: "local",
+          label: "Old laptop",
+          detail: "Setup stopped while applying your settings.",
+          action: "none",
+        },
+      ],
+    });
+  });
+
   it("reserves the row while status or binding is unread", () => {
-    expect(hostSettingsRowModel(null, PERSONAL_BINDING).kind).toBe("loading");
-    expect(hostSettingsRowModel(environmentStatusFixture({}), null).kind).toBe(
-      "loading",
+    expect(
+      hostSettingsRowModel(null, PERSONAL_BINDING, "Old laptop").kind,
+    ).toBe("loading");
+    expect(
+      hostSettingsRowModel(environmentStatusFixture({}), null, "Old laptop")
+        .kind,
+    ).toBe("loading");
+  });
+});
+
+describe("<HostOverviewSettingsCard /> follows the rail", () => {
+  const localPick = {
+    kind: "local" as const,
+    hostId: "old",
+    hostName: "Old laptop",
+  };
+
+  it("writes Personal, the host, the team, and a move, and leaves a stopped move that has no Local row", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: localPick });
+    renderCard(
+      environmentStatusFixture({
+        planes: {
+          records: "shared_unrecorded",
+          broker: "shared_unrecorded",
+          room: "shared_unrecorded",
+        },
+      }),
+      {},
     );
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      );
+    });
+    cleanup();
+
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+    });
+    renderCard(
+      environmentStatusFixture({
+        principal: null,
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      {},
+    );
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        localPick,
+      );
+    });
+    cleanup();
+
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+    });
+    renderCardWithBinding(
+      environmentStatusFixture({}),
+      {},
+      {
+        binding: TEAM_BINDING,
+        retrySupported: true,
+        owner: null,
+        isLocalMachine: false,
+      },
+    );
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "team",
+        environmentId: TEAM_BINDING.environment.environmentId,
+      });
+    });
+    cleanup();
+
+    useSettingsEnvironmentPickStore.setState({ pick: localPick });
+    renderCard(
+      environmentStatusFixture({
+        setup: { stage: "moving_settings", state: "running" },
+      }),
+      {},
+    );
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      );
+    });
+    cleanup();
+
+    useSettingsEnvironmentPickStore.setState({
+      pick: null,
+      defaultPick: PERSONAL_PICK,
+    });
+    renderCard(
+      environmentStatusFixture({
+        setup: { stage: "moving_settings", state: "failed" },
+      }),
+      {},
+    );
+    await waitFor(() => {
+      expect(useSettingsEnvironmentPickStore.getState().pick).toBeNull();
+    });
   });
 });

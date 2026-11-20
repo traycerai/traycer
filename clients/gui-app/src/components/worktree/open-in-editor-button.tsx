@@ -72,14 +72,14 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
   const { copy } = useClipboardCopy({
     resetMs: 2000,
     onSuccess: () => {
-      toast.success("Copied workspace path");
+      toast.success("Copied folder path");
     },
     onError: () => {
       reportableErrorToast("Couldn't copy path to clipboard.", undefined, {
-        title: "Could not copy workspace path",
+        title: "Could not copy folder path",
         message: null,
         code: null,
-        source: "Workspace",
+        source: "Folder",
       });
     },
   });
@@ -144,7 +144,7 @@ export function OpenInEditorButton(props: OpenInEditorButtonProps) {
         variant="ghost"
         size="icon"
         disabled={openingEditor || noTargetsAvailable || !hostMatches}
-        aria-label="Open workspace in editor"
+        aria-label="Open folder in editor"
         data-testid="workspace-open-in-editor-primary"
         className="size-7"
         onClick={handleOpenPrimaryEditor}

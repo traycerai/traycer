@@ -113,6 +113,7 @@ vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
   useTuiForkProfileSupported: () => useTuiForkProfileSupportedMock(),
 }));
 
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
 import {
   type CreateTuiAgentStatus,
@@ -283,9 +284,7 @@ describe("useCreateTuiAgent", () => {
           terminalAgentArgs: null,
           profileId: null,
         }),
-      ).rejects.toThrow(
-        /Couldn't prepare the workspace .* branch already exists/,
-      );
+      ).rejects.toThrow(/Couldn't prepare the folder .* branch already exists/);
     });
 
     // Launching against the partial binding never proceeds to harness work.
@@ -297,7 +296,7 @@ describe("useCreateTuiAgent", () => {
     // The host's causal per-entry reason reaches the toast, not just the
     // folder-name headline.
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      'Couldn\'t prepare the workspace for "workspace-a". The terminal agent was not launched.',
+      'Couldn\'t prepare the folder for "workspace-a". The terminal agent was not launched.',
       expect.objectContaining({ description: "branch already exists" }),
     );
   });
@@ -378,13 +377,13 @@ describe("useCreateTuiAgent", () => {
           terminalAgentArgs: null,
           profileId: null,
         }),
-      ).rejects.toThrow(/^Couldn't prepare the workspace for 2 folders/);
+      ).rejects.toThrow(/^Couldn't prepare the folder for 2 folders/);
     });
 
     // Falls back to the folder-only headline: no description, and the other
     // folder's reason never rides along.
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
-      'Couldn\'t prepare the workspace for 2 folders, starting with "workspace-a". The terminal agent was not launched.',
+      'Couldn\'t prepare the folder for 2 folders, starting with "workspace-a". The terminal agent was not launched.',
     );
   });
 
@@ -1306,6 +1305,60 @@ describe("useCreateTuiAgent", () => {
     );
     expect(placeholderNode.type).toBe("terminal-agent");
 
+    queryClient.clear();
+  });
+
+  it("a removed-by-person refusal on the staged create path toasts Was removed", async () => {
+    vi.mocked(toast.error).mockClear();
+    hookMocks.request.mockImplementation((method, payload) => {
+      if (method === "agent.tui.prepareLaunch") {
+        return Promise.reject(
+          new HostRpcError({
+            code: "removed-by-person",
+            message: "The send was refused.",
+            requestId: "req-1",
+            method: "agent.tui.prepareLaunch",
+            fatalDetails: null,
+          }),
+        );
+      }
+      if (method === "epic.createTuiAgent") {
+        return Promise.resolve({ tuiAgentId: "server-id" });
+      }
+      return Promise.resolve(worktreeCreateOkResponse(payload));
+    });
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current
+        .create({
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          parentId: null,
+          title: "",
+          placement: null,
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
+          onStatusChange: null,
+          workspaceMode: "inherit",
+          worktreeIntent: null,
+          terminalAgentArgs: null,
+          profileId: null,
+        })
+        .catch(() => undefined);
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe("Was removed");
+    });
     queryClient.clear();
   });
 

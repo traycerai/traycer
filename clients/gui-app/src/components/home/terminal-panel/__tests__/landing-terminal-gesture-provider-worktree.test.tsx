@@ -13,7 +13,10 @@ import {
 } from "@/stores/home/landing-panel-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-staging-store";
 
@@ -47,10 +50,13 @@ const SECOND_IMPORTED_WORKTREE_PATH =
 
 const mocks = vi.hoisted(() => ({
   activeHostId: "host-a" as string | null,
+  /** The caller-named host the provider asked its placement for. */
+  placementOverride: null as string | null,
 }));
 
 vi.mock("@/hooks/host/use-composer-placement", () => ({
-  useComposerPlacement: () => {
+  useComposerPlacement: (overrideHostId: string | null) => {
+    mocks.placementOverride = overrideHostId;
     const target = {
       resolvedHostId: mocks.activeHostId,
       client:
@@ -112,6 +118,7 @@ function resetStores(): void {
   useWorktreeIntentStagingStore.getState().resetForTests();
   useLandingPanelStore.getState().resetForTests();
   mocks.activeHostId = HOST_A;
+  mocks.placementOverride = null;
 }
 
 beforeEach(resetStores);
@@ -144,6 +151,39 @@ function Wrapper({ children }: { readonly children: ReactNode }): ReactNode {
 function renderGesture() {
   return renderHook(() => useLandingTerminalGesture(), { wrapper: Wrapper });
 }
+
+describe("LandingTerminalGestureProvider - a draft opened for one host", () => {
+  function renderFor(draftId: string | null) {
+    return renderHook(() => useLandingTerminalGesture(), {
+      wrapper: ({ children }: { readonly children: ReactNode }) => (
+        <LandingTerminalGestureProvider draftId={draftId}>
+          {children}
+        </LandingTerminalGestureProvider>
+      ),
+    });
+  }
+
+  it("places the terminal on the draft's own host, and an unnamed draft on the window's", () => {
+    useLandingDraftStore.getState().installLandingDraft({
+      id: "draft-named",
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+      selection: null,
+      lastTouchedAt: 1,
+      settings: null,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+      returnedSandbox: null,
+      namedHostId: HOST_B,
+      durability: "in-memory",
+    });
+    renderFor("draft-named");
+    expect(mocks.placementOverride).toBe(HOST_B);
+    cleanup();
+    renderFor(null);
+    expect(mocks.placementOverride).toBeNull();
+  });
+});
 
 describe("LandingTerminalGestureProvider - staged worktree intent routes the launch directory", () => {
   it("keeps primaryWorkspacePath/workspacePaths raw while launchWorkspacePath follows the primary's staged import, live and captured", () => {

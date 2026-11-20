@@ -20,6 +20,7 @@ import {
   scrubSentryTransactionInPlace,
 } from "@traycer-clients/shared/platform/sentry-scrub";
 import { config } from "../config";
+import { isElectronWebviewDetachNoise } from "./sentry-capture-filter";
 
 declare global {
   interface Window {
@@ -56,6 +57,7 @@ function bootstrap(): void {
       // an RPC error rendered into text. This is the same shaping the main
       // process applies, from the same detection leaf.
       beforeSend: (event) => {
+        if (isElectronWebviewDetachNoise(event)) return null;
         scrubSentryEventInPlace(event);
         return event;
       },

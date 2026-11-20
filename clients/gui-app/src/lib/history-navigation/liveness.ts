@@ -4,7 +4,8 @@ import {
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { parseNestedFocusTargetFromHref } from "@/lib/epic-nested-focus-route";
-import { hrefPathname } from "@/lib/routes";
+import { hrefPathname, readBotIdFromPath } from "@/lib/routes";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 /**
  * Conservative liveness predicate for a persisted history entry.
@@ -31,6 +32,10 @@ import { hrefPathname } from "@/lib/routes";
  *   start-task draft is retained in the store but is not a strip
  *   source; Back onto `/draft/:id` would landing-correct. `/draft/new` is a
  *   distinct route and is always kept.
+ *
+ * - `/bot/$botId` — dead when the Tracy surface's host has shown the bot
+ *   gone (`isGoneBotHref`). `/bot`, and a channel of any bot nothing has
+ *   shown gone, are kept.
  *
  * Reads `getState()` at call time so the prune scheduler re-evaluates liveness
  * against the live stores at execution, not at install time.
@@ -72,8 +77,24 @@ export function isHistoryEntryDead(href: string): boolean {
     return !isOpen;
   }
 
-  // Unknown / unparseable / every other route shape: keep.
-  return false;
+  // /bot/$botId — dead once its bot is shown gone; every other route shape,
+  // unknown and unparseable ones included, is kept.
+  return isGoneBotHref(href);
+}
+
+/**
+ * Whether `href` is the channel of a bot the Tracy surface's host has shown
+ * to be gone. The one proof both the prune and the back/forward skip read:
+ * the surface records a bot gone only on a deleted frame of its stream or a
+ * list that answered without it, so an unreachable host or a list not read
+ * yet proves nothing and the entry stays.
+ */
+export function isGoneBotHref(href: string): boolean {
+  const botId = readBotIdFromPath(hrefPathname(href));
+  return (
+    botId !== null &&
+    Object.hasOwn(useTracySurfaceStore.getState().goneReports, botId)
+  );
 }
 
 /** Split an href into its non-empty pathname segments (query/hash stripped). */

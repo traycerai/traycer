@@ -21,6 +21,7 @@ const GROUP_LABELS: Readonly<Record<CommandGroupId, string>> = {
   actions: "Actions",
   navigation: "Navigation",
   epics: "Tasks",
+  mainBots: "Main bots",
   bots: "Tracy",
   theme: "Theme",
   help: "Help",
@@ -28,6 +29,7 @@ const GROUP_LABELS: Readonly<Record<CommandGroupId, string>> = {
 };
 
 const DEFAULT_GROUP_ORDER: ReadonlyArray<CommandGroupId> = [
+  "mainBots",
   "suggested",
   "epics",
   "bots",
@@ -41,7 +43,8 @@ const DEFAULT_GROUP_ORDER: ReadonlyArray<CommandGroupId> = [
  * Partition items into their declared groups, drop empty groups,
  * and sort each group's items alphabetically by label. Returns the
  * groups in `DEFAULT_GROUP_ORDER`; `pinned` and `recents` are
- * composed separately by the renderer so they always appear on top.
+ * composed separately by the renderer, on top of everything but the
+ * main bots.
  */
 export function bucketItems(
   items: ReadonlyArray<CommandItem>,

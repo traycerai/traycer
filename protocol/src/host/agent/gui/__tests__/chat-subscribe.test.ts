@@ -427,6 +427,7 @@ describe("chat.subscribe@1.2 server frames", () => {
       // A fired schedule is not a managed command; there is nothing to open.
       managedCommand: null,
       live: false,
+      conversationMessage: null,
     });
   });
 
@@ -1719,11 +1720,8 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
       snapshotFrameWithManagedCommands([shell]),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
-    // `toMatchObject`, not `toEqual`: 1.6 binds the LIVE managed-command shape
-    // since the unreleased 1.7 collapsed into it, so the details widening
-    // (`command`/`cwd`/`cadence`) arrives with its defaults on top of the
-    // fields this fixture states. It was `toEqual` while 1.6 was pinned to
-    // `managedCommandSchemaPreImage`, which modelled none of the three.
+    // The frozen 1.7 snapshot includes the managed-command detail defaults
+    // (`command`/`cwd`/`cadence`) on top of the fields this fixture states.
     expect(parsed.snapshot.managedCommands).toMatchObject([shell]);
     expect(parsed.snapshot.managedCommands[0]).toHaveProperty("command");
     expect(parsed.snapshot.managedCommands[0]).toHaveProperty("cwd");
@@ -2278,14 +2276,12 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     }
   });
 
-  it("binds the LIVE line (1.7) to the live chat schema, with 1.6 now pinned", () => {
+  it("keeps image-bearing chats intact on frozen 1.7, with 1.6 pinned below it", () => {
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
 
-    // The inverse of what this asserted while a 1.7 sat above a pre-image-
-    // pinned 1.6. Collapsing that unreleased minor made 1.6 the live line, so
-    // an image-bearing chat must now arrive INTACT rather than stripped -
-    // stripping is what a frozen line does, and 1.6 has no peer to be frozen
-    // against. The lines below it stay pinned because they DO have peers.
+    // 1.7 shipped these image fields, so its frozen snapshot retains them.
+    // The older 1.6 binding keeps its own preimage; later additions belong to
+    // the separate current line.
     const parsed = chatSubscribeV17.serverFrameSchema.parse(
       snapshotFrameWithChat(chatWithImages),
     );
@@ -2310,7 +2306,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 42 as chatSubscribeV142", () => {
+  it("registers chat.subscribe major 1 with latestMinor 45", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2402,7 +2398,7 @@ describe("chat.subscribe registry membership", () => {
     // the delivery's `worktreeIntent`, stripped for every `<=1.41` peer, and
     // `43` the `slack` user message, degraded to a plain user row for every
     // `<=1.42` peer.
-    expect(entry[1].latestMinor).toBe(43);
+    expect(entry[1].latestMinor).toBe(46);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);

@@ -1,97 +1,13 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { grantedEnvironmentRole } from "@traycer/protocol/host/environment/contracts";
 import { ConfigurationConflict } from "@/components/settings/environment/configuration-conflict";
 import { ConfigurationSourceContext } from "@/components/settings/environment/configuration-source";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import type { ConfigurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
-import { PlanUnlinkPreview } from "@/components/settings/environment/plan-unlink-preview";
-import {
-  PlansCard,
-  type ConfigurationPlan,
-} from "@/components/settings/environment/plans-card";
 import { TeamSecretNames } from "@/components/settings/environment/team-secret-names";
 
-const plan: ConfigurationPlan = {
-  id: "plan-1",
-  linkedBy: "Ada",
-  providerLabel: "Claude",
-};
-
-function renderPlans(overrides: {
-  canAdminister: boolean;
-  plans?: readonly ConfigurationPlan[];
-  adminNames?: readonly string[];
-  onLink?: () => void;
-  onPreviewUnlink?: (plan: ConfigurationPlan) => void;
-}): void {
-  render(
-    <PlansCard
-      teamName="Acme"
-      plans={overrides.plans ?? [plan]}
-      canAdminister={overrides.canAdminister}
-      adminNames={overrides.adminNames ?? ["Ada", "Grace"]}
-      isPending={false}
-      onLink={overrides.onLink ?? vi.fn()}
-      onPreviewUnlink={overrides.onPreviewUnlink ?? vi.fn()}
-    />,
-  );
-}
-
 afterEach(cleanup);
-
-describe("PlansCard", () => {
-  it("gives a viewer no Link or Unlink verbs", () => {
-    renderPlans({ canAdminister: false });
-
-    expect(screen.queryByRole("button", { name: /link a plan/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /unlink/i })).toBeNull();
-  });
-
-  it.each([
-    { admins: [], line: "Only an admin can link a plan." },
-    { admins: ["Ada"], line: "Only an admin can link a plan: ask Ada." },
-    {
-      admins: ["Ada", "Grace"],
-      line: "Only an admin can link a plan: ask Ada or Grace.",
-    },
-    {
-      admins: ["Ada", "Grace", "Linus"],
-      line: "Only an admin can link a plan: ask Ada, Grace or 1 other.",
-    },
-    {
-      admins: ["Ada", "Grace", "Linus", "Barbara", "Alan"],
-      line: "Only an admin can link a plan: ask Ada, Grace or 3 others.",
-    },
-  ])("tells a reader who to ask: $line", ({ admins, line }) => {
-    renderPlans({ canAdminister: false, adminNames: admins });
-
-    expect(screen.getByText(line)).toBeTruthy();
-  });
-
-  it("says no plan is linked when the team has none", () => {
-    renderPlans({ canAdminister: true, plans: [] });
-
-    expect(screen.getByText("No plans linked.")).toBeTruthy();
-  });
-
-  it("hands the plan to the preview callback when an admin clicks Unlink", () => {
-    const onPreviewUnlink = vi.fn();
-    const onLink = vi.fn();
-    renderPlans({ canAdminister: true, onPreviewUnlink, onLink });
-
-    fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
-    expect(onPreviewUnlink).toHaveBeenCalledExactlyOnceWith(plan);
-    expect(onLink).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: /link a plan/i }));
-    expect(onLink).toHaveBeenCalledOnce();
-  });
-
-  it("never offers to add a profile", () => {
-    renderPlans({ canAdminister: true });
-    expect(screen.queryByText(/add a profile/i)).toBeNull();
-  });
-});
 
 describe("TeamSecretNames", () => {
   it("lists names with their state and renders no buttons", () => {
@@ -150,7 +66,7 @@ describe("ConfigurationWriteFeedback", () => {
           environmentId: "env-a",
           roomId: "room-a",
           providerHandle: null,
-          effectiveRole: role,
+          effectiveRole: grantedEnvironmentRole(role),
         }}
       >
         <ConfigurationWriteFeedback issue={issue} />
@@ -194,48 +110,5 @@ describe("ConfigurationConflict", () => {
     expect(screen.getByRole("status").textContent).toBe(
       "Changed by another member a moment ago",
     );
-  });
-});
-
-describe("PlanUnlinkPreview", () => {
-  function renderPreview(
-    activeTurns: number | null,
-    handlers: { onConfirm: () => void; onClose: () => void },
-  ): void {
-    render(
-      <PlanUnlinkPreview
-        teamName="Acme"
-        plan={plan}
-        activeTurns={activeTurns}
-        remainingAccess={["Team key"]}
-        isPending={false}
-        onClose={handlers.onClose}
-        onConfirm={handlers.onConfirm}
-      />,
-    );
-  }
-
-  it("confirms only on the Unlink click, and Cancel closes without confirming", () => {
-    const onConfirm = vi.fn();
-    const onClose = vi.fn();
-    renderPreview(3, { onConfirm, onClose });
-
-    expect(screen.getByText(/3 active turns\./)).toBeTruthy();
-    expect(screen.getByText("Team key.")).toBeTruthy();
-    expect(onConfirm).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(onConfirm).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Unlink" }));
-    expect(onConfirm).toHaveBeenCalledOnce();
-  });
-
-  it("says so when active turns could not be counted", () => {
-    renderPreview(null, { onConfirm: vi.fn(), onClose: vi.fn() });
-    expect(
-      screen.getByText(/Active turns could not be counted\./),
-    ).toBeTruthy();
   });
 });

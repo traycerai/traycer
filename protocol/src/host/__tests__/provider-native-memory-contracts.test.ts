@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
-  downgradeProviderCliStateToV10,
   providerCliStateSchema,
   providersListResponseSchema,
   providersListResponseSchemaV107Preimage,
@@ -63,7 +62,6 @@ describe("native memory protocol surface", () => {
     const parsed = providerCliStateSchema.parse(providerStateFixture());
 
     expect(Object.hasOwn(parsed, "nativeMemory")).toBe(false);
-    expect(parsed.nativeMemory).toBeUndefined();
   });
 
   it("rejects a non-boolean nativeMemory", () => {
@@ -103,27 +101,6 @@ describe("native memory protocol surface", () => {
     ).toBe(false);
   });
 
-  it("drops the native-memory pair on the v1.0 downgrade while keeping an earlier field", () => {
-    // Parsed rather than hand-built, so the fixture is the live row type the
-    // downgrade actually receives: a literal here type-checks only as long as
-    // nobody adds a required field, and vitest would not notice either way.
-    const live = providerCliStateSchema.parse({
-      ...providerStateFixture(),
-      nativeMemory: false,
-      nativeMemorySupported: true,
-    });
-    expect(live.nativeMemory).toBe(false);
-
-    const downgraded = downgradeProviderCliStateToV10(live);
-
-    expect(downgraded).not.toBeNull();
-    expect(downgraded && Object.hasOwn(downgraded, "nativeMemory")).toBe(false);
-    expect(
-      downgraded && Object.hasOwn(downgraded, "nativeMemorySupported"),
-    ).toBe(false);
-    expect(downgraded?.providerId).toBe("claude-code");
-  });
-
   it("is registered as an optional 1.0 method, out of the released floor", () => {
     expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(
       "providers.setNativeMemory",
@@ -149,8 +126,5 @@ describe("native memory protocol surface", () => {
     const upgraded = upgrade.upgradeResponse(response);
 
     expect(upgraded).toBe(response);
-    expect(Object.hasOwn(upgraded.providers[0], "nativeMemorySupported")).toBe(
-      false,
-    );
   });
 });

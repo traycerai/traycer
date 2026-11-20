@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
@@ -14,16 +15,18 @@ import type {
   WorktreeBindingSelectorRowV12,
   WorktreeBindingWorkspaceMode,
   WorktreeIntent,
-  WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostOwnership } from "@traycer-clients/shared/host-client/host-ownership";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { CURRENT_EPIC_VERSION } from "@traycer-clients/shared/epic/epic-version";
 
-import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { authQueryKeys, hostQueryKeys } from "@/lib/query-keys";
+import { useHostOwnership } from "@/hooks/auth/use-host-ownership";
+import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { readLocalHostIdSnapshot } from "@/lib/host/local-host-id-snapshot";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
@@ -31,6 +34,7 @@ import {
   ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY,
   isAttachEnvironmentUnsupported,
   isAttachPromotionPending,
+  pressedSignInCurrent,
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
@@ -97,6 +101,7 @@ import {
   hashOnlyImageHashes,
   inlineHashOnlyImageBytes,
 } from "@/lib/composer/image-atoms";
+import { containsFileAttachments } from "@/lib/composer/file-attachments";
 import { sessionImageBytes } from "@/lib/composer/landing-image-store";
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { openLandingDraft } from "@/lib/drafts/open-landing-draft";
@@ -128,10 +133,7 @@ import {
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
-import {
-  orderFoldersPrimaryFirst,
-  resolvePrimaryPath,
-} from "@/lib/worktree/resolve-primary-path";
+import { orderFoldersPrimaryFirst } from "@/lib/worktree/resolve-primary-path";
 import {
   armEpicCreateSeedHoldTimer,
   clearEpicCreateSeedPending,
@@ -166,15 +168,7 @@ import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { toast } from "sonner";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
-import {
-  buildDefaultBranchByPath,
-  EMPTY_DEFAULT_BRANCH,
-} from "@/lib/worktree/default-branch-name";
-import {
-  defaultFolderIntent,
-  mainCheckoutHasCommit,
-} from "@/lib/worktree/worktree-intent-seeding";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { readCachedDefaultWorktreeIntent } from "@/lib/worktree/cached-default-worktree-intent";
 import type {
   LandingGiveBack,
   LandingSandboxSendHandoff,
@@ -197,10 +191,13 @@ export interface LandingComposerSubmitArgs {
     readonly serviceTier: ServiceTier;
     readonly permission: PermissionMode;
     readonly ultracode: boolean;
+    readonly accountChosen: boolean;
+    /** A default account is nobody's choice: last-run records the Terminal login it stands in for. */
+    readonly showsDefaultAccount: boolean;
   };
   /**
-   * Who the new task belongs to: the resolved host's owner, read by the
-   * caller at submit; `null` is Personal.
+   * The owner known to the caller at submit; `null` is Personal. A pending
+   * local ownership read settles before the create chooses its final owner.
    */
   readonly owner: LandingOwnerTeam | null;
   /**
@@ -267,6 +264,9 @@ export interface TerminalAgentLaunch {
  * never a toast-and-proceed, and never a silent fallback onto another host.
  */
 export interface LandingComposerActions {
+  readonly resolveOwnerForCreate: (
+    owner: LandingOwnerTeam | null,
+  ) => LandingOwnerTeam | null | Promise<LandingOwnerTeam | null>;
   readonly submit: (
     args: LandingComposerSubmitArgs,
   ) => LandingPlacementRefusal | null;
@@ -309,6 +309,10 @@ export interface LandingComposerActions {
 export interface LandingPlacementRefusal {
   readonly message: string;
 }
+
+type LandingEpicCreateResult = CreateEpicResponseV12 & {
+  readonly createdOwner: EpicCreateOwner | null;
+};
 
 interface FinalizeLandingSubmissionInput {
   /** What the HOST receives: image hashes inlined back to base64. */
@@ -368,10 +372,85 @@ export function useLandingComposerActions(
 ): LandingComposerActions {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const auth = useHostBinding()?.auth ?? null;
+  const localHostId =
+    target.client?.getActiveHost()?.kind === "local"
+      ? target.resolvedHostId
+      : null;
+  const localOwnership = useHostOwnership(localHostId, localHostId !== null);
+  const localOwnerQuery = useCallback(
+    (hostId: string) => {
+      if (auth === null || localHostId !== hostId) return undefined;
+      return queryClient.getQueryCache().find<HostOwnership>({
+        queryKey: authQueryKeys.hostOwnership(
+          auth,
+          useAuthStore.getState().contextMetadata?.userId ?? null,
+          hostId,
+        ),
+        exact: true,
+      });
+    },
+    [auth, localHostId, queryClient],
+  );
+  const ownerForCreate = useCallback(
+    (
+      hostId: string,
+      fallback: LandingOwnerTeam | null,
+    ): LandingOwnerTeam | null | Promise<LandingOwnerTeam | null> => {
+      const query = localOwnerQuery(hostId);
+      if (query === undefined) return fallback;
+      const userId = useAuthStore.getState().contextMetadata?.userId ?? null;
+      const readOwner = (): LandingOwnerTeam | null => {
+        if (query.state.error instanceof SupersededAuthEraError)
+          throw query.state.error;
+        const owner = query.state.data?.owner ?? null;
+        if (owner?.kind !== "team") return null;
+        return {
+          teamId: owner.id,
+          slug:
+            useAuthStore
+              .getState()
+              .shareableTeams.find((team) => team.teamId === owner.id)?.slug ??
+            owner.name,
+        };
+      };
+      // A submit may hold a null owner from the render before this read settled.
+      if (
+        query.state.status === "pending" &&
+        query.state.fetchStatus === "fetching" &&
+        query.promise !== undefined
+      ) {
+        return query.promise
+          .catch((error: unknown) => {
+            if (error instanceof SupersededAuthEraError) throw error;
+          })
+          .then(() => {
+            if (
+              userId !==
+              (useAuthStore.getState().contextMetadata?.userId ?? null)
+            )
+              throw new SupersededAuthEraError();
+            return readOwner();
+          });
+      }
+      return readOwner();
+    },
+    [localOwnerQuery],
+  );
+  const resolveOwnerForCreate = useCallback(
+    (
+      owner: LandingOwnerTeam | null,
+    ): LandingOwnerTeam | null | Promise<LandingOwnerTeam | null> =>
+      target.resolvedHostId === null
+        ? owner
+        : ownerForCreate(target.resolvedHostId, owner),
+    [ownerForCreate, target.resolvedHostId],
+  );
   const createEpic = useEpicCreateForClient(target.client);
   const attachClient = useEpicAttachmentClient(target.client);
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "landing");
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
+  const takeOperation = useEnvironmentCloud();
   const discardCreatedIfEmpty = useEpicDiscardCreatedIfEmpty();
   const terminalAgentCreate = useCreateTuiAgentForClient(
     target.client,
@@ -409,7 +488,7 @@ export function useLandingComposerActions(
   // frozen type would narrow nothing here - it would simply stop describing the
   // value this returns.
   const createLandingEpic = useCallback(
-    (input: {
+    async (input: {
       readonly epicId: string;
       /** The validated placement host - never re-read off a client here. */
       readonly hostId: string;
@@ -417,7 +496,8 @@ export function useLandingComposerActions(
       readonly initialUserPrompt: string;
       readonly chat: CreateEpicChatSeedV14 | null;
       /** `epic.create@1.3`'s owner; `null` is the person. */
-      readonly owner: EpicCreateOwner | null;
+      readonly owner: LandingOwnerTeam | null;
+      readonly ownerState: "resolve" | "settled";
       readonly workspaceFolders: ReadonlyArray<string>;
       readonly workspaceFolderInfoByPath: Readonly<
         Record<string, WorkspaceFolderInfo>
@@ -441,7 +521,14 @@ export function useLandingComposerActions(
        * this epic's binding refetches until the window is reloaded.
        */
       readonly captureSeedRecovery: (recover: () => void) => void;
-    }): Promise<CreateEpicResponseV12> => {
+    }): Promise<LandingEpicCreateResult> => {
+      const resolvedOwner =
+        input.ownerState === "settled"
+          ? input.owner
+          : ownerForCreate(input.hostId, input.owner);
+      const owner = epicCreateOwnerFor(
+        resolvedOwner instanceof Promise ? await resolvedOwner : resolvedOwner,
+      );
       const profile = useAuthStore.getState().profile;
       const hostId = input.hostId;
       const optimisticRows = buildOptimisticWorkspaceBindingRows(
@@ -550,7 +637,7 @@ export function useLandingComposerActions(
         chat: input.chat,
         // A team owner is floored at `epic.create@1.3` by the create
         // mutation, so it never reaches a host that would strip it.
-        owner: input.owner,
+        owner,
       })
         .then((response) => {
           // A REFUSAL resolves, so it arrives HERE and not in the `.catch`
@@ -602,9 +689,10 @@ export function useLandingComposerActions(
             queryClient.removeQueries({ queryKey: seededBindingsKey });
           }
           throw error;
-        });
+        })
+        .then((response) => ({ ...response, createdOwner: owner }));
     },
-    [createEpicMutateAsync, queryClient],
+    [createEpicMutateAsync, ownerForCreate, queryClient],
   );
 
   // Everything from building `submittedContent` through the optimistic
@@ -726,12 +814,15 @@ export function useLandingComposerActions(
       // until this exact runtime's create reports success. Last-run memory is
       // keyed by the host the chat is created on (`activeHostId`, resolved
       // and null-guarded above).
+      const lastRunSettings = toolbar.showsDefaultAccount
+        ? { ...settings, profileId: null }
+        : settings;
       useComposerRunSettingsStore
         .getState()
-        .setGlobalRunSettings(activeHostId, settings, now);
+        .setGlobalRunSettings(activeHostId, lastRunSettings, now);
       useComposerRunSettingsStore
         .getState()
-        .setEpicRunSettings(epicId, activeHostId, settings, now);
+        .setEpicRunSettings(epicId, activeHostId, lastRunSettings, now);
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
       useInitialChatHandoffStore.getState().register({
         hostId: activeHostId,
@@ -846,7 +937,8 @@ export function useLandingComposerActions(
         captureSeedRecovery: (recover) => {
           seedRecovery.run = recover;
         },
-        owner: epicCreateOwnerFor(args.owner),
+        owner: args.owner,
+        ownerState: "resolve",
         chat: {
           chatId,
           parentId: null,
@@ -1219,12 +1311,15 @@ export function useLandingComposerActions(
       );
       const editorContent = normalized.content;
       const text = extractPlainTextFromComposerJSONContent(editorContent);
-      const hasImages = containsImageAtoms(editorContent);
-      if (text.trim().length === 0 && !hasImages) return false;
+      const hasAttachments =
+        containsImageAtoms(editorContent) ||
+        containsFileAttachments(editorContent);
+      if (text.trim().length === 0 && !hasAttachments) return false;
       const draftId = ensureSubmissionDraft(
         args.draftId,
         editorContent,
         hostId,
+        args.toolbar.accountChosen,
       );
       const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
       if (runtime === null) return false;
@@ -1459,7 +1554,8 @@ export function useLandingComposerActions(
         // should stand. Nothing to recover to.
         captureSeedRecovery: () => undefined,
         chat: null,
-        owner: epicCreateOwnerFor(owner),
+        owner,
+        ownerState: "resolve",
       })
         .then(
           (response) => {
@@ -1636,7 +1732,12 @@ export function useLandingComposerActions(
         args.sandboxTeamId !== null && args.sandboxTeamId !== args.owner?.teamId
           ? args.sandboxTeamId
           : null;
-      if (attachTeamId !== null && attachClient === null) {
+      const attachmentHostId = attachClient?.getActiveHostId() ?? null;
+      if (
+        attachTeamId !== null &&
+        (attachmentHostId === null ||
+          (args.owner !== null && attachmentHostId === placement.hostId))
+      ) {
         return { message: ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY };
       }
       const hostId = placement.hostId;
@@ -1644,6 +1745,8 @@ export function useLandingComposerActions(
       const handed = args.hand(epicId);
       if (handed === null) return null;
       const dispatchUserId = useAuthStore.getState().profile?.userId ?? null;
+      // The sign-in taken at the press.
+      const operation = takeOperation === null ? null : takeOperation();
       const tabId = uuidv4();
       // The task opens at once, with no agent yet: its first one is created
       // on the sandbox once the agent the person asked for is ready there.
@@ -1656,8 +1759,9 @@ export function useLandingComposerActions(
         epicTitle: "",
         draftId: args.draftId,
       });
+      // The sign-in, not only its account: signing in again ends it.
       const sameAccount = (): boolean =>
-        (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
+        pressedSignInCurrent(operation, dispatchUserId);
       // A create or attachment refusal returns the only message copy. An
       // attachment refused because the task is still reaching the cloud then
       // deletes it, unless an agent was started in it meanwhile: the next Send
@@ -1715,7 +1819,8 @@ export function useLandingComposerActions(
         // no folders, so there is nothing to recover.
         captureSeedRecovery: () => undefined,
         chat: null,
-        owner: epicCreateOwnerFor(args.owner),
+        owner: args.owner,
+        ownerState: "settled",
       })
         .then(async (response) => {
           if (!sameAccount()) return;
@@ -1728,9 +1833,20 @@ export function useLandingComposerActions(
           if (!handed.isCurrent()) return;
           // The task stays on its placement, with its chosen owner. Its team
           // sandbox may serve it only after this personal-host attachment.
-          if (attachTeamId !== null) {
+          const createdOwner = response.createdOwner;
+          const settledAttachTeamId =
+            args.sandboxTeamId !== null &&
+            args.sandboxTeamId !==
+              (createdOwner?.kind === "team" ? createdOwner.teamId : null)
+              ? args.sandboxTeamId
+              : null;
+          if (settledAttachTeamId !== null) {
             try {
-              await attachEnvironmentAsync({ epicId, teamId: attachTeamId });
+              await attachEnvironmentAsync({
+                epicId,
+                teamId: settledAttachTeamId,
+                operation,
+              });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
                 attachRefused(error);
@@ -1750,6 +1866,7 @@ export function useLandingComposerActions(
       discardCreatedIfEmpty,
       navigate,
       resolveAdmittedPlacement,
+      takeOperation,
     ],
   );
 
@@ -1760,6 +1877,7 @@ export function useLandingComposerActions(
 
   return useMemo(
     () => ({
+      resolveOwnerForCreate,
       submit,
       selectTerminalAgent,
       startTaskOnStagedSandbox,
@@ -1768,6 +1886,8 @@ export function useLandingComposerActions(
       // without it the composer would report itself idle for the whole of a
       // multi-megabyte `drafts.putBlob` pass and keep Send live through it.
       isPending:
+        (localOwnership.isPending &&
+          localOwnership.fetchStatus === "fetching") ||
         createEpic.isPending ||
         attachEnvironment.isPending ||
         terminalAgentCreate.isPending ||
@@ -1780,6 +1900,9 @@ export function useLandingComposerActions(
       attachmentUpload,
       attachEnvironment.isPending,
       createEpic.isPending,
+      localOwnership.fetchStatus,
+      localOwnership.isPending,
+      resolveOwnerForCreate,
       placementAdmitsTask,
       selectTerminalAgent,
       startTaskOnStagedSandbox,
@@ -1840,6 +1963,11 @@ function openEpicBeforeCreate(
           epicName: epicTitle,
         });
   if (replaced === null) {
+    // A draft with no tab to replace is still the message being sent: the
+    // replace is what removes a draft's row, so it is removed here.
+    if (input.draftId !== null) {
+      useLandingDraftStore.getState().deleteDraft(input.draftId);
+    }
     activateTabIntent(
       navigate,
       openExactEpicTabIntent({
@@ -1863,6 +1991,7 @@ function ensureSubmissionDraft(
   draftId: string | null,
   content: JsonContent,
   hostId: string,
+  accountChosen: boolean,
 ): string {
   if (draftId !== null) return draftId;
   const createdDraftId = useLandingDraftStore.getState().createDraft(
@@ -1873,6 +2002,9 @@ function ensureSubmissionDraft(
       // app-wide active host.
       .getGlobalRunSettings(hostId),
   );
+  useLandingDraftStore
+    .getState()
+    .setDraftAccountFollowsDefault(createdDraftId, !accountChosen);
   useLandingDraftStore
     .getState()
     .restoreDraftWorkspaceForHost(createdDraftId, hostId);
@@ -1922,6 +2054,10 @@ function placeCreatedDraftEpic(input: {
   scheduleLandingImageReconcile();
 
   if (replaced === null) {
+    // No tab of the draft was there to replace, so nothing removed its row:
+    // what it holds is the text just sent, and it must not stay a draft.
+    useLandingDraftStore.getState().deleteDraft(input.draftId);
+    input.editor.clear();
     useEpicCanvasStore
       .getState()
       .openEpicTabInBackground(input.epicId, input.epicTitle);
@@ -2129,78 +2265,6 @@ function canonicalLaunchWorkspace(
       worktreeIntent,
     ),
   };
-}
-
-function readCachedDefaultWorktreeIntent(
-  queryClient: QueryClient,
-  hostId: string | null,
-  workspace: LandingDraftWorkspaceSnapshot,
-): WorktreeIntent | null {
-  const response = queryClient.getQueryData<{
-    readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV14>;
-  }>(
-    hostQueryKeys.method<HostRpcRegistry, "worktree.listByWorkspacePaths">(
-      hostId,
-      "worktree.listByWorkspacePaths",
-      {
-        workspacePaths: [...workspace.folders],
-        scriptRefs: [],
-        forceRefresh: false,
-      },
-    ),
-  );
-  const summariesByPath = new Map(
-    response?.workspaces.map((summary) => [summary.workspacePath, summary]) ??
-      [],
-  );
-  const worktreeDefaults = workspace.folders.flatMap((workspacePath) => {
-    const summary = summariesByPath.get(workspacePath);
-    if (
-      summary === undefined ||
-      summary.resolvedAt === null ||
-      !summary.isGitRepo
-    ) {
-      return [];
-    }
-    const currentBranch = branchForCachedSummary(summary);
-    // A detached HEAD or a branch with no commit has no fork source: no default.
-    return currentBranch === null || !mainCheckoutHasCommit(summary)
-      ? []
-      : [{ summary, currentBranch }];
-  });
-  if (worktreeDefaults.length === 0) return null;
-
-  const defaultBranchByPath = buildDefaultBranchByPath(
-    worktreeDefaults.map((entry) => entry.summary),
-    worktreeDefaults.length > 1,
-    useSettingsStore.getState().worktreeBranchPrefix,
-  );
-  const primaryPath = resolvePrimaryPath(
-    workspace.folders,
-    workspace.primaryPath,
-  );
-  return {
-    entries: worktreeDefaults.map(({ summary, currentBranch }) =>
-      defaultFolderIntent({
-        workspacePath: summary.workspacePath,
-        repoIdentifier: summary.repoIdentifier,
-        isPrimary: summary.workspacePath === primaryPath,
-        isGitRepo: true,
-        hasCommit: true,
-        currentBranch,
-        defaultNewBranchName: (
-          defaultBranchByPath[summary.workspacePath] ?? EMPTY_DEFAULT_BRANCH
-        ).name,
-      }),
-    ),
-  };
-}
-
-function branchForCachedSummary(
-  summary: WorktreeWorkspaceSummaryV14,
-): string | null {
-  const mainEntry = summary.worktrees.find((worktree) => worktree.isMain);
-  return mainEntry?.branch ?? summary.mainBranch ?? null;
 }
 
 function rememberLandingWorktreeIntent(

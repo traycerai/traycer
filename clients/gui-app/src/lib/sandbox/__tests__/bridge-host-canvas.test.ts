@@ -11,6 +11,7 @@ import {
   LOAD_TIMEOUT_MS,
   PING_TIMEOUT_MS,
   SandboxBridgeHost,
+  type SandboxArtifactLink,
   type SandboxHostContext,
   type SandboxServedPages,
   type SandboxShortcutPress,
@@ -67,6 +68,7 @@ interface Harness {
   >;
   readonly onPageError: Mock<(error: CanvasPageError) => void>;
   readonly onRelativeLink: Mock<(href: string) => void>;
+  readonly onArtifactLink: Mock<(link: SandboxArtifactLink) => void>;
   readonly onDoubleClick: Mock<(element: CanvasElement) => void>;
   readonly onShortcut: Mock<(press: SandboxShortcutPress) => void>;
   /** The newest request posted with this method. */
@@ -94,6 +96,7 @@ function createHarness(options: {
     vi.fn<(selection: CanvasTextSelection | null) => void>();
   const onPageError = vi.fn<(error: CanvasPageError) => void>();
   const onRelativeLink = vi.fn<(href: string) => void>();
+  const onArtifactLink = vi.fn<(link: SandboxArtifactLink) => void>();
   const onDoubleClick = vi.fn<(element: CanvasElement) => void>();
   const onShortcut = vi.fn<(press: SandboxShortcutPress) => void>();
   const host = new SandboxBridgeHost({
@@ -120,6 +123,7 @@ function createHarness(options: {
       onTextSelection,
       onPageError,
       onRelativeLink,
+      onArtifactLink,
       onDoubleClick,
     },
     appRequests: null,
@@ -138,6 +142,7 @@ function createHarness(options: {
     onTextSelection,
     onPageError,
     onRelativeLink,
+    onArtifactLink,
     onDoubleClick,
     onShortcut,
     requestOf: (method) => {
@@ -1428,14 +1433,18 @@ describe("page activity from a commentable html page", () => {
     expect(heard).toEqual([]);
   });
 
-  it("drops reports while the page is for reading, including one already queued", () => {
+  it("drops reports while the page is for reading", () => {
     const harness = commentable(true);
     const heard = listen(harness);
 
     harness.host.receive(hover(6));
     vi.advanceTimersToNextFrame();
     expect(heard).toEqual([]);
+  });
 
+  it("cancels a queued report when leaving Edit and accepts a later Edit pick", () => {
+    const harness = commentable(true);
+    const heard = listen(harness);
     edit(harness);
     harness.host.receive(hover(7));
     void harness.host.setMode("play");
@@ -1487,5 +1496,87 @@ describe("page activity from a commentable html page", () => {
     vi.advanceTimersToNextFrame();
 
     expect(heard).toEqual([{ kind: "layout" }]);
+  });
+});
+
+describe("artifact links from a served html artifact page", () => {
+  const PAGE = "traycer-artifact://artifact-a1--m1/a/b/index.html";
+  const link = (overrides: Record<string, unknown>): Sent =>
+    notification("traycer/notifications/artifact-link", {
+      nonce: NONCE,
+      href: "../sibling/index.html",
+      page: PAGE,
+      ...overrides,
+    });
+  function htmlPage(ready: boolean): Harness {
+    return createHarness({ canvas: false, ready, pages: COMMENTABLE_PAGES });
+  }
+
+  it("delivers the authored href with the clicked page's path from the tree root", () => {
+    const harness = htmlPage(true);
+
+    harness.host.receive(link({}));
+
+    expect(harness.onArtifactLink).toHaveBeenCalledExactlyOnceWith({
+      href: "../sibling/index.html",
+      pagePath: "a/b/index.html",
+      pageUrl: PAGE,
+    });
+  });
+
+  it.each([
+    ["a wrong nonce", { nonce: "other" }],
+    ["no nonce", { nonce: undefined }],
+    ["an over-long href", { href: "a".repeat(8193) }],
+    ["a non-string href", { href: 7 }],
+    [
+      "a page that is not an artifact address",
+      { page: "https://example.com/" },
+    ],
+    ["no page", { page: undefined }],
+  ])("drops a report with %s", (_label, overrides) => {
+    const harness = htmlPage(true);
+
+    harness.host.receive(link(overrides));
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it("drops a report before the page has proven itself", () => {
+    const harness = htmlPage(false);
+
+    harness.host.receive(link({}));
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it("drops a report from a page that proved itself but is marked crashed", () => {
+    const harness = createHarness({
+      canvas: false,
+      ready: false,
+      pages: COMMENTABLE_PAGES,
+    });
+    harness.host.receive(
+      notification("traycer/notifications/early-error", { message: "early" }),
+    );
+    harness.host.receive(
+      notification("traycer/notifications/document-ready", {
+        nonce: NONCE,
+        height: 10,
+      }),
+    );
+    expect(harness.host.status).toBe("crashed");
+
+    harness.host.receive(link({}));
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
+  });
+
+  it("drops a report from a canvas board, which reports its own links", () => {
+    const harness = createHarness({ canvas: true, ready: true });
+
+    harness.host.receive(link({}));
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
   });
 });

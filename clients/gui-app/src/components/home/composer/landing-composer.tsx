@@ -1,4 +1,5 @@
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
+import { SupersededAuthEraError } from "@/lib/auth/auth-service";
 import { captureComposerSubmitGeneration } from "@/lib/composer/composer-submit-generation";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
@@ -39,6 +40,7 @@ import { useProfileEligibilityGate } from "@/components/chat/composer/use-profil
 import { ProviderReauthBanner } from "@/components/chat/composer/provider-reauth-banner";
 import {
   SIGNED_OUT_SEND_HINT,
+  continueOnTerminalOffered,
   useLandingProviderReauthGate,
   type ProviderReauthGate,
 } from "@/components/chat/composer/use-provider-reauth-gate";
@@ -51,13 +53,25 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
-import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
-import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useStagedTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
+import {
+  composerAttachmentsHoldSend,
+  useComposerFileRoute,
+} from "@/hooks/composer/use-composer-paste";
+import { containsPendingFileAttachment } from "@/lib/composer/file-attachments";
+import type { FileNodeSettle } from "@/lib/composer/file-attachment-upload";
+import { useDraftsPutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
+import { settleFileNodeInLandingDraft } from "@/components/home/composer/landing-file-attachments";
+import {
+  useLandingComposerMentionRoots,
+  useLandingRunWorkingDirectory,
+} from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import {
   catalogSettledFor,
   chipModelName,
+  showsDefaultAccount,
 } from "@/stores/composer/composer-toolbar-store";
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { ComposerStagedSurfaceKeyProvider } from "@/components/composer/composer-staged-sandbox-context";
@@ -77,6 +91,7 @@ import {
 import {
   isOpenLandingDraft,
   landingRowIsForeign,
+  useLandingDraftNamedHostId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import {
@@ -129,11 +144,15 @@ import {
   stagedTerminalLaunchOnHost,
 } from "@/components/composer/staged-terminal-launch";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useSignedOutTerminalDefaultAccount } from "@/hooks/providers/use-signed-out-terminal-default-account";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
 import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
 import { handLandingSandboxSend } from "@/components/home/hooks/landing-sandbox-send-handoff";
-import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
+import {
+  landingDraftSurfaceKey,
+  subscribeFollowingSurfaceReset,
+} from "@/stores/host/surface-host-selection-store";
 import {
   ComposerHostNotice,
   type ComposerHostNoticeState,
@@ -211,8 +230,11 @@ export function LandingComposer(props: LandingComposerProps) {
   // The composer's PLACEMENT: its own
   // window-keyed surface pin, or the effective host while it follows. Not the
   // app-wide selection - the picker no longer moves that - so every RPC this
-  // surface makes, and every create it performs, resolves through here.
-  const placement = useComposerPlacement(null);
+  // surface makes, and every create it performs, resolves through here. A
+  // draft opened for one machine names it instead, which fixes the picker and
+  // refuses Send while that machine is offline.
+  const namedHostId = useLandingDraftNamedHostId(props.draftId);
+  const placement = useComposerPlacement(namedHostId);
   // READ target for this surface's queries; SUBMIT target (host-frozen client)
   // for anything that creates - see `useComposerPlacement`.
   const placementTarget = placement.target;
@@ -393,20 +415,37 @@ export function LandingComposer(props: LandingComposerProps) {
     resolvedHostId,
     seedUnseededDraft,
   ]);
+  const setDraftAccountFollowsDefault = useLandingDraftStore(
+    (state) => state.setDraftAccountFollowsDefault,
+  );
   const handleToolbarSettingsChange = useCallback(
-    (settings: ChatRunSettings) => {
+    (settings: ChatRunSettings, accountChosen: boolean) => {
       setGlobalRunSettings(activeHostId, settings, Date.now());
       if (draftId !== null) {
         setDraftSettings(draftId, settings);
+        setDraftAccountFollowsDefault(draftId, !accountChosen);
       }
       // After the write: the fork copies the row as it is, so the setting
       // rides into the fork and the old row is retired locally unpublished.
       authority.noteEdit();
     },
-    [activeHostId, authority, draftId, setDraftSettings, setGlobalRunSettings],
+    [
+      activeHostId,
+      authority,
+      draftId,
+      setDraftAccountFollowsDefault,
+      setDraftSettings,
+      setGlobalRunSettings,
+    ],
   );
-  // The window's pin key, which a staged sandbox is staged under.
-  const composerSurfaceKey = useComposerSurfaceHostKey();
+  // The window's pin key, which a staged sandbox is staged under; a draft
+  // opened for one machine stages under its own, so no sandbox picked for the
+  // window's other drafts takes its Send.
+  const composerSurfaceKey = landingDraftSurfaceKey(
+    useComposerSurfaceHostKey(),
+    props.draftId,
+    namedHostId,
+  );
   useLandingReturnedSandbox(composerSurfaceKey, draftId, activityEnabled);
   const settingsSeed = useMemo(
     () =>
@@ -463,6 +502,18 @@ export function LandingComposer(props: LandingComposerProps) {
             },
     });
   }, [authority, draftId, setDraftSettings, toolbarStore]);
+  // A draft whose account a person chose keeps it; otherwise its Terminal login
+  // starts on the default account.
+  const draftAccountFollowsDefault = useLandingDraftStore(
+    (state) =>
+      draftId === null ||
+      state.drafts.find((entry) => entry.id === draftId)
+        ?.accountFollowsDefault === true,
+  );
+  useLayoutEffect(() => {
+    toolbarStore.getState().setAccountChosen(!draftAccountFollowsDefault);
+  }, [draftAccountFollowsDefault, toolbarStore]);
+  useSignedOutTerminalDefaultAccount(toolbarStore, activityEnabled, hostClient);
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
@@ -505,6 +556,7 @@ export function LandingComposer(props: LandingComposerProps) {
       state.drafts.find((draft) => draft.id === draftId)?.workspace ?? null
     );
   });
+  const runWorkingDirectory = useLandingRunWorkingDirectory(draftId);
   // Rate-limit switch prompt for the landing composer's own toolbar
   // selection, scoped to this composer's RESOLVED host (landing has no tab of
   // its own) - the same shared hook the chat composer uses, mirroring its
@@ -514,7 +566,9 @@ export function LandingComposer(props: LandingComposerProps) {
     harnessId,
     profileId,
     selectedModel,
+    workingDirectory: runWorkingDirectory,
     active: activityEnabled,
+    hostId: resolvedHostId,
     client: hostClient,
   });
   // Keeps the banner's `providers.list` read converging with a turn's
@@ -561,12 +615,37 @@ export function LandingComposer(props: LandingComposerProps) {
     chatComposerActive && !workspaceGate.stagedAhead,
   );
   const runnerHost = useRunnerHost();
+  const putFileBlob = useDraftsPutFileBlob();
+  // The draft the node went into: this page's, or the one the first edit of
+  // an unbound page minted.
+  const settleDraftFile = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      settleFileNodeInLandingDraft(
+        draftId ?? createdUnboundDraftIdRef.current,
+        id,
+        settlement,
+      );
+    },
+    [draftId],
+  );
+  const fileRoute = useComposerFileRoute({
+    hostId: resolvedHostId,
+    client: hostClient,
+    putFileBlob,
+    settleDraft: settleDraftFile,
+  });
+  const pathsReachTarget = useStagedTypedPathsReach(
+    composerSurfaceKey,
+    resolvedHostId,
+  );
   const paste = useLandingComposerPaste({
     editorRef,
     draftId,
     disabled: isSubmitting,
     fileDrops: runnerHost.fileDrops,
     mentionRoots,
+    fileRoute,
+    pathsReachTarget,
   });
   // The SHARED pending-image ingest, the same one the chat composer, the inline
   // edit and the new-conversation modal use. This surface grew the logic first
@@ -586,7 +665,10 @@ export function LandingComposer(props: LandingComposerProps) {
       runPendingImageJob: paste.runPendingImageJob,
       draftId,
     });
-  const attachmentPending = isAttachmentIngestPending(paste);
+  const attachmentPending = composerAttachmentsHoldSend(
+    paste,
+    containsPendingFileAttachment(runtimeState.content),
+  );
   // Send-time gate for the selected provider's managed binary pack. Folded
   // into `canSubmit` rather than checked separately at submit, so the button
   // and its hint can never disagree - the user is told why BEFORE pressing,
@@ -825,10 +907,11 @@ export function LandingComposer(props: LandingComposerProps) {
     // new draft's id so activeDraftId's null -> id flip lines up with the
     // key the parent already mounted under (no editor remount). Falls back
     // to a fresh id when the caller has not pre-minted one.
+    const toolbar = toolbarStore.getState();
     const createdDraftId = useLandingDraftStore.getState().createDraftWithId(
       props.pendingCreateId ?? uuidv4(),
       landingMintedDraftSettings(
-        toolbarStore.getState(),
+        toolbar,
         useComposerRunSettingsStore
           .getState()
           // The composer's own resolved placement host - not the app
@@ -837,6 +920,9 @@ export function LandingComposer(props: LandingComposerProps) {
           .getGlobalRunSettings(activeHostId),
       ),
     );
+    useLandingDraftStore
+      .getState()
+      .setDraftAccountFollowsDefault(createdDraftId, !toolbar.accountChosen);
     // Keep the workspace aligned with the caller's captured placement, which
     // supplied the settings above, before accepting a submit.
     useLandingDraftStore
@@ -933,21 +1019,26 @@ export function LandingComposer(props: LandingComposerProps) {
         editorRef.current?.getJSON() ?? EMPTY_DRAFT_RUNTIME_CONTENT,
         pickerStore.getState().knownSlashCommands,
       );
+      const stillCurrent = (): boolean =>
+        stagedSubmitAttempt.current === attempt &&
+        readStagedSandbox(composerSurfaceKey) === staged &&
+        signedInUserId() === account &&
+        JSON.stringify(pickedRunSettings(toolbarStore.getState())) ===
+          settingsKey &&
+        generation.stillCurrent();
 
       // An agent the sandbox does not offer is refused here,
       // before anything is created or woken; the draft and the chip stay.
-      return stagedSignInCheck
-        .beforeSend(staged)
-        .then((signedOut) => {
-          if (
-            stagedSubmitAttempt.current !== attempt ||
-            readStagedSandbox(composerSurfaceKey) !== staged ||
-            signedInUserId() !== account ||
-            JSON.stringify(pickedRunSettings(toolbarStore.getState())) !==
-              settingsKey ||
-            !generation.stillCurrent()
-          )
-            return false;
+      const run = async (): Promise<boolean> => {
+        try {
+          const ownerResolution = actions.resolveOwnerForCreate(owner);
+          const resolvedOwner =
+            ownerResolution instanceof Promise
+              ? await ownerResolution
+              : ownerResolution;
+          if (!stillCurrent()) return false;
+          const signedOut = await stagedSignInCheck.beforeSend(staged);
+          if (!stillCurrent()) return false;
           if (signedOut !== null) {
             raiseSendRefusal();
             return false;
@@ -962,7 +1053,7 @@ export function LandingComposer(props: LandingComposerProps) {
           }
           const refusal = actions.startTaskOnStagedSandbox({
             draftId: draftId ?? createdUnboundDraftIdRef.current,
-            owner,
+            owner: resolvedOwner,
             sandboxTeamId:
               staged.target.configuration.kind === "team"
                 ? staged.target.configuration.teamId
@@ -985,10 +1076,14 @@ export function LandingComposer(props: LandingComposerProps) {
           );
           if (refusal === null) setComposerExpanded(false);
           return refusal === null;
-        })
-        .finally(() => {
-          stagedSubmitAttempt.current = null;
-        });
+        } catch (error) {
+          if (error instanceof SupersededAuthEraError) return false;
+          throw error;
+        }
+      };
+      return run().finally(() => {
+        stagedSubmitAttempt.current = null;
+      });
     },
     [
       actions,
@@ -1044,6 +1139,8 @@ export function LandingComposer(props: LandingComposerProps) {
         serviceTier: toolbar.serviceTier,
         permission: toolbar.permission,
         ultracode: toolbar.ultracode,
+        accountChosen: toolbar.accountChosen,
+        showsDefaultAccount: showsDefaultAccount(toolbar),
       },
       owner,
       teamSandboxHarnessBlocked: teamSandboxHarnessBlockedFor(
@@ -1143,6 +1240,7 @@ export function LandingComposer(props: LandingComposerProps) {
               stagedTerminalLaunch,
               toolbarStore.getState(),
               providers,
+              stagedProviders.data?.removedProfiles ?? [],
             );
             if (launch === null) return false;
             return dispatchStartTerminal(launch)
@@ -1193,6 +1291,7 @@ export function LandingComposer(props: LandingComposerProps) {
         toolbarStore={toolbarStore}
         composerMode={composerMode}
         chatEditorIsActive={chatComposerActive}
+        // Long prompts scroll inside the shared editor cap, min(50vh, 15rem).
         editorClassName={LANDING_COMPOSER_EDITOR_CLASSNAME}
         initialContent={initialContent}
         initialSelection={initialSelection}
@@ -1327,9 +1426,7 @@ function LandingReauthBanner(props: {
         epicId={null}
         viewTabId={null}
         onContinueOnAmbient={
-          gate.reason === "provider_unauthenticated"
-            ? null
-            : props.onContinueOnAmbient
+          continueOnTerminalOffered(gate) ? props.onContinueOnAmbient : null
         }
       />
     </TabHostContext.Provider>

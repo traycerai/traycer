@@ -109,6 +109,13 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
         }
         if (action.kind === "navigate") {
           deps.pickerStore.getState().setStep(action.step);
+          if (action.clearQuery === true && range.to > range.from + 1) {
+            editor
+              .chain()
+              .focus()
+              .deleteRange({ from: range.from + 1, to: range.to })
+              .run();
+          }
           return;
         }
         if (action.kind === "attach-tab-preview") {

@@ -70,6 +70,12 @@ function harnessEntry(
   };
 }
 
+function modelRowsStateFixture(
+  props: Omit<Parameters<typeof ModelRowsState>[0], "onOpenHostUpdates">,
+) {
+  return ModelRowsState({ ...props, onOpenHostUpdates: () => undefined });
+}
+
 // The `providers.list` row for `providerId`, carrying a `loginCapability` that
 // declares terminal-login support - this is what gates the setup CTA now,
 // not the guidance table alone (see `resolveProviderTerminalSetup`).
@@ -170,7 +176,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     ({ id, label }) => {
       const onOpenProviderSettings = vi.fn();
       render(
-        ModelRowsState({
+        modelRowsStateFixture({
           catalogLoading: false,
           catalogError: false,
           hostUnavailableLabel: null,
@@ -225,7 +231,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
   // and this one would not detect one in the callback.
   it("lands on General once the picker's own callback has set the tab", () => {
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -265,7 +271,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     ({ id, label }) => {
       const onOpenProviderSettings = vi.fn();
       render(
-        ModelRowsState({
+        modelRowsStateFixture({
           catalogLoading: false,
           catalogError: false,
           hostUnavailableLabel: null,
@@ -304,7 +310,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     "preserves the host remedy for $reason without a misleading CTA",
     ({ reason, message }) => {
       render(
-        ModelRowsState({
+        modelRowsStateFixture({
           catalogLoading: false,
           catalogError: false,
           hostUnavailableLabel: null,
@@ -335,7 +341,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     "keeps the legacy key CTA when the host has no reason (%s)",
     (unavailableReason) => {
       render(
-        ModelRowsState({
+        modelRowsStateFixture({
           catalogLoading: false,
           catalogError: false,
           hostUnavailableLabel: null,
@@ -363,7 +369,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     const onOpenProviderSettings = vi.fn();
     const onClosePicker = vi.fn();
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -417,7 +423,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       modelsError: catalogErrorFor(providerSignedOutMessage("reasonix")),
     });
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -471,7 +477,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       modelsError: catalogErrorFor("spawn failed: ENOENT"),
     });
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -498,7 +504,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       modelsError: catalogErrorFor(providerSignedOutMessage("claude-code")),
     });
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -531,7 +537,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       modelsError: catalogErrorFor(providerSignedOutMessage("reasonix")),
     });
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -584,7 +590,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     });
     const onClosePicker = vi.fn();
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -634,7 +640,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     const resolveLandingPageId = vi.fn(() => "resolved-draft-7");
     const onClosePicker = vi.fn();
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -679,7 +685,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       modelsError: catalogErrorFor(providerSignedOutMessage("reasonix")),
     });
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -713,7 +719,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
     });
     const onClosePicker = vi.fn();
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -755,7 +761,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       modelsError: catalogErrorFor(providerSignedOutMessage("copilot")),
     });
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -791,7 +797,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       modelsError: catalogErrorFor(providerSignedOutMessage("copilot")),
     });
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,
@@ -830,7 +836,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       modelsError: catalogErrorFor(providerSignedOutMessage("copilot")),
     });
     render(
-      ModelRowsState({
+      modelRowsStateFixture({
         catalogLoading: false,
         catalogError: false,
         hostUnavailableLabel: null,

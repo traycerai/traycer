@@ -96,6 +96,8 @@ export interface ComposerToolbarCatalog {
    * unless this matches the effective selection's harness.
    */
   readonly modelsHarnessId: ProviderId;
+  /** Account whose models these are; never normalize against another account. */
+  readonly modelsProfileId: string | null;
   readonly models: ReadonlyArray<ModelOption>;
   /**
    * Whether the models query for `modelsHarnessId` has RESOLVED (as opposed to
@@ -107,6 +109,8 @@ export interface ComposerToolbarCatalog {
    * until its own models land, so this is `false` for that window.
    */
   readonly modelsLoaded: boolean;
+  /** Discovery settled without any catalog for this account. */
+  readonly modelsFailed: boolean;
   /**
    * True when the consuming surface is the terminal launcher. A selection
    * carried over from a chat surface that isn't TUI-capable is rerouted to the
@@ -180,9 +184,8 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
   readonly catalog: ComposerToolbarCatalog;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /**
-   * A user edit happened while the model slug was still unresolved (catalog
-   * loading). The emit is deferred until `setCatalog` resolves a concrete
-   * slug, so `model: ""` never reaches persistence or the wire.
+   * Any edit waits for a concrete model slug. Run edits and retained setting
+   * effort also wait for their account's catalog before reaching persistence.
    */
   readonly pendingSettingsEmit: boolean;
   /**
@@ -212,6 +215,18 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * resolve so `model: ""` never reaches a draft.
    */
   readonly keptPickUnwritten: boolean;
+  /**
+   * A presentation layer: `values` keep the Terminal login, and no emit carries it
+   * (`withoutDefaultAccount`).
+   */
+  readonly defaultAccount: DefaultAccount | null;
+  /** Set by an account commit; the surface restores it per draft. */
+  readonly accountChosen: boolean;
+}
+
+export interface DefaultAccount {
+  readonly harnessId: ProviderId;
+  readonly profileId: string;
 }
 
 /**
@@ -249,6 +264,10 @@ export interface ComposerToolbarActions {
   readonly setOnSettingsChange: (
     onSettingsChange: ((settings: ChatRunSettings) => void) | null,
   ) => void;
+  /** Never emits: nobody edited anything. */
+  readonly setDefaultAccount: (account: DefaultAccount | null) => void;
+  /** Never emits. */
+  readonly setAccountChosen: (chosen: boolean) => void;
 }
 
 export type ComposerToolbarStoreState = ComposerToolbarState &
@@ -316,7 +335,10 @@ export function catalogSettledFor(
   return (
     catalog.hostId === hostId &&
     catalog.harnesses !== undefined &&
-    (catalog.harnesses.length === 0 || catalog.modelsLoaded)
+    (catalog.harnesses.length === 0 ||
+      (catalog.modelsLoaded &&
+        catalog.modelsHarnessId === state.selection.harnessId &&
+        catalog.modelsProfileId === state.selection.profileId))
   );
 }
 
@@ -339,8 +361,10 @@ export function createComposerToolbarStore(
     ultracodeCarried: input.ultracodeCarried,
     harnesses: undefined,
     modelsHarnessId: input.values.selection.harnessId,
+    modelsProfileId: input.values.selection.profileId,
     models: EMPTY_MODELS,
     modelsLoaded: false,
+    modelsFailed: false,
     tuiOnly: input.tuiOnly,
     // No harness list yet, so nothing to keep a pick against.
     keepsUnavailablePick: false,
@@ -350,7 +374,7 @@ export function createComposerToolbarStore(
       const state = get();
       const values = { ...state.values, ...patch };
       const derived = deriveToolbarState(
-        values,
+        presentedValues(values, state),
         state.catalog,
         state,
         policyFor(state),
@@ -365,7 +389,16 @@ export function createComposerToolbarStore(
       // chat, or the harness becoming available).
       const rerouted =
         derived.selection.harnessId !== values.selection.harnessId;
-      // Defer only when the slug is still unresolved (catalog loading), the
+      const catalogMatchesAccount = catalogMatchesSelection(
+        state.catalog,
+        derived.selection,
+      );
+      const needsAccountCatalog =
+        purpose === "run" || values.reasoning.length > 0;
+      // A run's account change, or a setting's retained effort, waits for that
+      // account's catalog. A setting's named-default provider switch carries no
+      // effort and commits at once. Other edits defer when the slug is still
+      // unresolved (catalog loading), the
       // harness was surface-rerouted, or the slug is a display-only heal - the
       // surface emit (live-settings/last-run) is NOT gated on catalog
       // confirmation. Memory integrity is enforced at the write site (the
@@ -378,14 +411,37 @@ export function createComposerToolbarStore(
       if (
         settings.model.length === 0 ||
         rerouted ||
-        derived.selectionHealedForDisplay
+        derived.selectionHealedForDisplay ||
+        (needsAccountCatalog &&
+          (!catalogMatchesAccount ||
+            (state.pendingSettingsEmit &&
+              !state.catalog.modelsLoaded &&
+              (purpose === "setting" || !state.catalog.modelsFailed))))
       ) {
         set({ values, ...derived, pendingSettingsEmit: true });
         return;
       }
-      set({ values, ...derived, pendingSettingsEmit: false });
-      state.onSettingsChange?.(settings);
-      state.onUserSettingsChange?.(settings);
+      const { values: releasedValues, derived: releasedDerived } =
+        resolveReleasedToolbarState({
+          values,
+          derived,
+          catalog: state.catalog,
+          previous: state,
+          policy: policyFor(state),
+          release: state.pendingSettingsEmit,
+          account: presentedAccount(state),
+        });
+      set({
+        values: releasedValues,
+        ...releasedDerived,
+        pendingSettingsEmit: false,
+      });
+      const releasedSettings = withoutDefaultAccount(
+        settingsFromDerived(releasedDerived),
+        get(),
+      );
+      state.onSettingsChange?.(releasedSettings);
+      state.onUserSettingsChange?.(releasedSettings);
     };
 
     return {
@@ -400,6 +456,8 @@ export function createComposerToolbarStore(
       modelHeld: false,
       stageKeepsShownPick: false,
       keptPickUnwritten: false,
+      defaultAccount: null,
+      accountChosen: false,
 
       setPermission: (next) => {
         update({ permission: next });
@@ -475,7 +533,7 @@ export function createComposerToolbarStore(
         const state = get();
         if (state.seedKey === seedKey) return;
         const derived = deriveToolbarState(
-          values,
+          presentedValues(values, state),
           state.catalog,
           state,
           policyFor(state),
@@ -495,43 +553,62 @@ export function createComposerToolbarStore(
         const { staged } = policyFor(state);
         if (settledOn(state, catalog, staged)) return;
         const keptDerived = deriveToolbarState(
-          state.values,
+          presentedValues(state.values, state),
           catalog,
           state,
           policyFor(state),
         );
-        // A catalog push touches `values` only to keep the pick on screen
-        // when a stage starts keeping picks (`shownPickValues`).
+        // A stage can keep its shown pick.
         const kept = shownPickValues(state, catalog, keptDerived);
         const values = kept ?? state.values;
         const derived =
           kept === null
             ? keptDerived
-            : deriveToolbarState(kept, catalog, state, policyFor(state));
+            : deriveToolbarState(
+                presentedValues(kept, state),
+                catalog,
+                state,
+                policyFor(state),
+              );
         // The emit decision lives in one named, testable place. A kept pick
         // takes any deferred edit with it to the draft: its emit would carry
         // the kept pick to the host's settings too.
-        const emit = kept === null && decideCatalogTransition(state, derived);
+        const emit =
+          kept === null &&
+          decideCatalogTransition(state, derived, catalog, purpose);
+        const { values: releasedValues, derived: releasedDerived } =
+          resolveReleasedToolbarState({
+            values,
+            derived,
+            catalog,
+            previous: state,
+            policy: policyFor(state),
+            release: emit,
+            account: presentedAccount(state),
+          });
         // Owed only while a stage keeps it: once one leaves, this host presents
         // the pick again and nothing here is the person's to write.
         const keptPickOwed =
           kept !== null ||
           (state.keptPickUnwritten && catalog.keepsUnavailablePick);
         const keptSettings = keptPickOwed
-          ? keptPickSettings(values, derived)
+          ? keptPickSettings(releasedValues, releasedDerived)
           : null;
         set({
           catalog,
-          values,
+          values: releasedValues,
           modelHeld: staged,
-          ...derived,
+          ...releasedDerived,
           // Only an emit clears the deferred flag; a silent push leaves it as-is.
           pendingSettingsEmit:
             emit || kept !== null ? false : state.pendingSettingsEmit,
           keptPickUnwritten: keptPickOwed && keptSettings === null,
         });
         if (emit) {
-          const settings = settingsFromDerived(derived);
+          const settings = withoutDefaultAccount(
+            settingsFromDerived(releasedDerived),
+            get(),
+          );
           state.onSettingsChange?.(settings);
           state.onUserSettingsChange?.(settings);
         }
@@ -542,8 +619,150 @@ export function createComposerToolbarStore(
         if (get().onSettingsChange === onSettingsChange) return;
         set({ onSettingsChange });
       },
+
+      setDefaultAccount: (account) => {
+        const state = get();
+        if (sameDefaultAccount(state.defaultAccount, account)) return;
+        const next = { ...state, defaultAccount: account };
+        set({
+          defaultAccount: account,
+          ...deriveToolbarState(
+            presentedValues(state.values, next),
+            state.catalog,
+            state,
+            policyFor(state),
+          ),
+        });
+      },
+
+      setAccountChosen: (chosen) => {
+        const state = get();
+        if (state.accountChosen === chosen) return;
+        const next = { ...state, accountChosen: chosen };
+        set({
+          accountChosen: chosen,
+          ...deriveToolbarState(
+            presentedValues(state.values, next),
+            state.catalog,
+            state,
+            policyFor(state),
+          ),
+        });
+      },
     };
   });
+}
+
+/** Clear only a released inherited tier; a discovery outage keeps an existing pick. */
+function resolveReleasedToolbarState(input: {
+  readonly values: ComposerToolbarValues;
+  readonly derived: ComposerToolbarDerived;
+  readonly catalog: ComposerToolbarCatalog;
+  readonly previous: ComposerToolbarDerived;
+  readonly policy: ToolbarSurfacePolicy;
+  readonly release: boolean;
+  readonly account: DefaultAccount | null;
+}): {
+  readonly values: ComposerToolbarValues;
+  readonly derived: ComposerToolbarDerived;
+} {
+  if (
+    !input.release ||
+    input.policy.purpose !== "run" ||
+    !input.catalog.modelsFailed
+  ) {
+    return { values: input.values, derived: input.derived };
+  }
+  // Recovery must not restore a speed inherited from the previous account.
+  const values = { ...input.values, serviceTier: "" };
+  return {
+    values,
+    derived: deriveToolbarState(
+      withDefaultAccount(values, input.account),
+      input.catalog,
+      input.previous,
+      input.policy,
+    ),
+  };
+}
+
+function catalogMatchesSelection(
+  catalog: ComposerToolbarCatalog,
+  selection: HarnessModelSelection,
+): boolean {
+  return (
+    catalog.modelsHarnessId === selection.harnessId &&
+    catalog.modelsProfileId === selection.profileId
+  );
+}
+
+function presentedAccount(
+  state: Pick<ComposerToolbarState, "defaultAccount" | "accountChosen">,
+): DefaultAccount | null {
+  return state.accountChosen ? null : state.defaultAccount;
+}
+
+function presentedValues(
+  values: ComposerToolbarValues,
+  state: Pick<ComposerToolbarState, "defaultAccount" | "accountChosen">,
+): ComposerToolbarValues {
+  return withDefaultAccount(values, presentedAccount(state));
+}
+
+function withDefaultAccount(
+  values: ComposerToolbarValues,
+  account: DefaultAccount | null,
+): ComposerToolbarValues {
+  if (
+    account === null ||
+    values.selection.profileId !== null ||
+    values.selection.harnessId !== account.harnessId
+  ) {
+    return values;
+  }
+  return {
+    ...values,
+    selection: { ...values.selection, profileId: account.profileId },
+  };
+}
+
+function sameDefaultAccount(
+  a: DefaultAccount | null,
+  b: DefaultAccount | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.harnessId === b.harnessId && a.profileId === b.profileId;
+}
+
+export function showsDefaultAccount(
+  state: Pick<
+    ComposerToolbarState,
+    "values" | "selection" | "defaultAccount" | "accountChosen"
+  >,
+): boolean {
+  const account = presentedAccount(state);
+  return (
+    account !== null &&
+    state.values.selection.profileId === null &&
+    state.values.selection.harnessId === account.harnessId &&
+    state.selection.profileId === account.profileId
+  );
+}
+
+/**
+ * A default account is nobody's choice, so it is stored as the Terminal login it
+ * stands in for; every emit and last-run record goes through this.
+ */
+export function withoutDefaultAccount(
+  settings: ChatRunSettings,
+  state: Pick<
+    ComposerToolbarState,
+    "values" | "selection" | "defaultAccount" | "accountChosen"
+  >,
+): ChatRunSettings {
+  return showsDefaultAccount(state)
+    ? { ...settings, profileId: null }
+    : settings;
 }
 
 /** The model's name as the toolbar's chip shows it. */
@@ -592,21 +811,22 @@ function deriveToolbarState(
     catalog,
     purpose,
   );
-  // Cross-harness guard: only resolve a model from the catalog when the model
-  // list actually belongs to the harness we're presenting.
-  const catalogBelongsToHarness =
-    catalog.modelsHarnessId === availabilitySelection.harnessId;
-  const models = catalogBelongsToHarness ? catalog.models : EMPTY_MODELS;
+  // Resolve only against the presented harness and account's catalog.
+  const catalogBelongsToSelection = catalogMatchesSelection(
+    catalog,
+    availabilitySelection,
+  );
+  const models = catalogBelongsToSelection ? catalog.models : EMPTY_MODELS;
   // Loaded ONLY when this harness's own models query has resolved - sourced from
   // the explicit `modelsLoaded` status, never inferred from `models.length`, so
   // a provider whose list loads empty (resolve a fallback / hold the emit) is
   // distinguishable from one still loading (hold the slug for display).
-  const catalogLoadedForHarness =
-    catalogBelongsToHarness && catalog.modelsLoaded;
+  const catalogLoadedForSelection =
+    catalogBelongsToSelection && catalog.modelsLoaded;
   const resolvedSlug = presentedModelSlug(
     availabilitySelection,
     models,
-    catalogLoadedForHarness,
+    catalogLoadedForSelection,
     policy,
   );
   const selection: HarnessModelSelection =
@@ -622,7 +842,7 @@ function deriveToolbarState(
       availabilitySelection.modelSlug,
       selection,
       models,
-      catalogLoadedForHarness,
+      catalogLoadedForSelection,
     );
   const selectedModel = presentedModel(models, selection, previous, staged);
   // Harness-level capabilities (currently just supportedPermissionModes) come
@@ -728,17 +948,17 @@ function classifyResolvedSlug(
   rawSlug: string,
   selection: HarnessModelSelection,
   models: ReadonlyArray<ModelOption>,
-  catalogLoadedForHarness: boolean,
+  catalogLoadedForSelection: boolean,
 ): {
   selectionHealedForDisplay: boolean;
   selectionCatalogConfirmed: boolean;
 } {
   const selectionHealedForDisplay =
-    catalogLoadedForHarness &&
+    catalogLoadedForSelection &&
     rawSlug.length > 0 &&
     selection.modelSlug !== rawSlug;
   const selectionCatalogConfirmed =
-    catalogLoadedForHarness &&
+    catalogLoadedForSelection &&
     !selectionHealedForDisplay &&
     modelCoveredByCatalog(models, selection.harnessId, selection.modelSlug);
   return { selectionHealedForDisplay, selectionCatalogConfirmed };
@@ -775,7 +995,10 @@ function shownPickValues(
     return null;
   return {
     ...state.values,
-    selection: shown,
+    // A default account shown is still nobody's pick.
+    selection: showsDefaultAccount(state)
+      ? { ...shown, profileId: state.values.selection.profileId }
+      : shown,
     reasoning: state.reasoning,
     serviceTier: state.serviceTier,
   };
@@ -791,10 +1014,11 @@ function keptPickSettings(
   derived: ComposerToolbarDerived,
 ): ChatRunSettings | null {
   if (derived.selection.harnessId !== values.selection.harnessId) return null;
+  // The pick's own account: a default account shown in its place is not it.
   const selection =
     values.selection.modelSlug.length > 0
       ? values.selection
-      : derived.selection;
+      : { ...derived.selection, profileId: values.selection.profileId };
   return selection.modelSlug.length > 0
     ? settingsFromDerived({ ...derived, selection })
     : null;
@@ -818,7 +1042,11 @@ function sameShownPick(
   a: HarnessModelSelection,
   b: HarnessModelSelection,
 ): boolean {
-  return a.harnessId === b.harnessId && a.modelSlug === b.modelSlug;
+  return (
+    a.harnessId === b.harnessId &&
+    a.modelSlug === b.modelSlug &&
+    a.profileId === b.profileId
+  );
 }
 
 /**
@@ -840,6 +1068,8 @@ function sameShownPick(
 function decideCatalogTransition(
   state: ComposerToolbarState,
   derived: ComposerToolbarDerived,
+  catalog: ComposerToolbarCatalog,
+  purpose: ComposerToolbarPurpose,
 ): boolean {
   // Reroute guard: never emit while the derived harness is a surface clamp of
   // the user's choice, or the rerouted harness would leak into settings.
@@ -847,6 +1077,8 @@ function decideCatalogTransition(
     derived.selection.harnessId !== state.values.selection.harnessId;
   return (
     state.pendingSettingsEmit &&
+    (catalog.modelsLoaded || (purpose === "run" && catalog.modelsFailed)) &&
+    catalogMatchesSelection(catalog, derived.selection) &&
     !rerouted &&
     !derived.selectionHealedForDisplay &&
     derived.selection.modelSlug.length > 0
@@ -873,11 +1105,13 @@ function sameCatalog(
     a.ultracodeCarried === b.ultracodeCarried &&
     a.harnesses === b.harnesses &&
     a.modelsHarnessId === b.modelsHarnessId &&
+    a.modelsProfileId === b.modelsProfileId &&
     a.models === b.models &&
     // Must compare the load status: a pure loading -> loaded transition (e.g. a
     // catalog that loads empty, where `models` stays the same `[]`) would
     // otherwise be skipped here, stranding a deferred emit that never flushes.
     a.modelsLoaded === b.modelsLoaded &&
+    a.modelsFailed === b.modelsFailed &&
     a.tuiOnly === b.tuiOnly &&
     // A pick kept or swapped is a different presented selection: a stage
     // written, or a sandbox's row answering after its catalog, changes
@@ -942,10 +1176,10 @@ function resolveModelSlug(
   harnessId: ProviderId,
   modelSlug: string,
   models: ReadonlyArray<ModelOption>,
-  catalogLoadedForHarness: boolean,
+  catalogLoadedForSelection: boolean,
 ): string {
   if (modelSlug.length === 0) {
-    return catalogLoadedForHarness
+    return catalogLoadedForSelection
       ? (findDefaultModel(models)?.slug ?? "")
       : "";
   }
@@ -954,7 +1188,7 @@ function resolveModelSlug(
     modelSlug,
   );
   if (modelMatchIsCovered(match)) return modelSlug;
-  if (!catalogLoadedForHarness) return modelSlug;
+  if (!catalogLoadedForSelection) return modelSlug;
   return findDefaultModel(models)?.slug ?? "";
 }
 
@@ -966,7 +1200,7 @@ function resolveModelSlug(
 function presentedModelSlug(
   selection: HarnessModelSelection,
   models: ReadonlyArray<ModelOption>,
-  catalogLoadedForHarness: boolean,
+  catalogLoadedForSelection: boolean,
   policy: ToolbarSurfacePolicy,
 ): string {
   if (
@@ -979,7 +1213,7 @@ function presentedModelSlug(
     selection.harnessId,
     selection.modelSlug,
     models,
-    catalogLoadedForHarness,
+    catalogLoadedForSelection,
   );
 }
 

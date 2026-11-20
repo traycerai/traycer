@@ -11,6 +11,7 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -20,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeWorkspaceSummaryV15 } from "@traycer/protocol/host/worktree-schemas";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 import { ActiveHostWorkspaceControls } from "../host-workspace-selector";
 
 const WORKSPACE_PATH = "/workspace/app";
@@ -54,6 +56,7 @@ const mocks = vi.hoisted(() => {
     resolvedWorkspace,
     activeHostId,
     selectHost: vi.fn(),
+    refreshDirectory: vi.fn(() => Promise.resolve([])),
     pickAndPrepareFolders: vi.fn(() => Promise.resolve(null)),
   };
 });
@@ -132,7 +135,12 @@ vi.mock("@/components/ui/select", () => ({
 }));
 
 vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({ directory: { selectById: mocks.selectHost } }),
+  useHostBinding: () => ({
+    directory: {
+      selectById: mocks.selectHost,
+      refresh: mocks.refreshDirectory,
+    },
+  }),
   useHostClient: () => hostClient,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => hostClient,
@@ -238,7 +246,10 @@ beforeEach(() => {
   mocks.activeHostId.current = "host-home";
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useStagedSandboxStore.setState({ bySurface: {} });
+});
 
 describe("stacked rows refresh-on-mount", () => {
   it("forces one re-derive when the fork / add-node surface mounts", async () => {
@@ -379,25 +390,98 @@ describe("stacked rows refresh-on-mount", () => {
 });
 
 describe("stacked host heading", () => {
-  it("heads the host block with Host on a surface without its own heading", () => {
+  it("heads the host block with Host and the folder block with Folders", () => {
     renderControls("stacked");
 
     const section = screen.getByTestId("host-workspace-selector-host-section");
     expect(within(section).getByText("Host")).toBeDefined();
+    const folders = screen.getByTestId(
+      "host-workspace-selector-folders-section",
+    );
+    expect(within(folders).getByText("Folders")).toBeDefined();
+    expect(screen.queryByText("Workspaces")).toBeNull();
+    expect(screen.queryByLabelText("Run location")).toBeNull();
   });
 
-  it("draws no Host heading under a caller's own heading, and keeps Workspaces", () => {
-    renderControls("stacked-caller-heading");
+  it("keeps Folders and Empty sandbox visible for a newly staged sandbox", () => {
+    const surfaceKey = "stacked-rows:new-sandbox";
+    stageNewPersonalSandbox(surfaceKey);
+    renderStackedStaging(surfaceKey);
 
-    const section = screen.getByTestId("host-workspace-selector-host-section");
-    expect(within(section).queryByText("Host")).toBeNull();
+    const folders = screen.getByTestId(
+      "host-workspace-selector-folders-section",
+    );
+    expect(within(folders).getByText("Folders")).toBeDefined();
     expect(
-      within(
-        screen.getByTestId("host-workspace-selector-folders-section"),
-      ).getByText("Workspaces"),
+      within(folders).getByTestId("workspace-summary-empty-sandbox")
+        .textContent,
+    ).toBe("Empty sandbox");
+    const hostSection = screen.getByTestId(
+      "host-workspace-selector-host-section",
+    );
+    expect(within(hostSection).getByText("Host")).toBeDefined();
+    expect(
+      within(hostSection).getByTestId("host-switcher-staged-gear"),
     ).toBeDefined();
+    expect(screen.queryByText("Workspaces")).toBeNull();
+    expect(screen.queryByLabelText("Run location")).toBeNull();
+
+    fireEvent.click(within(hostSection).getByTestId("settings-host-switcher"));
+    const bound = screen.getByTestId("settings-host-switcher-option-host-home");
+    expect(bound.getAttribute("aria-current")).toBe("true");
+    expect(bound.textContent).toContain("host-home");
   });
 });
+
+const STAGED_PERSONAL_SHAPE = {
+  os: "linux",
+  cpus: 2,
+  memoryMb: 4096,
+  diskMb: null,
+  region: "us-east",
+  idleMinutes: 30,
+  destroyAfterRestingMinutes: 10_080,
+} as const;
+
+function stageNewPersonalSandbox(surfaceKey: string): void {
+  useStagedSandboxStore.getState().stage(surfaceKey, {
+    kind: "new",
+    configuration: { kind: "personal" },
+    shape: STAGED_PERSONAL_SHAPE,
+    name: "",
+    wakeString: null,
+  });
+}
+
+function renderStackedStaging(surfaceKey: string): void {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <ActiveHostWorkspaceControls
+          sandboxStaging={{
+            surfaceKey,
+            task: null,
+            openTerminalInstead: null,
+          }}
+          disabled={false}
+          stagingKey={{
+            surface: "landing",
+            hostId: "host-home",
+            draftId: null,
+          }}
+          workspaceSeed={null}
+          seedIntent={null}
+          seedIntentOverride={null}
+          layout="stacked"
+          hostScope={{ kind: "active" }}
+        />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+}
 
 function forcedRefreshCalls(): Array<Record<string, unknown>> {
   return mocks.request.mock.calls.flatMap(([method, payload]) => {
@@ -408,9 +492,7 @@ function forcedRefreshCalls(): Array<Record<string, unknown>> {
   });
 }
 
-function renderControls(
-  layout: "inline" | "stacked" | "stacked-caller-heading",
-): {
+function renderControls(layout: "inline" | "stacked"): {
   /** Re-renders from a FRESH element - React bails out on an identical one. */
   readonly rerenderFresh: () => void;
   /** Explicit, because `cleanup` only runs in `afterEach`. */

@@ -1,6 +1,13 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// Every section mounts the pick's upkeep, which reads the window's host scope
+// and the account's queries; it has its own cases (`local-move-page.test.tsx`)
+// and this file holds the pick fixed.
+vi.mock("@/components/settings/environment-picker", () => ({
+  EnvironmentPickUpkeep: () => null,
+}));
+
 vi.mock("@/components/settings/settings-sidebar", () => ({
   SettingsSidebar: () => <div data-testid="settings-sidebar-probe" />,
 }));
@@ -28,11 +35,31 @@ vi.mock("@/components/settings/panels/permissions-settings-panel", () => ({
   PermissionsSettingsPanel: () => <div data-testid="permissions-page-probe" />,
 }));
 
+vi.mock("@/components/settings/panels/alerts-settings-panel", () => ({
+  AlertsSettingsPanel: () => <div data-testid="alerts-page-probe" />,
+}));
+vi.mock(
+  "@/components/settings/panels/app-notifications-settings-panel",
+  () => ({
+    AppNotificationsSettingsPanel: () => (
+      <div data-testid="sounds-page-probe" />
+    ),
+  }),
+);
+
+const soundtrackOfferedMock = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => soundtrackOfferedMock.value,
+}));
+
 import { SettingsModalContent } from "@/components/settings/settings-modal-content";
 
 describe("<SettingsModalContent />", () => {
   afterEach(() => {
     cleanup();
+    soundtrackOfferedMock.value = false;
   });
 
   // A page result scrolls the pane the SURFACE owns, so every section has one
@@ -57,5 +84,27 @@ describe("<SettingsModalContent />", () => {
     render(<SettingsModalContent section="browser-agent-access" />);
 
     expect(screen.getByTestId("permissions-page-probe")).toBeTruthy();
+  });
+
+  it("opens Alerts for a remembered Sounds when the build has no soundtrack", () => {
+    soundtrackOfferedMock.value = false;
+    render(<SettingsModalContent section="app-notifications" />);
+
+    expect(screen.getByTestId("alerts-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("sounds-page-probe")).toBeNull();
+  });
+
+  it("opens Sounds for a remembered Sounds when the build has a soundtrack", () => {
+    soundtrackOfferedMock.value = true;
+    render(<SettingsModalContent section="app-notifications" />);
+
+    expect(screen.getByTestId("sounds-page-probe")).toBeTruthy();
+    expect(screen.queryByTestId("alerts-page-probe")).toBeNull();
+  });
+
+  it("opens Alerts for a remembered Notifications, the retired host page", () => {
+    render(<SettingsModalContent section="notifications" />);
+
+    expect(screen.getByTestId("alerts-page-probe")).toBeTruthy();
   });
 });

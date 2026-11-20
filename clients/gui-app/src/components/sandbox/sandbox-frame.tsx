@@ -29,6 +29,7 @@ import {
   SANDBOX_SCROLL_GESTURE_EVENT,
   SandboxBridgeHost,
   type SandboxAppRequestHandler,
+  type SandboxArtifactLink,
   type SandboxDisplayMode,
   type SandboxHostContext,
   type SandboxKind,
@@ -43,6 +44,7 @@ import {
   type ForwardedShortcut,
 } from "@/lib/sandbox/forwarded-shortcuts";
 import { useFullscreenBlocker } from "@/lib/sandbox/overlay-owner";
+import { reportHistoryGestureFrameWheel } from "@/components/layout/shell/desktop-history-frame-wheel";
 import {
   artifactContentPolicy,
   mcpAppContentPolicy,
@@ -212,6 +214,8 @@ export interface SandboxFrameProps {
   readonly onTextSelection?: (selection: CanvasTextSelection | null) => void;
   readonly onPageError?: (error: CanvasPageError) => void;
   readonly onRelativeLink?: (href: string) => void;
+  /** A served html page's link out of its artifact. */
+  readonly onArtifactLink?: (link: SandboxArtifactLink) => void;
   readonly source: SandboxSource;
   readonly kind: SandboxKind;
   readonly title: string;
@@ -242,17 +246,16 @@ export interface SandboxFrameProps {
    * When a replacement source is declared equivalent to the one on screen -
    * the served bytes are unchanged, or the live document already adopted the
    * change in place - the frame keeps its mounted document instead of
-   * reloading. The stale server mount is refreshed by the next real change.
+   * reloading, and its mount serves the replacement's manifest from then on.
    */
   readonly sourceEquivalent?: (
     previous: SandboxSource,
     next: SandboxSource,
   ) => boolean;
   /**
-   * Changing this value forces a fresh mount even when the source is
-   * equivalent: an adopted document that must reload (a query navigation)
-   * needs a server mount built from the CURRENT manifest, not the one the
-   * retained document was served from.
+   * Changing this value forces a fresh mount, and so a fresh document, even
+   * when the source is equivalent: a canvas board whose play stopped comes
+   * back as its own page rather than wherever the played document went.
    */
   readonly remountKey?: string;
   /**
@@ -500,6 +503,9 @@ export function SandboxFrame(props: SandboxFrameProps) {
   const onRelativeLink = useEffectEvent((href: string) =>
     props.onRelativeLink?.(href),
   );
+  const onArtifactLink = useEffectEvent((link: SandboxArtifactLink) =>
+    props.onArtifactLink?.(link),
+  );
   const onSize = useEffectEvent((size: SandboxSize) => props.onSize(size));
   const onStatus = useEffectEvent((status: SandboxStatus) =>
     props.onStatus(status),
@@ -575,6 +581,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
   const onWheel = useEffectEvent((wheel: SandboxWheel) => {
     const iframe = frameRef.current;
     if (iframe === null) return;
+    if (reportHistoryGestureFrameWheel(iframe, wheel)) return;
     if (wheel.deltaY !== 0) {
       onScrollGesture(wheel.deltaY > 0 ? "toward-end" : "away-from-end");
     }
@@ -624,6 +631,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
   if (advanced !== null) setFrame(advanced);
   const frameGeneration = frame.generation;
 
+  const mountedServer = useRef<ArtifactServer | null>(null);
   useLayoutEffect(() => {
     const inputs = initialInputs();
     if (
@@ -649,6 +657,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
       },
     });
     const mount = mountArtifact(inputs.runnerHost, server);
+    mountedServer.current = server;
     const origin = inputs.runnerHost.sandboxArtifacts.artifactOrigin({
       artifactId: inputs.source.artifactId,
       mountId: mount.mountId,
@@ -688,9 +697,17 @@ export function SandboxFrame(props: SandboxFrameProps) {
     );
     return () => {
       active = false;
+      mountedServer.current = null;
       mount.dispose();
     };
   }, [frameGeneration]);
+  // An equivalent source keeps the mounted document, and the mount serves its
+  // manifest from then on: a page read again later, after a link or Back, gets
+  // the bytes a comment stamped into it in place, not the ones mounted first.
+  useLayoutEffect(() => {
+    if (source.kind === "artifact")
+      mountedServer.current?.replaceManifest(source.manifest);
+  }, [source]);
 
   const served = currentServedFrame(source, servedFrame, frameGeneration);
 
@@ -757,6 +774,7 @@ export function SandboxFrame(props: SandboxFrameProps) {
         onTextSelection,
         onPageError,
         onRelativeLink,
+        onArtifactLink,
         onStatus: onBridgeStatus,
         onSize,
         onOpenLink,

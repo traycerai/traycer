@@ -297,7 +297,7 @@ function unaryFileTreeSource(args: {
     hasError: unary.error !== null && paths.length === 0,
     truncationNotice:
       unary.data?.truncated === true
-        ? `Showing the first ${paths.length.toLocaleString()} files - this workspace exceeds the preview limit.`
+        ? `Showing the first ${paths.length.toLocaleString()} files - this folder exceeds the preview limit.`
         : null,
     isLive: false,
   };
@@ -842,7 +842,7 @@ function FileTreeBodyForResolvedHost(
               <ReportIssueAction
                 context={createReportIssueContext({
                   title: "Unable to load files",
-                  message: "The workspace file tree could not be loaded.",
+                  message: "The folder file tree could not be loaded.",
                   code: null,
                   source: "File tree",
                 })}

@@ -29,6 +29,8 @@ export type CommandGroupId =
   | "actions"
   | "navigation"
   | "epics"
+  // An environment's main bot (the starred one), which leads the root list.
+  | "mainBots"
   | "bots"
   | "theme"
   | "help"

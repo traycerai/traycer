@@ -22,13 +22,13 @@ const stream = vi.hoisted(() => ({
   client: null as StubHostStreamClient | null,
 }));
 
-// The app-wide stream client is the stub's; the subscription is the real one.
+// The host's stream client is the stub's; the subscription is the real one.
 vi.mock("@/hooks/bots/use-bot-subscription", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/hooks/bots/use-bot-subscription")>();
   return {
     ...actual,
-    useBotSubscription: (args: {
+    useBotSubscriptionForHost: (args: {
       readonly hostId: string | null;
       readonly botId: string;
       readonly enabled: boolean;

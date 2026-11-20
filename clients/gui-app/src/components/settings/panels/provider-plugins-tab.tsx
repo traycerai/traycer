@@ -151,7 +151,7 @@ function PluginsScopeToolbar(props: {
     <div className="flex flex-wrap items-center justify-between gap-2">
       {globalOnly ? (
         <p className="text-ui-xs text-muted-foreground">
-          Applies to every workspace on this host.
+          Applies to every folder on this host.
         </p>
       ) : (
         <McpScopePicker
@@ -527,12 +527,12 @@ function PluginsListBody({
     return (
       <div className="flex flex-col gap-1 rounded-lg border border-border/60 p-4">
         <div className="text-ui-sm font-medium text-foreground">
-          {workspacesLoading ? "Resolving workspaces…" : "Select a workspace"}
+          {workspacesLoading ? "Resolving folders…" : "Select a folder"}
         </div>
         <p className="text-ui-xs text-muted-foreground">
           {workspacesLoading
-            ? "Resolving workspaces on this host."
-            : "Choose a project workspace above to manage project-scoped plugins on this host."}
+            ? "Resolving folders on this host."
+            : "Choose a project folder above to manage project-scoped plugins on this host."}
         </p>
       </div>
     );

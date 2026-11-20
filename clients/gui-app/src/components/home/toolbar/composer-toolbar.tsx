@@ -27,6 +27,7 @@ interface ComposerToolbarProps {
    *  left group renders, leaves stay presentational. */
   store: ComposerToolbarStore;
   onAttachImages: (files: ReadonlyArray<File>) => void;
+  onAttachFiles: (files: ReadonlyArray<File>) => void;
   canSubmit: boolean;
   attachmentPending: boolean;
   onSubmit: () => void;
@@ -48,7 +49,7 @@ interface ComposerToolbarProps {
    */
   dictationPreparing: DictationPreparingStatus | null;
   settingsLocked: boolean;
-  /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
+  /** The host "Add a profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   createProfileHostId: string | null;
   readonly runTargetHostId: string | null;
@@ -81,10 +82,15 @@ function ComposerToolbarLive(props: ComposerToolbarProps) {
     props.store,
     (state) => state.selection.modelSlug,
   );
+  const runProfileId = useStore(
+    props.store,
+    (state) => state.selection.profileId,
+  );
   const judgeBilling = useAutoJudgeBilling(
     props.runTargetHostId,
     runHarnessId,
     runModelSlug,
+    runProfileId,
   );
   const openPermissionSettings = useOpenPermissionSettings(
     props.runTargetHostId,
@@ -120,6 +126,7 @@ function ComposerToolbarView(
   const {
     store,
     onAttachImages,
+    onAttachFiles,
     canSubmit,
     attachmentPending,
     onSubmit,
@@ -178,6 +185,7 @@ function ComposerToolbarView(
   const itemProps = {
     presentation: props.presentation === true,
     onAttachImages,
+    onAttachFiles,
     permission,
     onPermissionChange: setPermission,
     supportedPermissionModes,

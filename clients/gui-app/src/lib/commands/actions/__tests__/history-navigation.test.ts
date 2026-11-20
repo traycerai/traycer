@@ -5,11 +5,6 @@ import {
 } from "@tanstack/react-router";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import { goBack, goForward } from "@/lib/commands/actions/history-navigation";
-import { observeNestedFocusTraversals } from "@/lib/nested-focus-history-traversal";
-import {
-  lastExplicitNestedFocusIntentSeq,
-  resetNestedFocusNavigationIntentsForTests,
-} from "@/lib/nested-focus-navigation-intent";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -291,7 +286,6 @@ beforeEach(() => {
   boundHostClient.value = null;
   queryClient.clear();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
-  resetNestedFocusNavigationIntentsForTests();
 });
 
 afterEach(() => {
@@ -305,7 +299,6 @@ afterEach(() => {
   boundHostClient.value = null;
   queryClient.clear();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
-  resetNestedFocusNavigationIntentsForTests();
 });
 
 describe("goBack / goForward", () => {
@@ -501,35 +494,6 @@ describe("goBack / goForward — plain history fallback", () => {
       AnalyticsEvent.HistoryNavigationUsed,
       { direction: "back" },
     );
-  });
-
-  // T156 case 1: the web app's plain history exposes no entries and no
-  // index, so `goBack` lands strictly on `stepPlainHistory` - it cannot mark
-  // intent itself, because the landing is unknowable before the move. The
-  // traversal observer installed on the router (here installed by hand, the
-  // way `createAppRouter` installs it once) reads the COMMITTED destination
-  // instead and claims the person's intent from it, regardless of which
-  // control issued the step.
-  it("retires a pending focus request when a plain-history goBack lands on an entry naming a tile", () => {
-    const epicId = "epic-plain-fallback";
-    const tabId = "tab-plain-fallback";
-    const tileHref = `/epics/${epicId}/${tabId}?focusPaneId=pane-1&focusTileInstanceId=tile-1`;
-    const history = createMemoryHistory({
-      initialEntries: [tileHref, "/elsewhere"],
-      initialIndex: 1,
-    });
-    const unsubscribe = observeNestedFocusTraversals(history);
-    try {
-      const before = lastExplicitNestedFocusIntentSeq(epicId, tabId);
-
-      goBack({ history });
-
-      expect(lastExplicitNestedFocusIntentSeq(epicId, tabId)).toBeGreaterThan(
-        before,
-      );
-    } finally {
-      unsubscribe();
-    }
   });
 });
 

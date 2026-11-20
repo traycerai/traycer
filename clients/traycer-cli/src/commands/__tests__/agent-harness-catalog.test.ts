@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentListHarnessesCommand } from "../agent-list-harnesses";
 import { buildAgentListHarnessModelsCommand } from "../agent-list-harness-models";
-import { callHostRpc } from "../../internal/host-rpc";
+import { AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
+import { buildProgram } from "../../index";
+import {
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
+} from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
@@ -26,11 +31,13 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpc: vi.fn(),
+    callAgentHostRpc: vi.fn(),
+    callAgentHostRpcWithDispatch: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpc);
+const rpcMock = vi.mocked(callAgentHostRpc);
+const dispatchMock = vi.mocked(callAgentHostRpcWithDispatch);
 const PREV_ENV = {
   epic: process.env.TRAYCER_EPIC_ID,
   agent: process.env.TRAYCER_AGENT_ID,
@@ -78,9 +85,20 @@ afterEach(() => {
 });
 
 describe("agent harness catalog commands", () => {
+  it("registers a profile selector for model catalogs", () => {
+    const agent = buildProgram().commands.find(
+      (command) => command.name() === "agent",
+    );
+    expect(
+      agent?.commands
+        .find((command) => command.name() === "list-harness-models")
+        ?.options.map((option) => option.long),
+    ).toContain("--profile");
+  });
   it("lists harness models without requiring epic or sender context", async () => {
     rpcMock.mockResolvedValue({
       harnessId: "codex",
+      profileId: null,
       models: [],
     });
 
@@ -88,14 +106,67 @@ describe("agent harness catalog commands", () => {
       epicId: null,
       senderAgentId: null,
       harnessId: "codex",
+      profileId: null,
     })(makeCtx());
 
     expect(rpcMock).toHaveBeenCalledWith("agent.listHarnessModels", {
       epicId: null,
       senderAgentId: null,
       harnessId: "codex",
+      profileId: undefined,
     });
     expect(result.exitCode).toBe(0);
+  });
+
+  it("lists models for a named profile and requires the 2.1 catalog line", async () => {
+    dispatchMock.mockResolvedValue({
+      harnessId: "codex",
+      profileId: "profile-work",
+      models: [
+        {
+          id: "gpt-5.6-codex",
+          resolvedModel: "gpt-5.6-codex-2026",
+          reasoningEfforts: ["high"],
+          fastModeAvailable: true,
+          serviceTiers: ["priority"],
+        },
+      ],
+    });
+    const result = await buildAgentListHarnessModelsCommand({
+      epicId: null,
+      senderAgentId: null,
+      harnessId: "codex",
+      profileId: "profile-work",
+    })(makeCtx());
+    expect(result.human).toContain("[serviceTier: priority]");
+    expect(result.human).toContain(
+      "gpt-5.6-codex [resolvesTo: gpt-5.6-codex-2026]",
+    );
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.listHarnessModels",
+      expect.objectContaining({ profileId: "profile-work" }),
+      expect.objectContaining({
+        requiredHostMethodVersion:
+          AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+      }),
+    );
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the ambient catalog without requiring a newer host", async () => {
+    rpcMock.mockResolvedValue({
+      harnessId: "codex",
+      profileId: null,
+      models: [],
+    });
+    await buildAgentListHarnessModelsCommand({
+      epicId: null,
+      senderAgentId: null,
+      harnessId: "codex",
+      profileId: "ambient",
+    })(makeCtx());
+    expect(rpcMock).toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("lists enabled harnesses without fetching every model catalog", async () => {

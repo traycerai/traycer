@@ -7,6 +7,8 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import {
   providersConsumeRateLimitResetCreditRequestSchema,
   providersConsumeRateLimitResetCreditResponseSchema,
+  providersReadModelRoutesRequestSchema,
+  providersReadModelRoutesResponseSchema,
   providersRefreshProfileStatusRequestSchema,
   providersRefreshProfileStatusResponseSchema,
   providersRefreshProfileStatusResponseSchemaV10,
@@ -130,6 +132,13 @@ export const providersConsumeRateLimitResetCreditV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersConsumeRateLimitResetCreditRequestSchema,
   responseSchema: providersConsumeRateLimitResetCreditResponseSchema,
+});
+
+export const providersReadModelRoutesV10 = defineRpcContract({
+  method: "providers.readModelRoutes",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersReadModelRoutesRequestSchema,
+  responseSchema: providersReadModelRoutesResponseSchema,
 });
 
 export const providersRefreshProfileStatusV10 = defineRpcContract({

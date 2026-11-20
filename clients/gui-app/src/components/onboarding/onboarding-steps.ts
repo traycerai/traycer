@@ -1,4 +1,8 @@
-export type OnboardingStepId = "task-tabs" | "providers" | "session-import";
+export type OnboardingStepId =
+  | "task-tabs"
+  | "providers"
+  | "agent-memories"
+  | "session-import";
 
 export interface OnboardingStep {
   readonly id: OnboardingStepId;
@@ -21,14 +25,19 @@ export const ONBOARDING_STEPS: ReadonlyArray<OnboardingStep> = [
     subtitle: "Keep your accounts, skills and plugins.",
   },
   {
+    id: "agent-memories",
+    label: "Memory",
+    title: "Let your agents remember.",
+    subtitle:
+      "Keep useful facts and preferences across tasks, whichever provider you use.",
+  },
+  {
     id: "session-import",
     label: "Import",
     title: "Pick up where you left off.",
     subtitle: "Bring your Claude Code, Codex and OpenCode chats.",
   },
 ];
-
-const WITHOUT_IMPORT = ONBOARDING_STEPS.slice(0, 2);
 
 /**
  * Act 1 is the one act whose copy differs on a phone - the workspace it
@@ -54,16 +63,34 @@ function withPhoneCopy(
   );
 }
 
-/**
- * `phone` is the VIEWPORT's answer (`useIsMobileViewport`), not the installed
- * app's: the copy belongs to the layout that renders it, so a narrow desktop
- * window - which gets the phone shell and the phone scenes - gets the phone
- * line too.
- */
+/** What the tour's host can offer, which decides the optional acts. */
+export interface OnboardingStepAvailability {
+  /** The host can scan sessions, so the import act has something to show. */
+  readonly sessionImport: boolean;
+  /**
+   * The host can read AND write the Traycer memories setting. Without both
+   * the memory act could only offer a choice nothing would save.
+   */
+  readonly agentMemories: boolean;
+  /**
+   * The VIEWPORT's answer (`useIsMobileViewport`), not the installed app's:
+   * the copy belongs to the layout that renders it, so a narrow desktop
+   * window - which gets the phone shell and the phone scenes - gets the phone
+   * line too.
+   */
+  readonly phone: boolean;
+}
+
 export function onboardingStepsFor(
-  sessionImportAvailable: boolean,
-  phone: boolean,
+  availability: OnboardingStepAvailability,
 ): ReadonlyArray<OnboardingStep> {
-  const steps = sessionImportAvailable ? ONBOARDING_STEPS : WITHOUT_IMPORT;
-  return phone ? withPhoneCopy(steps) : steps;
+  const steps =
+    availability.sessionImport && availability.agentMemories
+      ? ONBOARDING_STEPS
+      : ONBOARDING_STEPS.filter(
+          (step) =>
+            (step.id !== "session-import" || availability.sessionImport) &&
+            (step.id !== "agent-memories" || availability.agentMemories),
+        );
+  return availability.phone ? withPhoneCopy(steps) : steps;
 }

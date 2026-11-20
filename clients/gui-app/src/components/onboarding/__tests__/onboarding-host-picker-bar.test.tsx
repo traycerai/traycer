@@ -47,6 +47,7 @@ const SANDBOX = hostScopeOptionFixture({
     state: "awake",
     frozen: false,
     summary: sandboxSummaryFixture({ hostId: "sbx-awake", burst: false }),
+    ownerKind: "unknown",
     teamOwned: false,
   },
 });

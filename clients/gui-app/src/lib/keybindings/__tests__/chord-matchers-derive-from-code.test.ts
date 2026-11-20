@@ -103,6 +103,11 @@ const CODE_DERIVED_MATCHERS: ReadonlyArray<{
 const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "desktop/src/electron-main/browser-view/annotation/browser-annotation-overlay-guest.ts": 3,
   "desktop/src/electron-main/browser-view/manager/browser-view-chords.ts": 2,
+  // The Threads page reads a key to tell the person's own native scrolling and
+  // activation (Page Up/Down, arrows, Home, End and Space) from other keys,
+  // so a pending unread landing yields to a page the person scrolled by
+  // keyboard. Named navigation keys, not a registered chord.
+  "gui-app/src/components/bots/bot-threads-view.tsx": 1,
   // These reads drive viewport editing and resize-handle navigation. They do
   // not resolve registered shortcut identity, which remains code-derived.
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
@@ -117,6 +122,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 3,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
+  // Left and right arrows step through the images attached together while
+  // their viewer is open; named non-printable keys, not registered chords.
+  "gui-app/src/components/chat/expanded-image-dialog.tsx": 2,
   // Enter and Space activate a folded agent row's `role="button"` text (#2441):
   // a button's own activation keys, named, not a registered chord.
   "gui-app/src/components/chat/queued-message-surface.tsx": 2,
@@ -214,6 +222,9 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/lib/simulator-view/simulator-input-encoding.ts": 2,
   "gui-app/src/lib/terminal-line-edit.ts": 6,
   "gui-app/src/providers/keybinding-provider.tsx": 2,
+  // `${item.kind}:${item.key}` builds a row key for an environment
+  // configuration item; the `.key` there is a field, not a keyboard key.
+  "shared/environment/configuration-hosts.ts": 1,
   // The mac/non-mac history-modifier check, kept separate from every
   // registered chord matcher above: it reads the character so it can
   // recognise the SAME convention (Cmd/Ctrl+Z, Ctrl+Y) regardless of which

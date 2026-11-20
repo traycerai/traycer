@@ -17,8 +17,8 @@
  * The wire types `permissionRole` as `PermissionRole | null`; the shared
  * `ControlEvent` widens it to `string | null` because the seam is generic over
  * adapters that may speak other vocabularies. The `@1` replica needs the
- * narrow type, and the only honest way back is to parse it - so an
- * unrecognised role becomes `null`, which is "the host cannot attribute a
+ * narrow type, and the only honest way back is to resolve it (`grantedRole`)
+ * rather than cast it - so an unrecognised role becomes `null`, which is "the host cannot attribute a
  * role", NOT "no access".
  *
  * That direction is load-bearing. `isWritablePermissionRole` is an INCLUSION
@@ -49,8 +49,7 @@
  * pre-snapshot silence and an in-band "cannot answer yet" collapse onto the
  * consumer's `unknown` rather than onto a synthesised `false`.
  */
-import { LatestPermissionRoleSchema } from "@traycer/protocol/host/epic/unary-schemas";
-import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
 import type {
   ControlEvent,
@@ -60,18 +59,6 @@ import type {
   EpicControlEvent,
   EpicMigrationEvent,
 } from "./epic-runtime-events";
-
-/**
- * The wire's role, or `null` when it is not one this build recognises.
- *
- * Parsed rather than cast. A cast would make an unrecognised role read as a
- * recognised one to every downstream consumer, including the write gate.
- */
-function narrowPermissionRole(role: string | null): PermissionRole | null {
-  if (role === null) return null;
-  const parsed = LatestPermissionRoleSchema.safeParse(role);
-  return parsed.success ? parsed.data : null;
-}
 
 /**
  * The wire's cloud-sync status, or the honest fallback.
@@ -127,16 +114,16 @@ export function legacyControlEventOf(event: ControlEvent): EpicControlEvent {
     case "permission-changed":
       return {
         kind: "permission-changed",
-        role: narrowPermissionRole(event.role),
+        role: grantedRole(event.role),
       };
     case "control-snapshot-complete":
-      // Narrowed by the SAME parser as `permission-changed`, and that matters
+      // Resolved by the SAME `grantedRole` as `permission-changed`, and that matters
       // more here than there: this is the role the write gate adopts for the
       // cycle, so an unrecognised role must reach it as `null` - unwritable -
       // rather than as anything this build could mistake for an editor.
       return {
         kind: "control-snapshot",
-        role: narrowPermissionRole(event.role),
+        role: grantedRole(event.role),
       };
     case "cloud-sync-status":
       return {

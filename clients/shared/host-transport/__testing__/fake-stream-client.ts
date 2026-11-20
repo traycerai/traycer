@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { StreamMethodSupport } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "../host-stream-client";
 import type {
@@ -6,6 +7,7 @@ import type {
   ServerFrameHandler,
   StatusChangeHandler,
   StreamContinuity,
+  StreamCloseReason,
   StreamFrameEnvelope,
 } from "../i-stream-session";
 
@@ -31,6 +33,12 @@ export class FakeStreamSession implements IStreamSession {
    * capability sets the line it wants before it opens the session.
    */
   negotiatedSchemaVersion: SchemaVersion | null = null;
+  /**
+   * {@link IStreamSession.hasSentOpenRequest}. Set by `open`, which a local
+   * transport reports right after it writes the subscribe frame; a suite
+   * modelling a request sent but never answered sets it itself.
+   */
+  openRequestSent = false;
   private serverHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
   private status: StreamStatus = "connecting";
@@ -66,11 +74,16 @@ export class FakeStreamSession implements IStreamSession {
     return this.negotiatedSchemaVersion;
   }
 
+  hasSentOpenRequest(): boolean {
+    return this.openRequestSent;
+  }
+
   close(): void {
     this.closed = true;
   }
 
   emitStatus(status: StreamStatus): void {
+    if (status === "open") this.openRequestSent = true;
     this.status = status;
     this.held = false;
     this.statusHandler?.(status, null, null, null);
@@ -81,6 +94,7 @@ export class FakeStreamSession implements IStreamSession {
     status: StreamStatus,
     continuity: StreamContinuity,
   ): void {
+    if (status === "open") this.openRequestSent = true;
     this.status = status;
     this.held = continuity === "held";
     this.statusHandler?.(status, null, null, continuity);
@@ -88,13 +102,44 @@ export class FakeStreamSession implements IStreamSession {
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
   emitFatal(reason: string): void {
+    this.emitFatalWithCode("UNAUTHORIZED", reason);
+  }
+
+  /** The close a host sends when it cannot serve `method` at all. */
+  emitIncompatible(method: string, reason: string): void {
     this.status = "closed";
     this.statusHandler?.(
       "closed",
       {
         kind: "fatalError",
         details: {
-          code: "UNAUTHORIZED",
+          code: "INCOMPATIBLE",
+          reason,
+          incompatibleMethods: [
+            {
+              method,
+              clientCanonical: null,
+              hostCanonical: null,
+              blocking: "host-missing-method",
+            },
+          ],
+          upgradeGuidance: null,
+        },
+      },
+      null,
+      null,
+    );
+  }
+
+  /** The terminal close a host sends with a specific code. */
+  emitFatalWithCode(code: string, reason: string): void {
+    this.status = "closed";
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code,
           reason,
           incompatibleMethods: null,
           upgradeGuidance: null,
@@ -103,6 +148,11 @@ export class FakeStreamSession implements IStreamSession {
       null,
       null,
     );
+  }
+
+  emitClosed(reason: StreamCloseReason): void {
+    this.status = "closed";
+    this.statusHandler?.("closed", reason, null, null);
   }
 
   /**
@@ -260,12 +310,26 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     return this.silentFor;
   }
 
-  getMethodSupport(): "unknown" {
-    return "unknown";
+  /** What {@link getMethodSupport} answers; `"unknown"` until a suite says otherwise. */
+  methodSupport: StreamMethodSupport = "unknown";
+
+  getMethodSupport(): StreamMethodSupport {
+    return this.methodSupport;
   }
 
-  subscribeMethodSupport(): () => void {
-    return () => undefined;
+  private readonly methodSupportListeners = new Set<() => void>();
+
+  subscribeMethodSupport(listener: () => void): () => void {
+    this.methodSupportListeners.add(listener);
+    return () => {
+      this.methodSupportListeners.delete(listener);
+    };
+  }
+
+  /** Changes {@link methodSupport} the way a handshake does: then tells every subscriber. */
+  setMethodSupport(next: StreamMethodSupport): void {
+    this.methodSupport = next;
+    for (const listener of [...this.methodSupportListeners]) listener();
   }
 
   subscribeAvailabilityRecovered(): () => void {

@@ -43,6 +43,10 @@ import {
   sandboxFrozenClock,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 
 function render(ui: ReactNode) {
   const queryClient = new QueryClient({
@@ -57,7 +61,10 @@ function resting(
   state: "suspended" | "stopped",
   options: {
     readonly team: boolean;
-    readonly wakeChangesPayer: boolean;
+    readonly wakePayer?: {
+      readonly userId: string;
+      readonly displayName: string;
+    } | null;
   },
 ): ChatSandboxState {
   return {
@@ -66,12 +73,14 @@ function resting(
       id: "sbx-r",
       displayName: "e2e-sbx-rest",
       state,
+      ...(options.wakePayer === undefined
+        ? {}
+        : { wakePayer: options.wakePayer }),
       priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 },
     }),
     configuration: options.team
       ? { kind: "team", teamId: "team-a", teamName: "Acme" }
       : { kind: "personal" },
-    wakeChangesPayer: options.wakeChangesPayer,
   };
 }
 
@@ -79,7 +88,6 @@ function resting(
 function lineOf(state: ChatSandboxState): ChatSandboxLine | null {
   return resolveChatSandbox(state, {
     reachable: false,
-    canEdit: true,
     ownedByViewer: true,
     environmentOwned: false,
   }).line;
@@ -111,6 +119,21 @@ afterEach(() => {
 });
 
 describe("<ChatSandboxFooter /> a resting sandbox", () => {
+  it("keeps payer actions and own-credit wording out while configuration is unknown", () => {
+    const knownState = resting("suspended", { team: false });
+    if (knownState.kind !== "resting") {
+      throw new Error("expected a resting sandbox fixture");
+    }
+    const unresolved = { ...knownState, configuration: null };
+    const line = lineOf(unresolved);
+
+    expect(line?.place).toBe("slot");
+    expect(line?.text).toBe("e2e-sbx-rest is suspended");
+    render(<ChatSandboxFooter line={line} />);
+    expect(screen.queryByRole("button", { name: "Add credits ↗" })).toBeNull();
+    expect(screen.queryByText(/uses your credits/)).toBeNull();
+  });
+
   it.each([
     [
       "suspended",
@@ -124,53 +147,42 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     "says a %s sandbox wakes on the next message, what it costs and whose credits",
     (state, line) => {
       render(
-        <ChatSandboxFooter
-          line={lineOf(
-            resting(state, { team: false, wakeChangesPayer: false }),
-          )}
-        />,
+        <ChatSandboxFooter line={lineOf(resting(state, { team: false }))} />,
       );
 
       expect(document.body.textContent).toContain(line);
     },
   );
 
-  it("adds the team clauses only when the wake changes who pays", () => {
+  it("names Acme's credits for a team sandbox regardless of its wake payer", () => {
     const { unmount } = render(
       <ChatSandboxFooter
         line={lineOf(
-          resting("suspended", { team: true, wakeChangesPayer: true }),
+          resting("suspended", {
+            team: true,
+            wakePayer: { userId: "priya", displayName: "Priya" },
+          }),
         )}
       />,
     );
-    const paying = document.body.textContent;
-    expect(paying).toContain("uses your Acme credits");
-    expect(paying).toContain(
-      "Storage while it's suspended or stopped, on the same credits until another member wakes it.",
-    );
-    expect(paying).toContain("Other members can use it while you pay.");
+    expect(document.body.textContent).toContain("uses Acme's credits");
+    expect(document.body.textContent).not.toContain("Storage while");
+    expect(document.body.textContent).not.toContain("Other members can use it");
     unmount();
 
     render(
       <ChatSandboxFooter
-        line={lineOf(
-          resting("suspended", { team: true, wakeChangesPayer: false }),
-        )}
+        line={lineOf(resting("suspended", { team: true, wakePayer: null }))}
       />,
     );
-    const same = document.body.textContent;
-    expect(same).toContain("uses your Acme credits");
-    expect(same).not.toContain("Storage while it's suspended or stopped");
-    expect(same).not.toContain("Other members can use it");
+    expect(document.body.textContent).toContain("uses Acme's credits");
+    expect(document.body.textContent).not.toContain("Storage while");
+    expect(document.body.textContent).not.toContain("Other members can use it");
   });
 
   it("offers no action and no offline or clone wording: the next message is the wake", () => {
     render(
-      <ChatSandboxFooter
-        line={lineOf(
-          resting("stopped", { team: false, wakeChangesPayer: false }),
-        )}
-      />,
+      <ChatSandboxFooter line={lineOf(resting("stopped", { team: false }))} />,
     );
 
     expect(screen.queryByRole("button")).toBeNull();
@@ -184,7 +196,7 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
   const FROZEN_AT = Date.UTC(2026, 9, 20, 6, 21);
 
   function frozen(team: boolean): ChatSandboxState {
-    const base = resting("suspended", { team, wakeChangesPayer: false });
+    const base = resting("suspended", { team });
     if (base.kind !== "resting") throw new Error("expected a resting state");
     return {
       ...base,
@@ -196,9 +208,15 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     render(<ChatSandboxFooter line={lineOf(frozen(false))} />);
 
     const text = document.body.textContent;
+    const stateLine = `${hostSandboxStateWord("suspended")} · ${HOST_FROZEN_WORD}`;
+    expect(screen.getByText(stateLine).textContent).toBe(stateLine);
     const consequence = screen.getByText("Your credits ran out.");
     expect(consequence.className).toContain("wrap-anywhere");
-    expect(text).toContain(sandboxFrozenClock(FROZEN_AT));
+    const clock = sandboxFrozenClock(FROZEN_AT);
+    if (clock === null) throw new Error("expected a removal clock");
+    const removal = screen.getByText(clock);
+    expect(removal.textContent).toBe(clock);
+    expect(removal.textContent).not.toContain(" at ");
     expect(text).not.toContain("your next message resumes it");
     expect(
       screen.queryByRole("link", { name: /add credits/i }) ??
@@ -206,7 +224,27 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     ).not.toBeNull();
   });
 
-  it("shows the actual payer consequence on its own wrapping line and offers a short Resume", () => {
+  it("omits the removal paragraph when the server sent no frozenAt", () => {
+    const base = resting("suspended", { team: false });
+    if (base.kind !== "resting") throw new Error("expected a resting state");
+    render(
+      <ChatSandboxFooter
+        line={lineOf({
+          ...base,
+          sandbox: { ...base.sandbox, frozen: true, frozenAt: null },
+        })}
+      />,
+    );
+
+    const stateLine = `${hostSandboxStateWord("suspended")} · ${HOST_FROZEN_WORD}`;
+    const stateParagraph = screen.getByText(stateLine);
+    expect(stateParagraph.textContent).toBe(stateLine);
+    const footer = stateParagraph.parentElement;
+    if (footer === null) throw new Error("expected the frozen footer");
+    expect(footer.querySelectorAll("p")).toHaveLength(2);
+  });
+
+  it("names the team's credits when frozen and offers Resume without payer wording", () => {
     useAuthStore.setState({
       status: "signed-in",
       profile: { userId: "viewer", userName: "V", email: "v@example.com" },
@@ -223,25 +261,22 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     };
     render(<ChatSandboxFooter line={lineOf(state)} />);
 
-    const payerLine = sandboxFrozenCause(
-      state.sandbox,
-      {
-        kind: "team",
-        teamId: "team-a",
-        teamName: "Acme",
-        environmentId: "team-a",
-      },
-      "viewer",
-    );
+    const payerLine = sandboxFrozenCause({
+      kind: "team",
+      teamId: "team-a",
+      teamName: "Acme",
+      environmentId: "team-a",
+    });
     const paragraph = screen.getByText(payerLine);
     expect(paragraph.className).toContain("wrap-anywhere");
     expect(paragraph.parentElement?.className).toContain("flex-col");
     expect(screen.getByRole("button", { name: "Resume" }).textContent).toBe(
       "Resume",
     );
-    expect(
-      document.body.textContent.match(/Resuming changes the payer to you\./gu),
-    ).toHaveLength(1);
+    expect(document.body.textContent).toContain("Acme's credits ran out.");
+    expect(document.body.textContent).not.toContain(
+      "Resuming changes the payer",
+    );
   });
 });
 
@@ -275,10 +310,7 @@ describe("<ChatSandboxFooter /> an awake sandbox that cannot be reached", () => 
 });
 
 describe("<ChatSandboxFooter /> no footer line", () => {
-  const unresolved = resting("suspended", {
-    team: true,
-    wakeChangesPayer: false,
-  });
+  const unresolved = resting("suspended", { team: true });
 
   it.each([
     ["none", { kind: "none" }],

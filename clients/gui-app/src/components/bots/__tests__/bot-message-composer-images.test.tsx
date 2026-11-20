@@ -6,6 +6,10 @@
  * host's file-path resolution, the toast library, and the preparation
  * session's start, which a case holds open to see Send wait for it.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { useState, type ReactNode } from "react";
 import {
   act,
@@ -47,6 +51,7 @@ import * as botBoxContent from "@/lib/bots/bot-box-content";
 import {
   boxInput,
   boxText,
+  NO_BOT_REPLY,
   typeInto,
 } from "@/components/bots/__tests__/bot-box-test-support";
 
@@ -66,6 +71,15 @@ const mocks = vi.hoisted(() => ({
   /** While set, a preparation waits for it before it starts. */
   preparationGate: null as Promise<void> | null,
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ stub: "tab-host-client" }),
@@ -187,7 +201,11 @@ function Box(props: {
         }}
         seed={props.keepDraft ? kept.seed : null}
         keptDraft={props.keepDraft ? kept.keptDraft : null}
+        hold={props.keepDraft ? kept.hold : null}
         quote={null}
+        reply={NO_BOT_REPLY}
+        moved={null}
+        notice={null}
         onSent={onSent}
       />
     </RunnerHostContext>
@@ -298,6 +316,11 @@ function dropFiles(...files: ReadonlyArray<File>): boolean {
   const dataTransfer = transferOf(...files);
   fireEvent.dragEnter(box(), { dataTransfer });
   return fireEvent.drop(box(), { dataTransfer });
+}
+
+/** The titles of the error toasts raised so far. */
+function errorToasts(): ReadonlyArray<unknown> {
+  return vi.mocked(toast.error).mock.calls.map(([message]) => message);
 }
 
 /** The images the strip holds, by the name each chip shows. */
@@ -460,6 +483,7 @@ describe("<BotMessageComposer /> taking images", () => {
     await holdsImage("Image#1: first.png");
     pasteFiles(imageFile("second.png", "image/png"));
     await holdsImage("Image#2: second.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
 
     await user.click(
       screen.getByRole("button", { name: "Remove Image#1: first.png" }),
@@ -479,6 +503,7 @@ describe("<BotMessageComposer /> sending images", () => {
       mount("delivered", PLAIN_BOX);
       pasteFiles(imageFile("shot.png", "image/png"));
       await holdsImage("Image#1: shot.png");
+      await waitFor(() => expect(sendButton().disabled).toBe(false));
       decode.mockClear();
 
       typeInto(box(), "caption");
@@ -495,6 +520,7 @@ describe("<BotMessageComposer /> sending images", () => {
     mount("delivered", PLAIN_BOX);
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     typeInto(box(), "What is this?");
 
     await user.click(sendButton());
@@ -531,7 +557,7 @@ describe("<BotMessageComposer /> sending images", () => {
 
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
-    expect(sendButton().disabled).toBe(false);
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     await user.click(sendButton());
 
     expect(lastSend().request.text).toBe(BOT_CONVERSATION_IMAGES_ONLY_TEXT);
@@ -556,7 +582,9 @@ describe("<BotMessageComposer /> sending images", () => {
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
 
-    typeInto(box(), "Is CI green?{Enter}");
+    typeInto(box(), "Is CI green?");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    typeInto(box(), "{Enter}");
 
     expect(lastSend().request.text).toBe("Is CI green?");
     expect("attachments" in lastSend().request).toBe(false);
@@ -687,6 +715,45 @@ describe("<BotMessageComposer /> refusing what it cannot take", () => {
     expect(openButtons()).toHaveLength(0);
   });
 
+  it("refuses a pasted SVG with the type sentence before reading any of it", async () => {
+    mount("delivered", PLAIN_BOX);
+    const svg = imageFile("logo.svg", "image/svg+xml");
+    const read = vi.spyOn(svg, "arrayBuffer");
+
+    pasteFiles(svg);
+
+    await waitFor(() => expect(errorToasts()).toEqual([NOT_AN_IMAGE]));
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(0);
+  });
+
+  it("refuses a dropped HEIC over the size ceiling with the type sentence, not the size toast", async () => {
+    mount("delivered", PLAIN_BOX);
+    const heic = imageFile("photo.heic", "image/heic");
+    Object.defineProperty(heic, "size", { value: MAX_IMAGE_SOURCE_BYTES + 1 });
+    const read = vi.spyOn(heic, "arrayBuffer");
+
+    dropFiles(heic);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(errorToasts()).toEqual([NOT_AN_IMAGE]);
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(0);
+  });
+
+  it("keeps the PNG of a paste that also carries an SVG, refusing the SVG once without reading it", async () => {
+    mount("delivered", PLAIN_BOX);
+    const svg = imageFile("logo.svg", "image/svg+xml");
+    const read = vi.spyOn(svg, "arrayBuffer");
+
+    pasteFiles(imageFile("clip.png", "image/png"), svg);
+
+    await holdsImage("Image#1: clip.png");
+    expect(errorToasts()).toEqual([NOT_AN_IMAGE]);
+    expect(read).not.toHaveBeenCalled();
+    expect(openButtons()).toHaveLength(1);
+  });
+
   it("refuses an image over the size the agent composer refuses, naming it", async () => {
     mount("delivered", PLAIN_BOX);
     const huge = imageFile("huge.png", "image/png");
@@ -730,6 +797,7 @@ describe("<BotMessageComposer /> a send that fails", () => {
     mount("delivered", PLAIN_BOX);
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     typeInto(box(), "What is this?{Enter}");
     expect(boxText("Message Tracy")).toBe("");
     expect(openButtons()).toHaveLength(0);
@@ -755,10 +823,12 @@ describe("<BotMessageComposer /> a send that fails", () => {
         requestId: "request-failed",
         text: editText,
         content: botBoxContentOf(editText, () => "Ann"),
+        held: [],
       },
     });
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     await user.click(sendButton());
     expect(lastSend().request.supersedes).toBe("request-failed");
 
@@ -787,6 +857,7 @@ describe("<BotMessageComposer /> a send that fails", () => {
     const view = mount("delivered", { edit: null, keepDraft: true });
     pasteFiles(imageFile("shot.png", "image/png"));
     await holdsImage("Image#1: shot.png");
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
     typeInto(box(), "What is this?{Enter}");
     expect(useBotDraftsStore.getState().threadBoxes["bot-1"]).toBeUndefined();
     view.unmount();

@@ -341,9 +341,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
         </TabHostProvider>,
       );
 
-      const notice = screen.getByText(
-        /Read-only viewer\. The agent owner can send prompts/,
-      );
+      const notice = screen.getByText("Read-only viewer.");
       // The read-only state carries a visual marker, not just the sentence -
       // the same lock glyph the sidebar row and tab strip use.
       expect(
@@ -628,6 +626,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     nodeId: "chat-1",
     isActive: false,
     mentionRoots: [],
+    runWorkingDirectory: null,
     fallbackToGlobalMentionRoots: true,
     currentEpicId: "epic-1",
     onSubmitMessage: () => false,
@@ -636,6 +635,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     workspaceControls: null,
     workspaceAvailability: WORKSPACE_COMPOSER_READY,
     onContinueOnTeamHosts: () => undefined,
+    onClone: () => undefined,
     suggestedPrompt: undefined,
   };
 

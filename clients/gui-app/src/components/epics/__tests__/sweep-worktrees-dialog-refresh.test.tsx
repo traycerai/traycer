@@ -103,7 +103,7 @@ describe("SweepWorktreesDialog refresh", () => {
     );
 
     expect(screen.getByTestId("sweep-worktrees-checked-at").textContent).toBe(
-      "Workspace snapshot · now",
+      "Folder snapshot · now",
     );
     const refresh = screen.getByRole("button", {
       name: "Refresh worktree details",

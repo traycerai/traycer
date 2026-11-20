@@ -20,14 +20,17 @@ describe("CLI config dev backend URL overrides", () => {
   it("honors loopback overrides and keeps the trust root baked", async () => {
     vi.stubEnv("TRAYCER_DEV_AUTHN_BASE_URL", "http://localhost:21001");
     vi.stubEnv("TRAYCER_DEV_CLOUD_UI_BASE_URL", "http://localhost:21003");
-    const { config, hostRegistryUrl } = await import("../config");
+    const { config, signedFeedUrls } = await import("../config");
     expect(config.authnBaseUrl).toBe("http://localhost:21001");
     expect(config.cloudUiBaseUrl).toBe("http://localhost:21003");
     // The override must not be able to touch the registry or trust root.
     expect(config.environment).toBe("dev");
     expect(config.releaseRepo).toBe("traycerai/traycer");
     expect(config.hostTrustedPubkeys).toHaveLength(1);
-    expect(hostRegistryUrl).toContain("github.com/traycerai/traycer");
+    expect(signedFeedUrls("host")).toEqual([
+      "https://releases.traycer.ai/host/versions.signed.json",
+      "https://github.com/traycerai/traycer/releases/download/released-host-versions/versions.signed.json",
+    ]);
   });
 
   it("throws at module init on a non-loopback override", async () => {

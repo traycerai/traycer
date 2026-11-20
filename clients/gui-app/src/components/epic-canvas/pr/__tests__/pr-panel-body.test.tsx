@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -202,7 +203,7 @@ describe("PrPanelBody card list", () => {
 
   beforeEach(() => {
     canvasHostState.id = "host-a";
-    usePrPanelStore.setState({ stateFilter: "all" });
+    usePrPanelStore.setState({ stateFilter: "all", searchQueryByTabId: {} });
     usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
     resetCanvas();
     useSidebarNodeRevealStore.setState(
@@ -225,7 +226,7 @@ describe("PrPanelBody card list", () => {
 
   afterEach(() => {
     cleanup();
-    usePrPanelStore.setState({ stateFilter: "all" });
+    usePrPanelStore.setState({ stateFilter: "all", searchQueryByTabId: {} });
     resetCanvas();
     useSidebarNodeRevealStore.setState(
       { requestsByViewTabId: {}, visibleByViewTabId: {} },
@@ -645,6 +646,108 @@ describe("PrPanelBody card list", () => {
 
       expect(await screen.findByTestId("pr-panel-empty")).toBeTruthy();
       expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+    });
+  });
+
+  describe("search", () => {
+    const searchRows = (): readonly PrLightItem[] => [
+      buildPrItem({ headRefName: "fix/login", title: "Fix login redirect" }),
+      buildPrItem({ headRefName: "feat/export", title: "CSV export" }),
+      buildPrItem({
+        headRefName: "fix/old-login",
+        title: "Old login fix",
+        state: "merged",
+      }),
+    ];
+
+    const typeQuery = (query: string): void => {
+      fireEvent.change(screen.getByTestId("pr-panel-search-input"), {
+        target: { value: query },
+      });
+    };
+
+    it("lists only rows the query matches, within the state filter", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-s1";
+      renderPanel({ epicId, tabId: "tab-s1" });
+      await emitSnapshot(epicId, searchRows());
+      await screen.findByTestId("mock-pr-card-feat/export");
+
+      typeQuery("LOGIN");
+
+      expect(screen.getByTestId("mock-pr-card-fix/login")).toBeTruthy();
+      expect(screen.queryByTestId("mock-pr-card-feat/export")).toBeNull();
+      expect(screen.queryByTestId("mock-pr-card-fix/old-login")).toBeNull();
+      expect(screen.getByTestId("pr-repo-group-header").textContent).toContain(
+        "1",
+      );
+    });
+
+    it("holds a collapsed repo group open while a query is typed, keeping its fold", async () => {
+      const epicId = "epic-s2";
+      renderPanel({ epicId, tabId: "tab-s2" });
+      await emitSnapshot(epicId, searchRows());
+      fireEvent.click(await screen.findByTestId("pr-repo-group-header"));
+      expect(screen.queryByTestId("mock-pr-card-fix/login")).toBeNull();
+
+      typeQuery("export");
+      expect(screen.getByTestId("mock-pr-card-feat/export")).toBeTruthy();
+      const header = screen.getByTestId("pr-repo-group-header");
+      expect(header.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(header);
+
+      fireEvent.keyDown(screen.getByTestId("pr-panel-search-input"), {
+        key: "Escape",
+      });
+      expect(usePrPanelStore.getState().searchQueryByTabId).toEqual({});
+      expect(screen.queryByTestId("mock-pr-card-feat/export")).toBeNull();
+    });
+
+    it("offers Show all when the only matches are in hidden states", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-s3";
+      renderPanel({ epicId, tabId: "tab-s3" });
+      await emitSnapshot(epicId, searchRows());
+      await screen.findByTestId("mock-pr-card-feat/export");
+
+      typeQuery("old-login");
+
+      const empty = screen.getByTestId("pr-panel-search-empty");
+      expect(empty.textContent).toContain(
+        "No open pull requests match “old-login”",
+      );
+      expect(empty.textContent).toContain("1 match in other states");
+      fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+      expect(screen.getByTestId("mock-pr-card-fix/old-login")).toBeTruthy();
+    });
+
+    it("offers Clear search when nothing matches anywhere", async () => {
+      const epicId = "epic-s4";
+      renderPanel({ epicId, tabId: "tab-s4" });
+      await emitSnapshot(epicId, searchRows());
+      await screen.findByTestId("mock-pr-card-feat/export");
+
+      typeQuery("nothing-like-this");
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+      fireEvent.click(
+        within(screen.getByTestId("pr-panel-search-empty")).getByRole(
+          "button",
+          { name: "Clear search" },
+        ),
+      );
+
+      expect(screen.getByTestId("mock-pr-card-feat/export")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-search-empty")).toBeNull();
+    });
+
+    it("keeps each tab's query to itself", async () => {
+      const epicId = "epic-s5";
+      usePrPanelStore.getState().setSearchQuery("other-tab", "export");
+      renderPanel({ epicId, tabId: "tab-s5" });
+      await emitSnapshot(epicId, searchRows());
+
+      expect(await screen.findByTestId("mock-pr-card-fix/login")).toBeTruthy();
+      expect(screen.queryByDisplayValue("export")).toBeNull();
     });
   });
 

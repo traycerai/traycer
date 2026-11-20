@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
+import { mayChangeConfiguration } from "@/components/settings/environment/configuration-source";
 import { configurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -13,6 +14,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useEnvironmentMembersList } from "@/hooks/environment/use-environment-members-list";
+import {
+  canChangeNames,
+  canChangeSentence,
+} from "@/hooks/environment/team/can-change-names";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import {
@@ -32,6 +38,8 @@ import {
   configurationStageShape,
   stagePrice,
   stageProviderFor,
+  stageProviderForShape,
+  stageQuotedSize,
   stageShapeDefaults,
   type SandboxConfigurationDefaults,
   type StageShape,
@@ -64,29 +72,48 @@ function configurationEnvironmentKey(
 }
 
 /**
- * A shape as the catalogue offers it, with its class's wake string and its
- * price (`from` unless it is the region's smallest, the one shape the
- * catalogue prices).
+ * One shape option: operating system, resources, hourly rate (`from` unless
+ * the catalogue prices that shape exactly) and how waking it behaves.
  */
+function shapePricePart(
+  catalogue: SandboxCatalogue,
+  shape: StageSize,
+): string | null {
+  const price = stagePrice(catalogue, shape);
+  if (price === null) return null;
+  const label = shortPriceLabel(price.awakeMcPerHour);
+  return price.exact ? label : `from ${label}`;
+}
+
 function shapeLine(catalogue: SandboxCatalogue, shape: StageSize): string {
   const provider = stageProviderFor(catalogue, shape.os);
-  const price = stagePrice(catalogue, shape);
-  const priceLabel =
-    price === null ? null : shortPriceLabel(price.awakeMcPerHour);
+  const wake = provider === null ? null : wakeString(provider.suspendFidelity);
   return [
-    `${shape.os === "linux" ? "Linux" : "Windows"} · ${sandboxShapeLabel(shape.cpus, shape.memoryMb)}`,
-    price === null || price.exact ? priceLabel : `from ${priceLabel}`,
-    provider === null ? null : wakeString(provider.suspendFidelity),
+    shape.os === "linux" ? "Linux" : "Windows",
+    sandboxShapeLabel(shape.cpus, shape.memoryMb),
+    shapePricePart(catalogue, shape),
+    wake,
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");
 }
 
-/** A size's option key; an unset disk is the provider's default. */
+/** Who these defaults apply to, under the short Defaults heading. */
+function defaultsScopeSentence(
+  configuration: SandboxPageConfiguration,
+): string {
+  if (configuration.kind === "team") {
+    const name = configuration.teamName;
+    return `New ${name} sandboxes use these defaults. Shared by ${name}, not a spending limit. Existing sandboxes keep their Idle settings.`;
+  }
+  return "New Personal sandboxes use these defaults. Existing sandboxes keep their Idle settings.";
+}
+
+/** A size's option key, at the same geometry as its quote and saved defaults. */
 function sizeKey(catalogue: SandboxCatalogue, size: StageSize): string {
-  const disk =
-    size.diskMb ?? stageProviderFor(catalogue, size.os)?.shape.diskDefaultMb;
-  return `${size.os}:${size.cpus}:${size.memoryMb}:${disk ?? ""}`;
+  const provider = stageProviderForShape(catalogue, size);
+  const quoted = provider === null ? null : stageQuotedSize(provider, size);
+  return `${size.os}:${quoted?.shape.cpus ?? size.cpus}:${quoted?.shape.memoryMb ?? size.memoryMb}:${quoted?.shape.diskMb ?? size.diskMb ?? ""}`;
 }
 
 /**
@@ -122,7 +149,7 @@ function defaultsCardBody(
   const shape = configurationStageShape(catalogue, ready?.defaults ?? null);
   if (
     environment === null ||
-    environment.role === "viewer" ||
+    !mayChangeConfiguration(environment.role) ||
     ready === null ||
     shape === null
   ) {
@@ -140,7 +167,7 @@ function defaultsCardBody(
 /**
  * The configuration's defaults for new sandboxes: its shared
  * `sandbox_defaults` item, the built-in defaults while none is set. Editors and
- * admins reveal the form here; viewers can open Members. The
+ * admins change them here; readers see the people who can change them. The
  * gear on a New row changes one sandbox only and never shows here.
  */
 export function SandboxDefaultsSection(props: {
@@ -151,9 +178,8 @@ export function SandboxDefaultsSection(props: {
     configurationEnvironmentKey(props.configuration),
   );
   const body = defaultsCardBody(catalogue, environment, read);
-  const [editing, setEditing] = useState(false);
   // Held here, not in the form: a conflict rereads the item, and the form
-  // reopened on its new revision still shows why the save did not land.
+  // mounted on its new revision still shows why the save did not land.
   const { put } = useConfigurationItemMutations();
   const issue =
     put.data === undefined ? null : configurationWriteIssue(put.data);
@@ -164,37 +190,14 @@ export function SandboxDefaultsSection(props: {
       data-testid="sandboxes-defaults"
     >
       <h2 className="text-ui font-medium">Defaults</h2>
-      {body.kind === "unread" ? null : (
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
-          {body.kind === "form" ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-expanded={editing}
-              onClick={() => setEditing(!editing)}
-            >
-              Edit defaults
-            </Button>
-          ) : null}
-        </div>
-      )}
-      {environment?.role === "viewer" ? (
-        <p
-          className="text-ui-xs text-muted-foreground wrap-anywhere"
-          data-testid="sandboxes-defaults-editors"
-        >
-          Editors and admins can change defaults ·{" "}
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            onClick={() => navigateToSettingsSection("members")}
-          >
-            Members
-          </Button>
-        </p>
+      <p className="text-ui-xs text-muted-foreground wrap-anywhere">
+        {defaultsScopeSentence(props.configuration)}
+      </p>
+      {body.kind === "list" ? (
+        <SandboxDefaultsList catalogue={body.catalogue} shape={body.shape} />
+      ) : null}
+      {environment !== null && !mayChangeConfiguration(environment.role) ? (
+        <DefaultsEditors environmentId={environment.environmentId} />
       ) : null}
       {read !== null && read.kind === "failed" ? (
         <div className="flex flex-wrap items-center gap-2">
@@ -211,9 +214,9 @@ export function SandboxDefaultsSection(props: {
           </Button>
         </div>
       ) : null}
-      {body.kind === "form" && editing ? (
+      {body.kind === "form" ? (
         <SandboxDefaultsForm
-          // A save, or a change made elsewhere, reopens the form on the value read.
+          // A save, or a change made elsewhere, resets the form to the value read.
           key={`${body.revision ?? "none"}`}
           catalogue={body.catalogue}
           initialShape={body.shape}
@@ -235,40 +238,86 @@ export function SandboxDefaultsSection(props: {
   );
 }
 
-const KEPT_UNTIL_IDLE_CHANGED =
-  "Sandboxes you already have aren't destroyed when idle until you change their Idle settings.";
+function DefaultsEditors(props: { readonly environmentId: string }): ReactNode {
+  const members = useEnvironmentMembersList(props.environmentId, true);
+  const names = canChangeNames(members);
+  let description: string;
+  if (members.isPending) description = "Loading editors and admins…";
+  else if (members.isError)
+    description = "Couldn't read who can change defaults.";
+  else description = canChangeSentence(names, "defaults");
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <p
+        className="text-ui-xs text-muted-foreground wrap-anywhere"
+        data-testid="sandboxes-defaults-editors"
+      >
+        {description}
+      </p>
+      {members.isError ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={members.retry}
+        >
+          Retry members
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
+        onClick={() => navigateToSettingsSection("members")}
+      >
+        Members
+      </Button>
+    </div>
+  );
+}
 
-/** The defaults as text: a viewer's, and anyone's while they are read (`catalogue` null). */
+/** Labelled Shape, idle and destruction facts, including while they load. */
+function defaultsFacts(
+  catalogue: SandboxCatalogue | null,
+  shape: StageShape | null,
+): {
+  readonly shape: string;
+  readonly idle: string;
+  readonly destruction: string;
+} {
+  if (catalogue === null || shape === null) {
+    return {
+      shape: catalogue === null ? "…" : SANDBOXES_CANT_BE_CREATED,
+      idle: "…",
+      destruction: "…",
+    };
+  }
+  const resting = shape.destroyAfterRestingMinutes;
+  return {
+    shape: shapeLine(catalogue, shape),
+    idle: sandboxPeriodLabel(shape.idleMinutes),
+    destruction:
+      resting === null || resting === 0
+        ? KEPT_UNTIL_YOU_DESTROY_IT
+        : `removed after ${sandboxPeriodLabel(resting)} suspended or stopped`,
+  };
+}
+
+/** The defaults as labelled facts, including while the catalogue is loading. */
 function SandboxDefaultsList(props: {
   readonly catalogue: SandboxCatalogue | null;
   readonly shape: StageShape | null;
 }): ReactNode {
-  const { catalogue, shape } = props;
-  if (catalogue === null) {
-    return (
-      <p className="text-ui-sm text-muted-foreground">Loading defaults…</p>
-    );
-  }
-  if (shape === null) {
-    return (
-      <p className="text-ui-sm text-muted-foreground">
-        {SANDBOXES_CANT_BE_CREATED}
-      </p>
-    );
-  }
-  const resting = shape.destroyAfterRestingMinutes;
+  const facts = defaultsFacts(props.catalogue, props.shape);
   return (
-    <p
-      className="min-w-0 text-ui-sm text-muted-foreground wrap-anywhere"
+    <div
+      className="flex min-w-0 flex-col gap-1 text-ui-sm text-muted-foreground wrap-anywhere"
       data-testid="sandboxes-defaults-summary"
     >
-      {shape.os === "linux" ? "Linux" : "Windows"} ·{" "}
-      {sandboxShapeLabel(shape.cpus, shape.memoryMb)}
-      {` · suspends after ${sandboxPeriodLabel(shape.idleMinutes)} · `}
-      {resting === null || resting === 0
-        ? KEPT_UNTIL_YOU_DESTROY_IT
-        : `removed after ${sandboxPeriodLabel(resting)}`}
-    </p>
+      <p data-testid="sandboxes-defaults-shape">{`Shape · ${facts.shape}`}</p>
+      <p data-testid="sandboxes-defaults-idle">{`Idle · ${facts.idle}`}</p>
+      <p data-testid="sandboxes-defaults-resting">{`Destruction · ${facts.destruction}`}</p>
+    </div>
   );
 }
 
@@ -319,7 +368,8 @@ function defaultsOfForm(
   const restingMinutes = periodMinutes(resting);
   if (restingMinutes !== null && Number.isNaN(restingMinutes)) {
     return {
-      problem: '"Destroy after idle for" must be a whole number, or empty.',
+      problem:
+        '"Destroy after suspended or stopped for" must be a whole number, or empty.',
     };
   }
   const defaults = stageShapeDefaults(catalogue, {
@@ -362,9 +412,6 @@ function SandboxDefaultsForm(props: {
         if ("defaults" in result) props.onSave(result.defaults);
       }}
     >
-      <p className="text-ui-xs text-muted-foreground wrap-anywhere">
-        {`Each new sandbox starts with these. These defaults are not a spending limit. ${KEPT_UNTIL_IDLE_CHANGED}`}
-      </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5 sm:col-span-2">
           <Label htmlFor={`${ids}-shape`}>Shape</Label>
@@ -374,7 +421,9 @@ function SandboxDefaultsForm(props: {
               className="w-full"
               data-testid="sandboxes-defaults-shape-select"
             >
-              <SelectValue />
+              <SelectValue>
+                {picked === null ? null : shapeLine(catalogue, picked)}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {options.map((option) => (
@@ -382,7 +431,9 @@ function SandboxDefaultsForm(props: {
                   key={sizeKey(catalogue, option)}
                   value={sizeKey(catalogue, option)}
                 >
-                  {shapeLine(catalogue, option)}
+                  <span className="min-w-0 wrap-anywhere">
+                    {shapeLine(catalogue, option)}
+                  </span>
                 </SelectItem>
               ))}
             </SelectContent>
@@ -398,7 +449,7 @@ function SandboxDefaultsForm(props: {
         />
         <PeriodInput
           id={`${ids}-resting`}
-          label="Destroy after idle for (empty: never)"
+          label="Destroy after suspended or stopped for (empty: never)"
           placeholder="Never"
           field={resting}
           testId="sandboxes-defaults-resting-input"

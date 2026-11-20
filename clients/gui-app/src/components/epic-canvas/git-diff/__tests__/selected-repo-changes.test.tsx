@@ -499,7 +499,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.queryByTestId("file-row-/repo-traycer")).toBeNull();
     const previewText = await expectModuleHeaderPreview(
       screen.getByTestId("git-module-header-traycer"),
-      "Location in workspace: traycer",
+      "Location in folder: traycer",
     );
     expect(previewText).not.toContain("Repository location:");
   });

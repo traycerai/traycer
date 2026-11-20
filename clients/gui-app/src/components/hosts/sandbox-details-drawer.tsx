@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { toast } from "sonner";
 import {
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
   sandboxSupportReference,
   type SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
@@ -9,7 +10,6 @@ import {
   sandboxSettingsFailed,
   sandboxSettingsStepsLine,
 } from "@traycer/protocol/host/sandbox-settings";
-import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,7 +26,13 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import {
+  SandboxOperationError,
+  sandboxFailureMessageFor,
+  type SandboxFailureReader,
+} from "@/hooks/sandboxes/sandbox-failure-copy";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useSampledNow } from "@/lib/relative-time";
@@ -34,13 +40,10 @@ import {
   sandboxDetailsEntry,
   type SandboxDetailsExport,
 } from "@/lib/sandboxes/sandbox-details-provider";
-import {
-  formatSandboxDate,
-  sandboxSessionPills,
-  sandboxSessionsLine,
-} from "@/lib/sandboxes/sandbox-row-lines";
+import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import {
   SANDBOX_LIST_FAILED,
+  sandboxCreditShortLine,
   sandboxVerbFailureLine,
 } from "@/lib/sandboxes/sandbox-strings";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -135,6 +138,35 @@ function withOperationFailure(
   };
 }
 
+/**
+ * While ownership is unknown, a credits refusal from any pot but the team's reads
+ * as it does for that reader, with no amount told as the person's own.
+ */
+function operationFailureMessage(
+  error: Error,
+  reader: SandboxFailureReader,
+  ownerKnown: boolean,
+): string {
+  if (!(error instanceof SandboxOperationError)) return error.message;
+  const { failure } = error;
+  if (
+    !ownerKnown &&
+    failure.kind === "refused" &&
+    failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT &&
+    failure.reason !== "unverified" &&
+    failure.reason !== "unsupported-subscription" &&
+    failure.creditSource !== "team"
+  ) {
+    return sandboxCreditShortLine(
+      null,
+      failure.creditSource ?? null,
+      failure.shortfallMc,
+      { waking: true, context: "sentence" },
+    );
+  }
+  return sandboxFailureMessageFor(failure, error.message, reader);
+}
+
 function SandboxDetailsSections(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
@@ -144,6 +176,8 @@ function SandboxDetailsSections(props: {
   const wake = useSandboxWakeString(summary);
   const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   const configurations = useSandboxConfigurations();
+  const configuration = sandboxConfigurationOf(summary, configurations);
+  const buysTeamCredits = useOffersAddCredits(configuration);
   const now = useSampledNow();
   const entry = sandboxDetailsEntry({
     summary,
@@ -154,10 +188,7 @@ function SandboxDetailsSections(props: {
     viewerUserId,
     // Personal only once every team answered: a team row from a server
     // that names no creator is never the viewer's.
-    personal:
-      configurations.complete &&
-      sandboxConfigurationOf(summary, configurations.configurations)?.kind ===
-        "personal",
+    personal: configurations.complete && configuration?.kind === "personal",
     now,
   });
   const clipboard = useClipboardCopy({
@@ -184,26 +215,8 @@ function SandboxDetailsSections(props: {
               <dd className="wrap-anywhere">{row.value}</dd>
             </div>
           ))}
-          {summary.burst && summary.createdByAgentName !== null ? (
-            <>
-              <dt className="text-muted-foreground">Created by</dt>
-              <dd className="wrap-anywhere">{summary.createdByAgentName}</dd>
-              {summary.createdByTaskTitle === null ? null : (
-                <>
-                  <dt className="text-muted-foreground">For task</dt>
-                  <dd className="wrap-anywhere">
-                    {summary.createdByTaskTitle}
-                  </dd>
-                </>
-              )}
-            </>
-          ) : null}
         </dl>
       </section>
-      <p className="px-4 pb-4 text-ui-xs text-muted-foreground">
-        Today’s costs use the UTC day.
-      </p>
-      <SandboxDetailsSessions summary={summary} now={now} />
       <SandboxSettingsDeliverySection summary={summary} />
       <section
         aria-label="History"
@@ -218,13 +231,21 @@ function SandboxDetailsSections(props: {
               data-testid="sandbox-details-operation-failure"
             >
               <p>
-                {sandboxVerbFailureLine(
-                  operation.verb,
-                  summary.displayName,
-                  operation.reference,
+                {sandboxVerbFailureLine(operation.verb, summary.displayName)}
+              </p>
+              <p>
+                {operationFailureMessage(
+                  operation.error,
+                  {
+                    buysTeamCredits,
+                    teamName:
+                      configuration?.kind === "team"
+                        ? configuration.teamName
+                        : null,
+                  },
+                  configuration !== null,
                 )}
               </p>
-              <p>{operation.error.message}</p>
               <p>{`Support reference: ${operation.reference}`}</p>
             </li>
           ) : null}
@@ -278,43 +299,6 @@ function SandboxDetailsSections(props: {
         </Button>
       </section>
     </>
-  );
-}
-
-/** Session reports stay in Details so the list shows lifecycle facts once. */
-function SandboxDetailsSessions(props: {
-  readonly summary: SandboxSummary;
-  readonly now: number;
-}): ReactNode {
-  const { report } = useSandboxRowSessionReport(props.summary);
-  if (props.summary.state !== "awake") return null;
-  return (
-    <section
-      aria-label="Sessions"
-      className="flex flex-col gap-2 border-t border-border/60 px-4 py-4"
-    >
-      <h3 className="text-ui-sm font-medium">Sessions</h3>
-      <p className="text-ui-xs text-muted-foreground wrap-anywhere">
-        {sandboxSessionsLine(report, props.now)}
-      </p>
-      <ul className="flex min-w-0 flex-col gap-1.5 text-ui-xs">
-        {sandboxSessionPills(report).map((pill) => (
-          <li
-            key={pill.key}
-            className="flex min-w-0 items-start gap-1.5 wrap-anywhere"
-            data-testid="sandbox-details-session-pill"
-          >
-            {pill.working ? (
-              <span
-                aria-hidden
-                className="mt-1 size-1.5 shrink-0 rounded-full bg-success"
-              />
-            ) : null}
-            <span className="min-w-0">{pill.label}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }
 

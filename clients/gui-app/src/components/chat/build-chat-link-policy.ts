@@ -22,6 +22,10 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
+import {
+  fromTracyTranscript,
+  type TracyTranscriptOrigin,
+} from "@/lib/tab-navigation/intents";
 import { artifactEpicIdFromLinkPath } from "@/markdown/links/artifact-link-path";
 import type { MarkdownFileLink } from "@/markdown/links/markdown-link-context";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -93,6 +97,12 @@ export interface ChatLinkPolicyDeps {
    */
   readonly workspaceClient: HostClient<HostRpcRegistry> | null;
   readonly navigate: UseNavigateResult<string>;
+  /**
+   * The Tracy transcript the links are drawn in, taken when the policy is
+   * built; a link that opens another task carries it, so the task has a way
+   * back to Tracy. `null` everywhere else.
+   */
+  readonly tracyOrigin: TracyTranscriptOrigin | null;
   /**
    * The one tile-open seam (C1). The policy stays pure - the provider hands
    * in `useEpicTileNavigation().openTile` - and every link open here is a
@@ -290,15 +300,18 @@ export function openResolvedArtifact(
   // `epicId|focusArtifactId|focusedAt`).
   navigateToTabIntent(
     deps.navigate,
-    openOrFocusEpicIntent({
-      epicId: artifactEpicId,
-      focus: {
-        focusArtifactId: artifact.artifactId,
-        focusedAt: Date.now(),
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
-    }),
+    fromTracyTranscript(
+      openOrFocusEpicIntent({
+        epicId: artifactEpicId,
+        focus: {
+          focusArtifactId: artifact.artifactId,
+          focusedAt: Date.now(),
+          focusThreadId: undefined,
+          migrationSource: undefined,
+        },
+      }),
+      deps.tracyOrigin,
+    ),
     undefined,
   );
 }

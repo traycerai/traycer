@@ -530,6 +530,7 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
           profileSelection: { kind: "profile", profileId: "profile-1" },
           reasoningEffort: "high",
           fastMode: false,
+          serviceTier: null,
           permissionMode: "supervised",
           agentMode: "regular",
         },
@@ -545,6 +546,7 @@ describe("agent.listProviderProfiles / agent.getProviderProfileRateLimits / agen
           profileSelection: { kind: "ambient" },
           reasoningEffort: null,
           fastMode: false,
+          serviceTier: null,
           permissionMode: "supervised",
           agentMode: "regular",
         },
@@ -619,10 +621,10 @@ describe("optional-method capability negotiation", () => {
       minor: 0,
       supportedMajors: [1, 2, 3, 4, 5, 6, 7, 8],
     });
-    // `agent.configure@7.1` added the routing choice to the request.
+    // `agent.configure@7.2` added the service-tier choice to the request.
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 7,
-      minor: 1,
+      minor: 2,
       supportedMajors: [1, 2, 3, 4, 5, 6, 7],
     });
   });
@@ -1297,6 +1299,7 @@ describe("Epic Mode removal — agentMode is RETAINED on the released wires", ()
       profileSelection: { kind: "profile" as const, profileId: "profile-1" },
       reasoningEffort: "high",
       fastMode: false,
+      serviceTier: null,
       permissionMode: "supervised" as const,
       agentMode: "regular" as const,
     },

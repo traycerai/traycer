@@ -29,8 +29,7 @@ const IMAGE = {
 };
 
 describe("bot.conversation.send@1.4", () => {
-  it("is the latest line, and upgrades a 1.3 request carrying no images", () => {
-    expect(send.latestMinor).toBe(4);
+  it("upgrades a 1.3 request carrying no images", () => {
     const parsed = sendV13.requestSchema.parse(REQUEST);
     const upgraded =
       send.versions[4].upgradeFromPreviousVersion.upgradeRequest(parsed);

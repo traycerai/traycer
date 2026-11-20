@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useOpenLink } from "@/lib/links/open-link";
 import {
   consequenceClauses,
@@ -17,6 +18,8 @@ import {
   OPEN_TERMINAL_INSTEAD,
   SHOW_LESS,
   WHAT_THIS_MEANS,
+  WINDOWS_SANDBOX_LIMITATION,
+  SANDBOX_SETUP_CHARGES,
 } from "@/lib/sandboxes/sandbox-strings";
 import {
   consequencesShown,
@@ -91,7 +94,8 @@ function ConsequencesBlockBody(props: {
   }, [expanded, markSeen, props.subject, props.viewerUserId]);
 
   const clauses = consequenceClauses(props.input);
-  const price = expanded ? clauses[0] : priceClause(props.input);
+  // The standing cost keeps its funding context when the block is open.
+  const price = priceClause(props.input);
   const rest = clauses.filter((clause) => clause.kind !== "price");
   return (
     <div
@@ -142,6 +146,12 @@ function ConsequencesBlockBody(props: {
           </Button>
         )}
       </p>
+      <p className="m-0" data-testid="consequences-setup-charges">
+        {SANDBOX_SETUP_CHARGES}
+      </p>
+      {props.input.os === "windows" ? (
+        <p className="m-0">{WINDOWS_SANDBOX_LIMITATION}</p>
+      ) : null}
       {expanded
         ? rest.map((clause) => (
             <p
@@ -185,7 +195,7 @@ function ConsequencesBlockBody(props: {
 /**
  * `Add credits ↗` beside the price clause at a zero or short balance: the
  * configuration's billing page, in the browser. The shape sheet repeats it
- * where it repeats the clause.
+ * where it repeats the clause. A team's is offered to its Admin only.
  */
 export function AddCreditsLink(props: {
   readonly configuration: StageConfiguration;
@@ -193,6 +203,8 @@ export function AddCreditsLink(props: {
 }): ReactNode {
   const billingUrl = useConfigurationBillingUrl(props.configuration);
   const openLink = useOpenLink();
+  const offered = useOffersAddCredits(props.configuration);
+  if (!offered) return null;
   return (
     <Button
       type="button"

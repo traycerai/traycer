@@ -2075,7 +2075,20 @@ export type AgentConfigureRequestV71 = z.infer<
   typeof agentConfigureRequestSchemaV71
 >;
 
-export const agentConfigureSettingsSchema = lazySchema(() =>
+/**
+ * `agent.configure@7.2`: a named tier wins over `fastMode`. Null/omitted
+ * tier uses the boolean: true selects the first upgrade and false clears it.
+ */
+export const agentConfigureRequestSchemaV72 = lazySchema(() =>
+  agentConfigureRequestSchemaV71.extend({
+    serviceTier: z.string().nullable().optional(),
+  }),
+);
+export type AgentConfigureRequestV72 = z.infer<
+  typeof agentConfigureRequestSchemaV72
+>;
+
+export const agentConfigureSettingsSchemaV71 = lazySchema(() =>
   z.object({
     harnessId: guiHarnessIdSchema,
     model: z.string().min(1),
@@ -2094,9 +2107,22 @@ export const agentConfigureSettingsSchema = lazySchema(() =>
     agentMode: agentModeSchema,
   }),
 );
+export const agentConfigureSettingsSchema = lazySchema(() =>
+  agentConfigureSettingsSchemaV71.extend({
+    serviceTier: z.string().nullable(),
+  }),
+);
+
 export type AgentConfigureSettings = z.infer<
   typeof agentConfigureSettingsSchema
 >;
+
+export const agentConfigureResponseSchemaV71 = lazySchema(() =>
+  z.object({
+    settings: agentConfigureSettingsSchemaV71,
+    warnings: z.array(z.string()),
+  }),
+);
 
 export const agentConfigureResponseSchema = lazySchema(() =>
   z.object({
@@ -2403,19 +2429,19 @@ export const agentConfigureV60 = defineRpcContract({
   responseSchema: agentConfigureResponseSchemaV6,
 });
 
-// `7.0` is RELEASED (`host-v1.5.1`); `7.1` below is the LIVE line. The moment a
+// `7.0` is RELEASED (`host-v1.5.1`); `7.2` below is the LIVE line. The moment a
 // tag ships a harness id after Command Code, freeze the response against a
 // snapshot harness id set and open `8`.
 export const agentConfigureV70 = defineRpcContract({
   method: "agent.configure",
   schemaVersion: { major: 7, minor: 0 } as const,
   requestSchema: agentConfigureRequestSchemaV20,
-  responseSchema: agentConfigureResponseSchema,
+  responseSchema: agentConfigureResponseSchemaV71,
 });
 
 // `7.1` lets a caller choose what the agent does on a usage limit or an error
 // (`routing`). One added request key: `7.0` is RELEASED (`host-v1.5.1`), so its
-// request stays `agentConfigureRequestSchemaV20` and the response is shared. The
+// request stays `agentConfigureRequestSchemaV20` and the response is frozen. The
 // key is required and nullable like `permissionMode` beside it: `null` leaves
 // the agent's routing as it is, so a caller that restates the run tuple without
 // meaning to touch routing cannot reset a chat that was told to wait.
@@ -2423,7 +2449,27 @@ export const agentConfigureV71 = defineRpcContract({
   method: "agent.configure",
   schemaVersion: { major: 7, minor: 1 } as const,
   requestSchema: agentConfigureRequestSchemaV71,
+  responseSchema: agentConfigureResponseSchemaV71,
+});
+
+export const agentConfigureV72 = defineRpcContract({
+  method: "agent.configure",
+  schemaVersion: { major: 7, minor: 2 } as const,
+  requestSchema: agentConfigureRequestSchemaV72,
   responseSchema: agentConfigureResponseSchema,
+});
+
+export const agentConfigureUpgradeV71ToV72 = defineUpgradePath<
+  typeof agentConfigureV71,
+  typeof agentConfigureV72
+>({
+  from: agentConfigureV71.schemaVersion,
+  to: agentConfigureV72.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    settings: { ...response.settings, serviceTier: null },
+  }),
 });
 
 export const agentConfigureUpgradeV70ToV71 = defineUpgradePath<
@@ -2438,15 +2484,13 @@ export const agentConfigureUpgradeV70ToV71 = defineUpgradePath<
 });
 
 /**
- * The request a major-6-or-older host can read, from a `7.1` request.
+ * The request a major-6-or-older host can read, from a `7.2` request.
  *
- * A request that names a routing is REFUSED rather than stripped: the older
- * host would apply the run tuple and silently ignore the one part the caller
- * asked for, and an orchestrator told its chat now waits would still be
- * switched. `null` ("leave it alone") carries nothing to lose, so the key is
- * dropped.
+ * Named tiers and concrete routing choices are refused: an older host
+ * would apply the rest of the tuple while silently ignoring the choice.
+ * Null/omitted tier and null routing carry no choice to lose and can be stripped.
  */
-function downgradeConfigureRequestFromV71(request: AgentConfigureRequestV71):
+function downgradeConfigureRequestFromV72(request: AgentConfigureRequestV72):
   | { readonly ok: true; readonly value: AgentConfigureRequestV20 }
   | {
       readonly ok: false;
@@ -2455,6 +2499,16 @@ function downgradeConfigureRequestFromV71(request: AgentConfigureRequestV71):
         readonly message: string;
       };
     } {
+  if (request.serviceTier !== undefined && request.serviceTier !== null) {
+    return {
+      ok: false,
+      error: {
+        code: "DOWNGRADE_UNSUPPORTED",
+        message:
+          "Choosing an agent service tier requires a newer Traycer host. Upgrade the host before configuring this agent.",
+      },
+    };
+  }
   if (request.routing !== null) {
     return {
       ok: false,
@@ -2480,13 +2534,13 @@ export const agentConfigureUpgradeV60ToV70 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentConfigureDowngradeV71ToV60 = defineDowngradePath<
-  typeof agentConfigureV71,
+export const agentConfigureDowngradeV72ToV60 = defineDowngradePath<
+  typeof agentConfigureV72,
   typeof agentConfigureV60
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 2 },
   to: { major: 6, minor: 0 },
-  downgradeRequest: downgradeConfigureRequestFromV71,
+  downgradeRequest: downgradeConfigureRequestFromV72,
   downgradeResponse: (response) => {
     // Fails closed for a harness added after 1.5.0: a single configured agent
     // cannot be filtered, so it is pass-through or refuse. The message names
@@ -2506,13 +2560,13 @@ export const agentConfigureDowngradeV71ToV60 = defineDowngradePath<
   },
 });
 
-export const agentConfigureDowngradeV71ToV50 = defineDowngradePath<
-  typeof agentConfigureV71,
+export const agentConfigureDowngradeV72ToV50 = defineDowngradePath<
+  typeof agentConfigureV72,
   typeof agentConfigureV50
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 2 },
   to: { major: 5, minor: 0 },
-  downgradeRequest: downgradeConfigureRequestFromV71,
+  downgradeRequest: downgradeConfigureRequestFromV72,
   downgradeResponse: (response) => {
     // Fails closed for a post-v8.0 harness (antigravity) - see the v5->v4
     // bridge below for the full reasoning. The message names no harness so it
@@ -2532,13 +2586,13 @@ export const agentConfigureDowngradeV71ToV50 = defineDowngradePath<
   },
 });
 
-export const agentConfigureDowngradeV71ToV40 = defineDowngradePath<
-  typeof agentConfigureV71,
+export const agentConfigureDowngradeV72ToV40 = defineDowngradePath<
+  typeof agentConfigureV72,
   typeof agentConfigureV40
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 2 },
   to: { major: 4, minor: 0 },
-  downgradeRequest: downgradeConfigureRequestFromV71,
+  downgradeRequest: downgradeConfigureRequestFromV72,
   downgradeResponse: (response) => {
     const parsed = agentConfigureResponseSchemaV4.safeParse(response);
     if (!parsed.success) {
@@ -2555,13 +2609,13 @@ export const agentConfigureDowngradeV71ToV40 = defineDowngradePath<
   },
 });
 
-export const agentConfigureDowngradeV71ToV30 = defineDowngradePath<
-  typeof agentConfigureV71,
+export const agentConfigureDowngradeV72ToV30 = defineDowngradePath<
+  typeof agentConfigureV72,
   typeof agentConfigureV30
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 2 },
   to: { major: 3, minor: 0 },
-  downgradeRequest: downgradeConfigureRequestFromV71,
+  downgradeRequest: downgradeConfigureRequestFromV72,
   downgradeResponse: (response) => {
     const parsed = agentConfigureResponseSchemaV3.safeParse(response);
     if (!parsed.success) {
@@ -2578,13 +2632,13 @@ export const agentConfigureDowngradeV71ToV30 = defineDowngradePath<
   },
 });
 
-export const agentConfigureDowngradeV71ToV20 = defineDowngradePath<
-  typeof agentConfigureV71,
+export const agentConfigureDowngradeV72ToV20 = defineDowngradePath<
+  typeof agentConfigureV72,
   typeof agentConfigureV20
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 2 },
   to: { major: 2, minor: 0 },
-  downgradeRequest: downgradeConfigureRequestFromV71,
+  downgradeRequest: downgradeConfigureRequestFromV72,
   downgradeResponse: (response) => {
     const parsed = agentConfigureResponseSchemaV2.safeParse(response);
     if (!parsed.success) {
@@ -2601,11 +2655,11 @@ export const agentConfigureDowngradeV71ToV20 = defineDowngradePath<
   },
 });
 
-export const agentConfigureDowngradeV71ToV10 = defineDowngradePath<
-  typeof agentConfigureV71,
+export const agentConfigureDowngradeV72ToV10 = defineDowngradePath<
+  typeof agentConfigureV72,
   typeof agentConfigureV10
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 2 },
   to: { major: 1, minor: 0 },
   // Same refusal as every other bridge onto v1.0 - see the v5->v1 bridge.
   downgradeRequest: () => ({

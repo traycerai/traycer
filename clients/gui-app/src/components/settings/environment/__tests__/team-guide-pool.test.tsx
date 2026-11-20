@@ -246,6 +246,14 @@ describe("TeamGuide on a build with a server pool and no host running the team",
       ).not.toBeNull();
     });
     expect(screen.queryByText(/The guide needs a host/)).toBeNull();
+    expect(
+      screen.getAllByRole("heading", { name: "Agent selection guide" }),
+    ).toHaveLength(1);
+    expect(
+      screen.queryByText(
+        "The guide agents read when they pick a coding agent, model and effort for work they hand off.",
+      ),
+    ).toBeNull();
   });
 
   it("says the read failed, with Retry and no host pick, when the pool predates the guide read", async () => {

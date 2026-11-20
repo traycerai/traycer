@@ -1,3 +1,4 @@
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { EpicArtifactSync } from "@traycer/protocol/host/epic/status-subscribe";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import {
@@ -605,7 +606,7 @@ export class EpicStreamClient {
         return;
       }
       case "permissionChanged": {
-        this.callbacks.onPermissionChanged(frame.permissionRole);
+        this.callbacks.onPermissionChanged(grantedRole(frame.permissionRole));
         return;
       }
       case "cloudSyncStatus": {

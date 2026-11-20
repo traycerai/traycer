@@ -382,7 +382,7 @@ describe("MobileAppHeader", () => {
     );
   });
 
-  it("renders the epic title as an editable control for an editor and plain text for a viewer", async () => {
+  it("renders the epic title as an editable control for an owner and plain text for a role that grants no write access", async () => {
     presentEpicTab("t1", "e1", "Wire up billing");
     headerTitleState.role = "owner";
     renderAt("/epics/e1/t1");
@@ -391,7 +391,9 @@ describe("MobileAppHeader", () => {
     ).toBe("BUTTON");
     cleanup();
 
-    headerTitleState.role = "viewer";
+    // A role nothing recognises. A `viewer` never reaches the header: it is
+    // decoded to `editor` before the store holds it.
+    headerTitleState.role = "supervisor";
     renderAt("/epics/e1/t1");
     expect(
       (await screen.findByTestId("mobile-epic-header-title")).tagName,

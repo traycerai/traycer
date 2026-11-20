@@ -22,6 +22,7 @@ const openEpicFromList = vi.hoisted(() =>
       options: {
         readonly title: string | undefined;
         readonly source: string;
+        readonly tracyOrigin: null;
       },
     ) => void
   >(),
@@ -102,7 +103,7 @@ describe("<TrayOpenEpicBridge />", () => {
       expect.any(Function),
       "epic-live",
       "/",
-      { title: "Live task", source: "system_tray" },
+      { title: "Live task", source: "system_tray", tracyOrigin: null },
     );
   });
 

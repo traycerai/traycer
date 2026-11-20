@@ -36,6 +36,13 @@ vi.mock("@/components/settings/personal/personal-page-frame", async () => {
   };
 });
 
+// Every section mounts the pick's upkeep, which reads the window's host scope
+// and the account's queries; it has its own cases (`local-move-page.test.tsx`)
+// and this file holds the pick fixed.
+vi.mock("@/components/settings/environment-picker", () => ({
+  EnvironmentPickUpkeep: () => null,
+}));
+
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture, hostScopeOptionFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
@@ -209,7 +216,7 @@ describe("SettingsPanelForSection phone scope line", () => {
     expect(window.matchMedia("(width < 768px)").matches).toBe(false);
   });
 
-  it("omits Overview scope for team and local picks at phone and tablet widths", () => {
+  it("shows the environment and host on Overview and Worktrees in phone layout", () => {
     const localPick: EnvironmentPick = {
       kind: "local",
       hostId: "host-local",
@@ -217,12 +224,12 @@ describe("SettingsPanelForSection phone scope line", () => {
     };
     const teamPick: EnvironmentPick = { kind: "team", environmentId: "team-1" };
     const cases = [
-      [teamPick, 1024],
-      [teamPick, 390],
-      [localPick, 1024],
-      [localPick, 390],
+      [teamPick, 1024, "Acme › tgill-mbp · Computer"],
+      [teamPick, 390, "Acme › tgill-mbp · Computer"],
+      [localPick, 1024, "tgill-popos › tgill-popos · Computer"],
+      [localPick, 390, "tgill-popos › tgill-popos · Computer"],
     ] as const;
-    for (const [environment, width] of cases) {
+    for (const [environment, width, expected] of cases) {
       cleanup();
       reads.environment = environment;
       reads.hostName =
@@ -234,7 +241,7 @@ describe("SettingsPanelForSection phone scope line", () => {
       });
       renderSection("host");
       expect(screen.getByRole("heading", { name: "Overview" })).not.toBeNull();
-      expect(screen.queryByTestId("settings-phone-scope-line")).toBeNull();
+      expect(scopeLine().textContent).toBe(expected);
     }
 
     cleanup();
@@ -288,6 +295,11 @@ describe("SettingsPanelForSection phone scope line", () => {
     cleanup();
     setPhoneLayoutOnly(false);
     renderSection("diagnostics");
+    expect(screen.queryByTestId("settings-phone-scope-line")).toBeNull();
+
+    cleanup();
+    renderSection("host");
+    expect(screen.getByRole("heading", { name: "Overview" })).not.toBeNull();
     expect(screen.queryByTestId("settings-phone-scope-line")).toBeNull();
   });
 });

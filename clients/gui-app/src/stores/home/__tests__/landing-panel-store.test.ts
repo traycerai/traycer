@@ -1,3 +1,4 @@
+import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   independentScope,
@@ -336,6 +337,34 @@ describe("placeholder", () => {
         .panelOpen,
     ).toBe(false);
     expect(useLandingPanelStore.getState().activeInstanceId).toBeNull();
+  });
+});
+
+describe("layout of a start page with no record of its own", () => {
+  it("opens at the width the user last dragged another page to, across a reload", () => {
+    useLandingPanelStore.getState().setPanelWidthFraction("page-a", 0.5);
+    expect(
+      landingPanelLayoutFor(useLandingPanelStore.getState(), "page-new")
+        .panelWidthFraction,
+    ).toBe(0.5);
+
+    const persisted: unknown = JSON.parse(
+      JSON.stringify(useLandingPanelStore.getState()),
+    );
+    const reloaded = parsePersistedLandingPanelState(persisted);
+    expect(
+      landingPanelLayoutFor(reloaded, "page-after-reload").panelWidthFraction,
+    ).toBe(0.5);
+  });
+
+  it("renders a page with no record through the panel's own store selector", () => {
+    useLandingPanelStore.getState().setPanelWidthFraction("page-a", 0.5);
+    // The panel selects the resolved layout object directly, so a resolver
+    // that built a fresh object per call would re-render without end here.
+    const { result } = renderHook(() =>
+      useLandingPanelStore((state) => landingPanelLayoutFor(state, "page-new")),
+    );
+    expect(result.current.panelWidthFraction).toBe(0.5);
   });
 });
 

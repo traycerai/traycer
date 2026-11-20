@@ -1,7 +1,7 @@
 {
   "browser-tests/artifact-pages-toolbar.spec.ts": 6.6,
   "browser-tests/boot-escape-hatch-press.spec.ts": 7.9,
-  "browser-tests/bot-creature-marks.spec.ts": 2.2,
+  "browser-tests/bot-mascot-marks.spec.ts": 2.2,
   "browser-tests/bot-thread-focus-layout.spec.ts": 84.1,
   "browser-tests/bot-thread-long-post.spec.ts": 21.9,
   "browser-tests/bot-thread-tasks-bound.spec.ts": 19.8,

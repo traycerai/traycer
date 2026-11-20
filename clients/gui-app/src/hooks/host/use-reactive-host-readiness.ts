@@ -53,6 +53,13 @@ export function useReactiveHostReadiness<Registry extends VersionedRpcRegistry>(
   );
 }
 
+/** Read the same dispatch prerequisites synchronously inside an imperative query. */
+export function readHostReadiness<Registry extends VersionedRpcRegistry>(
+  client: HostRequester<Registry> | null,
+): ReactiveHostReadiness {
+  return parseHostReadinessSnapshot(readHostReadinessSnapshot(client));
+}
+
 function readHostReadinessSnapshot<Registry extends VersionedRpcRegistry>(
   client: HostRequester<Registry> | null,
 ): string {

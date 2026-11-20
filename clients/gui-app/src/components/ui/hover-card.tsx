@@ -399,6 +399,10 @@ export function HoverCard(props: HoverCardProps): ReactNode {
             ref={setFloating}
             style={floatingStyles}
             className="z-50"
+            // `useRole` puts `role="dialog"` here, which the back/forward swipe
+            // reads as a decision to protect. A hover card is a glance, not a
+            // decision, so swiping stays available while one is showing.
+            data-history-navigation-surface="allowed"
             aria-label={labelOf(props.semantics)}
             {...getFloatingProps()}
             {...layerDismissal(context)}

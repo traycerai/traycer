@@ -115,7 +115,7 @@ describe("<CloneProfileRecovery /> catalog recovery", () => {
         resolution={{
           status: "profile-selection-required",
           providerId: "claude-code",
-          reason: "no-enabled-terminal-fallback",
+          reason: "not-on-destination",
           matchedProfileId: null,
           targetProfiles: [],
         }}

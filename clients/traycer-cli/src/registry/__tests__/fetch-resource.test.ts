@@ -104,6 +104,36 @@ function downloadOptions(destPath: string, expected: string) {
 }
 
 async function settleRetryTimers<T>(promise: Promise<T>): Promise<T> {
+  return settleReportedBackoffs(promise, () =>
+    vi.advanceTimersToNextTimerAsync(),
+  );
+}
+
+// undici finishes a real response through setImmediate, so these cases leave
+// it native. Its own setTimeouts stay frozen beside the backoff, so the next
+// timer is not necessarily the backoff; running everything pending includes it.
+function useFakeTimersForRealSockets(): void {
+  vi.useFakeTimers({
+    toFake: [
+      "setTimeout",
+      "clearTimeout",
+      "setInterval",
+      "clearInterval",
+      "Date",
+    ],
+  });
+}
+
+async function settleRetryTimersOverRealSockets<T>(
+  promise: Promise<T>,
+): Promise<T> {
+  return settleReportedBackoffs(promise, () => vi.runOnlyPendingTimersAsync());
+}
+
+async function settleReportedBackoffs<T>(
+  promise: Promise<T>,
+  advance: () => Promise<unknown>,
+): Promise<T> {
   let settled = false;
   const outcome = promise.then(
     (value) => {
@@ -120,7 +150,7 @@ async function settleRetryTimers<T>(promise: Promise<T>): Promise<T> {
     await Promise.race([settlement, retryBackoffSignal.promise]);
     if (settled) break;
     retryBackoffSignal = createRetryBackoffSignal();
-    await vi.advanceTimersToNextTimerAsync();
+    await advance();
   }
   const result = await outcome;
   if (result.kind === "rejected") throw result.error;
@@ -182,6 +212,66 @@ describe("downloadToFile resume and integrity policy", () => {
       expect(requests[1]?.headers.get("if-range")).toBe('"strong-etag"');
       expect(readFileSync(destPath, "utf8")).toBe("abcdef");
       expect(statSync(destPath).size).toBe(6);
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "resumes a partial archive on a mirror without carrying the first origin validator",
+    async () => {
+      useFakeTimersForRealSockets();
+      const expected = "abcdef";
+      const destPath = join(workDir, "mirrored-archive.tar.gz");
+      const firstOriginRequests: Array<{
+        range: string | undefined;
+        ifRange: string | undefined;
+      }> = [];
+      const mirrorRequests: Array<{
+        range: string | undefined;
+        ifRange: string | undefined;
+      }> = [];
+      let firstOriginCalls = 0;
+      const firstOrigin = await startFaultServer((request, response) => {
+        firstOriginRequests.push({
+          range: firstRequestHeaderValue(request.headers.range),
+          ifRange: firstRequestHeaderValue(request.headers["if-range"]),
+        });
+        firstOriginCalls += 1;
+        if (firstOriginCalls === 1) {
+          response.writeHead(200, {
+            etag: '"cdn-version"',
+            "content-length": "6",
+          });
+          response.write("abc", () => response.destroy());
+          return;
+        }
+        response.writeHead(503);
+        response.end("temporarily unavailable");
+      }, faultServers);
+      const mirrorOrigin = await startFaultServer((request, response) => {
+        mirrorRequests.push({
+          range: firstRequestHeaderValue(request.headers.range),
+          ifRange: firstRequestHeaderValue(request.headers["if-range"]),
+        });
+        response.writeHead(206, { "content-range": "bytes 3-5/6" });
+        response.end("def");
+      }, faultServers);
+
+      const pending = downloadToFile({
+        ...downloadOptions(destPath, expected),
+        url: `${firstOrigin}/host.tar.gz`,
+        mirrorUrls: [`${mirrorOrigin}/host.tar.gz`],
+      });
+      const result = await settleRetryTimersOverRealSockets(pending);
+
+      expect(result).toEqual({ downloadedBytes: 6, sha256: sha256(expected) });
+      expect(readFileSync(destPath, "utf8")).toBe(expected);
+      expect(firstOriginCalls).toBe(3);
+      expect(firstOriginRequests[1]?.range).toBe("bytes=3-");
+      expect(firstOriginRequests[1]?.ifRange).toBe('"cdn-version"');
+      expect(mirrorRequests).toEqual([
+        { range: "bytes=3-", ifRange: undefined },
+      ]);
     },
     SETTLE_RETRY_TEST_TIMEOUT_MS,
   );
@@ -702,7 +792,7 @@ describe("downloadToFile resume and integrity policy", () => {
   );
 
   it("preserves Range and If-Range across a real redirect before the 200 fallback", async () => {
-    vi.useRealTimers();
+    useFakeTimersForRealSockets();
     const requests: Array<{
       path: string;
       range: string | undefined;
@@ -739,10 +829,12 @@ describe("downloadToFile resume and integrity policy", () => {
     }, faultServers);
     const destPath = join(workDir, "real-redirect.tar.gz");
 
-    const result = await downloadToFile({
-      ...downloadOptions(destPath, "abcdef"),
-      url: `${baseUrl}/archive`,
-    });
+    const result = await settleRetryTimersOverRealSockets(
+      downloadToFile({
+        ...downloadOptions(destPath, "abcdef"),
+        url: `${baseUrl}/archive`,
+      }),
+    );
 
     expect(result.sha256).toBe(sha256("abcdef"));
     expect(requests).toEqual([
@@ -930,6 +1022,32 @@ describe("fetch watchdogs and heartbeat semantics", () => {
     }
     expect(heartbeats.filter((phase) => phase === "watchdog")).toHaveLength(4);
     expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("waits before the second attempt on the same origin", async () => {
+    vi.useFakeTimers();
+    const heartbeats: string[] = [];
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls += 1;
+      return calls === 1
+        ? response("slow down", 429, {})
+        : response("ok", 200, {});
+    }) as typeof globalThis.fetch;
+
+    const pending = fetchText(RESOURCE_URL, {
+      signal: null,
+      onHeartbeat: (heartbeat) => heartbeats.push(heartbeat.phase),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(749);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toBe("ok");
+    expect(calls).toBe(2);
+    expect(heartbeats).toEqual(["attempt", "backoff", "attempt"]);
   });
 
   it("resets the gap watchdog after each received chunk", async () => {

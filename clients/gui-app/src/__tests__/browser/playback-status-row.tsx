@@ -35,7 +35,9 @@ import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { playbackTrack } from "@/lib/soundtrack/__tests__/playback-track";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 import "@/lib/theme-applier";
 import "@/index.css";
 
@@ -80,6 +82,20 @@ Object.defineProperty(globalThis, "runnerHost", {
 useSettingsStore.setState({
   soundtrackEnabled: true,
   soundtrackPlaybackControls: true,
+});
+
+/**
+ * What the buttons' label shows is the track in front, which the real session
+ * sets (the Vitest suite drives that). The layout claim only needs a title too
+ * long for the label, so the store's own field is seeded with a real track
+ * definition: a name that is not the title, and a title that must be cut.
+ */
+useSoundtrackStore.setState({
+  soundingTrack: {
+    ...playbackTrack("internal-track-name", 60),
+    title:
+      "A very long track title that cannot fit the label beside the buttons",
+  },
 });
 
 const localHost = {

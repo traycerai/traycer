@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_USAGE_ROW_KEYS } from "@/lib/context-usage-rows";
 import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
-import { visibleRailPanelIds, type RailEntry } from "@/lib/layout/rail";
+import {
+  BROWSERS_SIMULATORS_STACK_ID,
+  GIT_DIFF_PULL_REQUESTS_STACK_ID,
+  visibleRailPanelIds,
+  type RailEntry,
+} from "@/lib/layout/rail";
 import { layoutChanges, regionChangedKeys } from "@/lib/layout/layout-diff";
 import { type LayoutValues } from "@/lib/layout/layout-values";
 import {
@@ -1145,9 +1150,10 @@ describe("migrating an unrecognized version resets to the defaults", () => {
 });
 
 /**
- * A new install ships tabs at the left edge, the minimap on the left, the task
- * sidebar on the right with Git Diff stacked on Pull Requests, File Tree off,
- * and the side strip listing agents. An install that exists is told apart by
+ * A new install ships tabs at the left edge, the task sidebar on the right
+ * with Browsers stacked on Simulators and Git Diff stacked on Pull Requests,
+ * File Tree off, and the side strip listing agents; the minimap is on the
+ * right, as it was. An install that exists is told apart by
  * what it left behind: a layout record at an earlier version, or, with none, a
  * legacy settings or sidebar record from a build before the layout store. Each
  * of those reads what its record does not say against the EARLIER defaults.
@@ -1158,7 +1164,9 @@ describe("the defaults that changed for a new install only", () => {
 
   const ONE_STACK_RAIL: ReadonlyArray<RailEntry> =
     DEFAULT_ARRANGEMENT.rail.filter(
-      (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+      (entry) =>
+        entry.id !== BROWSERS_SIMULATORS_STACK_ID &&
+        entry.id !== GIT_DIFF_PULL_REQUESTS_STACK_ID,
     );
 
   /** The arrangement fields a pre-change install holds, whatever else its record says. */
@@ -1214,13 +1222,14 @@ describe("the defaults that changed for a new install only", () => {
     expect(state().overrides).toEqual({});
     expect(state().arrangement).toMatchObject({
       tabStripPlacement: "left",
-      minimapSide: "left",
+      minimapSide: "right",
       sidebarSide: "right",
       sidebarStartCollapsed: false,
       sideStripView: "activity",
     });
     expect(railStacks(state().arrangement.rail)).toEqual([
       { kind: "stack", id: "stack:railAgents+railArtifacts" },
+      { kind: "stack", id: "stack:railBrowsers+railSimulators" },
       { kind: "stack", id: "stack:railGitDiff+railPullRequests" },
     ]);
     expect(fileTreeShown(state())).toBe("hidden");

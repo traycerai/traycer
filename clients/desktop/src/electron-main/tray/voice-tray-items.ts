@@ -5,6 +5,7 @@ import type {
 } from "../../ipc-contracts/host-types";
 import { log } from "../app/logger";
 import type { VoiceAwayWindow } from "../windows/voice-live-windows";
+import { watchWindowsTrayTheme } from "./tray";
 
 /**
  * The voice item: while a window's voice session is live and the window is
@@ -212,9 +213,11 @@ export function createElectronVoiceTrayView(input: {
     );
   };
   render(input.indicator);
+  const stopWatchingTheme = watchWindowsTrayTheme(tray, platform);
   return {
     update: render,
     destroy: () => {
+      stopWatchingTheme();
       if (!tray.isDestroyed()) tray.destroy();
     },
   };

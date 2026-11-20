@@ -36,11 +36,19 @@ export const RunnerHostInvoke = {
   // which owns the single machine-local credentials file + its lock/WAL. `rotate`
   // performs the refresh HTTP spend in main, inside the file lock.
   authTokenStoreGet: "runnerHost:auth:tokenStore:get",
+  authTokenStoreGetSignInStorageLow:
+    "runnerHost:auth:tokenStore:getSignInStorageLow",
   authTokenStoreSignIn: "runnerHost:auth:tokenStore:signIn",
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
   authTokenStoreDeleteIfToken: "runnerHost:auth:tokenStore:deleteIfToken",
   authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
+  // The person's host-only tokens, owned by main beside the credentials file.
+  // No channel carries the sign-in token: main mints with its own copy.
+  hostTokensObtain: "runnerHost:auth:hostTokens:obtain",
+  hostTokensRenew: "runnerHost:auth:hostTokens:renew",
+  hostTokensAdopt: "runnerHost:auth:hostTokens:adopt",
+  hostTokensForgetUser: "runnerHost:auth:hostTokens:forgetUser",
   // Remote Host Support (§7): `GET /api/v3/hosts` with the user bearer. Run in
   // main for the same CORS reason as the token validators — authn-v3's CORS
   // allow-list is the web dashboard origin, not the app renderer.
@@ -67,18 +75,36 @@ export const RunnerHostInvoke = {
   // reason as the two above — and, like them, a registry-only write that needs
   // no route to the machine, which is why it does not live on the host-
   // management bridge next to the OS-service verbs it must not be confused with.
+  readHostOwnership: "runnerHost:hosts:readOwnership",
+  listTeamComputers: "runnerHost:teams:listComputers",
+  mintTeamComputerInstallToken: "runnerHost:teams:mintComputerInstallToken",
+  releaseTeamComputer: "runnerHost:hosts:releaseTeamComputer",
   deregisterHostFromAccount: "runnerHost:hosts:deregisterFromAccount",
   // The team's soundtrack set on a staging build, with its samples' links
   // signed: `electron-main/soundtrack/`. Only main holds the key.
   readSoundtrackSet: "runnerHost:soundtrack:readSet",
+  // A recording of the music, on a build that is not production: main owns
+  // the folder and the names (`electron-main/soundtrack/session-recordings.ts`).
+  openSoundtrackRecording: "runnerHost:soundtrack:recording:open",
+  appendSoundtrackRecording: "runnerHost:soundtrack:recording:append",
+  closeSoundtrackRecording: "runnerHost:soundtrack:recording:close",
+  revealSoundtrackRecording: "runnerHost:soundtrack:recording:reveal",
   // The sandbox control plane (traycer-server `/api/sandboxes`). Same CORS
   // reason as the registry calls above: traycer-server's allow-list is the web
   // dashboard origin, so the renderer cannot reach it directly.
   listSandboxes: "runnerHost:sandboxes:list",
+  // The environment directory (`/api/environments`), same reason.
+  listEnvironments: "runnerHost:environments:list",
+  // The account's auto-approve policy (`/api/traycer/auto-policy`), same reason.
+  saveAutoPolicy: "runnerHost:autoPolicy:save",
+  // A task's team-environment attachment (`/api/tasks/environment-attachment`), same reason.
+  attachTaskEnvironment: "runnerHost:tasks:attachEnvironment",
   getSandboxCosts: "runnerHost:sandboxes:costs",
   getSandboxCatalogue: "runnerHost:sandboxes:catalogue",
   // traycer-server's Traycer model catalog, for a sandbox's model picker.
   getTraycerModels: "runnerHost:traycer:models",
+  getTeamChatAutoArchive: "runnerHost:traycer:teamChatAutoArchive:get",
+  setTeamChatAutoArchive: "runnerHost:traycer:teamChatAutoArchive:set",
   // The voice session routes (traycer-server `/api/voice/sessions`): the SDP
   // exchange that opens a session, and its end. Same CORS reason as above.
   getVoiceAvailability: "runnerHost:voice:availability",
@@ -105,15 +131,16 @@ export const RunnerHostInvoke = {
   mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
   disconnectSlackApp: "runnerHost:slackApps:disconnect",
   setSlackAppDms: "runnerHost:slackApps:dms",
-  // A team environment's bot-host install token (traycer-server), likewise.
-  mintTeamHostInstallToken: "runnerHost:teamHost:installToken",
+  // A bot's settings (`/api/bots/*`), for the same reason.
+  updateBotRunSettings: "runnerHost:bots:updateRunSettings",
+  updateBotReplyMode: "runnerHost:bots:updateReplyMode",
+  deleteBot: "runnerHost:bots:delete",
   // The secrets broker (authn), from Electron main for the same reason.
   getSandboxGrants: "runnerHost:sandboxSecrets:grants",
   getTeamEnvironment: "runnerHost:environments:team",
+  replaceEnvironmentApiKey: "runnerHost:environments:replaceApiKey",
   getEnvironmentProviders: "runnerHost:environments:providers",
   decideSecretRequest: "runnerHost:sandboxSecrets:decide",
-  // The executable-write grant (authn), from Electron main for the same reason.
-  mintExecutableWriteGrant: "runnerHost:environment:mintExecutableWriteGrant",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -492,6 +519,9 @@ export const RunnerHostEvent = {
   // AND self-writes) so each renderer's reconcile worker re-reads the file. The
   // watcher itself lands in §4; the channel + preload subscription ship now.
   authTokenStoreChange: "runnerHost:event:auth:tokenStore:change",
+  hostTokensChange: "runnerHost:event:auth:hostTokens:change",
+  authSignInStorageLowChanged:
+    "runnerHost:event:auth:sign-in-storage-low-changed",
   // Terminal outcome of a device-flow attempt, keyed by `attemptId` so a
   // superseded attempt's late result can't be mistaken for the live one.
   deviceFlowResult: "runnerHost:event:deviceFlowResult",
@@ -633,6 +663,9 @@ export const RunnerHostEvent = {
   // (`HostQuitStateEvent`, fanned to every window).
   hostQuitRequest: "runnerHost:event:hostQuit:request",
   hostQuitState: "runnerHost:event:hostQuit:state",
+  // A quit asking each recording window to finish its recording while the
+  // save channels are still up (`soundtrack-recording-ipc.ts`).
+  soundtrackRecordingFinish: "runnerHost:event:soundtrack:recording:finish",
 } as const;
 
 /**
@@ -649,12 +682,18 @@ export const RunnerHostSync = {
   // same pattern that serves `windowId`). No preload-local counter exists, so
   // a reloaded preload can never repeat or reset the sequence.
   selectionAttachSeq: "runnerHost:sync:selectionAttachSeq",
+  // A person's host-token era, held by main alone: the renderer reads it at
+  // the moment work begins, so it never holds one main did not issue.
+  hostTokensEra: "runnerHost:sync:hostTokensEra",
   // `"managed"` or `"none"`: whether this app instance runs the local-host
   // lanes, pinned at boot from the lifecycle policy (restart-to-apply).
   localHostCapability: "runnerHost:sync:localHostCapability",
   // Whether this build can read the team's soundtrack set: the toggle is drawn
   // at render, before anything asynchronous could answer.
   soundtrackSourceAvailable: "runnerHost:sync:soundtrackSourceAvailable",
+  // Whether this build can save a recording of the music: true only in dev and
+  // staging. Elsewhere the recording channels are not registered at all.
+  soundtrackRecordingAvailable: "runnerHost:sync:soundtrackRecordingAvailable",
 } as const;
 
 type RunnerHostInvokeChannel =

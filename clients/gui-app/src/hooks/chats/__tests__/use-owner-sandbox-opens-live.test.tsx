@@ -94,6 +94,7 @@ function sandboxEntryOwnedBy(
     version: "0.0.0-mock",
     transportDialability: "dialable",
     publicKey: "public-key",
+    owner: null,
     relayFuseGrace: false,
     sandbox:
       sandbox === null

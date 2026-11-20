@@ -3,6 +3,7 @@ import {
   fireEvent,
   render as rtlRender,
   screen,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,17 @@ import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  drawsRobotGlyph,
+  mascotPathsAt,
+  renderedMascotPaths,
+} from "@/components/bots/__tests__/mascot-drawing";
+import {
+  EMPTY_DIRECTORY_STATE,
+  TEAM_MAIN_BOT_ID,
+  TWO_MAIN_BOTS_DIRECTORY,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 const PREFIX_RECEIVER_ID = "9600b202-1111-4111-8111-111111111111";
 const tileNavigationMocks = vi.hoisted(() => ({
@@ -807,13 +819,27 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
       receiverAgentId: string,
       receipt: { receiverAgentId: string; messageId: string } | null,
     ) {
+      renderSendWith(receiverAgentId, receipt, null, null);
+    }
+
+    function renderSendWith(
+      receiverAgentId: string,
+      receipt: { receiverAgentId: string; messageId: string } | null,
+      error: string | null,
+      delivery: {
+        targetHostId: string;
+        eventId: string;
+        state: "queued" | "delivered" | "expired" | "failed";
+        targetHostOffline: boolean;
+      } | null,
+    ) {
       render(
         <ToolSegment
           headerFindUnitId={null}
           id="a2a-send-cross"
           toolName="traycer_a2a/traycer_send_message"
           {...inputProps("traycer_a2a/traycer_send_message", {})}
-          error={null}
+          error={error}
           agentMessageSend={{
             receiverAgentId,
             message: "Please continue in the other task.",
@@ -822,7 +848,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
           }}
           managedCommand={null}
           agentMessageReceipt={receipt}
-          agentMessageDelivery={null}
+          agentMessageDelivery={delivery}
           botSendReceipt={null}
           isStreaming={false}
           endState={null}
@@ -868,6 +894,149 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
       expect(
         useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
       ).toEqual({ kind: "message", messageId: "cross-message-1" });
+    });
+
+    describe("the receiver's picture in the card's header", () => {
+      afterEach(() => {
+        useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+      });
+
+      function receiverHeader(srLabel: string): HTMLElement {
+        const header = screen.getByText(srLabel).parentElement;
+        if (header === null) throw new Error("the card has no header");
+        return header;
+      }
+
+      function resolveReceiver(bot: { botId: string; title: string } | null) {
+        peerMocks.byId[CROSS_ID] = {
+          epicId: "epic-2",
+          agentId: CROSS_ID,
+          hostId: "host-2",
+          title: bot === null ? "Cross Task Agent" : bot.title,
+          surface: "gui",
+          bot,
+        };
+        renderSend(CROSS_ID, null);
+      }
+
+      it("is the robot glyph for an agent receiver", () => {
+        resolveReceiver(null);
+
+        const picture = within(receiverHeader("Sent message")).getByTestId(
+          "a2a-peer-picture",
+        );
+        expect(picture.getAttribute("data-peer")).toBe("agent");
+        expect(picture.querySelector("svg.lucide-bot")).not.toBeNull();
+        expect(renderedMascotPaths(picture)).toEqual([]);
+      });
+
+      it("is the bot's own 16px mascot for a bot receiver, not the robot glyph", () => {
+        resolveReceiver({ botId: "bot-1", title: "Release bot" });
+
+        const picture = within(receiverHeader("Sent message")).getByTestId(
+          "a2a-peer-picture",
+        );
+        expect(picture.getAttribute("data-peer")).toBe("bot");
+        expect(renderedMascotPaths(picture)).toEqual(
+          mascotPathsAt("bot-1", false, 16),
+        );
+        expect(drawsRobotGlyph(picture)).toBe(false);
+      });
+
+      describe("when the send was not delivered or faulted", () => {
+        const UNDELIVERED = {
+          targetHostId: "host-2",
+          eventId: "evt-1",
+          state: "failed" as const,
+          targetHostOffline: true,
+        };
+
+        afterEach(() => {
+          hostDirectoryMocks.labels = new Map();
+        });
+
+        function resolveSendTo(
+          bot: { botId: string; title: string } | null,
+          error: string | null,
+          delivery: typeof UNDELIVERED | null,
+        ) {
+          hostDirectoryMocks.labels = new Map([["host-2", "Work Laptop"]]);
+          peerMocks.byId[CROSS_ID] = {
+            epicId: "epic-2",
+            agentId: CROSS_ID,
+            hostId: "host-2",
+            title: bot === null ? "Cross Task Agent" : bot.title,
+            surface: "gui",
+            bot,
+          };
+          renderSendWith(CROSS_ID, null, error, delivery);
+        }
+
+        // A bot's mascot cannot take the glyph colour, so the badge is the
+        // only cue the header gives that the send did not arrive.
+        it("keeps the not-delivered badge beside a bot receiver's mascot", () => {
+          resolveSendTo(
+            { botId: "bot-1", title: "Release bot" },
+            null,
+            UNDELIVERED,
+          );
+
+          const header = receiverHeader("Undelivered message");
+          expect(
+            within(header)
+              .getByTestId("a2a-peer-picture")
+              .getAttribute("data-peer"),
+          ).toBe("bot");
+          expect(within(header).getByText("not delivered")).toBeTruthy();
+        });
+
+        it("keeps the error badge beside a bot receiver's mascot when the send faulted", () => {
+          resolveSendTo(
+            { botId: "bot-1", title: "Release bot" },
+            "tool failed: receiver unreachable",
+            null,
+          );
+
+          const header = receiverHeader("Sent message");
+          expect(
+            within(header)
+              .getByTestId("a2a-peer-picture")
+              .getAttribute("data-peer"),
+          ).toBe("bot");
+          expect(within(header).getByText("error")).toBeTruthy();
+        });
+
+        it("colours an agent receiver's robot glyph destructive when undelivered", () => {
+          resolveSendTo(null, null, UNDELIVERED);
+
+          const glyph = within(receiverHeader("Undelivered message"))
+            .getByTestId("a2a-peer-picture")
+            .querySelector("svg.lucide-bot");
+          expect(glyph?.getAttribute("class")).toContain("text-destructive");
+        });
+      });
+
+      it("replaces the send arrow the header carried", () => {
+        resolveReceiver(null);
+
+        expect(
+          receiverHeader("Sent message").querySelector(
+            "svg.lucide-send-horizontal",
+          ),
+        ).toBeNull();
+      });
+
+      it("names a bot receiver as the standalone directory does, by its environment when two main bots are visible", () => {
+        useStandaloneBotsStore.setState({
+          directory: TWO_MAIN_BOTS_DIRECTORY,
+          settled: true,
+        });
+        resolveReceiver({ botId: TEAM_MAIN_BOT_ID, title: "Tracy" });
+
+        expect(
+          screen.getByRole("button", { name: "Tracy · traycerai" }),
+        ).toBeTruthy();
+      });
     });
 
     it("opens a cross-task terminal agent without parking a jump", () => {

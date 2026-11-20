@@ -31,45 +31,45 @@ export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {
       <DialogContent
         layout="banded"
         showCloseButton={false}
-        className="w-[min(92vw,30rem)] overflow-hidden sm:max-w-md"
+        className="flex w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-md"
         data-testid="install-guidance-dialog"
       >
-        <div className="flex min-w-0 items-start gap-3 p-5">
+        <div className="flex min-w-0 shrink-0 items-start gap-3 p-5">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-info/10 text-info-foreground">
             <Terminal className="size-4" aria-hidden />
           </div>
-          <div className="min-w-0 flex-1 space-y-3">
-            <div className="space-y-1.5">
-              <DialogTitle>Finish updating Traycer</DialogTitle>
-              <DialogDescription>{guidance.summary}</DialogDescription>
-            </div>
-
-            <ol className="list-decimal space-y-1 pl-4 text-ui-sm text-foreground">
-              {guidance.steps.map((step) => (
-                <li key={step}>{step}</li>
-              ))}
-            </ol>
-
-            {guidance.command === null ? null : (
-              <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-foreground/5 px-3 py-2">
-                <code
-                  className="min-w-0 flex-1 truncate font-mono text-code-xs"
-                  data-testid="install-guidance-command"
-                >
-                  {guidance.command}
-                </code>
-                <CopyTextButton
-                  value={guidance.command}
-                  label={null}
-                  ariaLabel="Copy command"
-                  disabled={false}
-                />
-              </div>
-            )}
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <DialogTitle>Finish updating Traycer</DialogTitle>
+            <DialogDescription>{guidance.summary}</DialogDescription>
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
+        <div className="min-h-0 min-w-0 space-y-3 overflow-y-auto px-5 pb-5">
+          <ol className="list-decimal space-y-1 pl-4 text-ui-sm text-foreground">
+            {guidance.steps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+
+          {guidance.command === null ? null : (
+            <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-foreground/5 px-3 py-2">
+              <code
+                className="min-w-0 flex-1 truncate font-mono text-code-xs"
+                data-testid="install-guidance-command"
+              >
+                {guidance.command}
+              </code>
+              <CopyTextButton
+                value={guidance.command}
+                label={null}
+                ariaLabel="Copy command"
+                disabled={false}
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
           <Button
             type="button"
             variant="muted"

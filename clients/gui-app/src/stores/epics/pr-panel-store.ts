@@ -23,6 +23,13 @@ const DEFAULT_PR_STATE_FILTER: PrStateFilter = "open";
 export interface PrPanelStore {
   readonly stateFilter: PrStateFilter;
   readonly setStateFilter: (stateFilter: PrStateFilter) => void;
+  /**
+   * The search query, per Epic view tab and never persisted: a query is about
+   * the moment, not a standing preference. Held here rather than in the
+   * panel so switching to another sidebar panel and back keeps it.
+   */
+  readonly searchQueryByTabId: Readonly<Record<string, string>>;
+  readonly setSearchQuery: (tabId: string, query: string) => void;
 }
 
 export const PR_PANEL_PERSIST_KEY = persistKey(STORE_KEYS.prPanel);
@@ -76,6 +83,16 @@ export const usePrPanelStore = create<PrPanelStore>()(
           state.stateFilter === stateFilter ? state : { stateFilter },
         );
       },
+      searchQueryByTabId: {},
+      setSearchQuery: (tabId, query) => {
+        set((state) => {
+          const { [tabId]: _previous, ...rest } = state.searchQueryByTabId;
+          return {
+            searchQueryByTabId:
+              query === "" ? rest : { ...rest, [tabId]: query },
+          };
+        });
+      },
     }),
     {
       ...basePersistOptions(PR_PANEL_PERSIST_KEY),
@@ -98,3 +115,7 @@ export const usePrPanelStore = create<PrPanelStore>()(
     },
   ),
 );
+
+export function usePrPanelSearchQuery(tabId: string): string {
+  return usePrPanelStore((state) => state.searchQueryByTabId[tabId] ?? "");
+}

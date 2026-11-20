@@ -379,7 +379,7 @@ export const DEFAULT_ARRANGEMENT: LayoutArrangement = {
   usageSide: "left",
   resourceHost: "status-bar",
   resourceSide: "right",
-  minimapSide: "left",
+  minimapSide: "right",
   statusBarParked: [],
   pinnedContextFieldOrder: CONTEXT_USAGE_ROW_KEYS,
   mobileFooter: false,

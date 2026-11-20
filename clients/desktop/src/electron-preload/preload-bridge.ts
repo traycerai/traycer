@@ -3,7 +3,11 @@ import { contextBridge } from "electron";
 import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
 import { readInitialRouteArg } from "../ipc-contracts/window-bootstrap";
-import { buildAuthBridge, buildAuthTokenStoreBridge } from "./auth-bridge";
+import {
+  buildAuthBridge,
+  buildAuthTokenStoreBridge,
+  buildHostTokensBridge,
+} from "./auth-bridge";
 import { buildDeviceFlowBridge } from "./device-flow-bridge";
 import { buildHostBridge } from "./host-bridge";
 import {
@@ -38,6 +42,7 @@ import {
   buildHostLifecycleBridge,
   readLocalHostCapability,
 } from "./host-lifecycle-bridge";
+import { buildSoundtrackRecordingBridge } from "./soundtrack-recording-bridge";
 import { readSyncBoolean, readSyncString } from "./sync-bootstrap";
 
 /**
@@ -75,6 +80,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   sentryRendererDsn,
   ...buildAuthBridge(),
   tokenStore: buildAuthTokenStoreBridge(),
+  hostTokens: buildHostTokensBridge(),
   deviceFlow: buildDeviceFlowBridge(),
   ...buildHostBridge(),
   ...buildTrayBridge(),
@@ -105,6 +111,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
     RunnerHostSync.soundtrackSourceAvailable,
     false,
   ),
+  soundtrackRecording: buildSoundtrackRecordingBridge(),
   hostTray: buildHostTrayCommandSubscriber(),
   hostControllerStatus: buildHostControllerStatusSubscriber(),
 });

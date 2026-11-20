@@ -158,7 +158,8 @@ describe("visibility of the five environments-redesign kinds", () => {
       }
       // `notification.hooks.removed` is origin-store only from list @2.5 /
       // feed @1.7, and `feedback.drafted` arrives at list @2.6 / feed @1.8 /
-      // cloudFeed @1.7; past the retired kinds, nothing else is hidden.
+      // cloudFeed @1.7. Retirement notices are cloud-only from @1.8,
+      // so these older cloud buckets and every local read still hide them.
       expect(
         hidden.filter(
           (kind) =>
@@ -166,7 +167,7 @@ describe("visibility of the five environments-redesign kinds", () => {
             kind !== "notification.hooks.removed" &&
             kind !== "feedback.drafted",
         ),
-      ).toEqual([]);
+      ).toEqual(["access.readonly.retired"]);
     },
   );
 

@@ -90,12 +90,43 @@ function currentAt(scroll: number, scrollLength: number): number | null {
       scrollLength,
       positionAtIndex: (index) => POSITIONS[index],
       sizeAtIndex: () => 100,
+      atEnd: false,
+    },
+    TURNS,
+  );
+}
+
+// A channel's tail: three one-line queries, each over a reply, the last reply
+// long. Scrolled to the end, the viewport holds the second and third queries
+// in full above the long last reply.
+const TAIL_ROW_TOPS = [0, 80, 600, 680, 900, 980] as const;
+const TAIL_ROW_SIZES = [80, 520, 80, 220, 80, 420] as const;
+const TAIL_VIEWPORT = 820;
+const TAIL_END_SCROLL = 1400 - TAIL_VIEWPORT;
+
+function tailCurrentAt(atEnd: boolean): number | null {
+  return resolveChatTurnMinimapCurrentIndex(
+    {
+      scroll: TAIL_END_SCROLL,
+      scrollLength: TAIL_VIEWPORT,
+      positionAtIndex: (index) => TAIL_ROW_TOPS[index],
+      sizeAtIndex: (index) => TAIL_ROW_SIZES[index],
+      atEnd,
     },
     TURNS,
   );
 }
 
 describe("chat turn minimap logic", () => {
+  it("marks the last turn at the end, over queries visible above its reply", () => {
+    expect(tailCurrentAt(true)).toBe(2);
+  });
+
+  it("takes the end from the timeline's signal, not the geometry", () => {
+    // The same pixels without the signal keep the query rule's answer.
+    expect(tailCurrentAt(false)).toBe(1);
+  });
+
   it("uses the user query whose full turn occupies most of the viewport", () => {
     expect(currentAt(330, 300)).toBe(1);
     expect(currentAt(720, 70)).toBe(2);

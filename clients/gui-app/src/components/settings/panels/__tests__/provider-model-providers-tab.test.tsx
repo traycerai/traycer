@@ -1,9 +1,10 @@
 import type {
+  ModelProviderAuthAction,
   ModelProviderAuthResult,
-  ModelProviderEntry,
   ModelProvidersListResult,
   ProviderModelProvidersCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
+import type { ModelProviderAuthVariables } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 
 /**
  * The callbacks the tab hands `mutate`, named so a test can fire one by hand.
@@ -18,6 +19,11 @@ type AuthMutateOptions = {
   }) => void;
   readonly onSettled: () => void;
 };
+
+type CustomProviderAuthAction = Extract<
+  ModelProviderAuthAction,
+  { readonly action: "createCustom" | "updateCustom" }
+>;
 import {
   act,
   cleanup,
@@ -29,6 +35,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sortModelProviderEntries } from "@/components/settings/panels/model-provider-connect-model";
 import { ProviderModelProvidersTab } from "@/components/settings/panels/provider-model-providers-tab";
 import { useModelProviderPendingAuthStore } from "@/stores/settings/model-provider-pending-auth-store";
+import { entry, FULL_CAPS } from "./provider-model-providers-tab-test-support";
 
 const hostMocks = vi.hoisted(() => ({
   listResult: null as ModelProvidersListResult | null,
@@ -36,13 +43,31 @@ const hostMocks = vi.hoisted(() => ({
   listFetching: false,
   listError: null as string | null,
   refetch: vi.fn(),
-  authMutate: vi.fn<(payload: unknown, options: AuthMutateOptions) => void>(),
+  authMutate:
+    vi.fn<
+      (payload: ModelProviderAuthVariables, options: AuthMutateOptions) => void
+    >(),
+  authActions: [] as ModelProviderAuthAction[],
   authIsPending: false,
   awaitMutate: vi.fn(),
   cancelMutate: vi.fn(),
   openLink: vi.fn(),
   /** What `useHostCredentialRefusal` answers; `null` is a host that takes credentials. */
   credentialRefusal: null as string | null,
+  /** Whether the host reads and writes the picker list (draws the switch). */
+  visibilitySupported: false,
+  hiddenIds: new Set<string>(),
+  settlingIds: new Set<string>(),
+  setShown: vi.fn<(modelProviderId: string, shown: boolean) => void>(),
+}));
+
+vi.mock("@/hooks/providers/use-model-provider-visibility", () => ({
+  useModelProviderVisibility: () => ({
+    supported: hostMocks.visibilitySupported,
+    isShown: (id: string) => !hostMocks.hiddenIds.has(id),
+    isSettling: (id: string) => hostMocks.settlingIds.has(id),
+    setShown: hostMocks.setShown,
+  }),
 }));
 
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
@@ -81,8 +106,31 @@ vi.mock("@/hooks/providers/use-providers-model-providers-list-query", () => ({
 }));
 
 vi.mock("@/hooks/providers/use-providers-model-provider-auth-mutation", () => ({
-  useProvidersModelProviderAuth: () => ({
-    mutate: hostMocks.authMutate,
+  useProvidersModelProviderAuth: (
+    readAction:
+      | ((
+          target: ModelProviderAuthVariables["action"],
+        ) => ModelProviderAuthAction)
+      | null,
+    clearActionInput: (() => void) | null,
+  ) => ({
+    mutate: (
+      variables: ModelProviderAuthVariables,
+      options: AuthMutateOptions,
+    ) => {
+      const action =
+        variables.action.action === "disconnect"
+          ? variables.action
+          : (readAction?.(variables.action) ?? null);
+      if (action !== null) hostMocks.authActions.push(action);
+      hostMocks.authMutate(variables, {
+        ...options,
+        onSettled: () => {
+          options.onSettled();
+          clearActionInput?.();
+        },
+      });
+    },
     isPending: hostMocks.authIsPending,
   }),
 }));
@@ -111,25 +159,6 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => hostMocks.openLink,
 }));
 
-const FULL_CAPS: ProviderModelProvidersCapabilities = {
-  actions: ["connect", "oauth", "disconnect"],
-};
-
-function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
-  return {
-    id: "anthropic",
-    name: "Anthropic",
-    source: null,
-    hasStoredCredential: false,
-    canDisconnect: false,
-    configDeclaredCustom: false,
-    custom: null,
-    connected: false,
-    methods: [],
-    ...overrides,
-  };
-}
-
 function renderTab(args: {
   readonly result: ModelProvidersListResult | null;
   readonly capabilities: ProviderModelProvidersCapabilities;
@@ -141,7 +170,31 @@ function renderTab(args: {
       providerLabel="OpenCode"
       capabilities={args.capabilities}
       packPreparing={null}
+      hiddenModelProviders={undefined}
     />,
+  );
+}
+
+function outgoingCustomActionMatches(
+  index: number,
+  expected: CustomProviderAuthAction,
+): boolean {
+  const action = hostMocks.authActions.at(index);
+  if (
+    action === undefined ||
+    (action.action !== "createCustom" && action.action !== "updateCustom")
+  ) {
+    return false;
+  }
+  return (
+    action.action === expected.action &&
+    action.modelProviderId === expected.modelProviderId &&
+    action.name === expected.name &&
+    action.baseUrl === expected.baseUrl &&
+    JSON.stringify(action.models) === JSON.stringify(expected.models) &&
+    JSON.stringify(action.headers) === JSON.stringify(expected.headers) &&
+    action.key === expected.key &&
+    JSON.stringify(action.env) === JSON.stringify(expected.env)
   );
 }
 
@@ -153,10 +206,15 @@ beforeEach(() => {
   hostMocks.authIsPending = false;
   hostMocks.refetch.mockReset();
   hostMocks.authMutate.mockReset();
+  hostMocks.authActions.length = 0;
   hostMocks.awaitMutate.mockReset();
   hostMocks.cancelMutate.mockReset();
   hostMocks.openLink.mockReset();
   hostMocks.credentialRefusal = null;
+  hostMocks.visibilitySupported = false;
+  hostMocks.hiddenIds = new Set();
+  hostMocks.settlingIds = new Set();
+  hostMocks.setShown.mockReset();
   useModelProviderPendingAuthStore.setState({ entries: {} });
 });
 
@@ -166,9 +224,8 @@ afterEach(() => {
 
 describe("sortModelProviderEntries", () => {
   it("puts connected providers first, then sorts by name", () => {
-    // One list, not two sections: search has to be able to find a connected
-    // provider, and a "connected" section above a searchable catalog is exactly
-    // the shape where it cannot.
+    // Connected first: the tab splits them into their own card, and search
+    // ranks within each card in this order.
     const sorted = sortModelProviderEntries([
       entry({ id: "zzz", name: "Zed" }),
       entry({ id: "openai", name: "OpenAI", connected: true, source: "api" }),
@@ -185,6 +242,83 @@ describe("sortModelProviderEntries", () => {
 });
 
 describe("ProviderModelProvidersTab list states", () => {
+  it("splits connected and all providers, counts connected rows, and gates switches", () => {
+    const result = {
+      ok: true as const,
+      providers: [
+        entry({
+          id: "connected-a",
+          name: "Connected A",
+          connected: true,
+          source: "api",
+        }),
+        entry({
+          id: "connected-b",
+          name: "Connected B",
+          connected: true,
+          source: "env",
+        }),
+        entry({
+          id: "connected-c",
+          name: "Connected C",
+          connected: true,
+          source: "api",
+        }),
+        entry({ id: "available", name: "Available" }),
+      ],
+    };
+    hostMocks.visibilitySupported = true;
+    hostMocks.settlingIds = new Set(["connected-a"]);
+    hostMocks.hiddenIds = new Set(["connected-b"]);
+    renderTab({ result, capabilities: FULL_CAPS });
+
+    expect(screen.getByRole("heading", { name: /Connected/ }).textContent).toBe(
+      "Connected3",
+    );
+    expect(screen.getByRole("heading", { name: "All providers" })).toBeTruthy();
+    const switches = screen.getAllByRole("switch");
+    expect(switches).toHaveLength(3);
+    expect(
+      screen
+        .getByRole("switch", { name: "Show Connected A in Traycer" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("switch", { name: "Show Connected B in Traycer" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen.queryByRole("switch", { name: "Show Available in Traycer" }),
+    ).toBeNull();
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show Connected C in Traycer" }),
+    );
+    expect(hostMocks.setShown).toHaveBeenCalledWith("connected-c", false);
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show Connected B in Traycer" }),
+    );
+    expect(hostMocks.setShown).toHaveBeenCalledWith("connected-b", true);
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show Connected A in Traycer" }),
+    );
+    expect(hostMocks.setShown).not.toHaveBeenCalledWith("connected-a", false);
+  });
+
+  it("shows the visibility description only when the host supports it", () => {
+    const result = { ok: true as const, providers: [entry({})] };
+    renderTab({ result, capabilities: FULL_CAPS });
+    expect(
+      screen.queryByText(/Turn a provider off to hide its models in Traycer/),
+    ).toBeNull();
+    cleanup();
+    hostMocks.visibilitySupported = true;
+    renderTab({ result, capabilities: FULL_CAPS });
+    expect(
+      screen.getByText(/Turn a provider off to hide its models in Traycer/),
+    ).toBeTruthy();
+  });
+
   it("SAYS it is refreshing rather than letting stale rows look final", () => {
     // The host rotates its managed server on every write, so the refetch after
     // a mutation pays a cold `opencode serve` boot - seconds, against the
@@ -278,6 +412,7 @@ describe("ProviderModelProvidersTab list states", () => {
           reason: null,
           fallbackRunnable: false,
         }}
+        hiddenModelProviders={undefined}
       />,
     );
     expect(screen.getByText("Preparing OpenCode… 42%")).toBeTruthy();
@@ -301,6 +436,31 @@ describe("ProviderModelProvidersTab list states", () => {
     });
     expect(screen.getByText("Groq")).toBeTruthy();
     expect(screen.queryByText("OpenAI")).toBeNull();
+  });
+
+  it("searches across both cards with one query", () => {
+    renderTab({
+      result: {
+        ok: true,
+        providers: [
+          entry({
+            id: "connected-openai",
+            name: "OpenAI Connected",
+            connected: true,
+            source: "api",
+          }),
+          entry({ id: "available-openai", name: "OpenAI Available" }),
+          entry({ id: "groq", name: "Groq" }),
+        ],
+      },
+      capabilities: FULL_CAPS,
+    });
+    fireEvent.change(screen.getByLabelText("Search providers"), {
+      target: { value: "openai" },
+    });
+    expect(screen.getByText("OpenAI Connected")).toBeTruthy();
+    expect(screen.getByText("OpenAI Available")).toBeTruthy();
+    expect(screen.queryByText("Groq")).toBeNull();
   });
 });
 
@@ -726,7 +886,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
-      action: {
+      action: { action: "createCustom", modelProviderId: "my-gateway" },
+    });
+    expect(
+      outgoingCustomActionMatches(0, {
         action: "createCustom",
         modelProviderId: "my-gateway",
         name: "My gateway",
@@ -737,8 +900,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         // Untouched key field, so no env instruction at all - a declaration
         // that never mentioned env has nothing to clear.
         env: null,
-      },
-    });
+      }),
+    ).toBe(true);
   });
 
   it("says DISABLE, not remove, when disconnecting a declared custom provider", () => {
@@ -816,7 +979,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
-      action: {
+      action: { action: "updateCustom", modelProviderId: "my-gateway" },
+    });
+    expect(
+      outgoingCustomActionMatches(0, {
         action: "updateCustom",
         modelProviderId: "my-gateway",
         name: "My gateway v2",
@@ -828,8 +994,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         headers: [],
         key: null,
         env: null,
-      },
-    });
+      }),
+    ).toBe(true);
   });
 
   it("shows the host's refusal when a removal-shaped update reaches it", () => {
@@ -1047,7 +1213,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     );
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
-      action: {
+      action: { action: "updateCustom", modelProviderId: "my-gateway" },
+    });
+    expect(
+      outgoingCustomActionMatches(0, {
         action: "updateCustom",
         modelProviderId: "my-gateway",
         name: "My gateway",
@@ -1060,8 +1229,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         // would arrive as the wire's CLEAR signal - deleting a declaration
         // because a button that means "turn it on" said nothing about env.
         env: null,
-      },
-    });
+      }),
+    ).toBe(true);
   });
 
   it("offers Edit but NOT one-click re-enable for a broken declaration", () => {
@@ -1366,16 +1535,14 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     // tree at all. That inertness is Radix's and it ends when the dialog closes
     // - the disabled state asserted here is OURS, and it has to hold on its own
     // rather than leaning on a modal that is about to go away.
-    for (const label of ["Re-enable Gateway B", "Edit Gateway B"]) {
+    for (const label of [
+      "Re-enable Gateway B",
+      "Edit Gateway B",
+      "Add custom provider",
+    ]) {
       const button = document.querySelector(`button[aria-label="${label}"]`);
       expect(button?.hasAttribute("disabled")).toBe(true);
     }
-    expect(
-      screen
-        .getByText("Add custom provider")
-        .closest("button")
-        ?.hasAttribute("disabled"),
-    ).toBe(true);
   });
 
   it("closes a PLAIN Config row's Disconnect during a config write", () => {
@@ -1675,14 +1842,13 @@ describe("ProviderModelProvidersTab layout", () => {
     expect(search.closest(".sticky")).toBeNull();
     const tab = screen.getByTestId("provider-model-providers-tab");
     expect(tab.querySelector(".bg-card\\/40")).toBeNull();
-    // Still a sibling above the list rather than inside it - the list's own
-    // first row belongs to Add custom provider.
+    // Still a sibling above the list rather than inside it.
     expect(
       search.compareDocumentPosition(screen.getByTestId("model-provider-list")),
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
-  it("keeps Add custom provider as the FIRST item, inside the list", () => {
+  it("keeps Add custom provider beside the search, above the cards", () => {
     renderTab({
       result: {
         ok: true,
@@ -1690,11 +1856,14 @@ describe("ProviderModelProvidersTab layout", () => {
       },
       capabilities: { actions: ["connect", "createCustom"] },
     });
-    const list = screen.getByTestId("model-provider-list");
+    const search = screen.getByPlaceholderText(/Search/);
     const add = screen.getByRole("button", { name: "Add custom provider" });
-    // Inside, so it scrolls with the content rather than pinning above it.
-    expect(list.contains(add)).toBe(true);
-    expect(list.firstElementChild?.contains(add)).toBe(true);
+    // One row with the search, so a query never scrolls it out of reach, and
+    // never inside a card, where it would read as a provider.
+    expect(add.parentElement?.contains(search)).toBe(true);
+    expect(
+      add.compareDocumentPosition(screen.getByTestId("model-provider-list")),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 });
 

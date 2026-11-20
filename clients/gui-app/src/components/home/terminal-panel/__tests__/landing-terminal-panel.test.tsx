@@ -477,6 +477,10 @@ import {
   readStagedSandbox,
   useStagedSandboxStore,
 } from "@/stores/composer/staged-sandbox-store";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 
 const TEST_LANDING_PAGE_ID = "test-landing-page";
@@ -829,6 +833,7 @@ describe("<LandingTerminalPanel />", () => {
     resetTerminalFocusRegistryForTests();
     runStagedSandbox.mockClear();
     useStagedSandboxStore.setState({ bySurface: {} });
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useSurfaceHostSelectionStore.getState().resetForTests();
     mocks.activeHostId = null;
     mocks.placementHostId = null;
@@ -1212,7 +1217,7 @@ describe("<LandingTerminalPanel />", () => {
     );
   });
 
-  it("isolates resized width between landing pages", () => {
+  it("opens a new landing page at the last width, then keeps each page's own width", () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
@@ -1221,21 +1226,30 @@ describe("<LandingTerminalPanel />", () => {
     const view = render(panelUiForDraft("draft-b"));
 
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
-    const resizeHandle = screen.getByTestId("landing-terminal-resize-handle");
-    fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" });
+    fireEvent.keyDown(screen.getByTestId("landing-terminal-resize-handle"), {
+      key: "ArrowLeft",
+    });
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "39%",
     );
 
+    // A page that never recorded a layout opens at the width just chosen.
     view.rerender(panelUiForDraft("draft-a"));
     expect(screen.getByTestId("landing-terminal-panel").style.marginRight).toBe(
-      "-36%",
+      "-39%",
     );
     fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
+      "39%",
+    );
+    fireEvent.keyDown(screen.getByTestId("landing-terminal-resize-handle"), {
+      key: "ArrowRight",
+    });
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "36%",
     );
 
+    // Resizing that page leaves the other page's recorded width alone.
     view.rerender(panelUiForDraft("draft-b"));
     expect(screen.getByTestId("landing-terminal-panel").style.width).toBe(
       "39%",
@@ -2069,6 +2083,48 @@ describe("<LandingTerminalPanel />", () => {
     });
     expect(useLandingPanelStore.getState().tabs).toHaveLength(0);
     expect(screen.queryByTestId("landing-new-tab-chooser")).toBeNull();
+  });
+
+  it("leaves the window's staged sandbox alone when the draft was opened for one host: Terminal never takes it", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = null;
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = emptyList("/Users/dev");
+    useLandingDraftStore.getState().installLandingDraft({
+      id: TEST_LANDING_PAGE_ID,
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+      selection: null,
+      lastTouchedAt: 1,
+      settings: null,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+      returnedSandbox: null,
+      namedHostId: "host-a",
+      durability: "in-memory",
+    });
+    useStagedSandboxStore.getState().stage(COMPOSER_SURFACE, {
+      kind: "existing",
+      hostId: "host-sbx",
+      sandboxId: "sbx-1",
+      name: "build-box",
+      configuration: { kind: "personal" },
+      verb: "resume",
+    });
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await pickTerminalFromChooser();
+    await act(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    });
+
+    expect(runStagedSandbox).not.toHaveBeenCalled();
+    expect(readStagedSandbox(COMPOSER_SURFACE)).toMatchObject({
+      sendTaken: false,
+    });
+    expect(readStagedSandbox(COMPOSER_SURFACE)?.openTerminal).not.toBe(true);
   });
 
   it("asks for the terminal on a staged sandbox that is up with settings that did not apply, starting nothing", async () => {
@@ -5771,7 +5827,7 @@ describe("<LandingTerminalPanel />", () => {
       "transition-[margin-right,visibility]",
     );
     const pickerInput = screen.getByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     await waitFor(() => {
       expect(document.activeElement).toBe(pickerInput);
@@ -5866,7 +5922,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.new", fakeKeybindingRouter());
     });
     await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     setPrimaryFocusInteractionActive(true);
     fireEvent.click(screen.getByText("/workspace/other"));
@@ -5914,7 +5970,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.new", fakeKeybindingRouter());
     });
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
     fireEvent.keyDown(pickerInput, { key: "Enter" });
@@ -5966,7 +6022,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     pinnedHostId = "host-b";
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
@@ -5995,7 +6051,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     mocks.mutableWorkspacePaths.splice(1, 1);
     fireEvent.click(screen.getByText("/workspace/other"));
@@ -6022,7 +6078,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     mocks.queryClient.fetchQuery.mockRejectedValue(new Error("offline"));
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
@@ -6057,7 +6113,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     fireEvent.keyDown(pickerInput, { key: "ArrowDown" });
     fireEvent.keyDown(pickerInput, { key: "Enter" });
@@ -6100,7 +6156,7 @@ describe("<LandingTerminalPanel />", () => {
     view.rerender(panelUi());
 
     const pickerInput = screen.getByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     await waitFor(() => {
       expect(
@@ -6171,7 +6227,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.toggle", router);
     });
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     await waitFor(() => {
       expect(document.activeElement).toBe(pickerInput);
@@ -6204,7 +6260,7 @@ describe("<LandingTerminalPanel />", () => {
 
     const createInOther = async (): Promise<void> => {
       const pickerInput = await screen.findByRole("combobox", {
-        name: "Create terminal in workspace",
+        name: "Create terminal in folder",
       });
       await waitFor(() => {
         expect(document.activeElement).toBe(pickerInput);
@@ -6280,7 +6336,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.new", router);
     });
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     fireEvent.keyDown(pickerInput, { key: "Escape" });
 
@@ -6311,7 +6367,7 @@ describe("<LandingTerminalPanel />", () => {
     });
     fireEvent.keyDown(
       await screen.findByRole("combobox", {
-        name: "Create terminal in workspace",
+        name: "Create terminal in folder",
       }),
       { key: "Enter" },
     );
@@ -6329,7 +6385,7 @@ describe("<LandingTerminalPanel />", () => {
       dispatchAction("app.terminal.new", router);
     });
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     await waitFor(() => {
       expect(document.activeElement).toBe(pickerInput);
@@ -6364,7 +6420,7 @@ describe("<LandingTerminalPanel />", () => {
 
     await pickTerminalFromChooser();
     const pickerInput = await screen.findByRole("combobox", {
-      name: "Create terminal in workspace",
+      name: "Create terminal in folder",
     });
     // The chooser is still mounted UNDER the picker, hidden. It must not pull
     // the keyboard back out of the picker while it is up.

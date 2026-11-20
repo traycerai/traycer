@@ -364,7 +364,7 @@ type OwnedForwardPresentation = {
   /** Why a forward is not carrying traffic, when that is a separate fact. */
   readonly note: string | null;
   readonly action: "Stop" | "Clear";
-  readonly endpoints: string | null;
+  readonly endpoints: string;
   readonly received: string | null;
   readonly sent: string | null;
 };
@@ -377,8 +377,8 @@ type OwnedForwardPresentation = {
  * request, not as somewhere to point a browser; a stopped one is a record
  * waiting for its release to be answered, with nothing to stop.
  *
- * Endpoints and byte counters sit in the row's Details. The row itself is the
- * name, the port, the state, and one direction line.
+ * Endpoints and byte counters stay visible below the name and state. Each
+ * line wraps independently so the action remains reachable on narrow panels.
  */
 function presentOwnedForward(
   forward: OwnedPortForward,
@@ -507,12 +507,11 @@ function OwnedForwardRow(props: {
             {shown.note}
           </span>
         )}
-        <ForwardDetails
-          testId={`host-port-forward-owned-details-${forward.forwardId}`}
-          endpoints={shown.endpoints}
-          received={shown.received}
-          sent={shown.sent}
-        />
+        <span className="min-w-0 wrap-anywhere text-ui-xs text-muted-foreground">
+          {shown.endpoints}
+          {shown.received === null ? null : ` · ${shown.received} in`}
+          {shown.sent === null ? null : ` · ${shown.sent} out`}
+        </span>
       </div>
       <Button
         type="button"
@@ -533,48 +532,6 @@ function OwnedForwardRow(props: {
         {shown.action}
       </Button>
     </li>
-  );
-}
-
-function ForwardDetails(props: {
-  readonly testId: string;
-  readonly endpoints: string | null;
-  readonly received: string | null;
-  readonly sent: string | null;
-}): ReactNode {
-  if (
-    props.endpoints === null &&
-    props.received === null &&
-    props.sent === null
-  ) {
-    return null;
-  }
-  return (
-    <details className="min-w-0" data-testid={props.testId}>
-      <summary className="cursor-pointer text-ui-xs text-muted-foreground">
-        Details
-      </summary>
-      <dl className="mt-1 flex min-w-0 flex-col gap-1 text-ui-xs text-muted-foreground">
-        {props.endpoints === null ? null : (
-          <div className="min-w-0">
-            <dt>Endpoints</dt>
-            <dd className="break-words">{props.endpoints}</dd>
-          </div>
-        )}
-        {props.received === null ? null : (
-          <div className="min-w-0">
-            <dt>Received</dt>
-            <dd className="break-words">{props.received}</dd>
-          </div>
-        )}
-        {props.sent === null ? null : (
-          <div className="min-w-0">
-            <dt>Sent</dt>
-            <dd className="break-words">{props.sent}</dd>
-          </div>
-        )}
-      </dl>
-    </details>
   );
 }
 

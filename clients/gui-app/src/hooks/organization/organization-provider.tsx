@@ -19,7 +19,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
@@ -47,12 +47,19 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { organizationKeys } from "@/lib/query-keys/organization-query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { useTabsStore } from "@/stores/tabs/store";
-import { DEFAULT_TAB_CUSTOMIZATION } from "@/stores/tabs/tab-groups";
+import {
+  DEFAULT_TAB_CUSTOMIZATION,
+  type TabCustomization,
+  type TabGroup,
+} from "@/stores/tabs/tab-groups";
+import { useAppearanceEdits } from "./use-appearance-edits";
 
 const EMPTY_TASK_IDS: string[] = [];
 
 interface OrganizationLifecycle {
   readonly seenFailures: Set<string>;
+  readonly commandsBeforeBaseline: Set<string>;
+  failuresInitialized: boolean;
   confirmedView: OrganizationView | null;
 }
 
@@ -102,24 +109,50 @@ export function OrganizationProvider({
       identityScope.current = null;
     };
   }, [hostId, userId, accountUserId]);
-  const { mutate: revalidateIdentity } = useMutation({
-    mutationKey: authMutationKeys.revalidateContextAfterInvalidation(userId),
-    mutationFn: (expected: OrganizationIdentityScope) => {
-      const account = useAuthStore.getState();
-      if (
-        identityScope.current !== expected ||
-        expected.userId === null ||
-        client.getActiveHostId() !== expected.hostId ||
-        client.getRequestContextUserId() !== expected.userId ||
-        account.contextMetadata?.userId !== expected.userId ||
-        !authorizesCloudCapability(account.status)
-      )
-        return Promise.resolve(null);
-      return auth.revalidateCurrentContextAfterInvalidation();
+  const queryClient = useQueryClient();
+  // Read at call time, so the re-read keeps one identity, and with it
+  // `accept` and every subscription effect that depends on it.
+  const latestAuth = useRef(auth);
+  useLayoutEffect(() => {
+    latestAuth.current = auth;
+  }, [auth]);
+  // A mutation with no observer: the cache still records it under its key,
+  // but nothing here subscribes to its pending and settled states, which
+  // during an import moved every few seconds and re-rendered this provider
+  // and everything it draws on each time.
+  const revalidateIdentity = useCallback(
+    (expected: OrganizationIdentityScope): void => {
+      void queryClient
+        .getMutationCache()
+        .build(queryClient, {
+          mutationKey: authMutationKeys.revalidateContextAfterInvalidation(
+            expected.userId,
+          ),
+          mutationFn: (scope: OrganizationIdentityScope) => {
+            const account = useAuthStore.getState();
+            if (
+              identityScope.current !== scope ||
+              scope.userId === null ||
+              client.getActiveHostId() !== scope.hostId ||
+              client.getRequestContextUserId() !== scope.userId ||
+              account.contextMetadata?.userId !== scope.userId ||
+              !authorizesCloudCapability(account.status)
+            )
+              return Promise.resolve(null);
+            return latestAuth.current.revalidateCurrentContextAfterInvalidation();
+          },
+          retry: false,
+        })
+        .execute(expected)
+        .catch(() => undefined);
     },
-    retry: false,
-  });
+    [client, queryClient],
+  );
   const scope = `${hostId}:${userId}`;
+  const lifecycle = useRef<OrganizationLifecycle | null>(null);
+  useLayoutEffect(() => {
+    lifecycle.current = createLifecycle();
+  }, [scope]);
   useLayoutEffect(() => {
     if (accountUserId === null) return;
     const state = useTabsStore.getState();
@@ -144,7 +177,6 @@ export function OrganizationProvider({
   // whose request context belongs to someone else must never be drawn.
   const ownAccount = userId !== null && userId === accountUserId;
   const supported = hostSupport === true && authorized && ownAccount;
-  const queryClient = useQueryClient();
   const key = useMemo(
     () => organizationKeys.view(hostId, userId),
     [hostId, userId],
@@ -168,16 +200,20 @@ export function OrganizationProvider({
         return next;
       });
   }, []);
-  const taskIds = useMemo(
-    () => [...new Set([...requests.values()].flat())].sort(),
-    [requests],
-  );
+  const requestedTasks = [...new Set([...requests.values()].flat())]
+    .sort()
+    .join(",");
+  // Keyed on the set's contents, not on `requests`: a control registering a
+  // task that is already subscribed must hand each subscription the same
+  // array, or it reopens its stream and replays the answer it fetched at
+  // mount over newer frames.
   const chunks = useMemo(() => {
+    const taskIds = requestedTasks === "" ? [] : requestedTasks.split(",");
     const result: string[][] = [];
     for (let i = 0; i < taskIds.length; i += 100)
       result.push(taskIds.slice(i, i + 100));
     return [EMPTY_TASK_IDS, ...result];
-  }, [taskIds]);
+  }, [requestedTasks]);
   const query = useHostQuery({
     client,
     method: "organization.read",
@@ -206,6 +242,32 @@ export function OrganizationProvider({
         if (previous !== null && previous !== next.historyInvalidation)
           revalidateIdentity(current);
       }
+      // Failure history is durable. Only fresh subscription/refresh answers
+      // establish the baseline; the read cache may predate this mount.
+      const currentLifecycle = lifecycle.current;
+      if (supported && currentLifecycle !== null) {
+        const failures = next.failures.filter((failure) => {
+          const id = failure.commandIds.join(",");
+          if (currentLifecycle.seenFailures.has(id)) return false;
+          currentLifecycle.seenFailures.add(id);
+          return (
+            currentLifecycle.failuresInitialized ||
+            failure.commandIds.some((commandId) =>
+              currentLifecycle.commandsBeforeBaseline.has(commandId),
+            )
+          );
+        });
+        currentLifecycle.failuresInitialized = true;
+        currentLifecycle.commandsBeforeBaseline.clear();
+        const failure = failures.at(-1);
+        if (failure)
+          toast.warning(
+            failure.reason === "conflict"
+              ? "Organization changed elsewhere. Your pending edits were discarded."
+              : "An organization edit couldn't be saved.",
+            { description: failure.message },
+          );
+      }
       const requestedIds = new Set(ids);
       queryClient.setQueryData<OrganizationView>(key, (previous) => ({
         ...next,
@@ -226,7 +288,7 @@ export function OrganizationProvider({
         },
       }));
     },
-    [key, queryClient, client, userId, hostId, revalidateIdentity],
+    [key, queryClient, client, userId, hostId, revalidateIdentity, supported],
   );
   const mutation = useHostMutation({
     client,
@@ -250,10 +312,14 @@ export function OrganizationProvider({
     },
   });
   const { mutateAsync } = mutation;
-  const command = useCallback(
-    async (action: OrganizationAction) => {
+  const send = useCallback(
+    async (action: OrganizationAction): Promise<string> => {
+      const commandId = crypto.randomUUID();
+      const current = lifecycle.current;
+      if (current !== null && !current.failuresInitialized)
+        current.commandsBeforeBaseline.add(commandId);
       await mutateAsync({
-        command: { commandId: crypto.randomUUID(), action },
+        command: { commandId, action },
         userId,
         hostId,
       });
@@ -263,10 +329,19 @@ export function OrganizationProvider({
       )
         throw new Error("Organization account changed.");
       retireSupersededDraftIntents(action);
+      return commandId;
     },
     [mutateAsync, client, userId, hostId],
   );
-  const lifecycle = useRef<OrganizationLifecycle | null>(null);
+  const appearance = useAppearanceEdits({ scope, view: query.data, send });
+  const { edit: editAppearance } = appearance;
+  const command = useCallback(
+    async (action: OrganizationAction): Promise<void> => {
+      if (action.kind === "appearance") return editAppearance(action);
+      await send(action);
+    },
+    [editAppearance, send],
+  );
   // How many times this provider has tried each tab's draft group intent,
   // and which of those sends has not come back - owned by one scope, and
   // replaced wholesale when the host or account changes. A send closes over
@@ -276,9 +351,6 @@ export function OrganizationProvider({
   // Opening is a local tab transition, independent of the selected host's
   // organization projection. Switching that host must not reopen closed siblings.
   const openedTasks = useRef(new Set<string>());
-  useEffect(() => {
-    lifecycle.current = createLifecycle();
-  }, [scope]);
   // The host's own recovery evidence, and the only thing that reports a
   // session reopening after a drop or a stall: the client is NOT rebuilt for
   // either, so its identity cannot stand in for this. It both gives a
@@ -338,24 +410,6 @@ export function OrganizationProvider({
   }, [query.data, supported, queryClient, lifecycle, hostId, userId]);
   useEffect(() => {
     const current = lifecycle.current;
-    if (!supported || current === null) return;
-    const failures = (query.data?.failures ?? []).filter((failure) => {
-      const id = `${userId}:${failure.commandIds.join(",")}`;
-      if (current.seenFailures.has(id)) return false;
-      current.seenFailures.add(id);
-      return true;
-    });
-    const failure = failures.at(-1);
-    if (failure)
-      toast.warning(
-        failure.reason === "conflict"
-          ? "Organization changed elsewhere. Your pending edits were discarded."
-          : "An organization edit couldn't be saved.",
-        { description: failure.message },
-      );
-  }, [query.data?.failures, userId, lifecycle, supported]);
-  useEffect(() => {
-    const current = lifecycle.current;
     if (!supported || current === null || query.data === undefined) return;
     if (!query.data.ready) return;
     // Only opening a task opens its saved siblings. A remote edit never opens or closes local tabs.
@@ -387,10 +441,24 @@ export function OrganizationProvider({
       recoveries: recoveryCount,
       wake: () => setRecoveries((seen) => seen + 1),
     });
-    projectOrganizationToTabs(query.data, userId);
     // `command` changes with the host/account scope, so scope changes also
     // re-run this effect.
-  }, [supported, query.data, openIds, command, lifecycle, userId, recoveries]);
+  }, [supported, query.data, openIds, command, lifecycle, recoveries]);
+  // Declared after the effect that opens saved siblings, so a tab it opened
+  // is projected in the same pass. It draws the view with unacknowledged
+  // appearance edits applied, which is what the pickers show. `scope` is a
+  // dependency so a host or account change projects again.
+  const projectedView = appearance.view;
+  useEffect(() => {
+    if (!supported || lifecycle.current === null) return;
+    if (projectedView === undefined || !projectedView.ready) return;
+    projectOrganizationToTabs(projectedView, userId);
+  }, [supported, projectedView, openIds, lifecycle, userId, scope]);
+  const [viewSource] = useState(createOrganizationViewSource);
+  const shownView = ownAccount ? projectedView : undefined;
+  useLayoutEffect(() => {
+    viewSource.publish(shownView);
+  }, [viewSource, shownView]);
   const openDialog = useCallback(
     (value: OrganizationDialog) => {
       const opener = captureOrganizationDialogOpener();
@@ -409,7 +477,8 @@ export function OrganizationProvider({
       hostSupport,
       client,
       userId,
-      view: ownAccount ? query.data : undefined,
+      readView: viewSource.readView,
+      subscribeView: viewSource.subscribeView,
       register,
       command,
       refresh,
@@ -418,10 +487,9 @@ export function OrganizationProvider({
     [
       supported,
       hostSupport,
-      ownAccount,
       client,
       userId,
-      query.data,
+      viewSource,
       register,
       command,
       refresh,
@@ -515,6 +583,36 @@ function OrganizationSubscription(props: {
   return null;
 }
 
+/**
+ * The view the provider's consumers read, outside the context value. Every
+ * frame replaces the view, and only the consumers whose slice moved may
+ * re-render (`useOrganizationView`).
+ */
+function createOrganizationViewSource() {
+  let current: OrganizationView | undefined;
+  const listeners = new Set<() => void>();
+  return {
+    readView: (): OrganizationView | undefined => current,
+    subscribeView: (listener: () => void): (() => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    publish: (view: OrganizationView | undefined): void => {
+      if (view === current) return;
+      current = view;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+}
+
+/**
+ * Writes the view's groups and each open tab's appearance into the tab store.
+ * Most frames change neither - a moved History token, another task's labels -
+ * and the store is left alone for them: every strip row selects these maps,
+ * so a write of equal content re-renders the whole strip.
+ */
 function projectOrganizationToTabs(
   view: OrganizationView,
   userId: string | null,
@@ -523,35 +621,81 @@ function projectOrganizationToTabs(
   const state = useTabsStore.getState();
   const groups = { ...state.groups };
   const customizations = { ...state.customizations };
-  for (const group of view.groups.groups)
-    groups[group.groupId] = {
-      name: group.name,
-      color: group.color,
-      organizationOwnerId: userId,
-      collapsed: state.groups?.[group.groupId]?.collapsed ?? false,
-    };
+  let changed = false;
+  for (const group of view.groups.groups) {
+    const next = projectedGroup(group, state.groups?.[group.groupId], userId);
+    if (next === null) continue;
+    groups[group.groupId] = next;
+    changed = true;
+  }
   for (const tabId of tabs.openTabOrder) {
     const tab = tabs.tabsById[tabId];
     if (tab === undefined) continue;
-    const org = taskOrganization(view, tab.epicId, undefined);
     const key = `epic:${tabId}`;
-    if (org === undefined) {
-      const current = state.customizations?.[key];
-      // Groups are account-wide, even before this task's appearance loads.
-      if (current?.groupId && current.organizationOwnerId === userId)
-        customizations[key] = { ...current, groupId: null };
-      continue;
-    }
-    customizations[key] = {
-      ...(customizations[key] ?? DEFAULT_TAB_CUSTOMIZATION),
-      organizationOwnerId: userId,
-      groupId: org.group?.groupId ?? null,
-      color: org.appearance.color,
-      icon: org.appearance.icon,
-    };
+    const next = projectedCustomization(
+      view,
+      tab.epicId,
+      state.customizations?.[key],
+      userId,
+    );
+    if (next === null) continue;
+    customizations[key] = next;
+    changed = true;
   }
+  if (!changed) return;
   useTabsStore.setState({ groups, customizations });
   state.repair();
+}
+
+/** The strip's entry for an account group, or `null` when it already holds it. */
+function projectedGroup(
+  group: OrganizationView["groups"]["groups"][number],
+  current: TabGroup | undefined,
+  userId: string | null,
+): TabGroup | null {
+  const next = {
+    name: group.name,
+    color: group.color,
+    organizationOwnerId: userId,
+    collapsed: current?.collapsed ?? false,
+  };
+  return current !== undefined && sameEntries(current, next) ? null : next;
+}
+
+/** An open tab's drawn appearance, or `null` when the strip already has it. */
+function projectedCustomization(
+  view: OrganizationView,
+  epicId: string,
+  current: TabCustomization | undefined,
+  userId: string | null,
+): TabCustomization | null {
+  const org = taskOrganization(view, epicId, undefined);
+  if (org === undefined) {
+    // Groups are account-wide, even before this task's appearance loads.
+    if (!current?.groupId || current.organizationOwnerId !== userId)
+      return null;
+    return { ...current, groupId: null };
+  }
+  const next = {
+    ...(current ?? DEFAULT_TAB_CUSTOMIZATION),
+    organizationOwnerId: userId,
+    groupId: org.group?.groupId ?? null,
+    color: org.appearance.color,
+    icon: org.appearance.icon,
+  };
+  return current !== undefined && sameEntries(current, next) ? null : next;
+}
+
+/** Whether two flat records hold the same values under the same keys. */
+function sameEntries(a: object, b: object): boolean {
+  const left = Object.entries(a);
+  const right = new Map(Object.entries(b));
+  return (
+    left.length === right.size &&
+    left.every(
+      ([key, value]) => right.has(key) && Object.is(value, right.get(key)),
+    )
+  );
 }
 
 function organizationFiltersChanged(
@@ -728,6 +872,8 @@ function newDraftTracking(): DraftIntentTracking {
 function createLifecycle(): OrganizationLifecycle {
   return {
     seenFailures: new Set(),
+    commandsBeforeBaseline: new Set(),
+    failuresInitialized: false,
     confirmedView: null,
   };
 }

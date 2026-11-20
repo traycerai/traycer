@@ -34,9 +34,9 @@ import { cn } from "@/lib/utils";
 /**
  * The tab bar and the tab bodies under the pinned host header.
  *
- * Sandbox hosts add the first Sandbox tab. The remaining tabs stay present
- * in every connection state; each body decides what it can show while the
- * host connects or cannot be reached.
+ * Sandbox hosts add Secrets and Costs after Ports. The other tabs stay
+ * present in every connection state; each body decides what it can show
+ * while the host connects or cannot be reached.
  *
  * A VISITED tab stays mounted, hidden while inactive - the Permissions Rules
  * tab's rule - so a half-typed retention limit survives a look at Updates.
@@ -60,7 +60,8 @@ export function HostOverviewTabs(props: {
 }): ReactNode {
   const { tab, isMobile } = props;
   const tabs = HOST_OVERVIEW_TABS.filter(
-    (value) => value !== "sandbox" || props.sandbox,
+    (value) =>
+      (value !== "secrets" && value !== "costs") || props.sandbox === true,
   );
   const [visited, setVisited] = useState<ReadonlySet<HostOverviewTab>>(
     () => new Set([tab]),

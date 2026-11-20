@@ -42,14 +42,19 @@ import {
 } from "@/stores/epics/canvas/store";
 import {
   isOpenLandingDraft,
-  newestLandingDraftId,
+  resumableLandingDraftId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { tabRouteOptions } from "@/stores/tabs/registry";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
 import { isTracySurfaceOpen, TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
-import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import {
+  retireTracyLandings,
+  tracyLandingsRetired,
+  tracySurfaceHostId,
+  useTracySurfaceStore,
+} from "@/stores/bots/tracy-surface-store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
   tabCommandCoordinator,
@@ -64,8 +69,14 @@ import {
   tabRefKey,
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
+import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import type { TabRef } from "@/stores/tabs/types";
-import { recordMobileTabOrigin } from "@/stores/epics/mobile-tab-origin-store";
+import {
+  recordMobileTabOrigin,
+  spendMobileTabOriginUnlessInFront,
+  stampTracyOrigin,
+  type StampedTracyOrigin,
+} from "@/stores/epics/mobile-tab-origin-store";
 import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import { normalizeEpicFocusSearch } from "@/routes/epic-route-search";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -152,6 +163,8 @@ interface PreparedDraftSwap {
   readonly epicId: string;
   readonly epicTabId: string;
   readonly epicName: string | undefined;
+  /** The opening's transcript origin, landed with the swap. */
+  readonly tracyOrigin: StampedTracyOrigin | null;
 }
 
 interface PreparedPairRestore {
@@ -175,12 +188,58 @@ interface PendingNavigation {
   readonly correctionAttempt: 0 | 1;
   readonly correctionKey: string | null;
   placementCommitted: boolean;
+  /** A gesture putting a task tab in front, landed with the navigation. */
+  readonly taskOpening: TaskOpening | null;
+}
+
+/**
+ * A gesture's activation of task tab `tabId`, and the Tracy transcript link
+ * that made it, if one did: what the task's way back to Tracy is once the
+ * navigation lands.
+ */
+interface TaskOpening {
+  readonly tabId: string;
+  readonly tracyOrigin: StampedTracyOrigin | null;
 }
 
 interface QueuedActivation {
   readonly navigate: NavigateFn;
   readonly intent: TabActivationIntent;
   readonly options: TabNavigationOptions | undefined;
+  readonly tracyOrigin: StampedTracyOrigin | null;
+  readonly tracyAsk: TracyAsk | null;
+}
+
+/**
+ * What an opening of the Tracy surface was asked under while the tabs were
+ * hydrating. It runs once they are ready only if both still stand; otherwise
+ * it was asked of something the app no longer shows. The count moves each
+ * time the surface withdraws its landings (another account signs in, it
+ * moves to another host, it closes), so the surface coming back to the same
+ * host does not bring an opening's landing back. The host covers the writes
+ * that move the surface without withdrawing anything (`tracyLandingsRetired`
+ * names them).
+ */
+interface TracyAsk {
+  readonly landingsRetired: number;
+  readonly surfaceHostId: string | null;
+}
+
+function tracyAskOf(intent: TabActivationIntent): TracyAsk | null {
+  return intent.kind === "tracy"
+    ? {
+        landingsRetired: tracyLandingsRetired(),
+        surfaceHostId: tracySurfaceHostId(),
+      }
+    : null;
+}
+
+function tracyAskStands(ask: TracyAsk | null): boolean {
+  return (
+    ask === null ||
+    (ask.landingsRetired === tracyLandingsRetired() &&
+      ask.surfaceHostId === tracySurfaceHostId())
+  );
 }
 
 interface QueuedExternal {
@@ -363,11 +422,35 @@ function focusedRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
   return side.kind === "tab" ? side.ref : null;
 }
 
-/** The channel the Tracy surface shows when it is what the layout has in front. */
-function tracyChannelInFrontOf(layout: PersistedTabStripLayout): string | null {
-  return focusedRefOfLayout(layout)?.kind === "tracy"
-    ? useTracySurfaceStore.getState().botId
+function taskOpeningOf(
+  ref: TabRef,
+  tracyOrigin: StampedTracyOrigin | null,
+): TaskOpening | null {
+  return ref.kind === "epic" ? { tabId: ref.id, tracyOrigin } : null;
+}
+
+/**
+ * A transcript link's origin, stamped when its opening is asked for: before
+ * any hydration queue, so a bot or surface that goes while the opening is in
+ * flight is seen when it lands.
+ */
+function stampedTracyOriginOf(
+  intent: TabActivationIntent,
+): StampedTracyOrigin | null {
+  return intent.kind === "open-epic" && intent.tracyOrigin !== null
+    ? stampTracyOrigin(intent.tracyOrigin)
     : null;
+}
+
+/**
+ * A gesture's activation of a task tab has landed: its way back to Tracy is
+ * the transcript link's channel when a link made it and the tab is still in
+ * front, and is spent otherwise.
+ */
+function landTaskOpening(opening: TaskOpening): void {
+  const focused = selectHostFocusedRef(useTabsStore.getState());
+  const inFront = focused?.kind === "epic" && focused.id === opening.tabId;
+  recordMobileTabOrigin(opening.tabId, inFront ? opening.tracyOrigin : null);
 }
 
 function activeItemContainsRef(
@@ -733,16 +816,28 @@ export class TabNavigationController {
     options: TabNavigationOptions | undefined,
   ): boolean {
     this.navigator = navigate;
+    const tracyOrigin = stampedTracyOriginOf(intent);
     if (!this.hydrationReady) {
       const superseded = this.queuedActivation;
-      this.queuedActivation = { navigate, intent, options };
+      this.queuedActivation = {
+        navigate,
+        intent,
+        options,
+        tracyOrigin,
+        tracyAsk: tracyAskOf(intent),
+      };
       this.notifyPendingListeners();
       superseded?.options?.onRejected?.(
         new Error("Another task was opened before this task could open."),
       );
       return true;
     }
-    const accepted = this.executeActivation(navigate, intent, options);
+    const accepted = this.executeActivation(
+      navigate,
+      intent,
+      options,
+      tracyOrigin,
+    );
     if (!accepted) {
       options?.onRejected?.(
         new Error("The task could not be opened. Try again."),
@@ -823,6 +918,7 @@ export class TabNavigationController {
       correctionAttempt: 0,
       correctionKey: null,
       placementCommitted: true,
+      taskOpening: taskOpeningOf(focusedRef, null),
     };
     this.issueUserNavigation(navigate, pending);
     return true;
@@ -965,11 +1061,19 @@ export class TabNavigationController {
     this.queuedActivation = null;
     if (queuedActivation !== null) {
       this.notifyPendingListeners();
-      const accepted = this.executeActivation(
-        queuedActivation.navigate,
-        queuedActivation.intent,
-        queuedActivation.options,
-      );
+      const stands = tracyAskStands(queuedActivation.tracyAsk);
+      // An opening that no longer stands takes its landing with it: the
+      // surface may still show that channel, which would spend it. Only one
+      // opening is ever held, so the count this raises refuses no other.
+      if (!stands) retireTracyLandings();
+      const accepted =
+        stands &&
+        this.executeActivation(
+          queuedActivation.navigate,
+          queuedActivation.intent,
+          queuedActivation.options,
+          queuedActivation.tracyOrigin,
+        );
       if (!accepted) {
         queuedActivation.options?.onRejected?.(
           new Error("The task could not be opened. Try again."),
@@ -1070,10 +1174,15 @@ export class TabNavigationController {
     navigate: NavigateFn,
     requestedIntent: TabActivationIntent,
     options: TabNavigationOptions | undefined,
+    tracyOrigin: StampedTracyOrigin | null,
   ): boolean {
     const layoutBefore = currentLayout();
     if (requestedIntent.kind === "open-epic") {
-      const prepared = this.prepareDraftSwap(requestedIntent, layoutBefore);
+      const prepared = this.prepareDraftSwap(
+        requestedIntent,
+        layoutBefore,
+        tracyOrigin,
+      );
       if (prepared !== null) {
         this.issuePreparedSwap(navigate, requestedIntent, prepared, options);
         return true;
@@ -1096,17 +1205,6 @@ export class TabNavigationController {
     if (intent === null) {
       tabCommandCoordinator.restoreTabActivation(activation);
       return false;
-    }
-    // Every way of opening a task passes here (a chip, a task row, a tapped
-    // notification), and the strip's own tap on a tab does not.
-    if (
-      requestedIntent.kind === "open-epic" &&
-      activation.ref.kind === "epic"
-    ) {
-      recordMobileTabOrigin(
-        activation.ref.id,
-        tracyChannelInFrontOf(layoutBefore),
-      );
     }
     // Re-activating what the active item shows replaces the entry; another
     // channel of the Tracy surface is a move, and pushes one.
@@ -1142,6 +1240,11 @@ export class TabNavigationController {
       correctionAttempt: 0,
       correctionKey: null,
       placementCommitted: true,
+      // Every gesture that puts a task in front passes here or through the
+      // draft swap (`issuePreparedSwap`): a tab tap, a list row, a
+      // notification, a transcript link. Only the last carries a Tracy
+      // origin, stamped when it was asked for.
+      taskOpening: taskOpeningOf(activation.ref, tracyOrigin),
     };
     this.issueUserNavigation(navigate, pending);
     return true;
@@ -1295,6 +1398,7 @@ export class TabNavigationController {
   private prepareDraftSwap(
     intent: Extract<TabActivationIntent, { kind: "open-epic" }>,
     layout: PersistedTabStripLayout,
+    tracyOrigin: StampedTracyOrigin | null,
   ): PreparedDraftSwap | null {
     const draftId = intent.replaceEmptyDraftId;
     if (draftId === null) return null;
@@ -1313,6 +1417,7 @@ export class TabNavigationController {
       epicId: intent.epicId,
       epicTabId: existingId ?? uuidv4(),
       epicName: intent.name,
+      tracyOrigin,
     };
   }
 
@@ -1351,6 +1456,7 @@ export class TabNavigationController {
       correctionAttempt: 0,
       correctionKey: null,
       placementCommitted: false,
+      taskOpening: { tabId: swap.epicTabId, tracyOrigin: swap.tracyOrigin },
     };
     this.issueUserNavigation(navigate, pending);
   }
@@ -1453,6 +1559,10 @@ export class TabNavigationController {
         return;
       }
     }
+    // Landed here, not at activation: an opening that is refused or
+    // superseded leaves the way back as it was, and one that lands names the
+    // tab it resolved to, once the swap above has placed it.
+    if (pending.taskOpening !== null) landTaskOpening(pending.taskOpening);
     this.rememberAcknowledgedRoute(pending, location);
     // Once the exact entry is acknowledged, rollback and one-shot placement
     // are complete. The session+serial envelope classifies any later delivery,
@@ -1653,6 +1763,8 @@ export class TabNavigationController {
       correctionAttempt: attempt,
       correctionKey,
       placementCommitted: true,
+      // A correction restores a route; no gesture put a task in front.
+      taskOpening: null,
     };
     this.pending.set(envelope.token, pending);
     if (kind === "repair-replace") this.repairCount += 1;
@@ -1940,6 +2052,22 @@ export class TabNavigationController {
     location: TabNavigationLocation,
     navigate: NavigateFn,
   ): void {
+    const intent: TabNavigationIntent = {
+      kind: "tracy",
+      botId: readBotIdFromPath(location.pathname),
+    };
+    // The surface already holds the focus, so there is nothing to activate:
+    // this is the surface committing its own place, or a step between two of
+    // its entries. As for a task's tab (`resolveExternalEpic`), taking it
+    // through the command coordinator would refuse it while a transaction is
+    // open and correct the URL away from a good route.
+    if (
+      isTracySurfaceOpen() &&
+      refsEqual(focusedRefOfLayout(currentLayout()), TRACY_TAB_REF)
+    ) {
+      this.rememberRoute(TRACY_TAB_REF, intent, location.search);
+      return;
+    }
     if (!isTracySurfaceOpen()) {
       const hostId = activeHostIdOrNull();
       if (hostId === null) {
@@ -1956,11 +2084,7 @@ export class TabNavigationController {
       this.issueLandingCorrection(location, navigate);
       return;
     }
-    this.rememberRoute(
-      TRACY_TAB_REF,
-      { kind: "tracy", botId: readBotIdFromPath(location.pathname) },
-      location.search,
-    );
+    this.rememberRoute(TRACY_TAB_REF, intent, location.search);
   }
 
   private resolveExternalSystem(
@@ -2037,7 +2161,7 @@ export class TabNavigationController {
     }
     this.activateExternalTarget({
       kind: "draft",
-      draftId: newestLandingDraftId(),
+      draftId: resumableLandingDraftId(),
       // Same as `/draft/new`: a minted draft reads its settings from the
       // composer's placement, the host its folders come from.
       settings: null,
@@ -2188,6 +2312,13 @@ export class TabNavigationController {
 }
 
 export const tabNavigationController = new TabNavigationController();
+
+// The way back to Tracy belongs to the visit its transcript link started: the
+// task leaving the front by any route (another tab, Back, a closed tab, a
+// split's other side) spends it, so a later return shows none.
+useTabsStore.subscribe((state) => {
+  spendMobileTabOriginUnlessInFront(selectHostFocusedRef(state));
+});
 
 export function activateTabIntent(
   navigate: NavigateFn,

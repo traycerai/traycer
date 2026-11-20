@@ -149,24 +149,18 @@ export function providerTabInputs(
  * The tab that holds this provider's key on the Providers page, named as the
  * pane names it.
  *
- * When Profiles & Limits is also supported, the key is that tab's first block
- * and Account is not shown. A key provider with no usage tab keeps Account.
- * A provider with no key has no such tab. The pane drops Account by this same
- * answer, so a link that names the label opens `tab`.
+ * Account holds the key. A provider with no key has no such tab.
+ * A link that names the label opens `tab`.
  */
 export type ProviderKeyTab = {
-  readonly tab: "account" | "usage";
-  readonly label: "Account" | "Profiles & Limits";
+  readonly tab: "account";
+  readonly label: "Account";
 };
 
 export function providerKeyTab(input: {
   readonly apiKeySupported: boolean;
-  readonly usageAdvertised: boolean;
 }): ProviderKeyTab | null {
   if (!input.apiKeySupported) return null;
-  if (input.usageAdvertised) {
-    return { tab: "usage", label: "Profiles & Limits" };
-  }
   return { tab: "account", label: "Account" };
 }
 

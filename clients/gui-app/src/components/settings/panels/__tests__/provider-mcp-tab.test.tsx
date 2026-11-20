@@ -510,7 +510,7 @@ describe("<ProviderMcpTab />", () => {
     // Global is a destination too, and used to be the one state that named
     // nothing at all.
     expect(scopeTriggerText()).toContain("Global");
-    expect(scopeTriggerText()).toContain("Every workspace on this host");
+    expect(scopeTriggerText()).toContain("Every folder on this host");
   });
 
   it("offers each worktree of a workspace as its own destination", () => {
@@ -632,11 +632,11 @@ describe("<ProviderMcpTab />", () => {
     // nothing under it to point a project config at.
     openScopePicker();
     expect(screen.getByRole("option", { name: /Global/ })).toBeDefined();
-    expect(screen.queryByText("This host's workspaces")).toBeNull();
+    expect(screen.queryByText("This host's folders")).toBeNull();
     // ...and it SAYS so, rather than silently omitting the group and leaving
     // "Global is the only thing here" looking like the provider's own limit.
     expect(
-      screen.getByText("No workspaces added on this host yet."),
+      screen.getByText("No folders added on this host yet."),
     ).toBeDefined();
     // `enabled` matters: the shadow-badge read is MOUNTED in Global scope and
     // only gated off by that flag, so it lands in `listCalls` either way.
@@ -665,9 +665,7 @@ describe("<ProviderMcpTab />", () => {
     // host, so Global was the only reachable destination and a project config
     // could not be managed from here at all.
     openScopePicker();
-    fireEvent.click(
-      screen.getByRole("option", { name: /Add a workspace folder/ }),
-    );
+    fireEvent.click(screen.getByRole("option", { name: /Add a folder/ }));
     expect(folderActionMocks.pickAndPrepareFolders).toHaveBeenCalledWith(false);
 
     // The added folder becomes the selection - resolution feeds the picker
@@ -690,7 +688,7 @@ describe("<ProviderMcpTab />", () => {
   it("keeps the picker reachable for a PROJECT-ONLY provider with no workspaces", () => {
     // The dead end this guards: project-only provider, no folders opened on
     // this host. There is no Global to fall back to, and the only way out -
-    // "Add a workspace folder…" - lives INSIDE the popover. Disabling the
+    // "Add a folder…" - lives INSIDE the popover. Disabling the
     // trigger in that state sealed the user in with no route to a usable
     // config, which is the exact hole the add action was introduced to close.
     useWorkspaceFoldersStore.setState({
@@ -707,9 +705,7 @@ describe("<ProviderMcpTab />", () => {
     );
 
     openScopePicker();
-    expect(
-      screen.getByRole("option", { name: /Add a workspace folder/ }),
-    ).toBeDefined();
+    expect(screen.getByRole("option", { name: /Add a folder/ })).toBeDefined();
   });
 
   it("names the current destination in the trigger's accessible name", () => {
@@ -785,9 +781,7 @@ describe("<ProviderMcpTab />", () => {
     renderTab(FULL_CAPS, "codex");
 
     openScopePicker();
-    fireEvent.click(
-      screen.getByRole("option", { name: /Add a workspace folder/ }),
-    );
+    fireEvent.click(screen.getByRole("option", { name: /Add a folder/ }));
 
     await vi.waitFor(() => {
       expect(toastMocks.errors).toContain("Couldn't open the folder picker.");
@@ -820,9 +814,7 @@ describe("<ProviderMcpTab />", () => {
     renderTab(FULL_CAPS, "codex");
 
     openScopePicker();
-    fireEvent.click(
-      screen.getByRole("option", { name: /Add a workspace folder/ }),
-    );
+    fireEvent.click(screen.getByRole("option", { name: /Add a folder/ }));
 
     await vi.waitFor(() => {
       expect(
@@ -845,9 +837,7 @@ describe("<ProviderMcpTab />", () => {
     renderTab(FULL_CAPS, "codex");
 
     openScopePicker();
-    fireEvent.click(
-      screen.getByRole("option", { name: /Add a workspace folder/ }),
-    );
+    fireEvent.click(screen.getByRole("option", { name: /Add a folder/ }));
     await vi.waitFor(() => {
       expect(folderActionMocks.pickAndPrepareFolders).toHaveBeenCalledTimes(1);
     });
@@ -1011,7 +1001,7 @@ describe("<ProviderMcpTab />", () => {
       screen.queryByRole("button", { name: /^MCP config location/ }),
     ).toBeNull();
     expect(
-      screen.getByText("Applies to every workspace on this host."),
+      screen.getByText("Applies to every folder on this host."),
     ).toBeDefined();
   });
 

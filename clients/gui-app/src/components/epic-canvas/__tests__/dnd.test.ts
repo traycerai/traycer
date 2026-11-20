@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { makeSimulatorTileRef } from "@/stores/epics/canvas/tile-schema/simulator-tile";
 import {
   getArtifactTabDropIndexFromPoint,
   getEdgeDropPositionFromPoint,
@@ -223,6 +224,34 @@ describe("epic canvas dnd-kit data guards", () => {
           instanceId: "inst-term-1",
           type: "terminal",
           name: "Terminal",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("reads simulator tile drag source data and rejects a payload whose tile is not a simulator", () => {
+    const tile = makeSimulatorTileRef({
+      hostId: "host-1",
+      simulatorId: "udid-1",
+      platform: "ios",
+      name: "iPhone 16",
+      instanceKey: "udid-1",
+    });
+    const scope = { epicId: "epic-1", viewTabId: "view-1" };
+    expect(
+      readEpicCanvasDragSourceData({ kind: "simulator-tile", ...scope, tile }),
+    ).toEqual({ kind: "simulator-tile", ...scope, tile });
+    expect(
+      readEpicCanvasDragSourceData({
+        kind: "simulator-tile",
+        ...scope,
+        tile: {
+          id: "term-1",
+          instanceId: "inst-term-1",
+          type: "terminal",
+          name: "Terminal",
+          hostId: "host-1",
+          cwd: "/repo",
         },
       }),
     ).toBeNull();

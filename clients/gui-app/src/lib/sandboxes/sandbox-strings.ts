@@ -11,6 +11,7 @@ import type {
   SandboxCreditSource,
   SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
+import { SANDBOX_OUT_OF_CREDITS } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   formatCredits,
   formatCreditsRequired,
@@ -22,7 +23,13 @@ import {
  * as shown against it, so changing a clause's words re-opens the block for
  * everyone once.
  */
-export const CONSEQUENCES_WORDING_VERSION = 3;
+export const CONSEQUENCES_WORDING_VERSION = 4;
+
+export const WINDOWS_SANDBOX_LIMITATION =
+  "Windows sandboxes have no desktop or Computer Use.";
+
+export const SANDBOX_SETUP_CHARGES =
+  "Running the sandbox is charged separately from build work. Build work is charged once, even if the build fails. Keeping the result is charged as storage for as long as you keep it.";
 
 /** A configuration as copy reads it: Personal, or a team by its name. */
 export type SandboxConfigurationCopy =
@@ -111,7 +118,7 @@ export function collapsedConfigurationsLabel(
 }
 
 /** The search field above a host list. */
-export const SEARCH_HOSTS_PLACEHOLDER = "Search hosts";
+export const SEARCH_HOSTS_PLACEHOLDER = "Search computers";
 
 /** A computer row's status: it answers. */
 export const COMPUTER_ACTIVE = "Active";
@@ -138,7 +145,7 @@ export function computerSubLine(parts: readonly (string | null)[]): string {
 }
 
 /** The sub-line of a computer whose settings are not in Personal yet. */
-export const LOCAL_SUB_LINE = "Local · its own settings, not in Personal yet";
+export const LOCAL_SUB_LINE = "Local · runs its own settings, not Personal's";
 
 /** The search found nothing of the viewer's. */
 export function noHostMatchesLine(term: string): string {
@@ -149,16 +156,21 @@ export const NO_MATCH_ELSEWHERE_LINE =
 
 // ── Money ─────────────────────────────────────────────────────────────────
 
-/** `uses your credits` / `uses your Acme credits`. */
+/** A team's sandbox is paid from the team's credits whoever woke it, so every sentence names the team. */
+export function teamPossessive(teamName: string): string {
+  return `${teamName}'s`;
+}
+
+/** `uses your credits` / `uses Acme's credits`. */
 export function usesCreditsClause(
   configuration: SandboxConfigurationCopy,
 ): string {
   return configuration.kind === "personal"
     ? "uses your credits"
-    : `uses your ${configuration.teamName} credits`;
+    : `uses ${teamPossessive(configuration.teamName)} credits`;
 }
 
-/** The cost line: `$0.12 an hour while awake · uses your Acme credits`. */
+/** The cost line: `$0.12 an hour while awake · uses Acme's credits`. */
 export function costLine(
   priceMcPerHour: number,
   configuration: SandboxConfigurationCopy,
@@ -224,6 +236,36 @@ export function needsCreditsRow(priceMcPerHour: number): string {
 
 export const ADD_CREDITS_LINK = "Add credits ↗";
 
+/** Not shown yet: `shown` is the one switch that shows it. */
+export const ONLY_TEAM_ADMINS_CAN_ADD_CREDITS =
+  "Only team admins can add credits.";
+export const ONLY_TEAM_ADMINS_LINE: { readonly shown: boolean } = {
+  shown: false,
+};
+
+// Only a team's Admin can buy its credits, so anyone else reads these instead of
+// being told to add credits. A wake refused by an older server, which does not say
+// whose credits were short, keeps the add-credits sentence.
+
+export function teamCreditsRanOutLine(teamName: string): string {
+  return `${teamPossessive(teamName)} credits ran out.`;
+}
+
+export function teamSandboxOutOfCreditsLine(teamName: string): string {
+  return `${SANDBOX_OUT_OF_CREDITS} ${teamPossessive(teamName)} bundle is out.`;
+}
+
+export function teamOutOfCreditsHeadline(teamName: string): string {
+  return `Paused: ${teamName} is out of credits`;
+}
+
+export function onceTeamHasCreditsLine(teamName: string): string {
+  return `This sandbox ran out of credits, which ended the turn. Once ${teamName} has credits again, send a message to pick up where it stopped.`;
+}
+
+export const TEAM_CREDITS_DONT_COVER_AN_HOUR =
+  "The team's credits don't cover an hour of this sandbox.";
+
 // ── The consequences block ────────────────────────────────────────────────
 
 /** The audience clause: the task has or may gain readers beyond the person. */
@@ -249,17 +291,19 @@ export function reachRemedyLine(teamName: string): string {
   return `To work together, start this agent on a host in ${teamName}.`;
 }
 
-/** Shared use and payment, followed by the distinct access warning. */
-export const TEAM_USE_AND_ACCESS_CLAUSE =
-  "Everyone in the team can use it while you pay from your team credits; another member's agent can read what yours can.";
+/**
+ * Who else can use a team sandbox, and what their agent can read.
+ * Payment stays on the price line, beside the standing cost.
+ */
+export function teamAccessClause(teamName: string): string {
+  return `Everyone in ${teamName} can use it; another member's agent can read what yours can.`;
+}
 
 export const RESTING_STORAGE_CLAUSE =
-  "Storage while it's suspended or stopped, on the same credits until another member wakes it.";
+  "Storage while it's suspended or stopped, on the same credits.";
 export function restingStorageClause(): string {
   return RESTING_STORAGE_CLAUSE;
 }
-
-export const SHARED_USE_CLAUSE = "Other members can use it while you pay.";
 
 /** The move clause: `computer` still holds settings not in Personal yet. */
 export function moveClause(computer: string): string {
@@ -292,7 +336,7 @@ export function wakeString(suspendFidelity: string): string | null {
   }
 }
 
-/** `Suspends after 30 idle min · destroyed after 7 idle days`. */
+/** `Suspends after 30 idle min · destroyed after 7 days suspended or stopped`. */
 export function idleAndRestingLine(
   idleMinutes: number,
   destroyAfterRestingMinutes: number | null,
@@ -301,7 +345,7 @@ export function idleAndRestingLine(
   // `0` is never, as the server spells it.
   return destroyAfterRestingMinutes === null || destroyAfterRestingMinutes === 0
     ? `${idle} · ${KEPT_UNTIL_YOU_DESTROY_IT}`
-    : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)}`;
+    : `${idle} · destroyed after ${restingPeriodLabel(destroyAfterRestingMinutes)} suspended or stopped`;
 }
 
 /**
@@ -313,17 +357,17 @@ export function idleLine(idleMinutes: number): string {
   return `Suspends after ${idleMinutes} idle min`;
 }
 
-/** `7 idle days`, `12 idle hours`, `45 idle minutes`. */
+/** `7 days`, `12 hours`, `45 minutes`. */
 export function restingPeriodLabel(minutes: number): string {
   if (minutes % (24 * 60) === 0) {
     const days = minutes / (24 * 60);
-    return `${days} idle ${days === 1 ? "day" : "days"}`;
+    return `${days} ${days === 1 ? "day" : "days"}`;
   }
   if (minutes % 60 === 0) {
     const hours = minutes / 60;
-    return `${hours} idle ${hours === 1 ? "hour" : "hours"}`;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
   }
-  return `${minutes} idle ${minutes === 1 ? "minute" : "minutes"}`;
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
 export const KEPT_UNTIL_YOU_DESTROY_IT = "kept until you destroy it";
@@ -331,13 +375,22 @@ export const CHANGE_LABEL = "Change";
 
 // ── Chip ──────────────────────────────────────────────────────────────────
 
-/** A staged create's identity and resources; its consequences show the price. */
+/**
+ * The chip of a staged create: `New Acme sandbox · 2 vCPU · 4 GB · $0.12/h`.
+ * `priceIsFrom` reads the price as a lower bound (`from $0.12/h`): the price
+ * is the region's smallest shape's, not an exact catalogue price.
+ */
 export function stagedChipLabel(args: {
   readonly configuration: SandboxConfigurationCopy;
   readonly cpus: number;
   readonly memoryMb: number;
+  readonly priceMcPerHour: number | null;
+  readonly priceIsFrom: boolean;
 }): string {
-  return `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
+  const head = `${newSandboxRowLabel(args.configuration)} · ${sandboxShapeLabel(args.cpus, args.memoryMb)}`;
+  if (args.priceMcPerHour === null) return head;
+  const price = shortPriceLabel(args.priceMcPerHour);
+  return `${head} · ${args.priceIsFrom ? `from ${price}` : price}`;
 }
 
 /** A resting pick: `api-refactor · suspended, resumes on send`. */
@@ -399,24 +452,50 @@ function notEnoughCreditsText(
   return `${opening}. ${formatSandboxDollarsRequired(shortfallMc)} more ${action} for an hour.`;
 }
 
-/** Short for an hour on a team allowance; `null` names no amount. */
-export function teamAllowanceShortLine(
+/**
+ * Short for an hour of a team's sandbox, which the team's credits pay;
+ * `null` names no amount.
+ */
+export function teamCreditsShortLine(
   teamName: string,
   shortfallMc: number | null,
 ): string {
+  const whose = teamPossessive(teamName);
   if (shortfallMc === null) {
-    return `Your ${teamName} allowance is too short to start this sandbox for an hour.`;
+    return `${whose} credits don't cover an hour of this sandbox.`;
   }
   const amount = formatSandboxDollarsRequired(shortfallMc);
-  return `Your ${teamName} allowance is short ${amount}. ${amount} more starts this sandbox for an hour.`;
+  return `${whose} credits are short ${amount}. ${amount} more starts this sandbox for an hour.`;
+}
+
+function knownTeamName(
+  configuration: SandboxConfigurationCopy | null,
+): string | null {
+  return configuration?.kind === "team" ? configuration.teamName : null;
 }
 
 /**
  * A spend refusal names the pot checked, with amounts rounded up for top-up.
  * Sentence/clause context is independent of whether this starts or wakes.
+ * `configuration` is `null` where the app does not know whose sandbox it is:
+ * nothing is then told as the person's own, neither their balance nor an
+ * amount for them to add, and a team pot reads as no team configuration
+ * known.
  */
 export function sandboxCreditShortLine(
-  configuration: SandboxConfigurationCopy,
+  configuration: SandboxConfigurationCopy | null,
+  creditSource: SandboxCreditSource | null,
+  shortfallMc: number | null,
+  options: SandboxCreditLineOptions,
+): string {
+  if (configuration === null && creditSource !== "team") {
+    return notEnoughCreditsText(null, options);
+  }
+  return potCreditShortLine(configuration, creditSource, shortfallMc, options);
+}
+
+function potCreditShortLine(
+  configuration: SandboxConfigurationCopy | null,
   creditSource: SandboxCreditSource | null,
   shortfallMc: number | null,
   options: SandboxCreditLineOptions,
@@ -426,17 +505,25 @@ export function sandboxCreditShortLine(
     return notEnoughCreditsText(shortfallMc, options);
   }
   const allowance = creditSource === "team-allowance";
-  const whose = context === "sentence" ? "Your" : "your";
+  const sentence = context === "sentence";
+  const whose = sentence ? "Your" : "your";
   // The refusal names the pot; the configuration only supplies the team's
   // name. A refusal from a team pot with no team configuration known (the
   // directory had no row) still says it was the team's, never the person's.
+  // A member's allowance is the member's own; the team's credits are the
+  // team's, whoever woke the sandbox.
+  const teamName = knownTeamName(configuration);
   let pot = `${whose} credits`;
-  if (creditSource !== "personal") {
-    if (configuration.kind === "team") {
-      pot = `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`;
-    } else {
-      pot = `${whose} ${allowance ? "team allowance" : "team's credits"}`;
-    }
+  if (allowance) {
+    pot =
+      teamName === null
+        ? `${whose} team allowance`
+        : `${whose} ${teamName} allowance`;
+  } else if (creditSource === "team") {
+    pot =
+      teamName === null
+        ? `${whose} team's credits`
+        : `${teamPossessive(teamName)} credits`;
   }
   if (shortfallMc === null) {
     if (!waking && allowance)
@@ -611,11 +698,8 @@ export function sandboxVerbPendingLine(
 export function sandboxVerbFailureLine(
   verb: SandboxLifecycleVerb | "destroy",
   name: string,
-  reference: string,
 ): string {
-  const sentence =
-    verb === "stop" ? couldntStopLine(name) : `Couldn't ${verb} ${name}`;
-  return `${sentence} · ${reference}`;
+  return verb === "stop" ? couldntStopLine(name) : `Couldn't ${verb} ${name}`;
 }
 
 export const RETRY_APPLYING = "Retry applying";
@@ -691,16 +775,12 @@ export const TASK_FILES = "Task files";
 export const HOST_LABEL = "Host";
 export const SESSIONS_UNKNOWN = "Sessions unknown · no report yet";
 
-/** The hover's session summary: how many, never their names. */
-export function hoverSessionCount(count: number): string {
-  return count === 1 ? "1 session" : `${count} sessions`;
-}
-
 /** A team sandbox to a reader authorized only over the task. */
 export function hoverTaskConfiguration(teamName: string | null): string {
   return `a sandbox of ${teamName ?? "a team"}`;
 }
 
+/** Other agents on this computer, named in one sentence. */
 export function hoverAlsoInTask(names: string): string {
   return `Also in this task on it: ${names}`;
 }

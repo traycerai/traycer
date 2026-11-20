@@ -83,10 +83,15 @@ export const useSettingsHostScopeStore = create<SettingsHostScopeState>(
         environment.defaultPick.kind === "local" &&
         environment.defaultPick.hostId === previous
       ) {
-        environment.setDefaultPick({
-          ...environment.defaultPick,
-          hostId: next,
-        });
+        environment.setDefaultPick(
+          {
+            ...environment.defaultPick,
+            hostId: next,
+          },
+          environment.defaultHostId === previous
+            ? next
+            : environment.defaultHostId,
+        );
       }
     },
   }),

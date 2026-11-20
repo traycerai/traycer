@@ -480,8 +480,9 @@ describe("artifact export", () => {
     expect(screen.queryByTestId(`switcher-export-pdf-${NODE_ID}`)).toBeNull();
   });
 
-  it("keeps the artifact menu for a viewer, with export enabled and Rename disabled", () => {
-    handle.store.setState({ permissionRole: "viewer" });
+  it("keeps the artifact menu without a role, with export enabled and Rename disabled", () => {
+    // A stored viewer seat is retired and decodes to no role at all.
+    handle.store.setState({ permissionRole: null });
 
     render(
       <SwitcherRowActions

@@ -39,7 +39,10 @@ import type {
   GuiHarnessOption,
   HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import type {
   SandboxCatalogue,
   SandboxSummary,
@@ -256,7 +259,10 @@ vi.mock("@/hooks/composer/use-composer-dictation", () => ({
     dictationPreparing: false,
   }),
 }));
-vi.mock("@/hooks/composer/use-composer-paste", () => ({
+vi.mock("@/hooks/composer/use-composer-paste", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/composer/use-composer-paste")
+  >()),
   isAttachmentIngestPending: () => false,
   useComposerHashPaste: () => ({
     onPaste: () => undefined,
@@ -265,9 +271,11 @@ vi.mock("@/hooks/composer/use-composer-paste", () => ({
     onDragEnter: () => undefined,
     onDragLeave: () => undefined,
     attachImageFiles: () => undefined,
+    attachFiles: () => undefined,
     dragOverlayVariant: null,
     isIngestingImages: false,
     isResolvingFilePaths: false,
+    isAttachingFiles: false,
     runPendingImageJob: () => undefined,
   }),
 }));
@@ -350,7 +358,6 @@ const RESTING: RestingChatSandbox = {
     displayName: "e2e-sbx-p3",
   }),
   configuration: { kind: "personal" },
-  wakeChangesPayer: false,
 };
 
 const SEEDED_MODEL: Readonly<Record<string, string>> = {
@@ -504,6 +511,7 @@ function mountComposerOn(
         sendDisabled={false}
         sendDisabledHint={null}
         mentionRoots={[]}
+        runWorkingDirectory={null}
         fallbackToGlobalMentionRoots={false}
         currentEpicId="epic-1"
         viewTabId="tab-1"
@@ -816,5 +824,70 @@ describe("the composer of an awake sandbox's chat, served by the sandbox", () =>
     });
     clickNoticeButton("Choose a model");
     expect(openForHarness).toHaveBeenCalledWith("traycer", ["traycer"]);
+  });
+});
+
+function accountProfile(input: {
+  readonly profileId: string;
+  readonly kind: "ambient" | "managed";
+  readonly label: string;
+  readonly authenticated: boolean;
+}): ProviderProfile {
+  return {
+    profileId: input.profileId,
+    enabled: true,
+    kind: input.kind,
+    authType: "oauth",
+    label: input.label,
+    auth: {
+      status: input.authenticated ? "authenticated" : "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
+describe("an existing chat on the Terminal account", () => {
+  it("stays on Terminal when exactly one profile is signed in", () => {
+    answers.providers = [
+      {
+        ...providerRow("claude-code", null),
+        auth: {
+          status: "unauthenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+        profiles: [
+          accountProfile({
+            profileId: "terminal-login",
+            kind: "ambient",
+            label: "Terminal",
+            authenticated: false,
+          }),
+          accountProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            authenticated: true,
+          }),
+        ],
+      },
+    ];
+
+    mountComposerOn(seed("claude"), null, () => true);
+
+    expect(submitted().toolbarStore.getState().selection).toMatchObject({
+      harnessId: "claude",
+      profileId: null,
+    });
   });
 });

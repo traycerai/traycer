@@ -36,12 +36,13 @@ export type HostOverviewTabBadges = Readonly<
 >;
 
 export const NO_HOST_OVERVIEW_TAB_BADGES: HostOverviewTabBadges = {
-  sandbox: null,
   installation: null,
   updates: null,
   access: null,
   data: null,
   ports: null,
+  secrets: null,
+  costs: null,
   simulators: null,
 };
 
@@ -68,9 +69,10 @@ export interface HostOverviewTabSelection {
  * which is what lets a switch of host in the sidebar picker keep the tab while
  * the remount still closes whatever was open for the previous host - a
  * confirmation, the rename field, the Doctor panel. The page opens on
- * Sandbox for a sandbox host, otherwise Installation. An explicit selection
- * carries across hosts when that host offers it; otherwise only the reader, an
- * open intent naming a tab (a retired name selects its replacement), and a
+ * Installation. Secrets and Costs stay selected only on a sandbox host; any
+ * other host opens on Installation instead. An explicit selection carries
+ * across hosts when that host offers it; otherwise only the reader, an open
+ * intent naming a tab (a retired name selects its replacement), and a
  * settings-search landing on a tab's anchor move it.
  *
  * The intent and the landing are applied during render, the Permissions
@@ -127,7 +129,11 @@ function resolvedOverviewTab(
   selectedTab: HostOverviewTab | null,
 ): HostOverviewTab {
   const sandbox = scope.host !== null && scope.host.sandbox !== null;
-  if (selectedTab !== null && (selectedTab !== "sandbox" || sandbox))
+  if (
+    selectedTab !== null &&
+    ((selectedTab !== "secrets" && selectedTab !== "costs") || sandbox)
+  ) {
     return selectedTab;
-  return sandbox ? "sandbox" : DEFAULT_HOST_OVERVIEW_TAB;
+  }
+  return DEFAULT_HOST_OVERVIEW_TAB;
 }

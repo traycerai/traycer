@@ -293,6 +293,9 @@ export type TerminalCloudVerdictLoss = Exclude<CloudVerdictLoss, "unreachable">;
  * `useAuthStore`. Static guard tests below enforce this constraint.
  */
 export interface AuthState {
+  /** Main-process storage condition, independent of the signed-in identity. */
+  readonly signInStorageLow: boolean;
+  setSignInStorageLow(low: boolean): void;
   readonly status: AuthStatus;
   /**
    * See {@link CloudVerdictLoss}. `AuthService` keeps it current from the
@@ -417,6 +420,8 @@ function coalesceUserName(
 }
 
 export const useAuthStore = create<AuthState>()((set) => ({
+  signInStorageLow: false,
+  setSignInStorageLow: (low) => set({ signInStorageLow: low }),
   status: "signed-out",
   signingInAttempt: null,
   // The initial `signed-out` is the absence of any identity, which is a

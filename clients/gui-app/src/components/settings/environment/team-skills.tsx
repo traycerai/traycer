@@ -28,7 +28,7 @@ import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
 import { TeamSkillUpload } from "./team-skill-upload";
 import { ConfigurationReadFailed } from "./team-read-failed";
-import { SKILLS_PAGE_DESCRIPTION } from "./mcp-skills-copy";
+import { SkillsIntroduction } from "./configuration-introduction";
 
 export function TeamSkillsPage(): ReactNode {
   // Keyed by configuration: a draft or a write's outcome stays with the
@@ -37,7 +37,7 @@ export function TeamSkillsPage(): ReactNode {
   return (
     <SettingsPanelShell
       title="Skills"
-      description={SKILLS_PAGE_DESCRIPTION}
+      description={<SkillsIntroduction />}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <TeamSkills key={configurationKey} providerId={null} />

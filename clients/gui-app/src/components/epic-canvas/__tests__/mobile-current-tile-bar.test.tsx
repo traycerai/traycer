@@ -3,12 +3,16 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderTestingLibrary,
   screen,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
+import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
+import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -46,6 +50,7 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
 // QueryClient, and no tile here is a chat the projection lacks a record for.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatList: () => ({ data: undefined }),
+  useCloudChatViewerId: () => "user-1",
 }));
 
 /**
@@ -130,6 +135,14 @@ const mocks = vi.hoisted(() => ({
   handle: { current: null as OpenedStoreForTest | null },
 }));
 
+let queryClient: QueryClient;
+
+function render(ui: ReactNode) {
+  return renderTestingLibrary(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
+
 // The display title's live-artifact read resolves through the open session.
 vi.mock("@/providers/use-open-epic-handle", () => ({
   useMaybeOpenEpicHandle: () => mocks.handle.current,
@@ -192,6 +205,13 @@ const TERMINAL_TILE: EpicCanvasTileRef = {
   hostId: "host-A",
   cwd: "/ws",
 };
+
+const terminalDirectory = new Map<
+  string,
+  { readonly displayName: string; readonly avatarUrl: string | null }
+>();
+const terminalDirectoryResolver: BotMemberResolver = (userId) =>
+  terminalDirectory.get(userId) ?? null;
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -261,10 +281,18 @@ function newSession(): OpenedStoreForTest {
 
 describe("<MobileCurrentTileBar trailing={null} />", () => {
   beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
     mocks.handle.current = newSession();
   });
   afterEach(() => {
     cleanup();
+    queryClient.clear();
+    terminalDirectory.clear();
     mocks.handle.current?.dispose();
     mocks.handle.current = null;
   });
@@ -379,6 +407,28 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
       expect(screen.getByTestId("mobile-current-tile-title").textContent).toBe(
         "Deciding",
       );
+    });
+
+    it("draws no pictures of attached people in the phone's current-tile bar", () => {
+      terminalDirectory.set("phone-viewer", {
+        displayName: "Phone Viewer",
+        avatarUrl: "https://images.example.test/phone-viewer.png",
+      });
+
+      render(
+        <PersonMembersContext.Provider value={terminalDirectoryResolver}>
+          <MobileCurrentTileBar
+            epicId="epic-1"
+            tile={TERMINAL_TILE}
+            onSwitch={null}
+            trailing={null}
+          />
+        </PersonMembersContext.Provider>,
+      );
+
+      expect(screen.getByTestId("mobile-current-tile-title")).toBeTruthy();
+      expect(screen.queryByTestId("terminal-viewers")).toBeNull();
+      expect(screen.queryAllByTestId("person-avatar")).toHaveLength(0);
     });
   });
 

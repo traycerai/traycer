@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
+import { PrSearchTermsContext } from "@/components/epic-canvas/pr/pr-search-context";
+import { prSearchTerms } from "@/lib/pr/pr-list-projection";
 import { makePrDetailTile, prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
@@ -202,6 +204,32 @@ describe("PrRow band 1: identity badges", () => {
 });
 
 describe("PrRow band 2-4: title, branches, owners", () => {
+  it("marks the title text the panel search matched", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <PrSearchTermsContext value={prSearchTerms("REMOTE support")}>
+            <PrRow
+              hostId="host1"
+              entry={entry({}, () => {})}
+              epicId="epic-1"
+              tabId={TAB_ID}
+            />
+          </PrSearchTermsContext>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId("pr-row-title").textContent).toBe(
+      "Remote Host Support",
+    );
+    expect(
+      screen
+        .getAllByTestId("pr-row-title-match")
+        .map((mark) => mark.textContent),
+    ).toEqual(["Remote", "Support"]);
+  });
+
   it("keeps the PR number out of the title so the title gets the full width", () => {
     renderRow({});
 

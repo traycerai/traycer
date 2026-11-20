@@ -116,6 +116,7 @@ const TRANSPARENT_NODE_TYPES: ReadonlySet<string> = new Set([
 const LOSSY_NODE_TYPES: ReadonlyMap<string, ContentRecoveryLoss> = new Map([
   ["image", "attachment"],
   ["imageAttachment", "attachment"],
+  ["fileAttachment", "attachment"],
   ["mention", "mention"],
   ["sourcedQuote", "quote"],
   ["blockquote", "quotedBlock"],

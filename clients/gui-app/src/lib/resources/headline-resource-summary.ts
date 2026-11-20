@@ -20,7 +20,9 @@ import type { AppResourceUsage } from "@/stores/resources/resources-store";
  * report a different total for the same host.
  */
 export interface HeadlineResourceSummary {
+  /** Host-count-scaled total retained for the secondary busy-cores detail. */
   readonly cpuPercent: number;
+  readonly cpuSharePercent: number | null;
   readonly memoryBytes: number | null;
   readonly rssBytes: number | null;
   readonly pssBytes: number | null;
@@ -29,7 +31,7 @@ export interface HeadlineResourceSummary {
 }
 
 interface DesktopResourceSummary {
-  readonly cpuPercent: number;
+  readonly cpuSharePercent: number;
   readonly rssBytes: number;
   readonly processCount: number;
 }
@@ -183,6 +185,24 @@ export function hostMemorySharePercent(
   return (memoryBytes / app.hostTotalMemoryBytes) * 100;
 }
 
+/** Share of the watched machine; the wire and desktop metrics stay per-core. */
+export function hostCpuSharePercent(
+  perCore: number | null,
+  app: Pick<AppResourceUsage, "hostCpuCount"> | null,
+): number | null {
+  if (perCore === null || app?.hostCpuCount === undefined) return null;
+  return perCore / app.hostCpuCount;
+}
+
+/** The busy cores behind the share, for hover and accessible detail. */
+export function hostCpuCoresLabel(
+  perCore: number | null,
+  app: Pick<AppResourceUsage, "hostCpuCount"> | null,
+): string | null {
+  if (perCore === null || app?.hostCpuCount === undefined) return null;
+  return `${(perCore / 100).toFixed(1)} of ${app.hostCpuCount} cores`;
+}
+
 export function combineHeadlineResourceSummary(input: {
   readonly hostTree: HostTreeResourceSnapshotWireV15 | null;
   readonly app: AppResourceUsage | null;
@@ -213,8 +233,14 @@ export function combineHeadlineResourceSummary(input: {
         };
   const desktop = desktopResourceSummary(desktopApp);
 
+  const hostShare = hostCpuSharePercent(base.cpuPercent, app);
+  // Callers include Desktop only while watching this machine. Add its native
+  // share to the host share; only the secondary cores detail scales it by the
+  // host count (exact when Electron and the local host count the same CPUs).
+  const desktopShare = desktop.cpuSharePercent;
   const summary = {
-    cpuPercent: base.cpuPercent + desktop.cpuPercent,
+    cpuPercent: base.cpuPercent + desktopShare * (app?.hostCpuCount ?? 0),
+    cpuSharePercent: hostShare === null ? null : hostShare + desktopShare,
     rssBytes: base.rssBytes === null ? null : base.rssBytes + desktop.rssBytes,
     pssBytes: desktopApp === null ? base.pssBytes : null,
     privateBytes: desktopApp === null ? base.privateBytes : null,
@@ -229,7 +255,7 @@ export function combineHeadlineResourceSummary(input: {
 function legacyHeadlineSummary(
   app: AppResourceUsage | null,
   owners: readonly OwnerResourceSnapshotWireV15[],
-): Omit<HeadlineResourceSummary, "memoryBytes"> {
+): Omit<HeadlineResourceSummary, "memoryBytes" | "cpuSharePercent"> {
   return owners.reduce(
     (summary, owner) => ({
       cpuPercent: summary.cpuPercent + owner.cpuPercent,
@@ -255,10 +281,10 @@ function desktopResourceSummary(
   desktopApp: DesktopAppResourceUsage | null,
 ): DesktopResourceSummary {
   if (desktopApp === null) {
-    return { cpuPercent: 0, rssBytes: 0, processCount: 0 };
+    return { cpuSharePercent: 0, rssBytes: 0, processCount: 0 };
   }
   return {
-    cpuPercent: desktopApp.cpuPercent,
+    cpuSharePercent: desktopApp.cpuSharePercent,
     rssBytes: desktopApp.rssBytes,
     processCount: desktopApp.processCount,
   };

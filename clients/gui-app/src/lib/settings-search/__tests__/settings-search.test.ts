@@ -1,8 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { searchSettings } from "@/lib/settings-search/settings-search";
+
+const soundtrackOfferedMock = vi.hoisted(() => ({ value: true }));
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => soundtrackOfferedMock.value,
+}));
+
+beforeEach(() => {
+  soundtrackOfferedMock.value = true;
+});
 
 /** A desktop zoom bridge: only its shape is read by the availability gate. */
 const DESKTOP_ZOOM = {
@@ -35,6 +46,8 @@ const DESKTOP: SettingsAvailabilityContext = {
   mobileApp: false,
   phoneLayout: false,
   soundtrackOffered: false,
+  soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: false,
 };
 
@@ -56,6 +69,8 @@ const MOBILE: SettingsAvailabilityContext = {
   mobileApp: true,
   phoneLayout: true,
   soundtrackOffered: false,
+  soundtrackRecordingOffered: false,
+  soundtrackSetPiecesOffered: false,
   soundtrackOn: false,
 };
 
@@ -111,7 +126,7 @@ describe("settings search", () => {
         result.entry.section === "shell" && result.entry.anchor === null,
     );
     expect(shell?.entry.description).toBe(
-      "Plain values every computer and sandbox running these settings gets, and the shell agents run in.",
+      "Plain values every computer and sandbox running Personal gets, and the shell agents run in.",
     );
   });
 
@@ -146,10 +161,21 @@ describe("settings search", () => {
     );
   });
 
-  it("reaches the Notifications page by its former name, Inbox", () => {
-    // The strip's drawer was renamed from "Inbox" to "Notifications"; the old
-    // name stays in the page's keywords so it is still findable.
-    expect(landingFor("inbox", DESKTOP)).toBe("notifications#<top>");
+  it("finds no Notifications page: the host's notification hooks are gone with it", () => {
+    for (const query of [
+      "inbox",
+      "notification hooks",
+      "webhook",
+      "script",
+      "automation",
+    ]) {
+      for (const context of [DESKTOP, MOBILE]) {
+        expect(
+          searchSettings(query, context).map((result) => result.entry.section),
+          query,
+        ).not.toContain("notifications");
+      }
+    }
   });
 
   it("reaches a bespoke page through the vocabulary it is really about", () => {
@@ -159,6 +185,17 @@ describe("settings search", () => {
     expect(labelsFor("api key", DESKTOP)).toContain("API key");
     expect(labelsFor("rate limit", DESKTOP)).toContain("Profiles & limits");
   });
+
+  it.each(["archived", "idle"])(
+    "reaches the Storage page for %s, which its two groups and their When rows fold into",
+    (query) => {
+      const storage = searchSettings(query, DESKTOP).filter(
+        (result) => result.entry.section === "storage",
+      );
+      expect(storage.map((result) => result.entry.label)).toEqual(["Storage"]);
+      expect(storage[0]?.entry.anchor).toBeNull();
+    },
+  );
 
   it("reaches the Appearance diff viewer rows by their own vocabulary", () => {
     expect(landingFor("line numbers", DESKTOP)).toBe(
@@ -252,13 +289,19 @@ describe("settings search", () => {
     ] as const) {
       expect(pageScopeFor(query, section, label), query).toBe("Environment");
     }
-    for (const [query, section, label] of [
-      ["Credits", "credits", "Credits"],
-      ["Notifications", "notifications", "Notifications"],
-    ] as const) {
-      expect(pageScopeFor(query, section, label), query).toBe("Account");
-    }
+    expect(pageScopeFor("Credits", "credits", "Credits")).toBe("Account");
     expect(pageScopeFor("Worktrees", "worktrees", "Worktrees")).toBe("Host");
+  });
+
+  it("finds the Members page when searching for the viewer role", () => {
+    const members = searchSettings("viewer", DESKTOP).find(
+      (result) =>
+        result.entry.kind === "section" &&
+        result.entry.section === "members" &&
+        result.entry.anchor === null,
+    );
+
+    expect(members?.entry.label).toBe("Members");
   });
 
   it("opens Browser agent access on the Permissions Browser tab, and Secrets on its own words", () => {
@@ -468,9 +511,9 @@ describe("settings search", () => {
       ).toContain("Agent roles");
     });
 
-    it("finds delivery words under Alerts and chime words under Sounds", () => {
-      // Sounds used to hold the OS and push rows and carried their words; it
-      // now holds only the chimes, so neither page answers the other's words.
+    it("finds delivery and chime words under Alerts, never under Sounds", () => {
+      // Sounds holds only the soundtrack now: the chimes, the OS and the push
+      // rows are all on Alerts.
       const sectionsFor = (
         query: string,
         context: SettingsAvailabilityContext,
@@ -481,18 +524,22 @@ describe("settings search", () => {
         ["push", DESKTOP],
         ["banner", DESKTOP],
         ["badge", DESKTOP],
+        ["chime", DESKTOP],
+        ["chime", MOBILE],
+        ["toast", DESKTOP],
+        ["in-app notifications", DESKTOP],
       ] as const) {
         const sections = sectionsFor(query, context);
         expect(sections[0], query).toBe("alerts");
         expect(sections, query).not.toContain("app-notifications");
       }
-      for (const query of ["chime", "sound"]) {
-        for (const context of [DESKTOP, MOBILE]) {
-          const sections = sectionsFor(query, context);
-          expect(sections[0], query).toBe("app-notifications");
-          expect(sections, query).not.toContain("alerts");
-        }
-      }
+    });
+
+    it("finds the Needs action kind row by its anchor", () => {
+      const hit = searchSettings("Needs action", DESKTOP).find(
+        (result) => result.entry.anchor === "alerts-needs-action",
+      );
+      expect(hit?.entry.section).toBe("alerts");
     });
 
     it.each(["music", "soundtrack"])(
@@ -610,18 +657,12 @@ describe("settings search", () => {
 
     it("sends runtime-gated groups' vocabulary to their pages", () => {
       // Website sessions also waits on a bound host runtime and a first read
-      // of the browser bridge; host Notifications' and Fallback's groups sit
-      // behind their pages' scope gates, and Fallback's render only once the
-      // host answers the policy read. None is a target — their words reach
-      // the page.
+      // of the browser bridge; Fallback's groups sit behind its page's scope
+      // gate and render only once the host answers the policy read. None is a
+      // target — their words reach the page.
       for (const context of [DESKTOP, MOBILE]) {
         for (const query of ["stay signed in", "cookies", "website sessions"]) {
           expect(landingsFor(query, context), query).toContain("browser#<top>");
-        }
-        for (const query of ["notification hooks", "webhook", "toast"]) {
-          expect(landingsFor(query, context), query).toContain(
-            "notifications#<top>",
-          );
         }
         for (const query of ["rate limit", "failover", "equivalent models"]) {
           expect(landingsFor(query, context), query).toContain(

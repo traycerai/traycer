@@ -35,6 +35,11 @@ import "../../../../../__tests__/test-browser-apis";
  */
 
 import type { UseNavigateResult } from "@tanstack/react-router";
+import {
+  drawsColouredMascot,
+  expectedTracyGlyph,
+  renderedTracyGlyphs,
+} from "@/components/bots/__tests__/mascot-drawing";
 import type { HostNotificationsIndicatorState } from "@traycer/protocol/host/notifications/contracts";
 import {
   cleanup,
@@ -65,6 +70,7 @@ import {
 } from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 // One-time, real reconciliation install - mirrors `tab-navigation.test.ts`,
 // the only other suite that drives `activateTabIntent` against real stores.
@@ -150,6 +156,7 @@ vi.mock("@/lib/analytics", () => ({
 
 vi.mock("@/lib/host", () => ({
   useAuthService: () => ({ signOut: () => Promise.resolve() }),
+  useHostBinding: () => null,
 }));
 
 // The drawer's Notifications row opens the phone's notification centre, whose
@@ -181,8 +188,10 @@ vi.mock("@/lib/commands/actions/new-epic", () => ({
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
+  useHistoryQuery: (params: UseHistoryQueryParams) => ({
     data: { items: [], totalCount: 0 },
+    sort: params.search.sort,
+    createdSortAvailable: true,
     isPending: false,
     isFetching: false,
     error: null,
@@ -329,7 +338,8 @@ describe("MobileNavDrawer rows", () => {
 
     const row = await screen.findByTestId("mobile-nav-tracy");
     expect(row.textContent).toBe("Tracy");
-    expect(within(row).getByTestId("tracy-entry-icon")).toBeTruthy();
+    expect(renderedTracyGlyphs(row)).toEqual([expectedTracyGlyph(16)]);
+    expect(drawsColouredMascot(row)).toBe(false);
     fireEvent.click(row);
 
     expect(useTracySurfaceStore.getState().hostId).toBe("host-a");
@@ -337,7 +347,7 @@ describe("MobileNavDrawer rows", () => {
     expect(useTabsStore.getState().activeItemId).toBe(tabItemId(TRACY));
   });
 
-  describe("the Tracy row's unread count", () => {
+  describe("the Tracy row's unread signal", () => {
     function openTracyRow(): void {
       useTracySurfaceStore.setState({
         open: true,
@@ -368,49 +378,39 @@ describe("MobileNavDrawer rows", () => {
       };
     }
 
-    it.each([
-      { unreadCount: 3, shown: "3" },
-      { unreadCount: 120, shown: "99+" },
-    ])(
-      "draws $shown on the glyph and names it, bold",
-      async ({ unreadCount, shown }) => {
-        openTracyRow();
-        tracyIndicators(true, unreadCount);
-        renderDrawer();
+    it("names the unread count and bolds the label without drawing a count", async () => {
+      openTracyRow();
+      tracyIndicators(true, 3);
+      renderDrawer();
 
-        const row = await screen.findByTestId("mobile-nav-tracy");
-        const count = within(row).getByTestId("tracy-entry-unread-count");
-        expect(count.textContent).toBe(shown);
-        // The drawer's ground is the popover, not the strip's canvas.
-        expect(count.classList.contains("ring-popover")).toBe(true);
-        expect(count.classList.contains("ring-canvas")).toBe(false);
-        expect(row.getAttribute("aria-label")).toBe(`Tracy, ${shown} unread`);
-        expect(row.hasAttribute("data-unread")).toBe(true);
-        expect(within(row).getByText("Tracy").className).toContain(
-          "font-semibold",
-        );
-      },
-    );
+      const row = await screen.findByRole("button", {
+        name: "Tracy, 3 unread",
+      });
+      expect(within(row).queryByText("3")).toBeNull();
+      expect(row.hasAttribute("data-unread")).toBe(true);
+      expect(within(row).getByText("Tracy").className).toContain(
+        "font-semibold",
+      );
+    });
 
-    it("draws no count at zero", async () => {
+    it("is unmarked and unbolded at zero", async () => {
       openTracyRow();
       tracyIndicators(false, 0);
       renderDrawer();
 
-      const row = await screen.findByTestId("mobile-nav-tracy");
-      expect(within(row).queryByTestId("tracy-entry-unread-count")).toBeNull();
-      expect(row.getAttribute("aria-label")).toBe("Tracy");
+      const row = await screen.findByRole("button", { name: "Tracy" });
       expect(row.hasAttribute("data-unread")).toBe(false);
+      expect(within(row).getByText("Tracy").className).not.toContain(
+        "font-semibold",
+      );
     });
 
-    it("keeps the bold name and draws no count for a host that does not count", async () => {
+    it("keeps the bold name for a host that does not count", async () => {
       openTracyRow();
       tracyIndicators(true, null);
       renderDrawer();
 
-      const row = await screen.findByTestId("mobile-nav-tracy");
-      expect(within(row).queryByTestId("tracy-entry-unread-count")).toBeNull();
-      expect(row.getAttribute("aria-label")).toBe("Tracy");
+      const row = await screen.findByRole("button", { name: "Tracy" });
       expect(row.hasAttribute("data-unread")).toBe(true);
       expect(within(row).getByText("Tracy").className).toContain(
         "font-semibold",

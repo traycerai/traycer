@@ -1,6 +1,5 @@
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
-import { useHostClient } from "@/lib/host";
 import { useConfigurationSource } from "./configuration-source";
 
 /**
@@ -11,8 +10,7 @@ import { useConfigurationSource } from "./configuration-source";
  * missing name costs something.
  */
 export function usePickedTeamLabel(environmentId: string): string | null {
-  const client = useHostClient();
-  const query = useEnvironmentListQuery(client, true);
+  const query = useEnvironmentListQuery(true);
   const entry = query.data?.environments.find(
     (row) => row.environmentId === environmentId,
   );
@@ -31,8 +29,7 @@ export function usePickedTeamLabel(environmentId: string): string | null {
  * on essentially every Settings visit, for everyone, invited or not.
  */
 export function useInvitedTeamName(environmentId: string): string | null {
-  const client = useHostClient();
-  const invitations = useEnvironmentInvitationsQuery(client);
+  const invitations = useEnvironmentInvitationsQuery();
   return (
     invitations.data?.invitations.find(
       (invitation) => invitation.environmentId === environmentId,
@@ -52,4 +49,15 @@ export function useConfigurationName(): string {
   if (source.kind === "pool" && source.configuration === "personal")
     return "Personal";
   return teamLabel ?? "this team";
+}
+
+/** The account's team route key; never substitute its environment id in a command. */
+export function usePickedTeamHandle(environmentId: string): string | null {
+  const query = useEnvironmentListQuery(true);
+  return (
+    query.data?.environments.find(
+      (row) =>
+        row.environmentId === environmentId && row.ownerKind === "organization",
+    )?.providerHandle ?? null
+  );
 }

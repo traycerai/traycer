@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { TEAM_HOST_ACTIVATE_REASON } from "@/components/settings/host-scope/host-option-model";
 import { HostOverviewHeaderActions } from "@/components/settings/panels/host-overview-status-card";
 
@@ -7,8 +13,9 @@ import { HostOverviewHeaderActions } from "@/components/settings/panels/host-ove
  * The window binding on the Overview's header cluster is offered only for a
  * row a picker would offer (`hostOptionCanActivate`). The panel passes
  * `onMakeActive: null` for the rest; the cluster then draws no Activate,
- * inline or in the phone menu, while "Active" still shows for a row the
- * window is already on.
+ * inline or in More. A row this window already runs on shows Active in the
+ * inline slot. More keeps that state only when `activateInMenu` says another
+ * control owns the slot.
  */
 
 function renderActions(args: {
@@ -62,6 +69,7 @@ describe("HostOverviewHeaderActions Activate gate", () => {
     fireEvent.click(screen.getByTestId("host-make-active"));
 
     expect(onMakeActive).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("host-active-in-window")).toBeNull();
   });
 
   it("draws no inline Activate for a management-only row", () => {
@@ -76,20 +84,26 @@ describe("HostOverviewHeaderActions Activate gate", () => {
     expect(screen.queryByTestId("host-active-in-window")).toBeNull();
   });
 
-  it("shows Active in More when the window is already on the row, whatever onMakeActive is", async () => {
+  it("shows Active in the row when the window is already on it, and More has no Active item", async () => {
     renderActions({
       isActive: true,
       onMakeActive: null,
       activateInMenu: false,
       teamOwned: false,
     });
-    await openMenu();
 
-    expect(screen.getByTestId("host-active-in-window").textContent).toContain(
-      "Active",
-    );
+    const badge = screen.getByTestId("host-active-in-window");
+    expect(badge.textContent).toBe("Active");
+    expect(badge.getAttribute("data-slot")).toBe("badge");
+    expect(badge.closest("[role='menu']")).toBeNull();
     expect(screen.queryByTestId("host-make-active")).toBeNull();
     expect(screen.queryByRole("button", { name: "Activate" })).toBeNull();
+
+    await openMenu();
+    const menu = screen.getByRole("menu");
+    expect(within(menu).queryByText("Active")).toBeNull();
+    expect(within(menu).queryByTestId("host-active-in-window")).toBeNull();
+    expect(within(menu).getByTestId("host-overview-restart")).not.toBeNull();
   });
 
   it("puts Activate first in the phone menu when the row can be activated", async () => {
@@ -120,7 +134,7 @@ describe("HostOverviewHeaderActions Activate gate", () => {
     expect(screen.getByTestId("host-overview-restart")).not.toBeNull();
   });
 
-  it("still says Active in the phone menu when the window is already on the row", async () => {
+  it("keeps Active in More when another control already owns the inline slot", async () => {
     renderActions({
       isActive: true,
       onMakeActive: null,
@@ -129,9 +143,10 @@ describe("HostOverviewHeaderActions Activate gate", () => {
     });
     await openMenu();
 
-    expect(screen.getByTestId("host-active-in-window").textContent).toContain(
-      "Active",
-    );
+    const menu = screen.getByRole("menu");
+    const active = within(menu).getByTestId("host-active-in-window");
+    expect(active.textContent).toContain("Active");
+    expect(screen.getAllByTestId("host-active-in-window")).toHaveLength(1);
     expect(screen.queryByTestId("host-make-active")).toBeNull();
   });
 

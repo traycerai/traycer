@@ -2039,8 +2039,8 @@ describe("the task store floor", () => {
     await expect(
       assertHostStoreFormatFloor(
         rollbackInput(logger, {
-          targetVersion: "1.5.4",
-          installedVersion: "1.5.5",
+          targetVersion: "1.5.5",
+          installedVersion: "1.5.6",
         }),
       ),
     ).resolves.toBeUndefined();
@@ -2173,8 +2173,8 @@ describe("the task store floor", () => {
     await expect(
       assertHostStoreFormatFloor(
         rollbackInput(logger, {
-          targetVersion: "1.5.4",
-          installedVersion: "1.5.5",
+          targetVersion: "1.5.5",
+          installedVersion: "1.5.6",
         }),
       ),
     ).resolves.toBeUndefined();

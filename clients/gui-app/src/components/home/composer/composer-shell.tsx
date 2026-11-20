@@ -5,6 +5,7 @@ import {
   type DragEventHandler,
   type PointerEvent,
   type ReactNode,
+  type RefCallback,
 } from "react";
 import { ImageIcon } from "lucide-react";
 
@@ -14,6 +15,7 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
 import { ComposerNarrowProvider } from "@/components/home/composer/composer-narrow-context";
 import { useComposerNarrowObserver } from "@/components/home/composer/composer-narrow-hooks";
+import { useComposerEditorOverflow } from "@/components/home/composer/use-composer-editor-overflow";
 import { useComposerSheetPin } from "@/components/home/composer/use-composer-sheet-pin";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
@@ -53,8 +55,21 @@ export function ComposerDropOverlay({
   );
 }
 
-/** Vertical travel that reads as a deliberate pull rather than a wobble. */
-const PULL_THRESHOLD_PX = 24;
+/**
+ * Upward travel that opens the sheet on release. Long enough that a scroll
+ * of the chat which starts on the card's top edge, or a thumb settling onto
+ * it, does not open the sheet; that was how an empty composer kept opening
+ * by accident.
+ */
+const OPEN_PULL_PX = 48;
+/** Downward travel that closes the sheet on release. */
+const CLOSE_PULL_PX = 24;
+/**
+ * Upward travel after which the card starts to follow the finger, so the
+ * pull shows what it will do well before it commits. A tap or a wobble
+ * under it does nothing.
+ */
+const FOLLOW_PULL_PX = 8;
 /** How long a released sheet takes to settle: the sheet's `duration-200`. */
 const SETTLE_MS = 200;
 /** Where a pull holds the sheet's top, measured from the card's place in flow. */
@@ -83,8 +98,9 @@ interface ComposerPull {
 /**
  * The pull that opens the composer as a sheet and closes it again. The sheet
  * follows it: its top stays under the finger, and on release it settles open
- * or closed by how far the pull went. A tap or a wobble does nothing, so a
- * thumb landing on a zone never opens anything. Every zone that starts one
+ * or closed by how far the pull went: a short pull up lifts the card to show
+ * the sheet and lets it settle back shut, so only a deliberate one opens it,
+ * and a tap or a wobble does nothing. Every zone that starts one
  * shares this one pull, so the zones are one control: a press in any of them
  * starts the same pull, and the sheet captures its pointer, so it carries the
  * pull whatever the finger crosses and whichever zone the layout it opens
@@ -123,7 +139,7 @@ function useComposerPull(expansion: ComposerExpansion | null): ComposerPull {
     }
     const { startY, grip, wasOpen } = pull.current;
     if (sheet.style.getPropertyValue(SHEET_TOP) === "") {
-      if (!wasOpen && event.clientY - startY > -PULL_THRESHOLD_PX) return;
+      if (!wasOpen && event.clientY - startY > -FOLLOW_PULL_PX) return;
       sheet.dataset.composerPulling = "";
       if (!wasOpen) expansion.onExpandedChange(true);
     }
@@ -138,7 +154,7 @@ function useComposerPull(expansion: ComposerExpansion | null): ComposerPull {
     if (sheet.style.getPropertyValue(SHEET_TOP) === "") return;
     delete sheet.dataset.composerPulling;
     const travel = event.clientY - startY;
-    if (wasOpen ? travel < PULL_THRESHOLD_PX : travel <= -PULL_THRESHOLD_PX) {
+    if (wasOpen ? travel < CLOSE_PULL_PX : travel <= -OPEN_PULL_PX) {
       sheet.style.removeProperty(SHEET_TOP);
       return;
     }
@@ -161,35 +177,53 @@ function useComposerPull(expansion: ComposerExpansion | null): ComposerPull {
 }
 
 /**
- * The pull zone along the card's top edge, with nothing drawn in it. It covers
- * the card's top padding and a little above it, never the first line of the
- * draft. On the focus layout's one row there is no top padding to cover, so
- * the zone is the gap under the transcript's jump pill and the row's dead
- * strip down to Send's top, which sits higher in the row than the draft's
- * first line; `ComposerDraftGrabber` carries it down to that line over the
- * draft's side. An attachment's chips sit at the row's top instead, so over
- * them the zone ends at the card's edge. It is hidden from assistive
- * technology; `ComposerExpandButton` is its accessible twin.
+ * The pull zone along the card's top edge. It covers the card's top padding
+ * and stops there: never the first line of the draft, and nothing above the
+ * card, where a scroll of the chat starts. On the focus layout's one row
+ * there is no top padding to cover, so the zone is the gap under the
+ * transcript's jump pill and the row's dead strip down to Send's top, which
+ * sits higher in the row than the draft's first line; `ComposerDraftGrabber`
+ * carries it down to that line over the draft's side. An attachment's chips
+ * sit at the row's top instead, so over them the zone ends at the card's
+ * edge. It is hidden from assistive technology; `ComposerExpandButton` is its
+ * accessible twin.
+ *
+ * The bar is the handle: a pill on the edge, which says the card can be
+ * pulled and, on the open sheet, is the only visible way back. The compact
+ * card earns it once the draft has outgrown the box (`overflows`), so a short
+ * draft shows no chrome; the row has no room for it.
  */
 function ComposerGrabber({
   pull,
   focusRow,
+  expanded,
+  overflows,
 }: {
   readonly pull: ComposerPull;
   readonly focusRow: boolean;
+  readonly expanded: boolean;
+  readonly overflows: boolean;
 }): ReactNode {
+  const bar = !focusRow && (expanded || overflows);
   return (
     <div
       aria-hidden
       data-composer-grabber=""
       className={cn(
-        "absolute inset-x-0 z-30 touch-none",
-        focusRow
-          ? "-top-1.5 h-2.25 group-has-[[data-composer-attachment-rail]:not(:empty)]/composer-shell:h-1.5"
-          : "-top-2 h-6",
+        "absolute inset-x-0 z-30 flex touch-none justify-center",
+        focusRow &&
+          "-top-1.5 h-2.25 group-has-[[data-composer-attachment-rail]:not(:empty)]/composer-shell:h-1.5",
+        !focusRow && (expanded ? "top-0 h-5 pt-2" : "top-0 h-4 pt-1.5"),
       )}
       {...pull.start}
-    />
+    >
+      {bar ? (
+        <span
+          data-composer-grabber-bar=""
+          className="h-1 w-9 rounded-full bg-foreground/25"
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -242,15 +276,17 @@ function ComposerExpandButton({
  * the sheet it takes the scroll, so the toolbar stays put.
  */
 function ComposerEditorFrame(props: {
+  readonly ref: RefCallback<HTMLDivElement>;
   readonly focusRow: boolean;
   readonly expanded: boolean;
   readonly attachmentsStrip: ReactNode;
   readonly editor: ReactNode;
   readonly draftGrabber: ReactNode;
 }): ReactNode {
-  const { focusRow, expanded } = props;
+  const { focusRow, expanded, ref } = props;
   return (
     <div
+      ref={ref}
       data-composer-editor-frame=""
       data-layout-passive
       className={cn(
@@ -331,6 +367,9 @@ function ComposerAreaImpl({
       : undefined;
   const { slotRef, sheetRef } = useComposerSheetPin(expanded);
   const pull = useComposerPull(expansion);
+  const { ref: frameRef, overflows } = useComposerEditorOverflow(
+    expansion !== null,
+  );
   return (
     <div className="relative">
       <ComposerMenu
@@ -386,7 +425,12 @@ function ComposerAreaImpl({
         {overlay}
         {expansion === null ? null : (
           <>
-            <ComposerGrabber pull={pull} focusRow={focusRow} />
+            <ComposerGrabber
+              pull={pull}
+              focusRow={focusRow}
+              expanded={expanded}
+              overflows={overflows}
+            />
             <ComposerExpandButton {...expansion} />
           </>
         )}
@@ -400,6 +444,7 @@ function ComposerAreaImpl({
           {utilityRail}
         </div>
         <ComposerEditorFrame
+          ref={frameRef}
           focusRow={focusRow}
           expanded={expanded}
           attachmentsStrip={attachmentsStrip}

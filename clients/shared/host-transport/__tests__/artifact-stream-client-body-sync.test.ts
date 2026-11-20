@@ -4,6 +4,7 @@
  * it names another artifact.
  */
 import { describe, expect, it, vi } from "vitest";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -41,6 +42,9 @@ class StubSession implements IStreamSession {
     return this.negotiatedSchemaVersion;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
 
   emitFrame(
@@ -68,6 +72,7 @@ function makeWsStreamClient(
     endpoint: () => null,
     hostId: null,
     bearer: () => null,
+    userId: AUTHENTICATED_USER_FIXTURE_ID,
     auth: null,
     clock: null,
     hostCredentialMint: null,

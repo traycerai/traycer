@@ -8,6 +8,10 @@ import {
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  decodeResponsePayload,
+  prepareRequestPayload,
+} from "@traycer/protocol/host-transport/remote/rpc-codec";
+import {
   environmentConfigurationRevisionV10,
   environmentConfigurationGuideGetUpgradeV10ToV11,
   environmentConfigurationGuideGetV10,
@@ -37,6 +41,8 @@ import {
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
   environmentPlansListV10,
+  environmentPlansListV11,
+  environmentPlansUnlinkV11,
   environmentPlansUnlinkPreviewV10,
   environmentPlansUnlinkV10,
   ENVIRONMENT_POLICY_MAX_BYTES,
@@ -44,12 +50,18 @@ import {
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   environmentHostBindV10,
+  environmentHostBindV11,
   environmentHostListV10,
   environmentHostListV11,
   environmentHostReadV10,
+  environmentHostReadV11,
   environmentListUpgradeV10ToV11,
   environmentListV10,
   environmentListV11,
+  environmentEffectiveRoleSchema,
+  environmentMemberRoleSchema,
+  grantedEnvironmentRole,
+  grantedTeamMemberRole,
   environmentMembersInviteV10,
   environmentMembersNoticeSeenV10,
   environmentInvitationsAcceptV10,
@@ -59,6 +71,7 @@ import {
   environmentMembersRemoveV10,
   environmentMembersSetRoleV10,
   environmentMembersV10,
+  environmentPreviewLocalFactsV10,
   environmentSetMainBotV10,
   type EnvironmentMembersResponseV11,
 } from "@traycer/protocol/host/environment/contracts";
@@ -70,6 +83,9 @@ import {
   environmentMovePlanV10,
   environmentMovePlanV11,
   environmentMovePlanV12,
+  environmentMoveStageV10,
+  environmentMoveStartV10,
+  environmentMoveOutcomeV10,
   environmentMoveStopPreviewUpgradeV10ToV11,
   environmentMoveStopPreviewV10,
   environmentMoveStopPreviewV11,
@@ -131,6 +147,19 @@ describe("environment.list protocol contract", () => {
   });
 });
 
+describe("retired team provider profile methods", () => {
+  it("does not register retired provider profile calls on the real host registry", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(Object.hasOwn(hostRpcRegistry, method)).toBe(false);
+    }
+  });
+});
+
 describe("environment.host.read / .bind / .list protocol contracts", () => {
   it("answer the host id, its environment and whether the binding is explicit", () => {
     const unbound = {
@@ -188,6 +217,119 @@ describe("environment.host.read / .bind / .list protocol contracts", () => {
     ).toBe(false);
   });
 
+  it("round-trips both read versions and upgrades an old host with an explicit null", () => {
+    const legacyResponse = environmentHostReadV10.responseSchema.parse({
+      hostId: "host-1",
+      environment: TEAM,
+      explicit: true,
+      enrolledByUserId: "user-1",
+      canUnbind: true,
+    });
+    const upgraded = decodeResponsePayload(
+      hostRpcRegistry["environment.host.read"],
+      { major: 1, minor: 1 },
+      { major: 1, minor: 0 },
+      legacyResponse,
+      "request-1",
+      "environment.host.read",
+    );
+    const newHostResponse = environmentHostReadV11.responseSchema.parse({
+      ...legacyResponse,
+      sharingGeneration: 12,
+    });
+    const decodedNewHostResponse = decodeResponsePayload(
+      hostRpcRegistry["environment.host.read"],
+      { major: 1, minor: 0 },
+      { major: 1, minor: 1 },
+      newHostResponse,
+      "request-2",
+      "environment.host.read",
+    );
+    const decodedNewHostForNewClient = decodeResponsePayload(
+      hostRpcRegistry["environment.host.read"],
+      { major: 1, minor: 1 },
+      { major: 1, minor: 1 },
+      newHostResponse,
+      "request-3",
+      "environment.host.read",
+    );
+    const legacyClientResponse = environmentHostReadV10.responseSchema.parse(
+      decodedNewHostResponse,
+    );
+
+    expect({
+      upgraded,
+      decodedNewHostAtNewClient: decodedNewHostForNewClient,
+      decodedNewHostAtOldClient: legacyClientResponse,
+      rejectedMissingGeneration:
+        environmentHostReadV11.responseSchema.safeParse(legacyResponse).success,
+      rejectedNegativeGeneration:
+        environmentHostReadV11.responseSchema.safeParse({
+          ...legacyResponse,
+          sharingGeneration: -1,
+        }).success,
+      acceptedNullGeneration: environmentHostReadV11.responseSchema.safeParse({
+        ...legacyResponse,
+        sharingGeneration: null,
+      }).success,
+    }).toEqual({
+      upgraded: { ...legacyResponse, sharingGeneration: null },
+      decodedNewHostAtNewClient: {
+        ...legacyResponse,
+        sharingGeneration: 12,
+      },
+      decodedNewHostAtOldClient: legacyResponse,
+      rejectedMissingGeneration: false,
+      rejectedNegativeGeneration: false,
+      acceptedNullGeneration: true,
+    });
+  });
+
+  it("keeps both bind minors wire compatible while advertising team transfer on 1.1", () => {
+    const method = "environment.host.bind";
+    const registry = hostRpcRegistry[method];
+    validateVersionedRpcRegistry({ [method]: registry });
+    const params = { environmentId: TEAM.environmentId };
+    const binding = {
+      hostId: "host-1",
+      environment: TEAM,
+      explicit: true,
+      enrolledByUserId: null,
+      canUnbind: true,
+    };
+    for (const minor of [0, 1]) {
+      const version = { major: 1, minor };
+      const prepared = prepareRequestPayload(
+        registry,
+        { major: 1, minor: 1 },
+        version,
+        params,
+        "bind-request",
+        method,
+      );
+      expect(prepared).toEqual({
+        onWireVersion: version,
+        onWirePayload: params,
+      });
+      expect(
+        decodeResponsePayload(
+          registry,
+          { major: 1, minor: 1 },
+          version,
+          binding,
+          "bind-request",
+          method,
+        ),
+      ).toEqual(binding);
+    }
+    expect(environmentHostBindV11.requestSchema).toBe(
+      environmentHostBindV10.requestSchema,
+    );
+    expect(environmentHostBindV11.responseSchema).toBe(
+      environmentHostBindV10.responseSchema,
+    );
+  });
+
   it("register off the released floor with unsupported degrade", () => {
     for (const [method, contract] of [
       ["environment.host.read", environmentHostReadV10],
@@ -200,10 +342,8 @@ describe("environment.host.read / .bind / .list protocol contracts", () => {
       expect(entry.degrade).toEqual({ kind: "unsupported" });
       expect(entry[1].versions[0].contract).toBe(contract);
     }
-    // read and bind stay at @1.0; host.list grew @1.1 and @1.2 MINORs,
-    // members @1.1 and @1.2.
-    expect(hostRpcRegistry["environment.host.read"][1].latestMinor).toBe(0);
-    expect(hostRpcRegistry["environment.host.bind"][1].latestMinor).toBe(0);
+    expect(hostRpcRegistry["environment.host.read"][1].latestMinor).toBe(1);
+    expect(hostRpcRegistry["environment.host.bind"][1].latestMinor).toBe(1);
     expect(hostRpcRegistry["environment.host.list"][1].latestMinor).toBe(2);
     expect(hostRpcRegistry["environment.members"][1].latestMinor).toBe(2);
   });
@@ -353,6 +493,37 @@ describe("environment.setMainBot protocol contract", () => {
   });
 });
 
+/**
+ * Viewer remains a team seat role in both the decodable and granted
+ * vocabularies. Values outside the vocabulary still resolve to no role.
+ */
+describe("the viewer role decodes and is granted", () => {
+  it("parses viewer in the environment's effective-role and member-role enums", () => {
+    expect(environmentEffectiveRoleSchema.parse("viewer")).toBe("viewer");
+    expect(environmentMemberRoleSchema.parse("viewer")).toBe("viewer");
+  });
+
+  it("resolves viewer roles and leaves unknown roles ungranted", () => {
+    const team = environmentListV11.responseSchema.parse({
+      environments: [
+        {
+          ...TEAM,
+          effectiveRole: "viewer",
+          kind: "team",
+          hostCount: 1,
+          providerHandle: "acme",
+        },
+      ],
+    }).environments[0];
+    expect(grantedEnvironmentRole(team.effectiveRole)).toBe("viewer");
+    expect(grantedEnvironmentRole("editor")).toBe("editor");
+    expect(grantedEnvironmentRole("superuser")).toBeNull();
+    expect(grantedTeamMemberRole("viewer")).toBe("viewer");
+    expect(grantedTeamMemberRole("admin")).toBe("admin");
+    expect(grantedTeamMemberRole("superuser")).toBeNull();
+  });
+});
+
 describe("environment.list@1.1, environment.host.list@1.1 and environment.members@1.1 upgrade from @1.0 through the registry", () => {
   const ONE_ZERO = { major: 1, minor: 0 } as const;
   const ONE_ONE = { major: 1, minor: 1 } as const;
@@ -386,6 +557,11 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
         },
       ],
     });
+    expect(
+      upgraded.environments.map((environment) =>
+        grantedEnvironmentRole(environment.effectiveRole),
+      ),
+    ).toEqual(["owner", "viewer"]);
     // The upgraded answer is a valid @1.1 answer, and the request is untouched.
     expect(environmentListV11.responseSchema.parse(upgraded)).toEqual(upgraded);
     expect(
@@ -570,6 +746,11 @@ describe("environment.list@1.1, environment.host.list@1.1 and environment.member
       legacyRoleNoticeSeenAt: null,
       legacyMembers: [],
     });
+    expect(
+      upgraded.members.map((member) =>
+        grantedTeamMemberRole(member.effectiveRole),
+      ),
+    ).toEqual(["viewer", "viewer"]);
   });
 
   it("upgrades an environment.members@1.1 page to @1.2 with each member's email null, and parses an @1.2 email", () => {
@@ -671,6 +852,24 @@ const ITEM_ADDRESS = {
   revision: 3,
 };
 
+const STAGED_MOVE = {
+  evidence: {
+    attemptId: "123e4567-e89b-42d3-a456-426614174000",
+    planHash: "a".repeat(64),
+    planRevision: 2,
+    hostVersion: "1.4.0",
+    itemCount: 1,
+    keyChoices: [{ key: "API_BASE", choice: "stays" }],
+    sourceHostId: "223e4567-e89b-42d3-a456-426614174000",
+    sharingGeneration: 1,
+    targetKind: "personal",
+    environmentId: PERSONAL.environmentId,
+    disclosureVersion: 1,
+  },
+  authorization: { manifestHash: "b".repeat(64) },
+};
+const MOVE_ACCEPTANCE_ID = "323e4567-e89b-42d3-a456-426614174000";
+
 const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
   {
     method: "environment.configuration.revision",
@@ -719,6 +918,67 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     },
     response: { outcome: "accepted", attemptId: "a1", consentId: "c1" },
     badResponse: { outcome: "accepted", attemptId: "a1" },
+  },
+  {
+    method: "environment.move.stage",
+    contract: environmentMoveStageV10,
+    request: {
+      target: { kind: "personal", environmentId: PERSONAL.environmentId },
+      keyChoices: [{ key: "API_BASE", choice: "stays" }],
+      personal: {
+        items: [
+          {
+            kind: "variable",
+            key: "API_BASE",
+            os: null,
+            value: "https://api.example.com",
+          },
+        ],
+        holdsSecrets: false,
+      },
+    },
+    badRequest: {
+      target: { kind: "personal", environmentId: PERSONAL.environmentId },
+      keyChoices: [{ key: "API_BASE", choice: "moves" }],
+      personal: { items: [], holdsSecrets: false },
+    },
+    response: STAGED_MOVE,
+    badResponse: {
+      ...STAGED_MOVE,
+      authorization: { manifestHash: "not-a-sha256-hash" },
+    },
+  },
+  {
+    method: "environment.move.start",
+    contract: environmentMoveStartV10,
+    request: {
+      attemptId: STAGED_MOVE.evidence.attemptId,
+      planHash: STAGED_MOVE.evidence.planHash,
+      acceptanceId: MOVE_ACCEPTANCE_ID,
+    },
+    badRequest: {
+      attemptId: STAGED_MOVE.evidence.attemptId,
+      planHash: STAGED_MOVE.evidence.planHash,
+      acceptanceId: "not-a-uuid",
+    },
+    response: {
+      state: "running",
+      attemptId: STAGED_MOVE.evidence.attemptId,
+      acceptanceId: MOVE_ACCEPTANCE_ID,
+    },
+    badResponse: {
+      state: "retry",
+      attemptId: STAGED_MOVE.evidence.attemptId,
+      acceptanceId: MOVE_ACCEPTANCE_ID,
+    },
+  },
+  {
+    method: "environment.move.outcome",
+    contract: environmentMoveOutcomeV10,
+    request: { attemptId: "ended-attempt" },
+    badRequest: { attemptId: "" },
+    response: { state: "not_found", attemptId: "ended-attempt" },
+    badResponse: { state: "not_found", attemptId: "" },
   },
   {
     method: "environment.move.stopPreview",
@@ -1226,6 +1486,20 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     badResponse: { seats: { used: -1, total: 5 } },
   },
   {
+    method: "environment.previewLocalFacts",
+    contract: environmentPreviewLocalFactsV10,
+    request: {
+      environmentId: TEAM.environmentId,
+      subject: { kind: "computer" },
+    },
+    badRequest: {
+      environmentId: TEAM.environmentId,
+      subject: { kind: "host" },
+    },
+    response: { activeTurns: 3, terminals: 1 },
+    badResponse: { activeTurns: -1, terminals: null },
+  },
+  {
     method: "environment.invitations.list",
     contract: environmentInvitationsListV10,
     request: {},
@@ -1270,21 +1544,24 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
 
 describe("the environments redesign's new @1.0 methods", () => {
   it.each(REDESIGN_WIRE_CASES.map((c) => [c.method, c] as const))(
-    "%s is registered off the released floor with degrade unsupported, major 1 only",
+    "%s is registered off the released floor with its current majors and frozen major 1",
     (_method, wire) => {
       expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain(wire.method);
       const entry = hostRpcRegistry[wire.method];
       expect(entry.degrade).toEqual({ kind: "unsupported" });
-      expect(Object.keys(entry).filter((key) => /^\d+$/.test(key))).toEqual([
-        "1",
-      ]);
+      expect(Object.keys(entry).filter((key) => /^\d+$/.test(key))).toEqual(
+        wire.method === "environment.move.plan" ? ["1", "2"] : ["1"],
+      );
       expect(entry[1].latestMinor).toBe(
-        wire.method === "environment.move.plan"
+        wire.method === "environment.move.plan" ||
+          wire.method === "environment.move.stopPreview"
           ? 2
-          : wire.method === "environment.move.stopPreview" ||
+          : wire.method === "environment.move.stop" ||
               wire.method === "environment.configuration.mcpServers.put" ||
               wire.method === "environment.configuration.guide.get" ||
-              wire.method === "environment.configuration.skills.list"
+              wire.method === "environment.configuration.skills.list" ||
+              wire.method === "environment.plans.list" ||
+              wire.method === "environment.plans.unlink"
             ? 1
             : 0,
       );
@@ -1310,6 +1587,51 @@ describe("the environments redesign's new @1.0 methods", () => {
       ).toBe(false);
     },
   );
+
+  it("carries a held plan binding only on the negotiated 1.1 line", () => {
+    const request = {
+      environmentId: TEAM.environmentId,
+      profileId: "p1",
+      expectedBindingVersion: 7,
+    };
+    expect(environmentPlansUnlinkV11.requestSchema.parse(request)).toEqual(
+      request,
+    );
+    expect(
+      environmentPlansUnlinkV11.requestSchema.safeParse({
+        environmentId: TEAM.environmentId,
+        profileId: "p1",
+      }).success,
+    ).toBe(false);
+    expect(environmentPlansUnlinkV10.requestSchema.parse(request)).toEqual({
+      environmentId: TEAM.environmentId,
+      profileId: "p1",
+    });
+    const answer = {
+      plans: [
+        {
+          profileId: "p1",
+          harness: "claude",
+          status: "linked",
+          linkedBy: null,
+          bindingVersion: 7,
+        },
+      ],
+    };
+    expect(environmentPlansListV11.responseSchema.parse(answer)).toEqual(
+      answer,
+    );
+    expect(environmentPlansListV10.responseSchema.parse(answer)).toEqual({
+      plans: [
+        {
+          profileId: "p1",
+          harness: "claude",
+          status: "linked",
+          linkedBy: null,
+        },
+      ],
+    });
+  });
 
   it("skills.state answers forbidden to a caller who may not refresh", () => {
     expect(

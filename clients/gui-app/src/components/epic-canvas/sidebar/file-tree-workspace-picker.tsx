@@ -63,10 +63,9 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
   const selectedRoot = selectedWorkspaceRoot(rows, props.selectedPath);
   const triggerWorktreeLabel =
     selectedRow === null
-      ? (selectedRoot?.folderName ?? "Select workspace")
+      ? (selectedRoot?.folderName ?? "Select folder")
       : formatGitWorktreeLabel(selectedRow);
-  const triggerSecondaryLabel =
-    props.selectedPath ?? "Choose a workspace folder";
+  const triggerSecondaryLabel = props.selectedPath ?? "Choose a folder";
 
   return (
     <CompactWorkspaceSwitcher

@@ -164,6 +164,7 @@ export function ComposerBody({
   const sharedToolbarProps = {
     store: toolbarStore,
     onAttachImages: paste.attachImageFiles,
+    onAttachFiles: paste.attachFiles,
     canSubmit,
     attachmentPending,
     onSubmit,

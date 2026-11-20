@@ -51,7 +51,8 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
 }));
-vi.mock("@/providers/use-runner-host", () => ({
+vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/providers/use-runner-host")>()),
   useRunnerHost: () => ({
     refreshHostFleet: mocks.refreshHostFleet,
     signInUrl: "https://example.test",
@@ -62,10 +63,12 @@ vi.mock("@/lib/host/fleet-refresh", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-configuration-billing-url", () => ({
   useConfigurationBillingUrl: () => "https://example.test/billing",
+  useBillingUrlOf: () => () => "https://example.test/billing",
 }));
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/hooks/sandboxes/use-on-team-sandbox", () => ({
   useSandboxHostConfiguration: () => null,
+  useSandboxHostPayer: () => null,
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({ openTile: vi.fn() }),
@@ -76,9 +79,15 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   useAuthUser: () => ({ data: null }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
-  useSandboxCatalogue: () => ({ data: null }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({ data: null }),
+  }),
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-settings-status", () => ({
   useSandboxSettingsStatus: () => ({ ready: true, data: null }),
 }));
@@ -86,6 +95,8 @@ vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/sandboxes/use-sandbox-list-query")
   >()),
+  // A row counts for a held Stop only when read after the Stop was asked.
+  sandboxListReadSentAt: () => Date.now(),
   // The held message's sandbox is awake: Stop is offered on it.
   useSandboxList: () => ({
     data: {
@@ -230,7 +241,7 @@ afterEach(() => {
 });
 
 describe("pending chat Stop failures", () => {
-  it("keeps the team credit refusal detail on the held message and retries Stop", async () => {
+  it("keeps the team credit refusal detail on the held message, offers a reader not known to be the team's Admin no top-up, and retries Stop", async () => {
     const binding = mocks.binding;
     if (binding === null) throw new Error("the sandbox binding is missing");
     binding.auth.runSandboxVerb
@@ -240,7 +251,6 @@ describe("pending chat Stop failures", () => {
     seedPendingMessage();
     renderPendingMessage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "More" }));
     await userEvent.click(await screen.findByTestId("sandbox-setup-stop"));
 
     const alert = await screen.findByRole("alert");
@@ -251,8 +261,8 @@ describe("pending chat Stop failures", () => {
       "fix the login bug",
     );
     expect(
-      within(alert).getByRole("button", { name: /add credits/i }),
-    ).toBeTruthy();
+      within(alert).queryByRole("button", { name: /add credits/i }),
+    ).toBeNull();
     expect(within(alert).getByRole("button", { name: "Retry" })).toBeTruthy();
 
     await userEvent.click(within(alert).getByRole("button", { name: "Retry" }));

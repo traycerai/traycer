@@ -1,11 +1,20 @@
-import { desktopSoundtrackBridge, readDesktopSet } from "./desktop-set";
+import { desktopSoundtrackBridge } from "./desktop-soundtrack-bridge";
 import type { SoundtrackView } from "./signals";
 import type { StemManifest } from "./stems";
 import type { VariableTrack } from "./variable-sound";
 
+export interface ComposedTrack {
+  readonly kind: "composed";
+  readonly name: string;
+  readonly title: string;
+  readonly recording: string;
+}
+
+export type SoundtrackTrack = VariableTrack | ComposedTrack;
+
 /** What can sound, and where. */
 export interface SoundtrackManifest {
-  readonly tracks: readonly VariableTrack[];
+  readonly tracks: readonly SoundtrackTrack[];
   /** By view, the names of the tracks it may play. */
   readonly views: Readonly<Record<SoundtrackView, readonly string[]>>;
   /** Where each track's samples are. */
@@ -39,6 +48,10 @@ export function soundtrackOffered(): boolean {
  * staging desktop build has the bridge. Either read answers with a promise and
  * falls back to the bundled manifest, but the promise rejects if the development
  * chunk itself will not load.
+ *
+ * The set's reader is loaded here, on demand, not imported: this module also
+ * says whether the build offers a soundtrack at all, which the settings section
+ * table asks, and the reader brings the query client's whole graph with it.
  */
 export function readSoundtrackManifest():
   | SoundtrackManifest
@@ -50,7 +63,9 @@ export function readSoundtrackManifest():
   }
   const bridge = desktopSoundtrackBridge();
   if (bridge === null) return SOUNDTRACK_MANIFEST;
-  return readDesktopSet(bridge).then((set) => set ?? SOUNDTRACK_MANIFEST);
+  return import("./desktop-set")
+    .then(({ readDesktopSet }) => readDesktopSet(bridge))
+    .then((set) => set ?? SOUNDTRACK_MANIFEST);
 }
 
 /**
@@ -60,6 +75,7 @@ export function readSoundtrackManifest():
 export async function reissueStemManifest(): Promise<StemManifest | null> {
   const bridge = desktopSoundtrackBridge();
   if (bridge === null) return null;
+  const { readDesktopSet } = await import("./desktop-set");
   const set = await readDesktopSet(bridge);
   return set?.stems ?? null;
 }

@@ -89,6 +89,7 @@ function renderToolbar(input: {
           presentation={input.presentation}
           store={toolbarStore()}
           onAttachImages={() => undefined}
+          onAttachFiles={() => undefined}
           canSubmit
           attachmentPending={false}
           onSubmit={input.onSubmit}

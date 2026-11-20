@@ -173,6 +173,7 @@ function mountTrunk(): void {
                 <BotSessionView
                   botId={BOT_ID}
                   hostId={HOST_ID}
+                  boundHostId={null}
                   botTitle="Tracy"
                   session={{ chatId: TRUNK_ID, threadId: null, landOn: null }}
                   threads={[]}
@@ -244,6 +245,8 @@ describe("a bot's session holding an inbound agent message (no task open)", () =
       kind: "open-epic",
       epicId: "epic-task",
       includeNestedFocus: true,
+      // The card sits in this bot's session, so the task's way back is it.
+      tracyOrigin: { botId: BOT_ID },
       preparation: {
         kind: "open-tile",
         gesture: "explicit",

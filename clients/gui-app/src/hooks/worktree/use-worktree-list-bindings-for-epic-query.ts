@@ -127,7 +127,7 @@ export function useTerminalWorkspaceBindingsForClient(args: {
           code: "RPC_ERROR",
           requestId: "terminal-workspace-check",
           method: "worktree.listBindingsForEpic",
-          message: "Workspace availability check has not completed. Try again.",
+          message: "Folder availability check has not completed. Try again.",
           fatalDetails: null,
         });
       }

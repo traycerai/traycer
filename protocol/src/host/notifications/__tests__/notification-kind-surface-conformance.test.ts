@@ -62,6 +62,18 @@ const ENTRY_BASE = {
 const REPRESENTATIVE_ENTRIES: Readonly<
   Record<HostNotificationKind, Record<string, unknown>>
 > = {
+  "access.readonly.retired": {
+    ...ENTRY_BASE,
+    kind: "access.readonly.retired",
+    severity: "info",
+    outcome: "completed",
+    payload: {
+      kind: "readonly_access_retired",
+      scope: "task",
+      taskId: "task-1",
+      taskTitle: "Design review",
+    },
+  },
   "agent.stopped": {
     ...ENTRY_BASE,
     kind: "agent.stopped",

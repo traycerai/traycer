@@ -11,11 +11,12 @@ import type { SoundtrackManifest } from "../manifest";
 import { MIX_TUNING } from "../mix-tuning";
 import { CROSSFADE_SECONDS } from "../player";
 import { SoundtrackSession, type SoundtrackPorts } from "../session";
+import { SoundtrackLogRelay } from "../session-log";
 import type { MixSignals } from "../signals";
 import type { StemSource } from "../stems";
 import { makeAudioBuffer } from "./audio-buffer";
 import { playbackTrack } from "./playback-track";
-import { FakeOutput } from "./fakes";
+import { captureNothing, FakeOutput } from "./fakes";
 
 const HOME: MixSignals = {
   view: "home",
@@ -112,6 +113,8 @@ function open(config: OpenConfig) {
     setVolume: vi.fn<(volume: number) => void>(),
     duck,
     close,
+    log: new SoundtrackLogRelay(),
+    captureMix: captureNothing,
     pause: () => {
       output.stopClock();
     },

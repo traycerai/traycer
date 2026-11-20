@@ -125,6 +125,8 @@ const DEFINITION_FILES = new Set(
  * string; every call site targeting it is treated as satisfied.
  */
 const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
+  "drafts.putBlob":
+    "version floor on the dispatch plus an up-front refusal: useDraftsPutFileBlob requires @1.2 (PUT_BLOB_FILE_FLOOR) through requiredHostMethodVersion, which the connection carrying the put answers, so an older host refuses the frame before it is sent and never keeps a file as an image; the attach route refuses a pick on a host below 1.2 before any upload (refuseFileAttachment -> host-outdated, naming the update) (use-drafts-put-file-blob-mutation.ts, file-attachment-upload.ts)",
   "epic.editArtboard":
     "sibling-method proxy gate: an edit needs a selection on a served board (servedSha256), and board bytes come only from epic.readArtifactObject on the same tab-host client, which host-object-reader.ts degrades to 'missing' on E_HOST_UNSUPPORTED so no board renders and nothing can be selected (canvas-artifact-surface.tsx, canvas-selection-provider.tsx); both methods entered the registry together on html-artifacts, and refusals render inline in the properties panel (use-artboard-edit.ts)",
   "epic.updateChatRunSettings":
@@ -169,16 +171,10 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
   // worktree.setAutoCleanupPolicy above.
   "bot.create":
     "sibling-method proxy gate: CreateBotForm renders only inside HomeBotsSection (home-bots-group.tsx), which gates on bot.list (home-bots-section.tsx), and inside the Tracy surface's channel sidebar (bot-channel-sidebar.tsx), which BotTabSurface draws only under bot.open of the same block (bot-tab-surface.tsx); onError toasts an E_HOST_UNSUPPORTED like any other refusal (use-bot-mutations.ts)",
-  "bot.delete":
-    "same bot.list proxy as bot.create: a bot's channel is opened only from HomeBotRow and CreateBotForm under that gate (home-bot-row.tsx, create-bot-form.tsx), and BotTabSurface re-checks bot.open - the newest method of the same block - on its own host before drawing any control (bot-tab-surface.tsx), so a surface restored from tracy-surface-store onto a host without bots shows the update notice; documented no-toast: the Settings panel states the refusal inline (use-bot-mutations.ts, bot-settings-panel.tsx)",
   "bot.updateTitle":
-    "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
-  "bot.updateRunSettings":
-    "same proxy and inline refusal as bot.delete (bot-settings-panel.tsx)",
+    "same bot.list proxy as bot.create: a bot's channel is opened only from HomeBotRow and CreateBotForm under that gate (home-bot-row.tsx, create-bot-form.tsx), and BotTabSurface re-checks bot.open - the newest method of the same block - on its own host before drawing any control (bot-tab-surface.tsx), so a surface restored from tracy-surface-store onto a host without bots shows the update notice; documented no-toast: the Settings panel states the refusal inline (use-bot-mutations.ts, bot-settings-panel.tsx)",
   "bot.conversation.send":
-    "same bot.list proxy as bot.delete; documented no-toast: the composer states the refusal inline under the field (use-bot-mutations.ts, bot-message-composer.tsx)",
-  "epic.attachEnvironment":
-    "call-and-catch degrade: a host that predates it answers E_HOST_UNSUPPORTED, which the hook does not toast and the fork dialog answers by forking as it did before the method existed (use-epic-attach-environment-mutation.ts, chat-fork-dialog.tsx)",
+    "same bot.list proxy as bot.updateTitle; documented no-toast: the composer states the refusal inline under the field (use-bot-mutations.ts, bot-message-composer.tsx)",
 };
 
 /**

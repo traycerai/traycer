@@ -333,6 +333,7 @@ export function SampleWorkspaceBody() {
                             presentation
                             store={toolbarStore}
                             onAttachImages={sampleNoop}
+                            onAttachFiles={sampleNoop}
                             canSubmit={false}
                             attachmentPending={false}
                             onSubmit={sampleNoop}

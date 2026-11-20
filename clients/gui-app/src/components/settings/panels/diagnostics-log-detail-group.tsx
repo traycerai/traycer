@@ -2,15 +2,11 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Info } from "lucide-react";
 import { toast } from "sonner";
 import { SettingsGroup } from "@/components/settings/settings-group";
-import { HostSettingsDisclosure } from "@/components/settings/panels/host-settings-disclosure";
 import { LogLevelRow } from "@/components/settings/panels/log-level-row";
 import type { LogLevelControl } from "@/components/settings/panels/log-level-controls";
-import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
 import type { SettingsGroupDefinition } from "@/lib/settings-search/settings-definitions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import { useSettingsDensity } from "@/providers/settings-density-context";
 
 /**
  * Verbosity controls plus the "you left a level raised" reminder, over whatever
@@ -54,11 +50,6 @@ export function LogDetailGroup(props: {
   readonly emptyState: ReactNode;
 }): ReactNode {
   const { controls } = props;
-  const compact = useSettingsDensity() === "compact";
-  // The host page and the app page share this card. Only the host page's group
-  // object carries the support sentence, the guidance beside the heading, and
-  // the capture disclosure — the app page keeps the heading the group draws.
-  const hostLogDetail = props.group === HOST_DIAGNOSTICS.definitions.logDetail;
   const [resetPending, setResetPending] = useState(false);
   // Focus-restoration target for when the reminder row (and the "Reset all to
   // Info" button a keyboard/screen-reader user just activated) unmounts -
@@ -159,73 +150,19 @@ export function LogDetailGroup(props: {
           }}
         />
       ) : null}
-      {hostLogDetail ? <HostProblemCaptureDisclosure /> : null}
     </div>
   );
 
-  if (!hostLogDetail) {
-    return (
-      <SettingsGroup
-        group={props.group}
-        showTitle
-        tone="default"
-        dataTestId={undefined}
-        fill={false}
-      >
-        {body}
-      </SettingsGroup>
-    );
-  }
-
   return (
-    <div>
-      <div
-        className={cn(
-          "flex flex-wrap items-baseline gap-x-3 gap-y-1 px-1",
-          compact ? "mb-1" : "mb-1.5",
-        )}
-      >
-        <h2 className="font-semibold text-ui-xs text-muted-foreground">
-          Log detail
-        </h2>
-        <p
-          className="text-ui-xs text-muted-foreground"
-          data-testid="diagnostics-verbosity-guidance"
-        >
-          Use Debug while capturing a problem
-        </p>
-      </div>
-      <p className="mb-2 px-1 text-ui-xs text-muted-foreground">
-        Applies to every Traycer host on this computer.
-      </p>
-      <SettingsGroup
-        group={props.group}
-        showTitle={false}
-        tone="default"
-        dataTestId={undefined}
-        fill={false}
-      >
-        {body}
-      </SettingsGroup>
-    </div>
-  );
-}
-
-function HostProblemCaptureDisclosure(): ReactNode {
-  return (
-    <HostSettingsDisclosure
-      label="How to capture a problem"
-      defaultOpen={false}
+    <SettingsGroup
+      group={props.group}
+      showTitle
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
     >
-      <p
-        className="wrap-anywhere text-ui-sm text-muted-foreground"
-        data-testid="diagnostics-capture-steps"
-      >
-        Raise the relevant level to Debug, reproduce the problem, then set it
-        back to Info. This app&apos;s own log and memory capture live under
-        Application › Diagnostics.
-      </p>
-    </HostSettingsDisclosure>
+      {body}
+    </SettingsGroup>
   );
 }
 

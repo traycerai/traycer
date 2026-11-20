@@ -1,3 +1,50 @@
+import {
+  recordSignInRequestViaHttp,
+  type SignInRequestRecordAnswer,
+} from "@traycer-clients/shared/host-client/provider-sign-in-request";
+import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
+import {
+  setProfileRecordEnabledViaHttp,
+  setProfileRecordColorViaHttp,
+  type ProfileRecordColorClient,
+  type ProfileRecordColorChange,
+  type ProfileRecordEnablementClient,
+  type ProfileRecordEnabledChange,
+  type ProfileRecordEnablementResult,
+} from "@traycer-clients/shared/host-client/provider-profile-enablement";
+import {
+  readProfileRecordsViaHttp,
+  signOutProfileRecordViaHttp,
+  removeProfileRecordViaHttp,
+  nameProfileRecordViaHttp,
+  profileRecordActionFailure,
+  type ProfileRecordClient,
+  type ProfileRecordListResult,
+  type ProfileRecordActionResult,
+  type ProfileRecordNameResult,
+  type ProfileRecordNameChange,
+} from "@traycer-clients/shared/host-client/profile-record-actions";
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import {
+  changeProviderKeyRecordViaHttp,
+  type ProviderApiKeyChange,
+  type ProviderKeyProviderId,
+  type ProviderKeyRecordChangeResult,
+} from "@traycer-clients/shared/host-client/provider-api-key-change";
+import {
+  AUTH_ERROR_DISK_FULL,
+  isDiskFullSignInError,
+} from "@traycer-clients/shared/auth/sign-in-storage";
+import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
+import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type {
   CredentialsMigrationOutcome,
   IRunnerHost,
@@ -10,7 +57,7 @@ import type {
   TokenRotateOutcome,
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
@@ -59,13 +106,23 @@ import {
   type SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
 import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-import {
-  TEAM_HOST_UNAVAILABLE_IN_STAGING,
-  type TeamHostInstallTokenResult,
-} from "@traycer-clients/shared/host-client/team-host";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
@@ -73,6 +130,8 @@ import type {
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -83,6 +142,14 @@ import {
   fetchEnvironmentInvitations,
   acceptEnvironmentInvitation,
 } from "@traycer-clients/shared/auth/environment-invitations";
+import {
+  fetchEnvironmentPerson,
+  type EnvironmentPersonResult,
+} from "@traycer-clients/shared/auth/environment-people";
+import {
+  fetchClaimedComputers,
+  type ClaimedComputersResult,
+} from "@traycer-clients/shared/auth/claimed-computers";
 import {
   claimCreditOfferViaHttp,
   listCreditOffersViaHttp,
@@ -215,6 +282,12 @@ export type LinkLoginSignInResult =
  */
 const LINK_LOGIN_APPROVAL_TIMEOUT_MS = 120_000;
 
+/** So a write sent later can tell an ended sign-in from a refreshed token. */
+export interface ChosenSignIn {
+  readonly identityGeneration: number;
+  readonly userId: string | null;
+}
+
 /**
  * Thrown when a read is asked for on behalf of a credential era that is no
  * longer the live one — the request would go out under a bearer from a
@@ -304,6 +377,50 @@ interface LiveSessionAuthority {
   readonly userId: string;
   readonly bearer: string;
   readonly generation: number;
+}
+
+/**
+ * Which account a session belongs to: its identity generation, its user and
+ * its live credential object. No bearer: that is read from the live session
+ * when a request is sent.
+ */
+type SessionPrincipal = Pick<
+  LiveSessionAuthority,
+  "credentials" | "userId" | "generation"
+>;
+
+/**
+ * The account one voice call was started under. Every mint and end of that
+ * call, renewals included, goes out under it or not at all. Opaque: only the
+ * AuthService that captured it can read what it stands for, and neither a
+ * structured clone nor JSON keeps anything of it.
+ */
+class VoiceCallAuthority {
+  readonly #issuer: AuthService;
+  readonly #principal: SessionPrincipal;
+
+  constructor(issuer: AuthService, principal: SessionPrincipal) {
+    this.#issuer = issuer;
+    this.#principal = principal;
+  }
+
+  /** What `handle` stands for, to the service that captured it; `null` to any other. */
+  static capturedBy(
+    handle: VoiceCallAuthority,
+    service: AuthService,
+  ): SessionPrincipal | null {
+    return handle.#issuer === service ? handle.#principal : null;
+  }
+}
+export type { VoiceCallAuthority };
+
+/**
+ * A call's request that was not sent: its account is no longer the one
+ * signed in (signed out, switched, replaced credentials, or this service
+ * disposed). Never retried under whoever is signed in now.
+ */
+export interface VoiceCallPrincipalChanged {
+  readonly kind: "principal-changed";
 }
 
 export type AuthSessionSnapshotListener = (
@@ -416,6 +533,7 @@ export const AUTH_ERROR_DEVICE_EXPIRED = "device-expired";
  * host runtime, and never writes/deletes the file.
  */
 export const AUTH_ERROR_STORE_UNAVAILABLE = "store-unavailable";
+export { AUTH_ERROR_DISK_FULL };
 
 /**
  * Record of the single in-flight sign-in attempt. Device flow is now the only
@@ -619,7 +737,12 @@ export interface RevokedCloudAuthorization {
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") without clearing persisted credentials.
  */
-export class AuthService {
+export class AuthService
+  implements
+    ProfileRecordClient,
+    ProfileRecordEnablementClient,
+    ProfileRecordColorClient
+{
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
   private readonly contextProvider: DefaultRequestContextProvider;
@@ -684,6 +807,8 @@ export class AuthService {
   private callbackDisposable: Disposable | null = null;
   // Owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
   private tokenStoreChangeDisposable: Disposable | null = null;
+  private signInStorageRevision = 0;
+  private signInStorageChangeDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
   private currentRevalidation: Promise<LiveRevalidationOutcome | null> | null =
     null;
@@ -881,6 +1006,10 @@ export class AuthService {
   constructor(options: AuthServiceOptions) {
     this.runnerHost = options.runnerHost;
     this.tokenStore = new AuthTokenStore(options.runnerHost.tokenStore);
+    // A host-only token is minted only with a sign-in authn has confirmed.
+    options.runnerHost.hostTokens.bindSignIn((userId) =>
+      this.currentProfile?.userId === userId ? this.cloudBearer() : null,
+    );
     this.contextProvider = new DefaultRequestContextProvider({
       origin: "renderer",
     });
@@ -1082,6 +1211,27 @@ export class AuthService {
     this.applySignedIn(inboundToken, outcome.user, snapshot.profile);
   }
 
+  private async initializeSignInStorageStatus(): Promise<void> {
+    if (this.signInStorageChangeDisposable === null) {
+      this.signInStorageChangeDisposable =
+        this.tokenStore.subscribeSignInStorageLow((low) => {
+          this.signInStorageRevision += 1;
+          useAuthStore.getState().setSignInStorageLow(low);
+        });
+    }
+    const storageRevision = this.signInStorageRevision;
+    try {
+      const low = await this.tokenStore.getSignInStorageLow();
+      if (!this.disposed && storageRevision === this.signInStorageRevision) {
+        useAuthStore.getState().setSignInStorageLow(low);
+      }
+    } catch (error) {
+      appLogger.warn("[auth] sign-in storage status unavailable", {
+        error: describeLogError(error),
+      });
+    }
+  }
+
   async start(): Promise<void> {
     if (this.disposed) {
       return;
@@ -1115,6 +1265,8 @@ export class AuthService {
     }
 
     try {
+      await this.initializeSignInStorageStatus();
+      if (this.shouldStopStartFlow(startGeneration)) return;
       // One-time migration of the legacy per-window localStorage token pair
       // onto the shared file, BEFORE the first file read so the rehydrate below
       // adopts the migrated session. Bounded + single-flighted in main; on any
@@ -1128,6 +1280,9 @@ export class AuthService {
       try {
         stored = await this.tokenStore.get();
       } catch (error) {
+        if (this.shouldStopStartFlow(startGeneration)) {
+          return;
+        }
         // Unreadable store (EACCES/EIO/…) must never escape start() — the host
         // runtime provider would dispose the entire runtime. UI-only signed-out
         // + store-unavailable; no file write.
@@ -1657,6 +1812,7 @@ export class AuthService {
         return;
       case "lock-busy":
       case "spend-pending":
+      case "disk-full":
       case "refresh-network":
       case "applied":
       case "superseded":
@@ -2065,9 +2221,10 @@ export class AuthService {
    * service is not disposed). Async credential tails capture the generation
    * before their first await and re-check through this after each one, so a
    * newer `signIn()` / `signOut()` / `dispose()` always wins over an
-   * already-started save/rotate/provision.
+   * already-started save/rotate/provision. A direct bot write's caller fences
+   * its own later steps the same way (`hooks/bots/bot-write-sign-in.ts`).
    */
-  private isIdentityCurrent(generation: number): boolean {
+  isIdentityCurrent(generation: number): boolean {
     return !this.disposed && generation === this.identityGeneration;
   }
 
@@ -2144,7 +2301,7 @@ export class AuthService {
   }
 
   private captureUpdatedSessionAuthority(
-    expected: LiveSessionAuthority,
+    expected: SessionPrincipal,
   ): LiveSessionAuthority | null {
     const current = this.captureLiveSessionAuthority();
     if (
@@ -2248,9 +2405,9 @@ export class AuthService {
     });
   }
 
-  async signOut(): Promise<void> {
+  async signOut(): Promise<boolean> {
     if (this.isDisposed()) {
-      return;
+      return false;
     }
     // Invalidate any sign-in finalization that already passed its epoch fence
     // and is now awaiting its token save - the sign-out wins.
@@ -2275,7 +2432,7 @@ export class AuthService {
     );
     // dispose() may have landed during the delete await — re-read fresh.
     if (this.isDisposed()) {
-      return;
+      return false;
     }
     if (deleteError !== null) {
       appLogger.warn(
@@ -2293,11 +2450,11 @@ export class AuthService {
         if (!this.sessionRecoveryTerminallyRejected) {
           this.scheduleSessionRecovery("sign-out-delete-failed");
         }
-        return;
+        return false;
       }
       // The session is still live - re-arm the proactive refresh we paused.
       this.refreshScheduler.start();
-      return;
+      return false;
     }
     this.setLastError(null);
     this.applySignedOut("retired");
@@ -2324,6 +2481,7 @@ export class AuthService {
     // finalization's signIn may have re-written the file and notified before
     // delete landed; its adopt must not resurrect signed-in after we cleared).
     this.reconcileGeneration += 1;
+    return true;
   }
 
   /**
@@ -3120,6 +3278,60 @@ export class AuthService {
     return this.runnerHost.updateHostVersionPolicy(bearer, hostId, input);
   }
 
+  async readHostOwnership(
+    hostId: string,
+    era: AuthEra,
+  ): Promise<HostOwnershipResult> {
+    this.assertLiveAuthEra(era);
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const result = await this.runnerHost.readHostOwnership(bearer, hostId);
+    this.assertLiveAuthEra(era);
+    return result;
+  }
+
+  async listEnvironments(): Promise<EnvironmentDirectoryResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.listEnvironments(bearer);
+  }
+
+  async saveAutoPolicy(body: string): Promise<AutoPolicySaveResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.saveAutoPolicy(bearer, body);
+  }
+
+  async attachTaskEnvironment(
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.attachTaskEnvironment(bearer, request);
+  }
+
+  async listTeamComputers(environmentId: string): Promise<TeamComputersResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.listTeamComputers(bearer, environmentId);
+  }
+  async mintTeamComputerInstallToken(
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.mintTeamComputerInstallToken(bearer, environmentId);
+  }
+
+  async releaseTeamComputer(
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to claim this computer.");
+    return this.runnerHost.releaseTeamComputer(bearer, hostId, environmentId);
+  }
+
   /**
    * "Remove from account": `POST /api/v3/hosts/:hostId/deregister` via the
    * runner host (run in Electron main for CORS, mirroring
@@ -3181,14 +3393,69 @@ export class AuthService {
     return this.runnerHost.getSandboxCosts(bearer);
   }
 
-  async getSandboxCatalogue(): Promise<SandboxCatalogueFetchResult> {
+  async getSandboxCatalogue(
+    context: SandboxCatalogueReadinessRequest | null,
+  ): Promise<SandboxCatalogueFetchResult> {
     const refusal = this.sandboxControlRefusal();
     if (refusal !== null) return refusal;
     const bearer = this.cloudBearer();
     if (bearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.getSandboxCatalogue(bearer);
+    return this.runnerHost.getSandboxCatalogue(bearer, context);
+  }
+
+  /** An era no longer live throws {@link SupersededAuthEraError}, before the request or after its answer. */
+  async getTeamChatAutoArchive(
+    teamId: string,
+    era: AuthEra,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    if (this.sandboxControlUnavailableReason() !== null)
+      return { kind: "failed" };
+    this.assertLiveAuthEra(era);
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const result = await this.runnerHost.getTeamChatAutoArchive(bearer, teamId);
+    this.assertLiveAuthEra(era);
+    return result;
+  }
+
+  chosenSignIn(): ChosenSignIn {
+    return {
+      identityGeneration: this.identityGeneration,
+      userId: this.currentProfile?.userId ?? null,
+    };
+  }
+
+  /**
+   * A sign-in that has ended throws instead of sending as someone else; a same-user
+   * refresh has not. The user check covers a switch projected from another window,
+   * which leaves the identity generation unchanged.
+   */
+  async setTeamChatAutoArchive(
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+    chosenBy: ChosenSignIn,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    if (this.sandboxControlUnavailableReason() !== null)
+      return { kind: "failed" };
+    if (
+      !this.isIdentityCurrent(chosenBy.identityGeneration) ||
+      (this.currentProfile?.userId ?? null) !== chosenBy.userId
+    )
+      throw new SupersededAuthEraError();
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.setTeamChatAutoArchive(bearer, teamId, request);
+  }
+
+  private assertLiveAuthEra(era: AuthEra): void {
+    const live = this.currentAuthEra();
+    if (
+      live.identity !== era.identity ||
+      live.credentialGeneration !== era.credentialGeneration
+    )
+      throw new SupersededAuthEraError();
   }
 
   async getTraycerModels(): Promise<TraycerModelsFetchResult> {
@@ -3207,10 +3474,15 @@ export class AuthService {
    * account, and its end. A shell that cannot reach traycer-server at all
    * (`sandboxControlUnavailableReason`) reads as not available and as the
    * dormant mint, so Talk hides there too.
+   *
+   * A call's mint and end go out under the account the call was started
+   * under (`captureVoiceCallAuthority`), or not at all: a session is the
+   * account's that minted it, and nothing of one call is sent as another
+   * account. A request already dispatched is not recalled by a later change.
    */
   async getVoiceAvailability(): Promise<VoiceAvailabilityFetchResult> {
     if (this.sandboxControlUnavailableReason() !== null) {
-      return { kind: "ok", available: false };
+      return { kind: "ok", available: false, voiceSelection: null };
     }
     const bearer = this.cloudBearer();
     if (bearer === null) {
@@ -3219,26 +3491,73 @@ export class AuthService {
     return this.runnerHost.getVoiceAvailability(bearer);
   }
 
+  /**
+   * The signed-in account, captured for one voice call; `null` with no
+   * verified session.
+   */
+  captureVoiceCallAuthority(): VoiceCallAuthority | null {
+    if (this.disposed || !this.hasVerifiedSession()) return null;
+    const authority = this.captureLiveSessionAuthority();
+    if (authority === null) return null;
+    const { credentials, userId, generation } = authority;
+    return new VoiceCallAuthority(this, { credentials, userId, generation });
+  }
+
+  /**
+   * The bearer a call's request is sent with now: its account's current one,
+   * a rotation of the same credentials included, or `null` once that account
+   * is not the one signed in. Read with no await before the dispatch.
+   */
+  private voiceCallBearer(handle: VoiceCallAuthority): string | null {
+    if (this.disposed || !this.hasVerifiedSession()) return null;
+    const captured = VoiceCallAuthority.capturedBy(handle, this);
+    if (captured === null) return null;
+    return this.captureUpdatedSessionAuthority(captured)?.bearer ?? null;
+  }
+
+  /**
+   * Whether a call's account is still the one signed in, checked without
+   * sending anything: a sign-out moves the identity before its storage
+   * settles, so an answer that arrives in between is no longer the call's.
+   */
+  isVoiceCallAuthorityLive(authority: VoiceCallAuthority): boolean {
+    return this.voiceCallBearer(authority) !== null;
+  }
+
+  /**
+   * The availability read a call makes as it starts, under its own account:
+   * the voices it may ask for come from this answer, never from a cached
+   * one.
+   */
+  async getVoiceAvailabilityForCall(
+    authority: VoiceCallAuthority,
+  ): Promise<VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return { kind: "ok", available: false, voiceSelection: null };
+    }
+    const bearer = this.voiceCallBearer(authority);
+    if (bearer === null) return { kind: "principal-changed" };
+    return this.runnerHost.getVoiceAvailability(bearer);
+  }
+
   async mintVoiceSession(
     request: VoiceSessionMintRequest,
-  ): Promise<VoiceSessionMintFetchResult> {
+    authority: VoiceCallAuthority,
+  ): Promise<VoiceSessionMintFetchResult | VoiceCallPrincipalChanged> {
     if (this.sandboxControlUnavailableReason() !== null) {
       return { kind: "dormant" };
     }
-    const bearer = this.cloudBearer();
-    if (bearer === null) {
-      return { kind: "unauthorized" };
-    }
+    const bearer = this.voiceCallBearer(authority);
+    if (bearer === null) return { kind: "principal-changed" };
     return this.runnerHost.mintVoiceSession(bearer, request);
   }
 
   async endVoiceSession(
     voiceSessionId: string,
-  ): Promise<VoiceSessionEndFetchResult> {
-    const bearer = this.cloudBearer();
-    if (bearer === null) {
-      return { kind: "unauthorized" };
-    }
+    authority: VoiceCallAuthority,
+  ): Promise<VoiceSessionEndFetchResult | VoiceCallPrincipalChanged> {
+    const bearer = this.voiceCallBearer(authority);
+    if (bearer === null) return { kind: "principal-changed" };
     return this.runnerHost.endVoiceSession(bearer, voiceSessionId);
   }
 
@@ -3419,24 +3738,42 @@ export class AuthService {
     return this.runnerHost.setSlackAppDms(bearer, request);
   }
 
-  /**
-   * The one-time install token for a team environment's bot host, on
-   * traycer-server with the person's bearer. A build that cannot reach
-   * traycer-server at all (the Slack floor's signal) answers `unavailable`
-   * without a request; signed out, `unauthorized`.
-   */
-  async mintTeamHostInstallToken(
+  /** The team computers a member claimed away from this team, kept 30 days. */
+  async listClaimedComputers(
     environmentId: string,
-  ): Promise<TeamHostInstallTokenResult> {
-    if (this.runnerHost.sandboxControlUnavailableReason !== null) {
-      return {
-        kind: "unavailable",
-        reason: TEAM_HOST_UNAVAILABLE_IN_STAGING,
-      };
-    }
+    signal: AbortSignal | null,
+  ): Promise<ClaimedComputersResult> {
     const bearer = this.cloudBearer();
     if (bearer === null) return { kind: "unauthorized" };
-    return this.runnerHost.mintTeamHostInstallToken(bearer, environmentId);
+    return fetchClaimedComputers(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      signal,
+    );
+  }
+
+  /** Signed out, it answers `no_response` without a request. */
+  async updateBotRunSettings(
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotRunSettings(bearer, request);
+  }
+
+  async updateBotReplyMode(
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.updateBotReplyMode(bearer, request);
+  }
+
+  async deleteBot(request: BotDeleteRequest): Promise<BotDeleteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "no_response" };
+    return this.runnerHost.deleteBot(bearer, request);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */
@@ -3461,6 +3798,23 @@ export class AuthService {
       this.runnerHost.authnBaseUrl,
       bearer,
       environmentId,
+    );
+  }
+
+  /** Still names a member who has left, whom the directory no longer lists. */
+  async readEnvironmentPerson(
+    environmentId: string,
+    userId: string,
+    signal: AbortSignal | null,
+  ): Promise<EnvironmentPersonResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) throw new Error("Sign in to read team members.");
+    return fetchEnvironmentPerson(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      userId,
+      signal,
     );
   }
 
@@ -3495,6 +3849,18 @@ export class AuthService {
     return this.runnerHost.getTeamEnvironment(bearer, teamId);
   }
 
+  async replaceEnvironmentApiKey(
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    try {
+      return await this.runnerHost.replaceEnvironmentApiKey(bearer, request);
+    } catch {
+      return { kind: "failed" };
+    }
+  }
+
   /** An environment's provider counts: its API keys and linked plans. */
   async getEnvironmentProviders(
     environmentId: string,
@@ -3504,6 +3870,151 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getEnvironmentProviders(bearer, environmentId);
+  }
+
+  /** The person's own provider-key change, sent only on a verified session. */
+  async changeProviderKeyRecord(
+    environmentId: string,
+    providerId: ProviderKeyProviderId,
+    change: ProviderApiKeyChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProviderKeyRecordChangeResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "refused", code: "UNAUTHORIZED" };
+    return changeProviderKeyRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      change,
+      callerSignal,
+    );
+  }
+
+  async readProfileRecords(
+    environmentId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordListResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return readProfileRecordsViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      callerSignal,
+    );
+  }
+
+  async signOutProfileRecord(
+    environmentId: string,
+    providerId: string,
+    profileId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordActionResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("sign-out", { kind: "unauthorized" });
+    return signOutProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      profileId,
+      callerSignal,
+    );
+  }
+
+  async removeProfileRecord(
+    environmentId: string,
+    providerId: string,
+    profileId: string,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordActionResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("remove", { kind: "unauthorized" });
+    return removeProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      profileId,
+      callerSignal,
+    );
+  }
+
+  async nameProfileRecord(
+    environmentId: string,
+    providerId: string,
+    change: ProfileRecordNameChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordNameResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null)
+      return profileRecordActionFailure("name", { kind: "unauthorized" });
+    return nameProfileRecordViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      providerId,
+      change.profileId,
+      change.name,
+      callerSignal,
+    );
+  }
+
+  async setProfileRecordColor(
+    environmentId: string,
+    harnessId: string,
+    change: ProfileRecordColorChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordEnablementResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "failed" };
+    return setProfileRecordColorViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      harnessId,
+      change,
+      callerSignal,
+    );
+  }
+
+  async setProfileRecordEnabled(
+    environmentId: string,
+    harnessId: string,
+    change: ProfileRecordEnabledChange,
+    callerSignal: AbortSignal | null,
+  ): Promise<ProfileRecordEnablementResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "failed" };
+    return setProfileRecordEnabledViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      environmentId,
+      harnessId,
+      change.profileId,
+      change.enabled,
+      callerSignal,
+    );
+  }
+
+  /** A 401 hands the session to the shared revalidator: it rotates, or signs out. */
+  async recordSignInRequest(
+    request: ProviderLoginSignInRequest,
+    signal: AbortSignal,
+  ): Promise<SignInRequestRecordAnswer> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    const answer = await recordSignInRequestViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      request,
+      signal,
+    );
+    if (answer.kind === "unauthorized") void this.revalidateCurrentContext();
+    return answer;
   }
 
   /** The user's answer to an agent's grant request. */
@@ -3522,20 +4033,6 @@ export class AuthService {
       requestId,
       decision,
     );
-  }
-
-  /**
-   * An executable-write grant for one host, minted on this user's session
-   * (`lib/environment/executable-write-grant.ts` is the caller and the cache).
-   */
-  async mintExecutableWriteGrant(
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult> {
-    const bearer = this.cloudBearer();
-    if (bearer === null) {
-      return { kind: "unauthorized" };
-    }
-    return this.runnerHost.mintExecutableWriteGrant(bearer, hostId);
   }
 
   private async revalidateCurrentContextOnce(
@@ -3847,6 +4344,7 @@ export class AuthService {
         );
       case "lock-busy":
       case "spend-pending":
+      case "disk-full":
       case "refresh-network":
         // Transient; the access token in hand stays valid for its TTL.
         return { status: "transient" };
@@ -3927,14 +4425,18 @@ export class AuthService {
     this.applySignedOut("retired");
   }
 
-  // Clear the UI session only when one is actually projected — avoids a redundant
-  // signed-out emit when reconcile just confirms an already-absent session.
-  private clearUiSessionIfSignedIn(): void {
-    if (
+  private hasProjectedSession(): boolean {
+    return (
       this.currentBearer !== null ||
       this.contextProvider.current() !== null ||
       useAuthStore.getState().status === "signed-in"
-    ) {
+    );
+  }
+
+  // Clear the UI session only when one is actually projected — avoids a redundant
+  // signed-out emit when reconcile just confirms an already-absent session.
+  private clearUiSessionIfSignedIn(): void {
+    if (this.hasProjectedSession()) {
       this.clearUiSession();
     }
   }
@@ -4397,7 +4899,11 @@ export class AuthService {
           "[auth] failed to persist accepted sign-in credentials",
           { error: describeLogError(signInError) },
         );
-        this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
+        this.applyFailure(
+          isDiskFullSignInError(signInError)
+            ? AUTH_ERROR_DISK_FULL
+            : AUTH_ERROR_SIGN_IN_FAILED,
+        );
         return "failed";
       }
 
@@ -4426,9 +4932,11 @@ export class AuthService {
    * this stale finalization wrote — any other window's `signIn` serializes
    * wholly before or after it, so a successor's pair can never be destroyed
    * by a stale comparison. A failed undo has a real consequence (the stale
-   * pair would rehydrate on a later launch if the successor fails), so it
-   * surfaces through the shared store-fault seam AND is remembered: the
-   * recovery loop completes the delete before adopting anything durable.
+   * pair would rehydrate on a later launch if the successor fails), so it is
+   * remembered and arms recovery, which completes the delete before adopting
+   * anything durable. When nothing newer is live (a sign-out or dispose
+   * superseded it and no attempt is in flight) it also surfaces through the
+   * shared store-fault seam.
    */
   private async undoSupersededCredentialSave(token: string): Promise<void> {
     // Recorded BEFORE the attempt, not on failure: the very write being
@@ -4443,6 +4951,17 @@ export class AuthService {
       await this.tokenStore.deleteIfToken(token);
       this.pendingUndoTokens.delete(token);
     } catch (error) {
+      // This finalization returned before projecting a session, so a live
+      // session or an attempt in flight now belongs to something newer and is
+      // not this failure's to clear.
+      if (this.hasProjectedSession() || this.isInteractiveAttemptInFlight()) {
+        appLogger.warn(
+          "[auth] superseded-save undo failed; keeping the newer session or attempt",
+          { error: describeLogError(error) },
+        );
+        this.scheduleSessionRecovery("undo-superseded-save:store-unavailable");
+        return;
+      }
       this.markStoreUnavailable("undo-superseded-save", error);
     }
   }
@@ -4907,6 +5426,8 @@ export class AuthService {
       this.tokenStoreChangeDisposable.dispose();
       this.tokenStoreChangeDisposable = null;
     }
+    this.signInStorageChangeDisposable?.dispose();
+    this.signInStorageChangeDisposable = null;
     this.reconcileQueued = false;
     this.currentReconcile = null;
     this.authStoreUnsubscribe();
@@ -6070,6 +6591,24 @@ export class AuthService {
     for (const handler of this.sessionSnapshotListeners) {
       handler(snapshot);
     }
+  }
+
+  /**
+   * The bearer is asked at each call; after a sign-out or a sign-in, as anyone, the
+   * operation sends nothing more. A same-user refresh keeps it.
+   */
+  environmentCloud(): EnvironmentCloud {
+    const userId = this.currentProfile?.userId ?? null;
+    const generation = this.identityGeneration;
+    return {
+      authnBaseUrl: this.runnerHost.authnBaseUrl,
+      bearer: { kind: "cloud", getBearerToken: () => this.cloudBearer() },
+      transport: this.runnerHost.environmentTransport,
+      onOriginSignIn: () =>
+        userId !== null &&
+        this.currentProfile?.userId === userId &&
+        this.identityGeneration === generation,
+    };
   }
 }
 

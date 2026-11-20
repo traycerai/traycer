@@ -1,3 +1,5 @@
+import { useChatAccountWait } from "@/components/chat/fallback/use-chat-account-wait";
+import { AccountWaitSurface } from "@/components/chat/fallback/account-wait-card";
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useChatPrestartRuntime } from "@/hooks/chats/use-chat-prestart-runtime";
@@ -27,16 +29,33 @@ import type {
   HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type {
+  ChatAccountWait,
   ChatActiveTurn,
   ChatQueueDeliveryPolicy,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderId,
+  ProvidersListResponse,
+} from "@traycer/protocol/host/provider-schemas";
 
 import {
-  isAttachmentIngestPending,
+  composerAttachmentsHoldSend,
+  useComposerFileRoute,
   useComposerHashPaste,
 } from "@/hooks/composer/use-composer-paste";
+import { useTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
+import {
+  containsFileAttachments,
+  containsPendingFileAttachment,
+  settleFileNodeInContent,
+} from "@/lib/composer/file-attachments";
+import type { FileNodeSettle } from "@/lib/composer/file-attachment-upload";
+import {
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import { useDraftsPutFileBlob } from "@/hooks/drafts/use-drafts-put-file-blob-mutation";
 import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
@@ -64,7 +83,10 @@ import {
   steerHintIsActive,
   type ChatComposerSubmitSource,
 } from "@/lib/chats/resolve-steer-submit";
-import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
+import {
+  resolveComposerTopBannerKind,
+  type ComposerTopBannerKind,
+} from "./chat-composer-top-banner";
 import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
 import {
   fallbackComposerCardVisible,
@@ -126,6 +148,7 @@ import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
 import { sideChatSlashCommands } from "@/lib/chats/side-chat-command";
 import {
   SIGNED_OUT_SEND_HINT,
+  continueOnTerminalOffered,
   useProviderReauthGate,
   type ProviderReauthGate,
   type ProviderReauthReason,
@@ -140,6 +163,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 import { recordFocusedChat } from "@/stores/chat/last-focused-chat-store";
 import { ComposerAttachmentDropZone } from "./composer-attachment-drop-zone";
+import { useComposerDropScopeTarget } from "./composer-drop-scope";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 
@@ -186,6 +210,11 @@ interface ChatComposerProps {
    */
   readonly sendDisabledHint: string | null | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
+  /**
+   * The folder this chat's next run starts its CLI in, or `null` when it cannot
+   * be known before the send (see `runDirectoryFromWorktreeBindingAndIntent`).
+   */
+  readonly runWorkingDirectory: string | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
   /**
@@ -474,6 +503,40 @@ function useChatComposerToolbar(input: ChatComposerToolbarInput): {
   return { seedSource, toolbarStore };
 }
 
+function useChatComposerTopBanner(input: {
+  readonly providerFallback: ChatProviderFallbackState;
+  readonly providersList: ProvidersListResponse | undefined;
+  readonly epicId: string | null;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly profileDisabled: boolean;
+  readonly reauthVisible: boolean;
+  readonly rateLimitVisible: boolean;
+}): {
+  readonly accountWait: ChatAccountWait | null;
+  readonly topBannerKind: ComposerTopBannerKind;
+} {
+  const traversalVisible = fallbackComposerCardVisible(
+    input.providerFallback.pending,
+  );
+  const accountWait = useChatAccountWait({
+    fallbackCardVisible: traversalVisible,
+    providersList: input.providersList,
+    epicId: input.epicId,
+    chatId: input.chatId,
+    hostId: input.hostId,
+  });
+  const topBannerKind = resolveComposerTopBannerKind({
+    fallbackVisible: accountWait !== null || traversalVisible,
+    profileDisabled: input.profileDisabled,
+    reauthVisible: input.reauthVisible,
+    // A present key with an undefined value means there is no offer.
+    fallbackReturnVisible: input.providerFallback.pendingReturn !== undefined,
+    rateLimitVisible: input.rateLimitVisible,
+  });
+  return { accountWait, topBannerKind };
+}
+
 function ChatComposerImpl(props: ChatComposerProps) {
   const {
     taskId,
@@ -481,6 +544,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabled,
     sendDisabledHint,
     mentionRoots,
+    runWorkingDirectory,
     fallbackToGlobalMentionRoots,
     currentEpicId,
     viewTabId,
@@ -523,6 +587,32 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // providers, packs, profiles and limits say nothing about that send.
   const resting = restingSandbox !== null;
   const runHostClient = resting ? null : hostClient;
+  const putFileBlob = useDraftsPutFileBlob();
+  const settleDraftFile = useCallback<FileNodeSettle>(
+    (id, settlement) => {
+      const draft = readComposerDraftSnapshot(taskId);
+      const next = settleFileNodeInContent(draft.content, id, settlement);
+      if (next === null) return;
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, next, draft.selection);
+    },
+    [taskId],
+  );
+  // Files go to the tab's host, the host that holds this draft, as its images
+  // do - a resting sandbox's chat included. A send on another host pulls them
+  // by hash from the cloud copy that host publishes.
+  const fileRoute = useComposerFileRoute({
+    hostId: tabHostId,
+    client: hostClient,
+    putFileBlob,
+    settleDraft: settleDraftFile,
+  });
+  // A typed path is read where the turn runs, which for a resting sandbox's
+  // chat is the sandbox, not the tab's host.
+  const pathsReachTarget = useTypedPathsReach(
+    resting ? restingSandbox.sandbox.hostId : tabHostId,
+  );
   const guideRef = useRef<HTMLDivElement | null>(null);
   const submitWithGuide = useFirstTaskSubmit(
     onSubmitMessage,
@@ -616,6 +706,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     chatTitle,
     epicTitle,
   });
+  const draftHasFiles = useMemo(
+    () => containsFileAttachments(draftContent),
+    [draftContent],
+  );
+  const draftHasPendingFile = useMemo(
+    () => containsPendingFileAttachment(draftContent),
+    [draftContent],
+  );
 
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
@@ -753,7 +851,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     harnessId,
     profileId,
     selectedModel,
+    workingDirectory: runWorkingDirectory,
     active: focused,
+    hostId: tabHostId,
     client: runHostClient,
   });
   // ONE value for both readers: the chain's `rateLimitVisible` below and the
@@ -836,15 +936,25 @@ function ChatComposerImpl(props: ChatComposerProps) {
     onDragEnter,
     onDragLeave,
     attachImageFiles,
+    attachFiles,
     dragOverlayVariant,
     isIngestingImages,
     isResolvingFilePaths,
+    isAttachingFiles,
     runPendingImageJob,
-  } = useComposerHashPaste(
-    editorRef,
-    runnerHost.fileDrops,
-    resolvedMentionRoots,
-  );
+  } = useComposerHashPaste(editorRef, {
+    fileDrops: runnerHost.fileDrops,
+    mentionRoots: resolvedMentionRoots,
+    fileRoute,
+    pathsReachTarget,
+  });
+  const frameDrop = useComposerDropScopeTarget({
+    onDragEnter,
+    onDragLeave,
+    onDragOver,
+    onDrop,
+    overlayVariant: dragOverlayVariant,
+  });
   // The rich-clipboard channel and the mount-time restart. A file paste is
   // already hashed before insertion; these two cover the HTML paste (whose
   // nodes must keep their positions, so they go in with bytes and flip in
@@ -868,10 +978,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
     editorReadyTick,
     reingestPendingImages,
   });
-  const pastePending = isAttachmentIngestPending({
-    isIngestingImages,
-    isResolvingFilePaths,
-  });
+  const pastePending = composerAttachmentsHoldSend(
+    { isIngestingImages, isResolvingFilePaths, isAttachingFiles },
+    draftHasPendingFile,
+  );
 
   const authority = useChatComposerDraftAuthority({
     chatId: taskId,
@@ -945,17 +1055,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     steerProtocolSupported,
   });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
-  const topBannerKind = resolveComposerTopBannerKind({
-    // The UNION of the two card predicates, and only for the slot question -
-    // which banner wins. Which CARD renders is decided inside
-    // `ChatComposerFallbackBanners`, by each predicate on its own.
-    fallbackVisible: fallbackComposerCardVisible(providerFallback.pending),
+  const { accountWait, topBannerKind } = useChatComposerTopBanner({
+    providerFallback,
+    providersList: profileEligibility.providersList,
+    epicId: currentEpicId,
+    chatId: taskId,
+    hostId: tabHostId,
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
-    // BY VALUE. The key is present on every live `1.12` frame with `undefined`
-    // meaning "no offer", so a `"pendingReturn" in ...` test here would pin the
-    // banner open for the life of the chat.
-    fallbackReturnVisible: providerFallback.pendingReturn !== undefined,
     rateLimitVisible: rateLimitAdvisory !== null,
   });
 
@@ -1001,6 +1108,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
+    draftHasFiles,
   });
   // Sending drops the phone sheet back to the compact card: an empty
   // full-screen editor over a reply that just started is the wrong thing to
@@ -1019,16 +1127,27 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   return (
     <>
-      <ChatComposerFallbackBanners
-        topBannerKind={topBannerKind}
-        fallback={providerFallback}
-        rateLimitAdvisory={rateLimitAdvisory}
-        client={hostClient}
-        chatId={taskId}
+      <AccountWaitSurface
         epicId={currentEpicId}
+        chatId={taskId}
+        providersList={profileEligibility.providersList}
+        wait={accountWait}
+        client={runHostClient}
         hostId={tabHostId}
+        toolbarStore={toolbarStore}
         canAct={fallbackControlsCanAct(sendDisabled)}
-      />
+      >
+        <ChatComposerFallbackBanners
+          topBannerKind={topBannerKind}
+          fallback={providerFallback}
+          rateLimitAdvisory={rateLimitAdvisory}
+          client={hostClient}
+          chatId={taskId}
+          epicId={currentEpicId}
+          hostId={tabHostId}
+          canAct={fallbackControlsCanAct(sendDisabled)}
+        />
+      </AccountWaitSurface>
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
           <div className="pointer-events-none px-4">
@@ -1098,9 +1217,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
               epicId={currentEpicId}
               viewTabId={viewTabId}
               onContinueOnAmbient={
-                reauthBanner.reason === "provider_unauthenticated"
-                  ? null
-                  : () => onSwitchProfile(null)
+                continueOnTerminalOffered(reauthGate)
+                  ? () => onSwitchProfile(null)
+                  : null
               }
             />
           ) : null}
@@ -1118,11 +1237,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
               >
                 <ComposerShell
                   pickerStore={pickerStore}
-                  onDragOver={onDragOver}
-                  onDrop={onDrop}
-                  onDragEnter={onDragEnter}
-                  onDragLeave={onDragLeave}
-                  dragOverlayVariant={dragOverlayVariant}
+                  onDragOver={frameDrop.onDragOver}
+                  onDrop={frameDrop.onDrop}
+                  onDragEnter={frameDrop.onDragEnter}
+                  onDragLeave={frameDrop.onDragLeave}
+                  dragOverlayVariant={frameDrop.overlayVariant}
                   utilityRail={null}
                   expansion={composerExpansion}
                   attachmentsStrip={
@@ -1163,6 +1282,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                     <ChatComposerToolbarSlot
                       store={toolbarStore}
                       onAttachImages={attachImageFiles}
+                      onAttachFiles={attachFiles}
                       canSubmit={canSubmit}
                       attachmentPending={attachmentPending}
                       onSubmit={handleSubmitFromButton}
@@ -1290,6 +1410,7 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+  readonly draftHasFiles: boolean;
 }
 
 /**
@@ -1377,7 +1498,7 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
     !args.attachmentPreparationPending &&
-    (args.draftHasText || args.draftHasImages)
+    (args.draftHasText || args.draftHasImages || args.draftHasFiles)
   );
 }
 

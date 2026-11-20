@@ -33,6 +33,10 @@ function sampleTelemetry(
     stopRequested: false,
     stderrEmpty: false,
     stderrFatal: "other",
+    hostLastLine: "none",
+    errorClass: "none",
+    errorCode: "none",
+    stopIntentState: "none",
     reportMemory: NO_REPORT_MEMORY,
     ...overrides,
   };

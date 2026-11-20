@@ -1,10 +1,9 @@
 import type { BotThreadAnchor } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { AutonomousResumeConversationMessage } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ConversationRequest } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
-import {
-  buildAttachmentsFromJSONContent,
-  extractPlainTextFromComposerJSONContent,
-} from "@/lib/composer/tiptap-json-content";
+import { botMemberText } from "@/lib/bots/bot-member-text";
+import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
@@ -62,7 +61,7 @@ export function sendCardFor(
 export function postTextOf(post: OpenMessage | null): string | null {
   if (post === null) return null;
   if (post.role === "user") {
-    return extractPlainTextFromComposerJSONContent(post.message.content);
+    return botMemberText(post.message.content);
   }
   return post.blocks
     .flatMap((block) => (block.type === "text" ? [block.text] : []))
@@ -169,10 +168,36 @@ function loadedOriginRow(
     {
       ...originRowBase(post.messageId, "user", post.timestamp, text),
       attachments: buildAttachmentsFromJSONContent(post.message.content),
+      // A card's answers sent together draw as the channel draws them.
+      ...(post.questionAnswers === undefined
+        ? {}
+        : { questionAnswers: post.questionAnswers }),
     },
     userId,
     post.conversationRequest ?? null,
     names,
+  );
+}
+
+/**
+ * The member's message a bot conversation delivery carried into one of the
+ * bot's sessions (Tracy Bots T159), as the channel's row draws it: from the
+ * conversation's own row once it is read, else the writer and the time the
+ * delivery recorded, with no text.
+ */
+export function deliveredMessageRow(input: {
+  readonly delivered: AutonomousResumeConversationMessage;
+  readonly post: OpenMessage | null;
+  readonly senderLabel: (senderUserId: string | null) => string;
+  readonly senderAvatarUrl: (senderUserId: string) => string | null;
+}): ChatMessage {
+  const { delivered, post } = input;
+  if (post !== null) return loadedOriginRow(post, input);
+  return memberOriginRow(
+    originRowBase(delivered.messageId, "user", delivered.postedAt, ""),
+    delivered.senderUserId,
+    null,
+    input,
   );
 }
 

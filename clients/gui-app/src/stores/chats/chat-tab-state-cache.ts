@@ -344,10 +344,27 @@ export function restoreChatTabStateForMount(
   rowKeys: ReadonlyArray<string>,
 ): SavedChatTabScrollState {
   const restored = restoreChatTabState(identity, rowKeys);
+  const saved = peekSavedChatTabState(identity);
+  // A legacy index can point at row zero of a different snapshot. It is not
+  // the missing saved row: park at the tail while hydration answers for it.
+  if (
+    saved?.mode === "free-scrolling" &&
+    saved.anchorMessageId !== null &&
+    saved.anchorRowKey === undefined &&
+    !rowKeys.includes(saved.anchorMessageId) &&
+    savedChatTabAnchorRowKey(saved, rowKeys) === saved.anchorMessageId &&
+    !savedAnchorTurnWasSplit(saved, rowKeys)
+  ) {
+    return {
+      mode: saved.mode,
+      anchorMessageId: null,
+      anchorIndex: null,
+      offset: 0,
+    };
+  }
   if (restored.mode !== "free-scrolling" || restored.anchorMessageId !== null) {
     return restored;
   }
-  const saved = peekSavedChatTabState(identity);
   if (saved !== null && saved.anchorMessageId !== null) return restored;
   return DEFAULT_CHAT_TAB_SCROLL_STATE;
 }

@@ -1,3 +1,5 @@
+import { useHostDirectoryListQuery } from "@/hooks/host/use-host-directory-list-query";
+import { useHostMentionEntries } from "@/hooks/composer/use-host-mention-entries";
 import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
 import {
   useCallback,
@@ -592,7 +594,18 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     [active, resolvedContext, step],
   );
 
-  const stepEntries = liveStepEntries;
+  const mentionHostDirectory = useHostDirectoryListQuery(active);
+  const mentionHosts = useMemo(
+    () =>
+      (mentionHostDirectory.data ?? [])
+        .filter((host) => host.kind !== "pool")
+        .map((host) => ({ hostId: host.hostId, label: host.label })),
+    [mentionHostDirectory.data],
+  );
+  const stepEntries = useHostMentionEntries(step, query, liveStepEntries, {
+    hosts: mentionHosts,
+    answered: !mentionHostDirectory.isPending && !mentionHostDirectory.isError,
+  });
   // Only an accepted setItems publication earns a hold. openPicker and
   // setStep clear the store's stamp; a render attempt publishes nothing.
   const holdPublishedItems =

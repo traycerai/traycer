@@ -11,7 +11,7 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
@@ -56,9 +56,24 @@ import {
 } from "../../../../__tests__/mobile-level2-form-harness";
 import { StrictMode, useContext, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  render,
+  screen,
+  within,
+  type RenderResult,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import { toast } from "sonner";
 
 import type {
   BotThreadSummary,
@@ -70,7 +85,6 @@ import type { BotOpenSession } from "@/components/bots/bot-session-view";
 import type {
   BotOpenMemory,
   BotOpenThread,
-  BotSessionOpen,
   BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import {
@@ -120,6 +134,7 @@ vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
@@ -231,7 +246,6 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     openMemory: BotOpenMemory | null;
     onOpenMemory: (open: BotOpenMemory | null) => void;
     onOpenTurn: BotTurnOpen;
-    onOpenSession: BotSessionOpen;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
@@ -266,15 +280,8 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       />
       <button
         type="button"
-        data-testid="stub-channel-open-thread-session"
-        onClick={() =>
-          props.onOpenSession({
-            chatId: "session-thread-1",
-            threadId: "thread-1",
-            messageId: null,
-            sendPostId: null,
-          })
-        }
+        data-testid="stub-channel-open-thread-turn"
+        onClick={() => props.onOpenTurn(THREAD_TURN, null)}
       />
       {props.setupHistory}
       <MentionsProbe />
@@ -403,6 +410,7 @@ import {
   routeNotificationForHost,
 } from "@/lib/notifications/payload";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
@@ -410,6 +418,10 @@ import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result"
 import { rowFromHostEntry } from "@/stores/notifications/merged-notifications";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { isHistoryEntryDead } from "@/lib/history-navigation/liveness";
+import { isHistoryEntryEligible } from "@/lib/history-navigation/eligibility";
 
 /** The trunk's turn behind a reply in the channel. */
 const REPLY_TURN: BotTurnRef = {
@@ -424,13 +436,34 @@ const REPLY_TURN: BotTurnRef = {
   requestIds: [],
 };
 
+/** The thread's turn behind a reply in the thread panel. */
+const THREAD_TURN: BotTurnRef = {
+  chatId: "session-thread-1",
+  turnIds: ["turn-thread"],
+  userMessageId: "prompt-thread",
+  threadId: "thread-1",
+  startedAt: 1_000,
+  endedAt: 2_000,
+  summary: null,
+  messageIds: ["thread-reply-1"],
+  requestIds: [],
+};
+
 let queryClient = new QueryClient();
+
+/** The picker's sheet reads the resolved theme the app's provider supplies. */
+const RESOLVED_THEME = {
+  resolvedTheme: "dark",
+  themePreset: "neutral",
+} as const;
 
 function surfaceFor(botId: string | null): ReactNode {
   return (
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BotTabSurface botId={botId} hostId={TAB_HOST} />
+        <ResolvedThemeContext.Provider value={RESOLVED_THEME}>
+          <BotTabSurface botId={botId} hostId={TAB_HOST} />
+        </ResolvedThemeContext.Provider>
       </QueryClientProvider>
     </StrictMode>
   );
@@ -547,10 +580,10 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     ];
     render(surface());
 
-    await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+    await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
     expect(sessionShown().dataset.chatId).toBe("session-thread-1");
     expect(sessionShown().dataset.threadId).toBe("thread-1");
-    expect(sessionShown().dataset.landOn).toBe("none");
+    expect(sessionShown().dataset.landOn).toBe("prompt-thread");
 
     await user.click(screen.getByTestId("stub-session-thread"));
 
@@ -583,7 +616,7 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     ];
     render(surface());
 
-    await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+    await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
     await user.click(screen.getByTestId("stub-session-thread-post"));
 
     const channel = screen.getByTestId("stub-channel");
@@ -617,11 +650,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       render(surface());
       expect(openThreadBeside()).toBe("post-other");
 
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
       await user.click(screen.getByTestId("stub-session-channel"));
       expect(openThreadBeside()).toBe("post-other");
 
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
       await user.click(screen.getByTestId("stub-session-post"));
       expect(openThreadBeside()).toBe("none");
     });
@@ -631,7 +664,7 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       mocks.state.threads = [];
       render(surface());
 
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
       await user.click(screen.getByTestId("stub-session-thread"));
 
       expect(openThreadBeside()).toBe("none");
@@ -680,7 +713,9 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expect(openThreadBeside()).toBe("none");
     });
 
-    it("is closed by a requested landing on a thread the list does not name", () => {
+    it("is kept open, and the landing refused and spent, when a requested landing names a message of a thread the settled list does not name", () => {
+      const toastError = vi.spyOn(toast, "error").mockReturnValue("toast");
+      onTestFinished(() => toastError.mockRestore());
       mocks.state.threads = [];
       useBotTabLandingStore.getState().request(BOT_ID, {
         kind: "thread",
@@ -689,7 +724,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       });
       render(surface());
 
-      expect(openThreadBeside()).toBe("none");
+      expect(openThreadBeside()).toBe("post-other");
+      expect(toastError).toHaveBeenCalledTimes(1);
+      expect(
+        Object.hasOwn(useBotTabLandingStore.getState().byBotId, BOT_ID),
+      ).toBe(false);
     });
   });
 
@@ -1376,9 +1415,11 @@ describe("<BotTabSurface /> channel lifetime", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     const view = render(surface());
     useTracySurfaceStore.getState().selectChannel(OTHER_BOT_ID);
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(OTHER_BOT_ID, "post-1", "unsent", null);
+    useBotDraftsStore.getState().typeThreadBox(OTHER_BOT_ID, "post-1", {
+      text: "unsent",
+      content: null,
+      held: [],
+    });
     view.rerender(surfaceFor(OTHER_BOT_ID));
     expect(useTracySurfaceStore.getState().visitedBotIds).toEqual([
       BOT_ID,
@@ -1442,7 +1483,12 @@ describe("<BotTabSurface /> with no channel selected", () => {
     it("heads the pane with Tracy as the picker, to reach a team still to be set up that the default channel does not see", async () => {
       mocks.state.listedBotIds = [];
       mocks.state.environments = [
-        { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
+        {
+          environmentId: "env-new",
+          label: "Newco",
+          ownerKind: "organization",
+          providerHandle: null,
+        },
       ];
       mocks.reads["env-new"] = { setup: NEEDS_HOST_SETUP };
       const user = userEvent.setup();
@@ -1565,5 +1611,428 @@ describe("<BotTabSurface /> header on a short viewport under the keyboard", () =
 
     expect(hiddenAway(screen.getByTestId("bot-tab-title"))).toBe(true);
     expect(hiddenAway(screen.getByTestId("bot-tab-view-messages"))).toBe(true);
+  });
+});
+
+describe("<BotTabSurface /> the place store the route reads", () => {
+  function placeOfBot(): {
+    readonly view: string | undefined;
+    readonly threadsShown: boolean;
+    readonly session: unknown;
+    readonly automaticMoves: number;
+  } {
+    const place = useTracyPlaceStore.getState();
+    return {
+      view: place.viewByBotId[BOT_ID],
+      threadsShown: place.threadsShown,
+      session: place.sessionByBotId[BOT_ID],
+      automaticMoves: place.automaticMoves,
+    };
+  }
+
+  it("records a person's choice of Activity, of Threads and of a session, and counts none of them as an automatic move", async () => {
+    const user = userEvent.setup();
+    render(surface());
+
+    await user.click(screen.getByTestId("bot-tab-view-activity"));
+    expect(placeOfBot()).toEqual({
+      view: "activity",
+      threadsShown: false,
+      session: undefined,
+      automaticMoves: 0,
+    });
+
+    await user.click(screen.getByTestId("stub-sidebar-threads"));
+    expect(placeOfBot()).toMatchObject({
+      threadsShown: true,
+      automaticMoves: 0,
+    });
+
+    await user.click(screen.getByTestId("stub-sidebar-own-channel"));
+    await user.click(screen.getByTestId("bot-tab-view-messages"));
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
+    expect(placeOfBot()).toEqual({
+      view: undefined,
+      threadsShown: false,
+      session: { chatId: "trunk-1", threadId: null },
+      automaticMoves: 0,
+    });
+  });
+
+  it("counts a landing asked of the tab from outside as an automatic move, and the tab moves", () => {
+    useBotTabLandingStore.setState({ byBotId: {} });
+    useBotTabLandingStore.getState().request(BOT_ID, {
+      kind: "chat",
+      chatId: BOT.trunkChatId,
+      messageId: "turn-1",
+      sendPostId: null,
+    });
+    render(surface());
+
+    expect(screen.getByTestId("stub-session")).toBeTruthy();
+    const place = useTracyPlaceStore.getState();
+    expect(place.sessionByBotId[BOT_ID]).toEqual({
+      chatId: BOT.trunkChatId,
+      threadId: null,
+    });
+    expect(place.automaticMoves).toBeGreaterThan(0);
+  });
+});
+
+describe("<BotTabSurface /> a bot's deleted frame against the list it was read with", () => {
+  const BOT_HREF = `/bot/${BOT_ID}`;
+  const OTHER_HREF = `/bot/${OTHER_BOT_ID}`;
+
+  function historyOf(href: string): {
+    readonly dead: boolean;
+    readonly eligible: boolean;
+  } {
+    return {
+      dead: isHistoryEntryDead(href),
+      eligible: isHistoryEntryEligible(href, useEpicCanvasStore.getState()),
+    };
+  }
+
+  const GONE = { dead: true, eligible: false };
+  const ALIVE = { dead: false, eligible: true };
+
+  beforeEach(() => {
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+  });
+
+  it("keeps the bot gone, through an unrelated re-render, while the list that still carries it is the one it was reported against", () => {
+    mocks.state.deleted = true;
+    const view = render(surface());
+
+    expect(historyOf(BOT_HREF)).toEqual(GONE);
+    expect(historyOf(OTHER_HREF)).toEqual(ALIVE);
+
+    view.rerender(surface());
+    view.rerender(surface());
+
+    expect(historyOf(BOT_HREF)).toEqual(GONE);
+    expect(historyOf(OTHER_HREF)).toEqual(ALIVE);
+  });
+
+  it("takes the bot back once a list that answered later still carries it", () => {
+    mocks.state.deleted = true;
+    const view = render(surface());
+    expect(historyOf(BOT_HREF)).toEqual(GONE);
+
+    mocks.state.deleted = false;
+    mocks.state.list = { ...mocks.state.list, dataUpdatedAt: 2_000 };
+    view.rerender(surface());
+
+    expect(historyOf(BOT_HREF)).toEqual(ALIVE);
+  });
+
+  it("keeps the bot gone when a list that answered later no longer carries it", () => {
+    mocks.state.deleted = true;
+    const view = render(surface());
+    expect(historyOf(BOT_HREF)).toEqual(GONE);
+
+    mocks.state.deleted = false;
+    mocks.state.listedBotIds = [OTHER_BOT_ID];
+    mocks.state.list = { ...mocks.state.list, dataUpdatedAt: 2_000 };
+    view.rerender(surface());
+
+    expect(historyOf(BOT_HREF)).toEqual(GONE);
+    expect(historyOf(OTHER_HREF)).toEqual(ALIVE);
+  });
+
+  it("does not make a visited bot gone that the list it is read against never carried", () => {
+    mocks.state.listedBotIds = [BOT_ID];
+    const view = render(surface());
+    act(() => useTracySurfaceStore.getState().markVisited(OTHER_BOT_ID));
+
+    view.rerender(surface());
+
+    expect(historyOf(OTHER_HREF)).toEqual(ALIVE);
+    expect(historyOf(BOT_HREF)).toEqual(ALIVE);
+  });
+});
+
+describe("<BotTabSurface /> a bot reported gone is never the default while its report stands", () => {
+  const BOT_HREF = `/bot/${BOT_ID}`;
+  const REPORTED_AT = 200;
+
+  function answeredAt(time: number): void {
+    mocks.state.list = { ...mocks.state.list, dataUpdatedAt: time };
+  }
+
+  function chosen(): ReadonlyArray<unknown> {
+    return mocks.activateTabIntent.mock.calls.map(([intent]) => intent);
+  }
+
+  const CHOSE_BOT = { kind: "tracy", botId: BOT_ID };
+  const CHOSE_OTHER = { kind: "tracy", botId: OTHER_BOT_ID };
+
+  /**
+   * The model sorts a section by title, so these titles put the bot first: it
+   * is the default channel unless something bars it.
+   */
+  function titleBotFirst(): void {
+    mocks.state.listTitles = new Map([
+      [BOT_ID, "Alpha"],
+      [OTHER_BOT_ID, "Zulu"],
+    ]);
+  }
+
+  /**
+   * The bot is shown deleted by its stream frame against a list that answered
+   * at `REPORTED_AT` and carries it first, which is what would make it the
+   * default. Returns the view, with the surface now selecting the other bot.
+   */
+  function reportDeleted(): RenderResult {
+    titleBotFirst();
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    answeredAt(REPORTED_AT);
+    mocks.state.deleted = true;
+    const view = render(surface());
+    expect(useTracySurfaceStore.getState().goneReports).toEqual({
+      [BOT_ID]: REPORTED_AT,
+    });
+    expect(chosen()).toContainEqual(CHOSE_OTHER);
+    mocks.activateTabIntent.mockClear();
+    mocks.state.deleted = false;
+    return view;
+  }
+
+  function expectStillGone(): void {
+    expect(isHistoryEntryDead(BOT_HREF)).toBe(true);
+    expect(
+      isHistoryEntryEligible(BOT_HREF, useEpicCanvasStore.getState()),
+    ).toBe(false);
+    expect(useTracySurfaceStore.getState().goneReports).toEqual({
+      [BOT_ID]: REPORTED_AT,
+    });
+  }
+
+  beforeEach(() => {
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTracySurfaceStore.setState({ goneReports: {}, visitedBotIds: [] });
+  });
+
+  it("is the default when nothing reports it gone", () => {
+    titleBotFirst();
+    mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
+    answeredAt(100);
+
+    render(surfaceFor(null));
+
+    expect(chosen()).toContainEqual(CHOSE_BOT);
+    expect(chosen()).not.toContainEqual(CHOSE_OTHER);
+  });
+
+  it("does not choose it from the list it was reported against, with no channel selected", () => {
+    const view = reportDeleted();
+
+    view.rerender(surfaceFor(null));
+
+    expect(chosen()).toContainEqual(CHOSE_OTHER);
+    expect(chosen()).not.toContainEqual(CHOSE_BOT);
+    expectStillGone();
+  });
+
+  it("does not choose it from an older list that still carries it first", () => {
+    const view = reportDeleted();
+
+    answeredAt(100);
+    view.rerender(surfaceFor(null));
+
+    expect(chosen()).toContainEqual(CHOSE_OTHER);
+    expect(chosen()).not.toContainEqual(CHOSE_BOT);
+    expectStillGone();
+  });
+
+  it("does not choose it from an older list read by a surface mounted after the report", () => {
+    const view = reportDeleted();
+    view.unmount();
+
+    answeredAt(100);
+    render(surfaceFor(null));
+
+    expect(chosen()).toContainEqual(CHOSE_OTHER);
+    expect(chosen()).not.toContainEqual(CHOSE_BOT);
+    expectStillGone();
+  });
+
+  function expectChosenAlone(): void {
+    expect(chosen()).toContainEqual(CHOSE_BOT);
+    expect(chosen()).not.toContainEqual(CHOSE_OTHER);
+    expect(useTracySurfaceStore.getState().goneReports).toEqual({});
+    expect(
+      isHistoryEntryEligible(BOT_HREF, useEpicCanvasStore.getState()),
+    ).toBe(true);
+  }
+
+  it("chooses it, and never the other bot on the way, when a later list that carries both arrives with no channel selected", () => {
+    const view = reportDeleted();
+
+    answeredAt(300);
+    view.rerender(surfaceFor(null));
+
+    expectChosenAlone();
+  });
+
+  it("chooses it, and never the other bot on the way, when a later list that carries both is read by a surface mounted after the report", () => {
+    const view = reportDeleted();
+    view.unmount();
+
+    answeredAt(300);
+    render(surfaceFor(null));
+
+    expectChosenAlone();
+  });
+
+  it("chooses it again once a list that answered later carries it, taking the report away", () => {
+    const view = reportDeleted();
+    view.unmount();
+    mocks.state.listedBotIds = [BOT_ID];
+
+    answeredAt(300);
+    render(surfaceFor(null));
+
+    expect(useTracySurfaceStore.getState().goneReports).toEqual({});
+    expect(chosen()).toContainEqual(CHOSE_BOT);
+    expect(
+      isHistoryEntryEligible(BOT_HREF, useEpicCanvasStore.getState()),
+    ).toBe(true);
+  });
+});
+
+describe("<BotTabSurface /> a history step never lands on a message again", () => {
+  const SESSION = { chatId: "trunk-1", threadId: null } as const;
+  const LISTED_THREAD: BotThreadSummary = {
+    threadId: "thread-1",
+    conversationId: "conversation-app",
+    sessionChatId: "session-thread-1",
+    anchor: {
+      messageId: "post-7",
+      requestId: "req-7",
+      senderUserId: "user-1",
+      sentAt: 1_000,
+      resolvedAt: 1_001,
+      excerpt: null,
+    },
+    replyCount: 1,
+    lastReplyAt: 2_000,
+    openRequestCount: 0,
+    costUsd: null,
+  };
+
+  function sessionLandOn(): string | undefined {
+    return screen.getByTestId("stub-session").dataset.landOn;
+  }
+
+  function channelLandOn(): string | null {
+    return screen.getByTestId("stub-channel").getAttribute("data-land-on");
+  }
+
+  describe("a session opened at a message", () => {
+    it("lands where it was opened, and not again when a step back to the channel and forward shows it", async () => {
+      const user = userEvent.setup();
+      render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
+      expect(sessionLandOn()).toBe("prompt-reply");
+
+      act(() => useTracyPlaceStore.getState().setSession(BOT_ID, null));
+      expect(screen.queryByTestId("stub-session")).toBeNull();
+      act(() => useTracyPlaceStore.getState().setSession(BOT_ID, SESSION));
+
+      expect(sessionLandOn()).toBe("none");
+    });
+
+    it("does not land again when its own Back button closed it and a step forward shows it", async () => {
+      const user = userEvent.setup();
+      render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
+
+      await user.click(screen.getByTestId("stub-session-back"));
+      act(() => useTracyPlaceStore.getState().setSession(BOT_ID, SESSION));
+
+      expect(sessionLandOn()).toBe("none");
+    });
+
+    it("lands again when the same session is opened again, a new visit", async () => {
+      const user = userEvent.setup();
+      render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
+      await user.click(screen.getByTestId("stub-session-back"));
+      act(() => useTracyPlaceStore.getState().setSession(BOT_ID, SESSION));
+      expect(sessionLandOn()).toBe("none");
+      act(() => useTracyPlaceStore.getState().setSession(BOT_ID, null));
+
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
+
+      expect(sessionLandOn()).toBe("prompt-reply");
+    });
+
+    it("keeps its landing through a re-render that moves nothing", async () => {
+      const user = userEvent.setup();
+      const view = render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
+
+      view.rerender(surface());
+      view.rerender(surface());
+
+      expect(sessionLandOn()).toBe("prompt-reply");
+    });
+  });
+
+  describe("the channel landed on a post", () => {
+    it("lands with the move that asked for it, and not again when Activity and Messages are stepped through", async () => {
+      const user = userEvent.setup();
+      render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
+      await user.click(screen.getByTestId("stub-session-post"));
+      expect(channelLandOn()).toBe("post-1");
+
+      act(() => useTracyPlaceStore.getState().setView(BOT_ID, "activity"));
+      expect(screen.queryByTestId("stub-channel")).toBeNull();
+      act(() => useTracyPlaceStore.getState().setView(BOT_ID, "messages"));
+
+      expect(channelLandOn()).toBe("none");
+    });
+
+    it("keeps its landing through a re-render that moves nothing", async () => {
+      const user = userEvent.setup();
+      const view = render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
+      await user.click(screen.getByTestId("stub-session-post"));
+
+      view.rerender(surface());
+
+      expect(channelLandOn()).toBe("post-1");
+    });
+
+    it("lands on a post of a thread beside the channel, and not again when the thread is closed and reopened by the rail's store", async () => {
+      const user = userEvent.setup();
+      mocks.state.threads = [LISTED_THREAD];
+      render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-thread-turn"));
+      await user.click(screen.getByTestId("stub-session-thread-post"));
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("post-7");
+      expect(channel.getAttribute("data-land-on")).toBe("thread-reply-9");
+      expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
+
+      act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+      act(() =>
+        useBotOpenThreadStore.getState().setRail(BOT_ID, {
+          kind: "thread",
+          anchorMessageId: "post-7",
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        }),
+      );
+
+      const reopened = screen.getByTestId("stub-channel");
+      expect(reopened.getAttribute("data-open-thread")).toBe("post-7");
+      expect(reopened.getAttribute("data-land-on")).toBe("none");
+      expect(reopened.getAttribute("data-land-on-thread")).toBe("none");
+    });
   });
 });

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import { create } from "zustand";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
 import type {
   SandboxCatalogue,
   UserSandboxCost,
@@ -13,6 +14,8 @@ import type { TaskHostGroup } from "@/components/epic-canvas/sidebar/task-host-g
 import { mirrorLineOtherHostName } from "@/components/home/composer/composer-mirror-line-model";
 import { SandboxShapeSheet } from "@/components/hosts/sandbox-shape-sheet";
 import { taskHasReadersOutsideTeam } from "@/components/hosts/team-host-disclosure-model";
+import { isEnvironmentComputer } from "@/components/settings/environment/environment-picker-model";
+import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import {
   hostOptionPickerGroup,
   hostOptionTeamOwner,
@@ -24,6 +27,8 @@ import type {
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherNewRow } from "@/components/settings/host-scope/host-switcher-new-rows";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useTeamBundleBalances } from "@/hooks/sandboxes/use-team-bundle-balances";
+import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
 import {
   useCloudChatHasCloudAuthorization,
   useCloudChatViewerId,
@@ -61,6 +66,7 @@ import {
   stageProviderFor,
   type ConsequencesInput,
   type SandboxConfigurationDefaults,
+  type TeamBalanceMc,
   type StageAudience,
   type StageConfiguration,
   type StagePrice,
@@ -71,6 +77,7 @@ import {
   agentSandboxCreatedByLine,
   burstIdleShortLine,
   SANDBOXES_CANT_BE_CREATED,
+  LOCAL_SUB_LINE,
   NEEDS_CREDITS,
   fundedRowPrice,
   needsCreditsRow,
@@ -259,9 +266,20 @@ export function useSandboxStaging(input: {
   const task = surface === null ? null : surface.task;
   const viewerUserId = useCloudChatViewerId();
   const user = useAuthUser().data ?? null;
+  const teamBalanceMc = useTeamBundleBalances();
   // Neither read without a surface: nothing prices or shapes a stage.
   const reads = surface !== null;
-  const catalogue = useSandboxCatalogue(reads).data ?? null;
+  const catalogueQuery = useSandboxCatalogue(reads);
+  const catalogue = catalogueQuery.data ?? null;
+  let catalogueState: "loading" | "error" | null = null;
+  if (catalogue === null) {
+    catalogueState = catalogueQuery.isError ? "error" : "loading";
+  }
+  const computers = useMemo(
+    () => (reads ? input.hosts.filter(isEnvironmentComputer) : []),
+    [input.hosts, reads],
+  );
+  const computerStatuses = useRegisteredHostEnvironmentStatuses(computers);
   const defaultsFor = useSandboxDefaultsLookup(reads);
   const remembered = useSandboxShapeMemoryStore((s) => s.byHost);
   const lastConfigurationByHost = useSandboxShapeMemoryStore(
@@ -278,8 +296,9 @@ export function useSandboxStaging(input: {
   );
 
   const rows = useMemo(
-    () => newRowFacts({ user, catalogue, defaults: defaultsFor }),
-    [catalogue, defaultsFor, user],
+    () =>
+      newRowFacts({ user, teamBalanceMc, catalogue, defaults: defaultsFor }),
+    [catalogue, defaultsFor, teamBalanceMc, user],
   );
   const audienceFor = useCallback(
     (configuration: StageConfiguration): StageAudience =>
@@ -303,15 +322,15 @@ export function useSandboxStaging(input: {
     () =>
       stage === null || stage.target.kind !== "new" || catalogue === null
         ? null
-        : stagedNewFacts(user, catalogue, stage.target),
-    [catalogue, stage, user],
+        : stagedNewFacts(user, teamBalanceMc, catalogue, stage.target),
+    [catalogue, stage, teamBalanceMc, user],
   );
   const consequences = useMemo<ConsequencesInput | null>(() => {
     if (stage === null) return null;
     const stagedConfiguration = stage.target.configuration;
     const principal = configurationPrincipal(stagedConfiguration, viewerUserId);
     const price = stagedTargetPrice(stage.target, input.hosts, stagedFacts);
-    const balance = stageBalanceMc(user, stagedConfiguration);
+    const balance = stageBalanceMc(user, stagedConfiguration, teamBalanceMc);
     const existingHostId =
       stage.target.kind === "existing" ? stage.target.hostId : null;
     const existingHost = input.hosts.find(
@@ -320,23 +339,25 @@ export function useSandboxStaging(input: {
     const stagedHost = input.hosts.find(
       (host) => host.hostId === (stage.createdHostId ?? existingHostId),
     );
-    const payer = existingHost?.sandbox?.summary?.wakePayer;
+    const existingSummary = existingHost?.sandbox?.summary;
     return {
       configuration: stagedConfiguration,
+      os:
+        stage.target.kind === "new"
+          ? stage.target.shape.os
+          : existingSummary?.os,
       price,
       needsCredits: stagedFacts !== null && stagedFacts.needsCredits,
       billingStarted: stagedSandboxBillingStarted(
         stage,
-        stagedHost?.sandbox ?? null,
+        stagedHost === undefined ? null : stagedHost.sandbox,
       ),
       shortfallMc:
         balance === null || price === null
           ? null
           : Math.max(1, price.awakeMcPerHour - balance),
-      wakingName:
-        stage.target.kind === "existing" && payer?.userId !== viewerUserId
-          ? stage.target.name
-          : null,
+      // Waking a team's sandbox uses the team's credits whoever woke it last.
+      wakingName: stage.target.kind === "existing" ? stage.target.name : null,
       audience: audienceFor(stagedConfiguration),
       reachHost: reachFor(
         stage.target.kind === "existing" ? stage.target.hostId : "",
@@ -351,6 +372,7 @@ export function useSandboxStaging(input: {
     reachFor,
     stage,
     stagedFacts,
+    teamBalanceMc,
     user,
     viewerUserId,
   ]);
@@ -370,8 +392,13 @@ export function useSandboxStaging(input: {
   );
 
   const stageNew = useCallback(
-    (facts: NewRowFacts): void => {
-      if (facts.shape === null || catalogue === null) return;
+    (facts: NewRowFacts): boolean => {
+      if (facts.shape === null || catalogue === null) {
+        if (catalogueState === "error") {
+          setSheetKey(stageConfigurationKey(facts.configuration));
+        }
+        return false;
+      }
       const current = readStagedSandbox(surfaceKey);
       // Reselecting the picked row keeps the name and shape already edited.
       if (
@@ -380,7 +407,7 @@ export function useSandboxStaging(input: {
         stageConfigurationKey(current.target.configuration) ===
           stageConfigurationKey(facts.configuration)
       )
-        return;
+        return true;
       const provider = stageProviderFor(catalogue, facts.shape.os);
       placeNew({
         kind: "new",
@@ -396,8 +423,17 @@ export function useSandboxStaging(input: {
           memoryHostId,
           stageConfigurationKey(facts.configuration),
         );
+      return true;
     },
-    [catalogue, forkOnNew, memoryHostId, placeNew, surfaceKey],
+    [
+      catalogue,
+      catalogueState,
+      forkOnNew,
+      memoryHostId,
+      placeNew,
+      setSheetKey,
+      surfaceKey,
+    ],
   );
 
   // In this task: every host the task already uses, and every agent sandbox
@@ -461,23 +497,25 @@ export function useSandboxStaging(input: {
           creatorName,
           viewerUserId: composerViewerId,
         });
-        if (task === null) return sandboxLines;
+        const localLine = computerSettingsLine(
+          host,
+          computerStatuses.get(hostId) ?? null,
+        );
+        const lines =
+          localLine === null ? sandboxLines : [localLine, ...sandboxLines];
+        if (task === null) return lines;
         const owner = hostOptionTeamOwner(host);
         const principal: TaskHostPrincipal =
           owner === null
             ? { kind: "user", id: viewerUserId }
             : { kind: "team", id: owner.teamId };
         const other = reachFor(hostId, principal);
-        if (other === null) return sandboxLines;
+        if (other === null) return lines;
         const remedyTeam =
           host.isLocalMachine && owner === null ? taskTeamTitle(task) : null;
         return remedyTeam === null
-          ? [...sandboxLines, reachSentence(other)]
-          : [
-              ...sandboxLines,
-              reachSentence(other),
-              reachRemedyLine(remedyTeam),
-            ];
+          ? [...lines, reachSentence(other)]
+          : [...lines, reachSentence(other), reachRemedyLine(remedyTeam)];
       },
       tagFor: (hostId) => {
         const host = input.hosts.find((option) => option.hostId === hostId);
@@ -486,7 +524,7 @@ export function useSandboxStaging(input: {
         if (summary === null || !summary.burst) return null;
         return hostConfigurationLabel(host);
       },
-      newRows: rows.map(newRowPresentation),
+      newRows: rows.map((row) => newRowPresentation(row, catalogueState)),
       rememberedConfigurationKey:
         memoryHostId === null
           ? null
@@ -495,7 +533,8 @@ export function useSandboxStaging(input: {
         stage === null || stage.target.kind !== "new"
           ? null
           : stageConfigurationKey(stage.target.configuration),
-      stagedLabel: stage === null ? null : stagedLabel(stage, input.hosts),
+      stagedLabel:
+        stage === null ? null : stagedLabel(stage, stagedFacts, input.hosts),
       // Running, not settled: a refusal or a failure ends the wait.
       stagedBusy:
         stage !== null && stage.phase !== "staged" && stage.failure === null,
@@ -520,7 +559,7 @@ export function useSandboxStaging(input: {
           (row) =>
             stageConfigurationKey(row.configuration) === configurationKey,
         );
-        if (facts !== undefined) stageNew(facts);
+        return facts !== undefined && stageNew(facts);
       },
       onOpenShape: setSheetKey,
       onManage: () => {
@@ -537,6 +576,8 @@ export function useSandboxStaging(input: {
       },
     };
   }, [
+    catalogueState,
+    computerStatuses,
     costs,
     creatorIds,
     creatorTitles,
@@ -552,6 +593,7 @@ export function useSandboxStaging(input: {
     rows,
     setSheetKey,
     stage,
+    stagedFacts,
     stageNew,
     surfaceKey,
     task,
@@ -624,8 +666,27 @@ export function useSandboxStaging(input: {
   };
 }
 
+function computerSettingsLine(
+  host: HostScopeOption,
+  status: EnvironmentStatusResponseV12 | null,
+): string | null {
+  if (
+    host.sandbox !== null ||
+    hostOptionTeamOwner(host) !== null ||
+    status === null ||
+    status.principal?.kind === "team"
+  ) {
+    return null;
+  }
+  const cohort = localRowCohort(status);
+  return cohort.kind === "local" && cohort.defaultsToLocal
+    ? LOCAL_SUB_LINE
+    : null;
+}
+
 function newRowFacts(input: {
   readonly user: AuthenticatedUser | null;
+  readonly teamBalanceMc: TeamBalanceMc;
   readonly catalogue: SandboxCatalogue | null;
   readonly defaults: (
     configurationKey: string,
@@ -649,7 +710,7 @@ function newRowFacts(input: {
       uncreatable: input.catalogue !== null && shape === null,
       price,
       needsCredits: stageNeedsCredits(
-        stageBalanceMc(input.user, configuration),
+        stageBalanceMc(input.user, configuration, input.teamBalanceMc),
         price,
       ),
     };
@@ -658,6 +719,7 @@ function newRowFacts(input: {
 
 function stagedNewFacts(
   user: AuthenticatedUser | null,
+  teamBalanceMc: TeamBalanceMc,
   catalogue: SandboxCatalogue,
   target: Extract<StagedSandboxTarget, { kind: "new" }>,
 ): NewRowFacts {
@@ -668,7 +730,7 @@ function stagedNewFacts(
     uncreatable: false,
     price,
     needsCredits: stageNeedsCredits(
-      stageBalanceMc(user, target.configuration),
+      stageBalanceMc(user, target.configuration, teamBalanceMc),
       price,
     ),
   };
@@ -676,13 +738,28 @@ function stagedNewFacts(
 
 /**
  * `New Acme sandbox` over `Linux · 2 vCPU · 4 GB · $0.12 an hour while awake ·
- * uses your Acme credits`; at a short balance `New Acme sandbox · needs
- * credits` over `Linux · 2 vCPU · 4 GB · from $0.12 an hour · uses your Acme
+ * uses Acme's credits`; at a short balance `New Acme sandbox · needs
+ * credits` over `Linux · 2 vCPU · 4 GB · from $0.12 an hour · uses Acme's
  * credits`.
  */
-function newRowPresentation(facts: NewRowFacts): HostSwitcherNewRow {
+function newRowPresentation(
+  facts: NewRowFacts,
+  catalogueState: "loading" | "error" | null,
+): HostSwitcherNewRow {
   const copy = stageConfigurationCopy(facts.configuration);
   const head = newSandboxRowLabel(copy);
+  if (catalogueState !== null) {
+    return {
+      configurationKey: stageConfigurationKey(facts.configuration),
+      label: head,
+      subLine:
+        catalogueState === "loading"
+          ? "Loading sizes and regions…"
+          : "Sizes and regions couldn't be loaded.",
+      configuration: copy,
+      disabled: catalogueState === "loading",
+    };
+  }
   if (facts.uncreatable) {
     return {
       configurationKey: stageConfigurationKey(facts.configuration),
@@ -733,6 +810,7 @@ export function restingVerb(
 
 function stagedLabel(
   stage: StagedSandbox,
+  facts: NewRowFacts | null,
   hosts: readonly HostScopeOption[],
 ): string {
   const { target } = stage;
@@ -759,6 +837,11 @@ function stagedLabel(
     configuration: stageConfigurationCopy(target.configuration),
     cpus: target.shape.cpus,
     memoryMb: target.shape.memoryMb,
+    priceMcPerHour:
+      facts === null || facts.price === null
+        ? null
+        : facts.price.awakeMcPerHour,
+    priceIsFrom: facts !== null && facts.price !== null && !facts.price.exact,
   });
 }
 
@@ -939,16 +1022,12 @@ function sandboxRowLines(
   ];
   if (team !== null)
     lines.unshift(
-      sandboxShapeAndCostLine(
-        summary,
-        {
-          kind: "team",
-          teamId: team.teamId,
-          teamName: team.teamName,
-          environmentId: summary.environmentId,
-        },
-        context.viewerUserId,
-      ),
+      sandboxShapeAndCostLine(summary, {
+        kind: "team",
+        teamId: team.teamId,
+        teamName: team.teamName,
+        environmentId: summary.environmentId,
+      }),
     );
   return lines;
 }
@@ -1029,5 +1108,10 @@ function existingTargetPrice(
   const summary =
     host === undefined || host.sandbox === null ? null : host.sandbox.summary;
   if (summary === null || summary.priceMcPerHour === null) return null;
-  return { awakeMcPerHour: summary.priceMcPerHour.awakeMc, exact: true };
+  return {
+    awakeMcPerHour: summary.priceMcPerHour.awakeMc,
+    suspendedMcPerHour: summary.priceMcPerHour.suspendedMc,
+    stoppedMcPerHour: summary.priceMcPerHour.stoppedMc,
+    exact: true,
+  };
 }

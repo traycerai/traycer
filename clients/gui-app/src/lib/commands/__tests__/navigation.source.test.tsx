@@ -1,5 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
+const soundtrackOfferedMock = vi.hoisted(() => ({ value: false }));
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => soundtrackOfferedMock.value,
+}));
+
 import { navigationSource } from "@/lib/commands/sources/navigation.source";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import {
@@ -69,6 +76,7 @@ describe("navigationSource", () => {
 
   afterEach(() => {
     cleanup();
+    soundtrackOfferedMock.value = false;
     setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
   });
@@ -114,16 +122,18 @@ describe("navigationSource", () => {
   it("offers no route into a section this build does not have", () => {
     // Desktop: Delete account exists in the table (its id has to resolve) but
     // is offered only by the installed mobile app.
-    expect(captureSettingsSubpage("/").map((i) => i.id)).not.toContain(
-      "nav:settings/delete-account",
-    );
+    const desktopIds = captureSettingsSubpage("/").map((i) => i.id);
+    expect(desktopIds).not.toContain("nav:settings/delete-account");
+    expect(desktopIds).toContain("nav:settings/app-diagnostics");
 
     setMobileApp(true);
     const mobileIds = captureSettingsSubpage("/").map((i) => i.id);
     expect(mobileIds).toContain("nav:settings/delete-account");
-    // ...and the two the mobile app drops stay dropped.
+    // ...and the sections the mobile app drops stay dropped. Application
+    // Diagnostics joins Keybindings and Link mobile app.
     expect(mobileIds).not.toContain("nav:settings/keybindings");
     expect(mobileIds).not.toContain("nav:settings/link-phone");
+    expect(mobileIds).not.toContain("nav:settings/app-diagnostics");
   });
 
   it("settings sub-page filters out the current section", () => {
@@ -132,15 +142,23 @@ describe("navigationSource", () => {
     expect(ids).toContain("nav:settings/general");
   });
 
-  it("distinguishes application Sounds from account Notifications", () => {
+  it("lists application Sounds and Alerts, and no retired Notifications row", () => {
+    soundtrackOfferedMock.value = true;
     const items = captureSettingsSubpage("/");
     const app = items.find((i) => i.id === "nav:settings/app-notifications");
-    const account = items.find((i) => i.id === "nav:settings/notifications");
+    const alerts = items.find((i) => i.id === "nav:settings/alerts");
     expect(app?.label).toBe("Sounds");
     expect(app?.statusBadge).toBe("Application");
-    expect(app?.keywords).toContain("notifications");
-    expect(account?.label).toBe("Notifications");
-    expect(account?.statusBadge).toBe("Account");
+    expect(alerts?.label).toBe("Alerts");
+    expect(alerts?.statusBadge).toBe("Application");
+    expect(items.map((i) => i.id)).not.toContain("nav:settings/notifications");
+  });
+
+  it("lists Sounds only where a soundtrack is offered, and Alerts either way", () => {
+    soundtrackOfferedMock.value = false;
+    const without = captureSettingsSubpage("/").map((i) => i.id);
+    expect(without).not.toContain("nav:settings/app-notifications");
+    expect(without).toContain("nav:settings/alerts");
   });
 
   it("lists the Secrets page, and none of the retired pages, in the settings sub-page", () => {

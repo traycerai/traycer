@@ -1,8 +1,4 @@
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,19 +6,16 @@ import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 import { SecretRow } from "@/components/settings/secrets/secret-row";
 import { AddSecretDialog } from "@/components/settings/secrets/add-secret-dialog";
 import { Button } from "@/components/ui/button";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useCanEditConfiguration } from "./configuration-source";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { TeamSecretNames } from "./team-secret-names";
 import { PROVIDER_KEY_SECRET_NAMES } from "./team-provider-state-word";
 
-/**
- * The selected provider's key. A provider that does not take one renders
- * nothing: its keys, if any were stored under another name, stay on Secrets.
- */
+/** All provider keys share the selected provider's Key section. */
 export function TeamProviderKeys(props: {
   readonly providerId: ProviderId;
 }): ReactNode {
@@ -34,11 +27,7 @@ export function TeamProviderKeys(props: {
   const [adding, setAdding] = useState(false);
   const keyName = PROVIDER_KEY_SECRET_NAMES[props.providerId];
   const keys =
-    keyName === undefined
-      ? []
-      : (query.data?.secrets.filter(
-          (secret) => secret.kind === "provider" && secret.name === keyName,
-        ) ?? []);
+    query.data?.secrets.filter((secret) => secret.kind === "provider") ?? [];
   // A reader who cannot edit, once the latest read SUCCEEDED. The list's
   // "No secrets." is a claim about the configuration, and there are two states
   // where `keys` is `[]` without that claim being true: while the first read is
@@ -62,22 +51,14 @@ export function TeamProviderKeys(props: {
     />
   ) : null;
   const reread = (): void => {
-    void queries.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(
-        hostRpcServingTierHostId(
-          "environment.secrets.list",
-          client.getActiveHostId(),
-          readProcessHostRpcTierPlan(),
-          null,
-        ),
-        "environment.secrets.list",
-      ),
-    });
+    void invalidateEnvironmentReads(queries, ["environment.secrets.list"]);
   };
-  if (keyName === undefined) return null;
   return (
-    <section className="flex flex-col gap-3" aria-label="Key">
-      <div className="flex items-center justify-between gap-2">
+    <section
+      className="flex min-w-0 flex-col gap-3 wrap-anywhere"
+      aria-label="Key"
+    >
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <h2 className="text-ui-sm font-medium">Key</h2>
         {canEdit && !query.isError && query.data !== undefined ? (
           <Button
@@ -125,7 +106,7 @@ export function TeamProviderKeys(props: {
           // with the key it was started for.
           key={`${configurationKey}:${props.providerId}`}
           open={adding}
-          prefill={{ name: keyName, value: "" }}
+          prefill={keyName === undefined ? null : { name: keyName, value: "" }}
           client={client}
           onOpenChange={setAdding}
           initialKind="provider"

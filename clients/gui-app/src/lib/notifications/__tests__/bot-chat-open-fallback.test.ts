@@ -113,6 +113,7 @@ describe("a chat search hit in a bot's chat", () => {
       kind: "chat",
       chatId: "chat-1",
       messageId: "row-1",
+      sendPostId: null,
     });
   });
 });

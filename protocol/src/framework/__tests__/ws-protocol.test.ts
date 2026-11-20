@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  clientCancelFrameSchema,
   clientFrameSchema,
   clientOpenFrameSchema,
   clientRequestFrameSchema,
@@ -8,23 +9,25 @@ import {
   hostFrameSchema,
   hostOpenAckFrameSchema,
   hostResponseFrameSchema,
+  hostResponseErrorSchema,
   hostFatalErrorFrameSchema,
   fatalErrorDetailsSchema,
   hostRestartIntentSchema,
   HOST_RESTARTING_FATAL_CODE,
+  UNARY_CAPABILITY_PERSISTENT_SESSION,
 } from "@traycer/protocol/framework/ws-protocol";
 
 /**
  * Canonical-schema coverage for every WS frame kind.
  *
  * The per-request WebSocket session has a short, fixed frame vocabulary: the
- * client sends `open` → `request` (plus an optional `fatalError`), and the
- * host replies with `openAck` → `response` (plus an optional `fatalError`
- * at any point). These tests assert that the Zod schemas exported from
- * `@traycer/protocol/framework/ws-protocol` accept a minimal representative of
- * each frame shape, so the authoritative wire contract is exercised from one
- * place regardless of which consumer (host-side dispatcher, client-side
- * transport) is parsing.
+ * client sends `open`, `request`, and `fatalError`. A persistent session also
+ * sends `cancel`. The host replies with `openAck` and `response`, plus an
+ * optional `fatalError` at any point. These tests assert that the Zod schemas
+ * exported from `@traycer/protocol/framework/ws-protocol` accept a minimal
+ * representative of each frame shape, so the authoritative wire contract is
+ * exercised from one place regardless of which consumer (host-side dispatcher,
+ * client-side transport) is parsing.
  */
 
 describe("ws-protocol canonical Zod schemas", () => {
@@ -171,6 +174,62 @@ describe("ws-protocol canonical Zod schemas", () => {
         expect(unionParse.data.method).toBe("host.status");
         expect(unionParse.data.schemaVersion).toEqual({ major: 1, minor: 0 });
       }
+    });
+
+    it("accepts a persistent-session request with its own bearer and a request that omits one", () => {
+      const withBearer = {
+        kind: "request" as const,
+        requestId: "req-bearer",
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 },
+        params: { message: "hi" },
+        token: "rotated-token",
+        cloudAuthorized: false,
+      };
+
+      expect(clientRequestFrameSchema.parse(withBearer)).toEqual(withBearer);
+      expect(clientFrameSchema.parse(withBearer)).toMatchObject({
+        kind: "request",
+        token: "rotated-token",
+        cloudAuthorized: false,
+      });
+
+      const withoutBearer = {
+        kind: "request" as const,
+        requestId: "req-oneshot",
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 },
+        params: { message: "hi" },
+      };
+      expect(clientRequestFrameSchema.parse(withoutBearer)).toEqual(
+        withoutBearer,
+      );
+      expect(clientFrameSchema.safeParse(withoutBearer).success).toBe(true);
+    });
+
+    it("accepts a cancel frame on the client vocabulary", () => {
+      const frame = { kind: "cancel" as const, requestId: "req-1" };
+
+      expect(clientCancelFrameSchema.parse(frame)).toEqual(frame);
+      const parsed = clientFrameSchema.parse(frame);
+      expect(parsed).toEqual(frame);
+    });
+
+    it("keeps an unknown capability string on an open frame", () => {
+      const frame = {
+        kind: "open" as const,
+        token: "t-0",
+        manifest: { "host.status": { major: 1, minor: 0 } },
+        capabilities: [
+          UNARY_CAPABILITY_PERSISTENT_SESSION,
+          "future.capability",
+        ],
+      };
+
+      expect(clientOpenFrameSchema.parse(frame).capabilities).toEqual([
+        "unary.persistentSession",
+        "future.capability",
+      ]);
     });
 
     it("accepts a client `fatalError` frame with full details", () => {
@@ -505,6 +564,51 @@ describe("ws-protocol canonical Zod schemas", () => {
         error: null,
       };
       expect(hostFrameSchema.safeParse(frame).success).toBe(false);
+    });
+
+    it("accepts `retryable` on a response error and reads an omission as undefined", () => {
+      const present = hostResponseErrorSchema.safeParse({
+        code: "UNAUTHORIZED",
+        message: "verifier unreachable",
+        retryable: true,
+      });
+      expect(present.success).toBe(true);
+      if (present.success) {
+        expect(present.data.retryable).toBe(true);
+      }
+      const omitted = hostResponseErrorSchema.safeParse({
+        code: "UNAUTHORIZED",
+        message: "Invalid or expired token",
+      });
+      expect(omitted.success).toBe(true);
+      if (omitted.success) {
+        expect(omitted.data.retryable).toBeUndefined();
+      }
+      const framed = hostResponseFrameSchema.safeParse({
+        kind: "response",
+        requestId: "req-1",
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 },
+        result: null,
+        error: {
+          code: "UNAUTHORIZED",
+          message: "verifier unreachable",
+          retryable: true,
+        },
+      });
+      expect(framed.success).toBe(true);
+      if (framed.success) {
+        expect(framed.data.error?.retryable).toBe(true);
+      }
+    });
+
+    it("rejects a non-boolean `retryable` on a response error", () => {
+      const parsed = hostResponseErrorSchema.safeParse({
+        code: "UNAUTHORIZED",
+        message: "verifier unreachable",
+        retryable: "yes",
+      });
+      expect(parsed.success).toBe(false);
     });
   });
 

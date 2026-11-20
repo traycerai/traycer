@@ -48,6 +48,7 @@ vi.mock("@/components/home/bots/create-bot-form", () => ({
 
 const BINDINGS: HostEnvironmentBindings = {
   byHostId: new Map(),
+  ownSettingsHostIds: [],
   failedHostIds: [],
   retryFailed: () => undefined,
 };

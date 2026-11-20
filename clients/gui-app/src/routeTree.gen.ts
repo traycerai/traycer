@@ -23,6 +23,7 @@ import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
 import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
 import { Route as SettingsAgentDefinitionsRouteImport } from "./routes/settings.agent-definitions";
+import { Route as SettingsAgentMemoriesRouteImport } from "./routes/settings.agent-memories";
 import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAlertsRouteImport } from "./routes/settings.alerts";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
@@ -55,6 +56,7 @@ import { Route as SettingsSecretsRouteImport } from "./routes/settings.secrets";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
 import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
 import { Route as SettingsSkillsRouteImport } from "./routes/settings.skills";
+import { Route as SettingsStorageRouteImport } from "./routes/settings.storage";
 import { Route as SettingsUsageRouteImport } from "./routes/settings.usage";
 import { Route as SettingsWorktreesRouteImport } from "./routes/settings.worktrees";
 import { Route as EpicsEpicIdTabIdRouteImport } from "./routes/epics.$epicId.$tabId";
@@ -130,6 +132,11 @@ const SettingsAgentDefinitionsRoute =
     path: "/agent-definitions",
     getParentRoute: () => SettingsRoute,
   } as any);
+const SettingsAgentMemoriesRoute = SettingsAgentMemoriesRouteImport.update({
+  id: "/agent-memories",
+  path: "/agent-memories",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
   id: "/agents",
   path: "/agents",
@@ -293,6 +300,11 @@ const SettingsSkillsRoute = SettingsSkillsRouteImport.update({
   path: "/skills",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsStorageRoute = SettingsStorageRouteImport.update({
+  id: "/storage",
+  path: "/storage",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
   id: "/usage",
   path: "/usage",
@@ -321,6 +333,7 @@ export interface FileRoutesByFullPath {
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
+  "/settings/agent-memories": typeof SettingsAgentMemoriesRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/alerts": typeof SettingsAlertsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
@@ -353,6 +366,7 @@ export interface FileRoutesByFullPath {
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
   "/settings/skills": typeof SettingsSkillsRoute;
+  "/settings/storage": typeof SettingsStorageRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/bot/": typeof BotIndexRoute;
@@ -370,6 +384,7 @@ export interface FileRoutesByTo {
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
+  "/settings/agent-memories": typeof SettingsAgentMemoriesRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/alerts": typeof SettingsAlertsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
@@ -402,6 +417,7 @@ export interface FileRoutesByTo {
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
   "/settings/skills": typeof SettingsSkillsRoute;
+  "/settings/storage": typeof SettingsStorageRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/bot": typeof BotIndexRoute;
@@ -422,6 +438,7 @@ export interface FileRoutesById {
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agent-definitions": typeof SettingsAgentDefinitionsRoute;
+  "/settings/agent-memories": typeof SettingsAgentMemoriesRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/alerts": typeof SettingsAlertsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
@@ -454,6 +471,7 @@ export interface FileRoutesById {
   "/settings/service": typeof SettingsServiceRoute;
   "/settings/shell": typeof SettingsShellRoute;
   "/settings/skills": typeof SettingsSkillsRoute;
+  "/settings/storage": typeof SettingsStorageRoute;
   "/settings/usage": typeof SettingsUsageRoute;
   "/settings/worktrees": typeof SettingsWorktreesRoute;
   "/bot/": typeof BotIndexRoute;
@@ -475,6 +493,7 @@ export interface FileRouteTypes {
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agent-definitions"
+    | "/settings/agent-memories"
     | "/settings/agents"
     | "/settings/alerts"
     | "/settings/app-diagnostics"
@@ -507,6 +526,7 @@ export interface FileRouteTypes {
     | "/settings/service"
     | "/settings/shell"
     | "/settings/skills"
+    | "/settings/storage"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/bot/"
@@ -524,6 +544,7 @@ export interface FileRouteTypes {
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agent-definitions"
+    | "/settings/agent-memories"
     | "/settings/agents"
     | "/settings/alerts"
     | "/settings/app-diagnostics"
@@ -556,6 +577,7 @@ export interface FileRouteTypes {
     | "/settings/service"
     | "/settings/shell"
     | "/settings/skills"
+    | "/settings/storage"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/bot"
@@ -575,6 +597,7 @@ export interface FileRouteTypes {
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agent-definitions"
+    | "/settings/agent-memories"
     | "/settings/agents"
     | "/settings/alerts"
     | "/settings/app-diagnostics"
@@ -607,6 +630,7 @@ export interface FileRouteTypes {
     | "/settings/service"
     | "/settings/shell"
     | "/settings/skills"
+    | "/settings/storage"
     | "/settings/usage"
     | "/settings/worktrees"
     | "/bot/"
@@ -727,6 +751,13 @@ declare module "@tanstack/react-router" {
       path: "/agent-definitions";
       fullPath: "/settings/agent-definitions";
       preLoaderRoute: typeof SettingsAgentDefinitionsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/agent-memories": {
+      id: "/settings/agent-memories";
+      path: "/agent-memories";
+      fullPath: "/settings/agent-memories";
+      preLoaderRoute: typeof SettingsAgentMemoriesRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/agents": {
@@ -953,6 +984,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsSkillsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/storage": {
+      id: "/settings/storage";
+      path: "/storage";
+      fullPath: "/settings/storage";
+      preLoaderRoute: typeof SettingsStorageRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/usage": {
       id: "/settings/usage";
       path: "/usage";
@@ -991,6 +1029,7 @@ const EpicsRouteWithChildren = EpicsRoute._addFileChildren(EpicsRouteChildren);
 
 interface SettingsRouteChildren {
   SettingsAgentDefinitionsRoute: typeof SettingsAgentDefinitionsRoute;
+  SettingsAgentMemoriesRoute: typeof SettingsAgentMemoriesRoute;
   SettingsAgentsRoute: typeof SettingsAgentsRoute;
   SettingsAlertsRoute: typeof SettingsAlertsRoute;
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
@@ -1023,6 +1062,7 @@ interface SettingsRouteChildren {
   SettingsServiceRoute: typeof SettingsServiceRoute;
   SettingsShellRoute: typeof SettingsShellRoute;
   SettingsSkillsRoute: typeof SettingsSkillsRoute;
+  SettingsStorageRoute: typeof SettingsStorageRoute;
   SettingsUsageRoute: typeof SettingsUsageRoute;
   SettingsWorktreesRoute: typeof SettingsWorktreesRoute;
   SettingsIndexRoute: typeof SettingsIndexRoute;
@@ -1030,6 +1070,7 @@ interface SettingsRouteChildren {
 
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAgentDefinitionsRoute: SettingsAgentDefinitionsRoute,
+  SettingsAgentMemoriesRoute: SettingsAgentMemoriesRoute,
   SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAlertsRoute: SettingsAlertsRoute,
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
@@ -1062,6 +1103,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsServiceRoute: SettingsServiceRoute,
   SettingsShellRoute: SettingsShellRoute,
   SettingsSkillsRoute: SettingsSkillsRoute,
+  SettingsStorageRoute: SettingsStorageRoute,
   SettingsUsageRoute: SettingsUsageRoute,
   SettingsWorktreesRoute: SettingsWorktreesRoute,
   SettingsIndexRoute: SettingsIndexRoute,

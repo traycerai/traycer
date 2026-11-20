@@ -127,6 +127,8 @@ export type {
   VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 export type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -143,8 +145,6 @@ export type {
   SlackAppDmsRequest,
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
-export type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
-export type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 export type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,

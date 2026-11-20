@@ -198,12 +198,14 @@ function HostSettingsPanelInner(props: {
   // header included; the two page states without tabs scroll as they always
   // have.
   const pinned = !isMobile && !unresolved;
+  const description =
+    scope.host === null
+      ? "Status, updates and maintenance for the selected host."
+      : `Status, updates and maintenance for ${scope.host.name}.`;
   const shell = (
     <SettingsPanelShell
       title="Overview"
-      // The card below names the host, in bigger type, next to its status and
-      // its Edit name control. Repeating it as the page title printed the same
-      // string twice, two lines apart, and made the header look like a bug.
+      description={description}
       fillHeight={pinned}
       bodyClassName={cn(
         "overflow-visible rounded-none border-none bg-transparent",

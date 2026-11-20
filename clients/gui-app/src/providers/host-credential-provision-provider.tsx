@@ -7,6 +7,7 @@ import {
   setHostCredentialMintRunner,
   type HostCredentialMintRunnerOutcome,
 } from "@/lib/auth/host-credential-provisioning";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
@@ -48,6 +49,9 @@ export function HostCredentialProvisionProvider(props: {
     ): Promise<HostCredentialMintRunnerOutcome> => {
       const auth = binding?.auth ?? null;
       if (auth === null) {
+        appLogger.info("Host credential mint skipped, no auth service bound", {
+          hostId: request.hostId,
+        });
         return { kind: "unavailable" };
       }
       // Best-effort: the directory names the machine so the Devices & Sessions
@@ -71,8 +75,18 @@ export function HostCredentialProvisionProvider(props: {
           // matches its own owner-gated identity.
           return { kind: "unavailable" };
         }
+        if (result.kind !== "ok") {
+          appLogger.info("Host credential mint refused", {
+            hostId: request.hostId,
+            result: result.kind,
+          });
+        }
         return toMintOutcome(result);
-      } catch {
+      } catch (error) {
+        appLogger.warn("Host credential mint request threw", {
+          hostId: request.hostId,
+          error: describeLogError(error),
+        });
         return { kind: "unavailable" };
       }
     };

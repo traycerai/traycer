@@ -1,3 +1,4 @@
+import { grantedRole } from "@traycer/protocol/common/permission-role";
 import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * The record plane: the root replica, the projector that reads it, the record
@@ -217,8 +218,12 @@ export interface EpicRecordsReplica extends Replica<
   flushPendingRootUpdates(): void;
   /** Re-send this client's own awareness state after a (re)connect. */
   emitCurrentAwareness(): void;
-  /** Fail-closed teardown of every local root write path. */
-  clearLocalWritePaths(options: { readonly clearCoverage: boolean }): void;
+  /**
+   * Fail-closed teardown of every local root write path, for the one event
+   * that reaches it: access revoked entirely. Coverage goes with the queue -
+   * a client with no role cannot claim the host holds anything for it.
+   */
+  clearLocalWritePaths(): void;
 
   // ── Divergence ──────────────────────────────────────────────────────────
   /**
@@ -233,8 +238,8 @@ export interface EpicRecordsReplica extends Replica<
    * Recompute and publish unconditionally.
    *
    * The UNGATED form, for the paths that were folded into one combined write in
-   * the closure - a landed snapshot, a room snapshot, a room leaving `ready`, a
-   * viewer downgrade. Those writes always reached the store, and keeping them
+   * the closure - a landed snapshot, a room snapshot, a room leaving `ready`,
+   * a lost role. Those writes always reached the store, and keeping them
    * unconditional keeps the notification count where it was.
    */
   publishDivergence(): void;
@@ -781,8 +786,7 @@ export function createEpicRecordsReplica(
 
   function applyLocalUpdate(updateBytes: Uint8Array): void {
     if (isDisposed()) return;
-    const role = session.writeGateRole();
-    if (role === "viewer" || role === null) return;
+    if (!isWritablePermissionRole(session.writeGateRole())) return;
     // Gate on the renderer↔host transport, NOT the combined visible status.
     // When the host's cloud link drops the pill shows "reconnecting" but the
     // LOCAL transport stays open, and edits must keep flowing to the host: it
@@ -847,17 +851,17 @@ export function createEpicRecordsReplica(
       sink.read().dirtyWatermarkStateVectorBase64,
       meta.hostStateVectorBase64,
     );
-    // Only writable roles may push the reconcile delta back. A viewer's local
-    // doc carries no legitimate offline edits, and the delta vs
-    // `hostStateVectorBase64` can be non-trivial purely because the host
-    // re-encoded its snapshot and state vector at different instants on an
-    // actively-syncing room. Sending it as a viewer hits the host's guarded
-    // `applyCollabUpdate`, which refuses the mutate AND evicts the warm slot -
-    // tearing the room down mid-open. Mirror the same gate as
+    // Only a writable role may push the reconcile delta back. A client the
+    // host could not attribute a role to carries no legitimate offline edits,
+    // and the delta vs `hostStateVectorBase64` can be non-trivial purely
+    // because the host re-encoded its snapshot and state vector at different
+    // instants on an actively-syncing room. Sending it unattributed hits the
+    // host's guarded `applyCollabUpdate`, which refuses the mutate AND evicts
+    // the warm slot - tearing the room down mid-open. Mirror the same gate as
     // `applyLocalUpdate`.
     if (
       isNonTrivialYUpdate(reconcileUpdate) &&
-      isWritablePermissionRole(meta.permissionRole)
+      isWritablePermissionRole(grantedRole(meta.permissionRole))
     ) {
       send({ kind: "root-update", update: reconcileUpdate });
     }
@@ -934,8 +938,7 @@ export function createEpicRecordsReplica(
 
   function canWriteDoc(): boolean {
     if (isDisposed()) return false;
-    const role = session.writeGateRole();
-    return role !== "viewer" && role !== null;
+    return isWritablePermissionRole(session.writeGateRole());
   }
 
   function renameArtifact(artifactId: string, nextTitle: string): boolean {
@@ -1424,7 +1427,7 @@ export function createEpicRecordsReplica(
       switch (event.kind) {
         case "root-snapshot": {
           // The cross-plane sequencing (role adoption, control's snapshot
-          // fields, the viewer-downgrade room teardown) belongs to the runtime;
+          // fields, the lost-role room teardown) belongs to the runtime;
           // this arm is what the seam's `apply` can honestly do alone.
           const divergence = ingestSnapshot(event.meta, event.update);
           publishSnapshotLanded(event.meta, divergence);
@@ -1540,15 +1543,8 @@ export function createEpicRecordsReplica(
       });
     },
 
-    clearLocalWritePaths(options): void {
+    clearLocalWritePaths(): void {
       unsynced.clear();
-      if (!options.clearCoverage) {
-        // A viewer downgrade. Coverage is KEPT: the host still holds what it
-        // acknowledged, and discarding it would under-report host coverage,
-        // which is the direction that claims unsynced edits are safe.
-        publish({ unsyncedQueueSize: 0 });
-        return;
-      }
       // Access revoked. A client with no role cannot claim the host holds
       // anything for it, so coverage goes and divergence is asserted clean
       // rather than recomputed against a doc nothing will reconcile.

@@ -20,7 +20,13 @@ export interface ProcessMetricsSnapshot {
   readonly appMetrics: ReadonlyArray<{
     readonly pid: number;
     readonly type: string;
-    readonly cpu: { readonly percentCPUUsage: number };
+    readonly name?: string;
+    readonly serviceName?: string;
+    readonly cpu: {
+      /** Electron's native share of this desktop machine. */
+      readonly cpuSharePercent: number;
+      readonly idleWakeupsPerSecond: number;
+    };
     readonly memory: {
       readonly workingSetSize: number;
       readonly peakWorkingSetSize: number;

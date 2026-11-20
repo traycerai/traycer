@@ -38,9 +38,11 @@ jobs:
           # Git auth comes from GH_TOKEN via `gh auth setup-git` below, so the
           # bot-token path (when configured) is what pushes the branch.
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: ./.github/actions/bootstrap-ci-tools
         with:
-          bun-version: "1.3.14"
+          mirror-base-url: ${{ vars.CI_TOOLS_MIRROR_BASE_URL }}
+          # No bun-version: the action asserts the Bun its checked-out ref's lock pins.
+          tools: bun electron
       - name: Cache bun global install cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:

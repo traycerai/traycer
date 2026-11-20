@@ -33,7 +33,7 @@ import {
   providersListDowngradeV7ToV1,
   providersListDowngradeV7ToV2,
   providersListDowngradeV7ToV6,
-  providersSetEnabledDowngradeV21ToV10,
+  providersSetEnabledDowngradeV22ToV10,
 } from "@traycer/protocol/host/registry";
 import {
   providerCliStateSchema,
@@ -45,8 +45,7 @@ import {
   providersSetEnabledRequestSchema,
   providersSetEnabledRequestSchemaV10,
   providersSetEnabledRequestSchemaV21,
-  providersSetEnabledResponseSchema,
-  providersSetEnabledResponseSchemaV10,
+  providersSetEnabledRequestSchemaV22,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -337,19 +336,19 @@ describe("enablement carries no derived-mode field on any line", () => {
     expect(parsed.enabled).toBe(false);
   });
 
-  it("the registered 2.1 -> v1.0 downgrade drops profileAction - v1.0's strict request would otherwise reject the whole call", () => {
-    const v21Request = providersSetEnabledRequestSchemaV21.parse({
+  it("the registered 2.2 -> v1.0 downgrade drops profileAction - v1.0's strict request would otherwise reject the whole call", () => {
+    const v22Request = providersSetEnabledRequestSchemaV22.parse({
       providerId: "claude-code",
       enabled: false,
       profileAction: null,
     });
     // A leaked key fails v1.0's strict parse outright.
     expect(
-      providersSetEnabledRequestSchemaV10.safeParse(v21Request).success,
+      providersSetEnabledRequestSchemaV10.safeParse(v22Request).success,
     ).toBe(false);
 
     const downgraded =
-      providersSetEnabledDowngradeV21ToV10.downgradeRequest(v21Request);
+      providersSetEnabledDowngradeV22ToV10.downgradeRequest(v22Request);
     expect(downgraded).toMatchObject({
       ok: true,
       value: { providerId: "claude-code", enabled: false },
@@ -358,21 +357,6 @@ describe("enablement carries no derived-mode field on any line", () => {
     expect(downgraded.value).not.toHaveProperty("profileAction");
     expect(() =>
       providersSetEnabledRequestSchemaV10.parse(downgraded.value),
-    ).not.toThrow();
-  });
-
-  it("the 2.1 -> v1.0 downgrade response echo still strips to the frozen v1.0 state shape", () => {
-    const state = providersListResponseSchema.parse({
-      providers: [providerState("claude-code")],
-      native: null,
-    }).providers[0];
-    const downgraded = providersSetEnabledDowngradeV21ToV10.downgradeResponse(
-      providersSetEnabledResponseSchema.parse({ state }),
-    );
-    expect(downgraded.ok).toBe(true);
-    if (!downgraded.ok) return;
-    expect(() =>
-      providersSetEnabledResponseSchemaV10.parse(downgraded.value),
     ).not.toThrow();
   });
 });
@@ -471,14 +455,13 @@ describe("hostRpcRegistry loads with the catalog lines at their expected latestM
     ]);
   });
 
-  it("providers.setEnabled major 2 -> latestMinor 1 (no 2.2 line exists)", () => {
-    expect(hostRpcRegistry["providers.setEnabled"][2].latestMinor).toBe(1);
+  it("providers.setEnabled major 2 -> latestMinor 2 (environmentProfileId)", () => {
+    expect(hostRpcRegistry["providers.setEnabled"][2].latestMinor).toBe(2);
     expect(
       Object.keys(hostRpcRegistry["providers.setEnabled"][2].versions),
-    ).toEqual(["0", "1"]);
-    // The downgrade-from-latest table points back at the 2.1 bridge.
+    ).toEqual(["0", "1", "2"]);
     expect(
       hostRpcRegistry["providers.setEnabled"][2].downgradePathsFromLatest[1],
-    ).toBe(providersSetEnabledDowngradeV21ToV10);
+    ).toBe(providersSetEnabledDowngradeV22ToV10);
   });
 });

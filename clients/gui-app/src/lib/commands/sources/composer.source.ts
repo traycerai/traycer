@@ -26,8 +26,22 @@ import {
   useGuiHarnessCatalogForClientLine,
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
-import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
-import { useHostBinding } from "@/lib/host";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import {
+  isHarnessRowSignedOut,
+  signedOutTerminalBesideSignedInProfile,
+} from "@/lib/providers/provider-ambient-auth";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import {
+  hiddenModelProvidersForHarness,
+  modelProviderHidden,
+} from "@/lib/providers/provider-hidden-model-providers";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useFocusedComposerEntry } from "@/hooks/command-palette/use-focused-composer-entry";
@@ -304,7 +318,8 @@ const MODEL_SUBPAGE: CommandSubpage = {
  * composer whose host client has not resolved, nothing is listed rather than
  * another host's.
  */
-function useFocusedComposerCatalog(): GuiHarnessCatalog {
+/** The focused composer's host client, or the app's default host without one. */
+function useFocusedComposerClient(): HostClient<HostRpcRegistry> | null {
   const entry = useFocusedComposerEntry();
   const defaultBinding = useHostBinding();
   const defaultEffectiveHostId = useEffectiveHostId();
@@ -312,6 +327,12 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
     () => resolveSubtreeHostClient(defaultBinding, defaultEffectiveHostId),
     [defaultBinding, defaultEffectiveHostId],
   );
+  return entry === null ? defaultClient : entry.hostClient;
+}
+
+function useFocusedComposerCatalog(): GuiHarnessCatalog {
+  const entry = useFocusedComposerEntry();
+  const client = useFocusedComposerClient();
   // `"cached-only"`: opening a palette subpage must not cold-start every
   // provider on the focused composer's host. The subpages list what the host's
   // cache already holds: at least the focused composer's selected harness,
@@ -319,10 +340,15 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
   // providers in that picker. OpenCode's models are the focused chat's line,
   // the entries its toolbar warms.
   return useGuiHarnessCatalogForClientLine(
-    entry === null ? defaultClient : entry.hostClient,
+    client,
     null,
     entry === null ? null : entry.opencodeLine,
-    { enabled: true, subscribed: true, modelsFetch: "cached-only" },
+    {
+      enabled: true,
+      subscribed: true,
+      modelsFetch: "cached-only",
+      modelProfile: entry?.catalogSelection,
+    },
   );
 }
 
@@ -332,12 +358,11 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
  * probe that never consults auth, so a provider whose account is signed out
  * was offered here indistinguishably from a live one.
  *
- * The picker surfaces answer this by joining against `providers.list`, but the
- * palette has no such query - it holds a catalog and nothing else. So this is
- * the site the row-carried `authStatus` exists for: the same definitive-only
- * verdict the rail reads, taken straight off the row being listed. On a host
- * below `agent.gui.listHarnesses@7.1` the field is absent, the predicate is
- * false for every row, and both subpages look exactly as they do today.
+ * The signed-out verdict is the row-carried `authStatus`, as the rail reads it.
+ * On a host below `agent.gui.listHarnesses@7.1` the field is absent, the
+ * predicate is false for every row, and both subpages look exactly as they do
+ * today. Only the signed-in managed profile exception (see
+ * {@link providerSignedOutInPalette}) reads `providers.list`.
  */
 function providerOfferableInPalette(provider: HarnessOption): boolean {
   return provider.available;
@@ -353,19 +378,25 @@ function providerOfferableInPalette(provider: HarnessOption): boolean {
  * pinned to a managed profile is judged on THAT profile's own auth. Filtering
  * these rows out therefore hid every provider and model command for a
  * configuration that runs turns perfectly well - a signed-out terminal account
- * beside a signed-in managed profile. The palette cannot tell the two apart
- * (`FocusedComposerEntry` carries a host client, not profile state), so it
- * takes the reading it can defend: say so, order accordingly, and leave the
- * verdict to the gate that has the profile in hand.
+ * beside a signed-in managed profile. The ambient verdict says nothing about
+ * that managed profile, so leave the execution verdict to its send gate.
  *
- * The rail reads the identical signal (`railHarnessDegraded`) and reaches the
- * same conclusion by a different route: there it dims the row and leaves it
- * exactly where it is, because the rail is a fixed strip of ⌘-digit positions
+ * The rail reads the same signal (`railHarnessDegraded`) and the same
+ * exception: a provider with any enabled, signed-in managed profile beside the
+ * signed-out Terminal login is neither badged nor demoted here, nor dimmed
+ * there. Otherwise the rail dims the row and leaves it in place, because the
+ * rail is a fixed strip of ⌘-digit positions
  * a user learns. This is a searched list with no positional memory to break,
  * so it may additionally group the unusable rows last.
  */
-function providerSignedOutInPalette(provider: HarnessOption): boolean {
-  return isHarnessRowSignedOut(provider);
+function providerSignedOutInPalette(
+  provider: HarnessOption,
+  profiles: ReadonlyArray<ProviderProfile>,
+): boolean {
+  return (
+    isHarnessRowSignedOut(provider) &&
+    !signedOutTerminalBesideSignedInProfile(profiles)
+  );
 }
 
 /**
@@ -378,35 +409,72 @@ function providerSignedOutInPalette(provider: HarnessOption): boolean {
  */
 function paletteProviderOrder<T extends HarnessOption>(
   harnesses: ReadonlyArray<T>,
+  providers: ReadonlyArray<ProviderCliState> | undefined,
 ): ReadonlyArray<T> {
   return harnesses
     .filter((provider) => providerOfferableInPalette(provider))
     .toSorted(
       (left, right) =>
-        Number(providerSignedOutInPalette(left)) -
-        Number(providerSignedOutInPalette(right)),
+        Number(
+          providerSignedOutInPalette(left, profilesOfHarness(providers, left)),
+        ) -
+        Number(
+          providerSignedOutInPalette(
+            right,
+            profilesOfHarness(providers, right),
+          ),
+        ),
     );
+}
+
+/** The profile rows `providers.list` holds for a harness; none before it loads. */
+function profilesOfHarness(
+  providers: ReadonlyArray<ProviderCliState> | undefined,
+  harness: HarnessOption,
+): ReadonlyArray<ProviderProfile> {
+  const state = providers?.find(
+    (provider) => providerIdToGuiHarnessId(provider.providerId) === harness.id,
+  );
+  return state?.profiles ?? [];
 }
 
 function useProviderSubpageItems(): ReadonlyArray<CommandItem> {
   const catalog = useFocusedComposerCatalog();
+  const providers = useProvidersListForClient(useFocusedComposerClient(), {
+    enabled: true,
+    subscribed: true,
+  }).data?.providers;
   return useMemo(
     () =>
-      paletteProviderOrder(catalog.harnesses).map((provider) =>
-        buildProviderItem(provider),
+      paletteProviderOrder(catalog.harnesses, providers).map((provider) =>
+        buildProviderItem(provider, profilesOfHarness(providers, provider)),
       ),
-    [catalog.harnesses],
+    [catalog.harnesses, providers],
   );
 }
 
+/**
+ * Leaves out the models of every model provider hidden in Settings, as the
+ * model picker does. Unlike the picker it keeps no exception for the focused
+ * chat's own model: this is a list of models to switch TO, and the chat keeps
+ * running on its model whether or not it is listed here.
+ */
 function useModelSubpageItems(): ReadonlyArray<CommandItem> {
   const catalog = useFocusedComposerCatalog();
+  const providers = useProvidersListForClient(useFocusedComposerClient(), {
+    enabled: true,
+    subscribed: true,
+  }).data?.providers;
   return useMemo(
     () =>
-      paletteProviderOrder(catalog.harnesses).flatMap((provider) =>
-        provider.models.map((model) => buildModelItem(provider, model)),
-      ),
-    [catalog.harnesses],
+      paletteProviderOrder(catalog.harnesses, providers).flatMap((provider) => {
+        const hidden = hiddenModelProvidersForHarness(providers, provider.id);
+        const profiles = profilesOfHarness(providers, provider);
+        return provider.models
+          .filter((model) => !modelProviderHidden(model, hidden))
+          .map((model) => buildModelItem(provider, model, profiles));
+      }),
+    [catalog.harnesses, providers],
   );
 }
 
@@ -415,13 +483,19 @@ function useModelSubpageItems(): ReadonlyArray<CommandItem> {
  * the non-actionable "reason" one. The row stays selectable on purpose: see
  * {@link providerSignedOutInPalette}.
  */
-function signedOutBadge(provider: HarnessOption): { statusBadge?: string } {
-  return providerSignedOutInPalette(provider)
+function signedOutBadge(
+  provider: HarnessOption,
+  profiles: ReadonlyArray<ProviderProfile>,
+): { statusBadge?: string } {
+  return providerSignedOutInPalette(provider, profiles)
     ? { statusBadge: "Signed out" }
     : {};
 }
 
-function buildProviderItem(provider: HarnessOption): CommandItem {
+function buildProviderItem(
+  provider: HarnessOption,
+  profiles: ReadonlyArray<ProviderProfile>,
+): CommandItem {
   return {
     id: `composer:provider:${provider.id}`,
     label: provider.label,
@@ -432,7 +506,7 @@ function buildProviderItem(provider: HarnessOption): CommandItem {
     shortcut: null,
     actionId: null,
     subpage: null,
-    ...signedOutBadge(provider),
+    ...signedOutBadge(provider, profiles),
     run: () => {
       const entry = getFocusedComposerControls();
       if (entry === null) return;
@@ -447,6 +521,7 @@ function buildProviderItem(provider: HarnessOption): CommandItem {
 function buildModelItem(
   provider: HarnessOption,
   model: ModelOption,
+  profiles: ReadonlyArray<ProviderProfile>,
 ): CommandItem {
   return {
     id: `composer:model:${provider.id}:${model.slug}`,
@@ -458,7 +533,7 @@ function buildModelItem(
     shortcut: null,
     actionId: null,
     subpage: null,
-    ...signedOutBadge(provider),
+    ...signedOutBadge(provider, profiles),
     run: () => {
       const entry = getFocusedComposerControls();
       if (entry === null) return;

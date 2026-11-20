@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 /**
  * The Terminals surface's data + action layer, independent of its chrome.
  *
@@ -13,6 +14,8 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
+import { useHostDirectory } from "@/lib/host";
+import { hostNameFromLabel } from "@/lib/host/host-name";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
 import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
@@ -180,6 +183,7 @@ export function useEpicTerminalsPanel(args: {
   });
   const durableMutations = useHostPlainTerminalMutations(durableAuthority);
   const resolveOwnerClient = useResolvePlainTerminalOwnerHostClient();
+  const directory = useHostDirectory();
 
   const closeCapability = durableAuthority.capability.status;
   const closeCanMutate = durableAuthority.canMutate;
@@ -222,7 +226,7 @@ export function useEpicTerminalsPanel(args: {
     (row: TerminalSidebarSessionRow): EpicTerminalRef | null => {
       if (row.durable && resolveOwnerClient(row.hostId) === null) {
         toast(
-          `Can't open this terminal right now - host ${row.hostId} is not reachable.`,
+          `Can't open this terminal right now: ${hostNameFromLabel(directory.findById(row.hostId)?.label ?? null, row.hostId)} isn't reachable. Try again when it's back online.`,
         );
         return null;
       }
@@ -234,7 +238,7 @@ export function useEpicTerminalsPanel(args: {
         taskHome: taskHomeFor(row.hostId),
       });
     },
-    [resolveOwnerClient, taskHomeFor],
+    [directory, resolveOwnerClient, taskHomeFor],
   );
 
   // Host keeps exited sessions for a 60s grace window; filter so a
@@ -447,6 +451,7 @@ export function useEpicTerminalRowActions(args: {
   const label = terminalSessionLabel(session, taskHome);
 
   const submitRename = (next: string): boolean => {
+    if (showHostUpdateNeededForGesture(hostId)) return false;
     // A refusal has to reach the caller. `canRename` is a CONJUNCTION, and
     // BOTH conjuncts can go false while an editor is already open:
     //   - `renameMode` becomes "disabled" when the host stops being mutable
@@ -488,6 +493,7 @@ export function useEpicTerminalRowActions(args: {
   // immediate and mount-independent. `findOpenTileInTab` returns null when
   // no tab is open for this session, so a list-only session just gets killed.
   const requestClose = (): void => {
+    if (showHostUpdateNeededForGesture(hostId)) return;
     if (hasUnsupportedFutureRef) return;
     if (durable) {
       if (

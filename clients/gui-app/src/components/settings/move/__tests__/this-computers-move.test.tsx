@@ -6,7 +6,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
 import { useThisComputersMove } from "@/components/settings/move/use-this-computers-move";
 import {
@@ -48,7 +48,7 @@ function renderMove(computer: ThisComputer): {
 }
 
 /** This computer, with a host answering `environment.status` with `status`. */
-function computerAnswering(status: EnvironmentStatusResponseV11): ThisComputer {
+function computerAnswering(status: EnvironmentStatusResponseV13): ThisComputer {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: { "environment.status": () => status },
@@ -60,7 +60,7 @@ function computerAnswering(status: EnvironmentStatusResponseV11): ThisComputer {
 }
 
 async function settlesTo(
-  status: EnvironmentStatusResponseV11,
+  status: EnvironmentStatusResponseV13,
   answer: string,
 ): Promise<void> {
   const move = renderMove(computerAnswering(status));
@@ -93,6 +93,28 @@ describe("useThisComputersMove", () => {
         setup: { stage: "moving_settings", state: "awaiting_consent" },
       }),
       "not_moved",
+    );
+  });
+
+  it("offers the move again while consent is awaited even when all planes moved", async () => {
+    await settlesTo(
+      environmentStatusFixture({
+        principal: { kind: "personal" },
+        planes: { records: "moved", broker: "moved", room: "moved" },
+        consent: null,
+        setup: { stage: "moving_settings", state: "awaiting_consent" },
+      }),
+      "not_moved",
+    );
+  });
+
+  it("identifies a team-owned computer even when its planes are local", async () => {
+    await settlesTo(
+      environmentStatusFixture({
+        principal: { kind: "team", teamName: "Designers" },
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+      "team",
     );
   });
 

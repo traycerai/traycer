@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import type {
   ProviderId,
-  ProviderProfileAction,
+  ProviderProfileActionV22,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   callHostRpcWithDispatch,
@@ -15,8 +15,9 @@ import {
   parseProfileArgument,
   parseProviderArgument,
   printable,
+  readListedProfile,
 } from "../internal/profile-target";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 
 /**
@@ -39,7 +40,7 @@ const PROFILE_ACTION_DISPATCH: HostRpcDispatch = {
 
 async function applyProfileAction(
   providerId: ProviderId,
-  profileAction: ProviderProfileAction,
+  profileAction: ProviderProfileActionV22,
 ): Promise<void> {
   await toAgentCliError(
     callHostRpcWithDispatch(
@@ -52,7 +53,10 @@ async function applyProfileAction(
   );
 }
 
-/** `traycer profile rename <provider> <profile> <label>`. */
+/**
+ * `traycer profile rename <provider> <profile> <label>`. On a row with other names the name goes
+ * through `providers.answerProfileName`, which sets it on every computer and clears the others.
+ */
 export function buildProfileRenameCommand(opts: {
   readonly provider: string;
   readonly profile: string;
@@ -60,15 +64,48 @@ export function buildProfileRenameCommand(opts: {
 }): CommandFn {
   return async () => {
     const providerId = parseProviderArgument(opts.provider);
-    const profileId = parseProfileArgument(opts.profile);
+    const typed = parseProfileArgument(opts.profile);
     const label = parseProfileLabel(opts.label);
-    await applyProfileAction(providerId, { type: "rename", profileId, label });
+    const row = await readListedProfile(providerId, typed);
+    const profileId = row?.profileId ?? typed;
+    if ((row?.otherNames?.length ?? 0) > 0) {
+      const named = await toAgentCliError(
+        callHostRpcWithDispatch(
+          "providers.answerProfileName",
+          { providerId, profileId, label },
+          PLAIN_DISPATCH,
+        ),
+      );
+      // The name the account uses after the call: another person's choice
+      // can land just after this one.
+      return {
+        data: { providerId, profileId, label: named.label },
+        human: renamedLine(providerId, profileId, named.label),
+        exitCode: 0,
+      };
+    }
+    // The CLI does not follow its save, so it names no environment profile:
+    // on a computer in an environment the change waits in the review list.
+    await applyProfileAction(providerId, {
+      type: "rename",
+      profileId,
+      label,
+      environmentProfileId: null,
+    });
     return {
       data: { providerId, profileId, label },
-      human: `Renamed ${describeProvider(providerId)} profile ${printable(profileId)} to "${printable(label)}".`,
+      human: renamedLine(providerId, profileId, label),
       exitCode: 0,
     };
   };
+}
+
+function renamedLine(
+  providerId: ProviderId,
+  profileId: string,
+  label: string,
+): string {
+  return `Renamed ${describeProvider(providerId)} profile ${printable(profileId)} to "${printable(label)}".`;
 }
 
 /** The label cap both profile label fields carry on the wire. */
@@ -95,7 +132,9 @@ export function buildProfileSetEnabledCommand(opts: {
 }): CommandFn {
   return async () => {
     const providerId = parseProviderArgument(opts.provider);
-    const profileId = parseProfileArgument(opts.profile);
+    const typed = parseProfileArgument(opts.profile);
+    const profileId =
+      (await readListedProfile(providerId, typed))?.profileId ?? typed;
     const response = await toAgentCliError(
       callHostRpcWithDispatch(
         "providers.setProfileEnabled",
@@ -123,19 +162,16 @@ export function buildProfileRemoveCommand(opts: {
 }): CommandFn {
   return async (ctx) => {
     const providerId = parseProviderArgument(opts.provider);
-    const profileId = parseProfileArgument(opts.profile);
-    if (isAmbientProfileId(profileId)) {
-      throw cliError({
-        code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-        message:
-          "traycer: the ambient profile is the provider's own CLI login and cannot be removed - use 'traycer profile disable' to stop Traycer using it.",
-        details: null,
-        exitCode: 1,
-      });
-    }
+    const typed = parseProfileArgument(opts.profile);
+    // The typed-ambient refusal and the question both come before anything
+    // is sent to the host, so either one ending the command sends nothing.
+    if (isAmbientProfileId(typed)) throw ambientNotRemovable();
     if (!opts.yes) {
-      await confirmRemoval(ctx, providerId, profileId);
+      await confirmRemoval(ctx, providerId, typed);
     }
+    const profileId =
+      (await readListedProfile(providerId, typed))?.profileId ?? typed;
+    if (isAmbientProfileId(profileId)) throw ambientNotRemovable();
     await applyProfileAction(providerId, { type: "remove", profileId });
     return {
       data: { providerId, profileId, removed: true },
@@ -143,6 +179,16 @@ export function buildProfileRemoveCommand(opts: {
       exitCode: 0,
     };
   };
+}
+
+function ambientNotRemovable(): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+    message:
+      "traycer: the ambient profile is the provider's own CLI login and cannot be removed - use 'traycer profile disable' to stop Traycer using it.",
+    details: null,
+    exitCode: 1,
+  });
 }
 
 async function confirmRemoval(

@@ -6,13 +6,18 @@ import {
 } from "@/hooks/sandboxes/sandbox-failure-copy";
 import { refusal } from "./sandbox-binding-fixture";
 
+type RefusedFailure = Extract<
+  SandboxControlFailure,
+  { readonly kind: "refused" }
+>;
+
 function refused(
   code: string,
   detail: {
     readonly reason: string | null;
     readonly shortfallMc: number | null;
   },
-): SandboxControlFailure {
+): RefusedFailure {
   return {
     kind: "refused",
     status: 400,
@@ -53,6 +58,12 @@ describe("sandboxFailureMessage", () => {
     expect(
       sandboxFailureMessage(refused("rename_unavailable", NO_DETAIL)),
     ).toBe("Couldn't rename the sandbox. Try again in a moment.");
+  });
+
+  it("reports a failed sandbox action without promising recovery", () => {
+    expect(sandboxFailureMessage(refused("provider_failed", NO_DETAIL))).toBe(
+      "Couldn't complete the sandbox action.",
+    );
   });
 
   it("words the frozen and busy refusals the card and the tile surface", () => {
@@ -104,6 +115,24 @@ describe("sandboxFailureMessage", () => {
     );
   });
 
+  it("says the server's sentence for a credit refusal that carries one, and the team allowance copy without it", () => {
+    const seatWaiting =
+      "Your seat on this team is waiting on payment. You can use team credits once the payment goes through.";
+    const teamAllowance: RefusedFailure = {
+      ...refused("insufficient_credit", {
+        reason: "denied",
+        shortfallMc: null,
+      }),
+      creditSource: "team-allowance",
+    };
+    expect(
+      sandboxFailureMessage({ ...teamAllowance, message: seatWaiting }),
+    ).toBe(seatWaiting);
+    expect(sandboxFailureMessage(teamAllowance)).toBe(
+      "Your team allowance doesn't cover an hour of this sandbox.",
+    );
+  });
+
   it("reads the gate's other verdicts as what they are", () => {
     expect(
       sandboxFailureMessage(
@@ -140,6 +169,31 @@ describe("sandboxFailureMessage", () => {
         }),
       ),
     ).toBe("That size is outside what's offered.");
+  });
+
+  it("gives a shape reason named like an inherited member the fallback sentence", () => {
+    expect(
+      sandboxFailureMessage(
+        refused("shape_not_offered", {
+          reason: "constructor",
+          shortfallMc: null,
+        }),
+      ),
+    ).toBe("That size is outside what's offered.");
+  });
+
+  it("gives the two recognized 403 refusals their permission and owner remedies", () => {
+    expect(
+      sandboxFailureMessage(refused("pod_add_admin_only", NO_DETAIL)),
+    ).toBe("Only a team admin can add an Automations sandbox for this team.");
+    expect(
+      sandboxCreateFailureMessage(
+        refused("create_principal_mismatch", NO_DETAIL),
+        null,
+      ),
+    ).toBe(
+      "This sandbox can't be created for the selected owner. Choose another owner and try again.",
+    );
   });
 
   it("words a plan too small to run a sandbox", () => {

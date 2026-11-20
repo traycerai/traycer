@@ -90,6 +90,8 @@ function landingTab(
     confirmedHostBlobHashes: [],
     closed: true,
     returnedSandbox: null,
+    accountFollowsDefault: false,
+    namedHostId: null,
     ...overrides,
   };
 }

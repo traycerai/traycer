@@ -12,7 +12,7 @@
 // genuinely vary per release: `environment`, `version`, `supportedHostVersion`
 // (the exact host this CLI installs by default), and `releaseRepo` (so a
 // forked/relocated build fetches from the repo it publishes to, via
-// RELEASE_REPO).
+// RELEASE_REPO), plus the verified host and CLI feed revision floors.
 
 const path = require("node:path");
 const {
@@ -83,6 +83,28 @@ try {
   process.exit(2);
 }
 
+function readFeedFloor(name) {
+  const flag = `--${name}=`;
+  const arg = process.argv.find((value) => value.startsWith(flag));
+  const releaseTarget = target === "production" || target === "staging";
+  if (process.argv.includes("--restore") || !releaseTarget) return null;
+  const value = arg === undefined ? null : arg.slice(flag.length);
+  if (
+    value === null ||
+    !/^[1-9][0-9]*$/.test(value) ||
+    !Number.isSafeInteger(Number(value))
+  ) {
+    console.error(
+      `[set-deploy-target] FEED_AUTHORITY_FLOOR_REQUIRED: --${name}=<policyRevision> must come from a verified authority read`,
+    );
+    process.exit(2);
+  }
+  return value;
+}
+
+const hostFeedFloor = readFeedFloor("host-feed-floor");
+const cliFeedFloor = readFeedFloor("cli-feed-floor");
+
 const production = {
   cloud: {
     authnApiUrl: "https://authn.traycer.ai",
@@ -95,6 +117,11 @@ const production = {
 runConfigTargetCli({
   sourcePath: path.resolve(__dirname, "..", "src", "config.ts"),
   stringFields: {
+    releaseCdnBaseUrl: {
+      dev: "https://releases.traycer.ai",
+      staging: "https://releases.dev.traycer.ai",
+      production: "https://releases.traycer.ai",
+    },
     authnBaseUrl: {
       dev: production.cloud.authnApiUrl,
       staging: targetInput === null ? "" : targetInput.cloud.authnApiUrl,
@@ -122,6 +149,16 @@ runConfigTargetCli({
     },
   },
   nullableStringFields: {
+    hostFeedFloor: {
+      dev: null,
+      staging: hostFeedFloor,
+      production: hostFeedFloor,
+    },
+    cliFeedFloor: {
+      dev: null,
+      staging: cliFeedFloor,
+      production: cliFeedFloor,
+    },
     supportedHostVersion: {
       dev: null,
       staging: supportedHostVersion,

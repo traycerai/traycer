@@ -3,7 +3,11 @@ import type {
   StreamWebSocketLike,
   StreamWebSocketMessageEvent,
 } from "../stream-websocket";
-import type { WebSocketCloseEvent, WebSocketErrorEvent } from "../websocket";
+import {
+  whenDialStarted,
+  type WebSocketCloseEvent,
+  type WebSocketErrorEvent,
+} from "../websocket";
 import type { TimerHandle, IntervalHandle } from "../timers";
 import { assertRelayAttachUrlSecure } from "@traycer/protocol/host-transport/relay-attach-url";
 import { createRelayPathEstimator } from "@traycer/protocol/host-transport/relay-liveness";
@@ -124,6 +128,12 @@ export interface RelaySocketHandlers {
    * `null` from a relay that cannot park. A secret: never log it.
    */
   readonly onAttachAck: (sid: number, resumeKey: string | null) => void;
+  /**
+   * The socket reached WebSocket open, the point from which the relay owes
+   * its `attach_ack` (`ATTACH_ACK_TIMEOUT_MS`). The wait before it is bounded
+   * by the dial timer of this socket, which starts at the dial gate grant.
+   */
+  readonly onOpen: () => void;
   /** An opaque inbound DATA frame (Noise transport bytes for the layer above). */
   readonly onData: (ciphertext: Uint8Array) => void;
   /** Optional diagnostic: exact UTF-8 payload size, never the control text. */
@@ -264,14 +274,21 @@ export class RelaySocket {
     // durable leg that MULTIPLEXES every unary call and every stream for a
     // remote host, so anything queued behind it is queued behind all of them.
     // It holds a dial slot only while connecting, so it cannot squat.
-    this.socket = options.webSocketFactory.create(dialUrl, "interactive");
-    this.wireSocket(this.socket);
-    this.dialTimer = setTimeout(() => {
-      this.dialTimer = null;
-      if (!this.opened) {
-        this.fail(4000, RELAY_DIAL_TIMEOUT_CLOSE_REASON);
+    const socket = options.webSocketFactory.create(dialUrl, "interactive");
+    this.socket = socket;
+    this.wireSocket(socket);
+    // Time queued for a dial slot says nothing about the relay.
+    whenDialStarted(socket, () => {
+      if (socket !== this.socket) {
+        return;
       }
-    }, RELAY_DIAL_TIMEOUT_MS);
+      this.dialTimer = setTimeout(() => {
+        this.dialTimer = null;
+        if (!this.opened) {
+          this.fail(4000, RELAY_DIAL_TIMEOUT_CLOSE_REASON);
+        }
+      }, RELAY_DIAL_TIMEOUT_MS);
+    });
   }
 
   /** Sends an opaque DATA frame (client leg: raw `[ciphertext]`, no sid). */
@@ -483,6 +500,7 @@ export class RelaySocket {
       this.awaitingSince = 0;
       this.lastPingSentAt = now;
       this.startKeepalive();
+      this.handlers.onOpen();
       if (this.direct) {
         this.handlers.onAttachAck(0, null);
       }

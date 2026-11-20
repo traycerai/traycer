@@ -1,6 +1,8 @@
 import {
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreProfileBinding,
   chatRunSettingsStrictSchema,
+  chatRunSettingsStrictSchemaPreProfileBinding,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/messages";
 /**
@@ -27,6 +29,7 @@ import {
   EpicArtifactKindSchemaPreHtml,
 } from "@traycer/protocol/common/registry";
 import { accountContextSchema } from "@traycer/protocol/common/schemas";
+import type { GrantedPermissionRole } from "@traycer/protocol/common/permission-role";
 import { opencodeLineSchema } from "@traycer/protocol/common/opencode-line";
 import {
   agentModeSchema,
@@ -78,7 +81,22 @@ export const LatestTicketStatusSchema = getRecordSchema(
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
-export type PermissionRole = z.infer<typeof LatestPermissionRoleSchema>;
+/**
+ * A role as it arrives: every value {@link LatestPermissionRoleSchema}
+ * decodes, `viewer` among them. Only a decoder reads this type.
+ * Turn it into access with `grantedRole` (`protocol/common/permission-role`),
+ * which is the one place a role becomes access: `viewer` as `editor`.
+ */
+export type WirePermissionRole = z.infer<typeof LatestPermissionRoleSchema>;
+
+/**
+ * A role somebody HOLDS: owner or editor.
+ *
+ * Deliberately narrower than what the wire decodes, so a payload's role
+ * cannot reach a gate, a label or a grant without passing `grantedRole`
+ * first - the compiler shows every such crossing.
+ */
+export type PermissionRole = GrantedPermissionRole;
 
 export const accessTypeSchema = lazySchema(() =>
   z.enum(["direct", "link", "organization"]),
@@ -99,8 +117,16 @@ export type TaskOwnershipScope = z.infer<typeof taskOwnershipScopeSchema>;
 export const listTasksSortSchemaV11 = lazySchema(() =>
   z.enum(["recent", "oldest", "title-asc", "title-desc", "relevance"]),
 );
-export const listTasksSortSchema = lazySchema(() =>
+export const listTasksSortSchemaPre110 = lazySchema(() =>
   z.enum([...listTasksSortSchemaV11.options, "last-viewed"]),
+);
+/**
+ * `created-desc` (`epic.listTasks@1.10`) orders by when the task was created,
+ * newest first. `oldest` is unrelated despite the name: it is least recently
+ * UPDATED, the reverse of the task-edit half of `recent`.
+ */
+export const listTasksSortSchema = lazySchema(() =>
+  z.enum([...listTasksSortSchemaPre110.options, "created-desc"]),
 );
 export type ListTasksSort = z.infer<typeof listTasksSortSchema>;
 
@@ -1171,7 +1197,7 @@ export const listTasksRequestSchemaV11 = lazySchema(() =>
 );
 export const listTasksRequestSchemaPre13 = lazySchema(() =>
   listTasksRequestSchemaV11.extend({
-    sort: listTasksSortSchema.optional(),
+    sort: listTasksSortSchemaPre110.optional(),
   }),
 );
 export type ListTasksRequestPre13 = z.infer<typeof listTasksRequestSchemaPre13>;
@@ -1192,9 +1218,18 @@ export type ListTasksRequestPre16 = z.infer<typeof listTasksRequestSchemaPre16>;
  * that arrives after a local deletion must be merged against a fresh local
  * projection, which is work only the revalidation phase needs to request.
  */
-export const listTasksRequestSchema = lazySchema(() =>
+export const listTasksRequestSchemaPre110 = lazySchema(() =>
   listTasksRequestSchemaPre16.extend({
     localFirstPhase: z.enum(["initial", "revalidate"]).optional(),
+  }),
+);
+export type ListTasksRequestPre110 = z.infer<
+  typeof listTasksRequestSchemaPre110
+>;
+
+export const listTasksRequestSchema = lazySchema(() =>
+  listTasksRequestSchemaPre110.extend({
+    sort: listTasksSortSchema.optional(),
   }),
 );
 export type ListTasksRequest = z.infer<typeof listTasksRequestSchema>;
@@ -3680,14 +3715,16 @@ export type ContinueSubagentResponse = z.infer<
 
 /** The opening and the chat record carry the same per-chat request. */
 export const createChatInitialMessageSchemaV14 = lazySchema(() =>
-  createChatInitialMessageSchemaV12.extend({ settings: chatRunSettingsSchema }),
+  createChatInitialMessageSchemaV12.extend({
+    settings: chatRunSettingsSchemaPreProfileBinding,
+  }),
 );
 export type CreateChatInitialMessageV14 = z.infer<
   typeof createChatInitialMessageSchemaV14
 >;
 export const createChatRequestSchemaV14 = lazySchema(() =>
   createChatRequestSchemaV13.extend({
-    settings: chatRunSettingsSchema.nullable().optional(),
+    settings: chatRunSettingsSchemaPreProfileBinding.nullable().optional(),
     initialMessage: createChatInitialMessageSchemaV14.nullable().optional(),
   }),
 );
@@ -3718,6 +3755,7 @@ export type CreateEpicRequestV14 = z.infer<typeof createEpicRequestSchemaV14>;
  */
 export const createChatInitialMessageSchemaV15 = lazySchema(() =>
   createChatInitialMessageSchemaV14.extend({
+    settings: chatRunSettingsSchema,
     browserAnnotations: z.array(browserAnnotationRecordSchema).optional(),
   }),
 );
@@ -3726,6 +3764,7 @@ export type CreateChatInitialMessageV15 = z.infer<
 >;
 export const createChatRequestSchemaV15 = lazySchema(() =>
   createChatRequestSchemaV14.extend({
+    settings: chatRunSettingsSchema.nullable().optional(),
     initialMessage: createChatInitialMessageSchemaV15.nullable().optional(),
   }),
 );
@@ -3744,9 +3783,19 @@ export const createEpicRequestSchemaV15 = lazySchema(() =>
 export type CreateEpicRequestV15 = z.infer<typeof createEpicRequestSchemaV15>;
 export const updateChatRunSettingsRequestSchemaV12 = lazySchema(() =>
   updateChatRunSettingsRequestSchemaV11.extend({
-    settings: chatRunSettingsStrictSchema,
+    settings: chatRunSettingsStrictSchemaPreProfileBinding,
   }),
 );
 export type UpdateChatRunSettingsRequestV12 = z.infer<
   typeof updateChatRunSettingsRequestSchemaV12
+>;
+
+/** Portable account provenance first rides this settings-write minor. */
+export const updateChatRunSettingsRequestSchemaV13 = lazySchema(() =>
+  updateChatRunSettingsRequestSchemaV12.extend({
+    settings: chatRunSettingsStrictSchema,
+  }),
+);
+export type UpdateChatRunSettingsRequestV13 = z.infer<
+  typeof updateChatRunSettingsRequestSchemaV13
 >;

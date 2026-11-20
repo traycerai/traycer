@@ -310,10 +310,88 @@ function createLiveProbe(): LiveProbe {
   };
 }
 
+/** Exercises the real buffer offset and ended event, including a cut voice. */
+async function renderRecording(): Promise<{
+  readonly readings: readonly number[];
+  readonly ended: readonly string[];
+}> {
+  const context = new OfflineAudioContext(1, SAMPLE_RATE, SAMPLE_RATE);
+  const buffer = context.createBuffer(1, SAMPLE_RATE / 2, SAMPLE_RATE);
+  const samples = buffer.getChannelData(0);
+  samples.fill(0.25, 0, SAMPLE_RATE / 4);
+  samples.fill(0.75, SAMPLE_RATE / 4);
+  const bus = new WebAudioOutput(context, context.destination).createBus(1);
+  const ended: string[] = [];
+  const naturalEnd = new Promise<void>((resolve) => {
+    bus.playRecording(buffer, 0, 0.25, () => {
+      ended.push("natural");
+      resolve();
+    });
+  });
+  const cancelled = bus.playRecording(buffer, 0, 0, () =>
+    ended.push("cancelled"),
+  );
+  void context.suspend(0.1).then(() => {
+    cancelled.cut(0.01);
+    return context.resume();
+  });
+  await context.startRendering().then((result) => {
+    samples.set(result.getChannelData(0).subarray(0, samples.length));
+  });
+  await naturalEnd;
+  return {
+    readings: [
+      samples[Math.round(0.05 * SAMPLE_RATE)],
+      samples[Math.round(0.2 * SAMPLE_RATE)],
+      samples[Math.round(0.3 * SAMPLE_RATE)],
+    ],
+    ended,
+  };
+}
+
+/** Render the production mix path and its pre-volume recording tap on separate channels. */
+async function renderRecordingGraph(): Promise<{
+  readonly speaker: readonly number[];
+  readonly capture: readonly number[];
+}> {
+  const context = new OfflineAudioContext(2, SAMPLE_RATE * 2, SAMPLE_RATE);
+  const channels = context.createChannelMerger(2);
+  channels.connect(context.destination);
+  const level = new WebAudioLevel(context, channels, 1);
+  const dim = new WebAudioDimFilter(context, level.input);
+  const tap = context.createGain();
+  dim.tap(tap);
+  tap.connect(channels, 0, 1);
+  const buffer = context.createBuffer(1, SAMPLE_RATE * 2, SAMPLE_RATE);
+  buffer.getChannelData(0).fill(1);
+  const output = new WebAudioOutput(context, dim.input);
+  output.createBus(1).playRecording(buffer, 0, 0, () => undefined);
+  void context.suspend(0.3).then(() => {
+    level.setVolume(0.5);
+    return context.resume();
+  });
+  void context.suspend(0.7).then(() => {
+    level.duck(0.5);
+    return context.resume();
+  });
+  const rendered = await context.startRendering();
+  const times = [0.2, 0.6, 1];
+  return {
+    speaker: times.map(
+      (time) => rendered.getChannelData(0)[Math.round(time * SAMPLE_RATE)],
+    ),
+    capture: times.map(
+      (time) => rendered.getChannelData(1)[Math.round(time * SAMPLE_RATE)],
+    ),
+  };
+}
+
 declare global {
   interface Window {
     __soundtrackOutputProbe: {
       readonly render: typeof render;
+      readonly renderRecording: typeof renderRecording;
+      readonly renderRecordingGraph: typeof renderRecordingGraph;
       readonly renderDim: typeof renderDim;
       readonly renderLevel: typeof renderLevel;
       readonly duckTuning: typeof MIX_TUNING.duck;
@@ -324,6 +402,8 @@ declare global {
 
 window.__soundtrackOutputProbe = {
   render,
+  renderRecording,
+  renderRecordingGraph,
   renderDim,
   renderLevel,
   duckTuning: MIX_TUNING.duck,

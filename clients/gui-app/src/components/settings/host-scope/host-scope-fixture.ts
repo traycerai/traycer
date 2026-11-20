@@ -110,6 +110,7 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
     isLoading: false,
     listsFailed: false,
     retryLists: () => undefined,
+    retryEntryStatus: null,
     nowMs: 0,
     ...overrides,
   };
@@ -167,5 +168,19 @@ export function hostOptionsFixture(
     retryLists: () => undefined,
     nowMs: 0,
     ...overrides,
+  };
+}
+
+export function noHostsScopeModule() {
+  const scope = hostScopeFixture({ host: null });
+  const useHostScope = () => scope;
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    usePersonalHostScope: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
   };
 }

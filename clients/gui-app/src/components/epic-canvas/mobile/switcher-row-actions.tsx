@@ -284,6 +284,7 @@ function SwitcherRowActionsBody(
         : describeTreeDeleteDisclosure({
             tree: state.tree,
             kind: "agent",
+            includeNestedAgents: false,
             nodeIds: [nodeId],
             nestedAgentsKnown: selectNestedAgentsKnown(state),
           }),

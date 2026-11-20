@@ -19,6 +19,7 @@ import type {
   ProviderId,
   ReasoningLevel,
   ServiceTier,
+  HarnessModelSelection,
 } from "@/components/home/data/landing-options";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { FocusedComposerKind } from "@/lib/commands/types";
@@ -63,23 +64,18 @@ export interface FocusedComposerEntry {
    * commit to this chat.
    */
   readonly opencodeLine: OpencodeLine | null;
+  readonly catalogSelection: Pick<
+    HarnessModelSelection,
+    "harnessId" | "profileId"
+  >;
 }
 
 let registered: FocusedComposerEntry | null = null;
 const listeners = new Set<() => void>();
 
 export function registerFocusedComposerControls(
-  kind: FocusedComposerKind,
-  controls: ComposerControls,
-  hostClient: HostClient<HostRpcRegistry> | null,
-  opencodeLine: OpencodeLine | null,
+  entry: FocusedComposerEntry,
 ): () => void {
-  const entry: FocusedComposerEntry = {
-    kind,
-    controls,
-    hostClient,
-    opencodeLine,
-  };
   registered = entry;
   notify();
   return () => {

@@ -35,6 +35,7 @@ import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-b
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { TeamRemovalTileCloser } from "@/providers/team-removal-tile-closer";
+import { ClaimedComputerNotifier } from "@/providers/claimed-computer-notifier";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { FirstTaskImportBridge } from "@/components/onboarding/first-task-guide";
 import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
@@ -167,6 +168,7 @@ export function RootComponent() {
             <NotificationFocusBridge />
             <EpicAccessCoordinator />
             <TeamRemovalTileCloser />
+            <ClaimedComputerNotifier />
             <ProviderProfileAddFlowHost />
           </HostScopeReady>
           <RootSurface
@@ -182,7 +184,7 @@ export function RootComponent() {
               {/* The retrospective and move sheets. Here rather than in
                   Settings: the retrospective sheet opens by itself once on
                   the first launch after the update, whatever the window
-                  shows, and the Start toast opens it too. */}
+                  shows. */}
               <EnvironmentSheetsHost />
               {/* Mobile-only full-screen notifications surface (renders null on
                 desktop, where the header bell + popover are used instead). */}

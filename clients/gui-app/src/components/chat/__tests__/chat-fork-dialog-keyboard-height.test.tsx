@@ -1,3 +1,4 @@
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -269,6 +270,7 @@ function renderDialog(): void {
       tabId="tab-test"
       onOpenChange={() => undefined}
     />,
+    { wrapper: WithTestQueryClient },
   );
 }
 

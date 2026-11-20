@@ -30,6 +30,24 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 
+// A getter, so every case that does not raise the floor keeps the real "0.0.0".
+const minimumHostVersion = vi.hoisted(() => ({ value: "0.0.0" }));
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return {
+      ...actual,
+      get MINIMUM_HOST_VERSION(): string {
+        return minimumHostVersion.value;
+      },
+    };
+  },
+);
+
 // `attached` is the authority's "has anyone answered yet" flag, and it is a
 // SEPARATE axis from `id`: the pair (attached: false, id: null) is bootstrap,
 // while (attached: true, id: null) is the real ∅. Defaults to attached so every
@@ -110,28 +128,52 @@ const resolveSessionHostClient = vi.hoisted(
     },
 );
 
-// The provider opens its own durable transport via this factory, and
-// UNCONDITIONALLY. This stub used to THROW - "openTransport must not be called
-// when the factory is overridden" - and the name of the thing it referred to is
-// the point: the `__setEpicStreamClientFactoryForTests` override made the
-// provider short-circuit before the opener ran, so every test in this file
-// passed WITHOUT one. That override is deleted (a stream factory built on MAIN
-// cannot cross `postMessage` to a runtime living in the worker), and with it the
-// only reason a throw here was safe.
-//
-// The fake supplies "no socket in tests" at the opener instead. It keeps the
-// property the old stub's comment named as load-bearing: the real hook returns a
-// referentially-STABLE opener, and this one is a single module-scoped instance
-// for the same reason - so the acquire effect's `openTransport` dep never churns.
-// Resetting it clears the record array in place rather than replacing it.
-vi.mock("@/lib/host/use-durable-stream-transport", async () => {
-  const { fakeDurableStreamTransports } =
-    await import("@/lib/host/test-support/fake-durable-stream-transport");
+// The provider opens its own durable transport through the REAL
+// `useDurableStreamTransportFactory` and `openDurableStreamTransport`, so a row
+// below the floor is refused by the opener exactly as in the app
+// (`buildHostStreamClient`). The suite setup mocks this module for every file; naming it with its
+// original puts the real opener back here.
+vi.mock("@/lib/host/use-durable-stream-transport", (importOriginal) =>
+  importOriginal<typeof import("@/lib/host/use-durable-stream-transport")>(),
+);
+
+vi.mock("@/providers/use-runner-host", async () => {
+  const { MockRunnerHost } =
+    await import("@traycer-clients/shared/host-client/mock/mock-runner-host");
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: null,
+  });
   return {
-    useDurableStreamTransportFactory: () =>
-      fakeDurableStreamTransports().opener,
+    useRunnerHost: () => runnerHost,
+    useRunnerHostOrNull: () => runnerHost,
   };
 });
+
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    const { fakeDurableStreamTransports } =
+      await import("@/lib/host/test-support/fake-durable-stream-transport");
+    return {
+      ...actual,
+      createRemoteHostTransport: (options: { readonly hostId: string }) => ({
+        session: { start: () => undefined },
+        streamClient: fakeDurableStreamTransports().opener(options.hostId)
+          .wsStreamClient,
+      }),
+    };
+  },
+);
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => hostState.id,
@@ -146,9 +188,24 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     resolveSessionHostClient(hostId),
 }));
 
+const openerDirectory = vi.hoisted(() => ({
+  findById: (_hostId: string): unknown => null,
+  onChange: (_listener: () => void) => ({ dispose: () => undefined }),
+}));
+const openerRequestContext = vi.hoisted(() => ({
+  getRequestContextUserId: (): string | null => null,
+  getRequestContext: () => null,
+  onBearerRotated: (_listener: () => void) => () => undefined,
+  onCloudVerdictChanged: (_listener: () => void) => () => undefined,
+  notifyHostAvailabilityRecovered: (_hostId: string, _kind: string) =>
+    undefined,
+}));
+
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => hostBindingRef.value,
   useAuthService: () => authServiceStub,
+  useHostDirectory: () => openerDirectory,
+  useHostClient: () => openerRequestContext,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -780,6 +837,7 @@ function ownerIdentityRemoteTarget(
     version: "1.0.0",
     transportDialability: "dialable",
     publicKey,
+    owner: null,
     relayFuseGrace: false,
     sandbox: null,
     remoteStatus: {
@@ -792,6 +850,14 @@ function ownerIdentityRemoteTarget(
     },
   };
 }
+
+openerDirectory.findById = (hostId) =>
+  sessionHostRows.byHostId.get(hostId) ?? {
+    ...ownerIdentityRemoteTarget("pubkey-default"),
+    hostId,
+  };
+openerRequestContext.getRequestContextUserId = () =>
+  sessionHostRows.userId ?? OWNER_IDENTITY_FIXTURE_USER_ID;
 
 /**
  * Publishes `hostId`'s directory row and returns a rotate function.
@@ -807,6 +873,24 @@ function installOwnerIdentityRows(): (
   hostId: string,
   publicKey: string | null,
 ) => void {
+  const emitRowChanged = installOwnerIdentityRowSource();
+  return (hostId, publicKey) => {
+    // `null` removes the row - a deregistration, after which the owner
+    // reading for that host is absent rather than rotated.
+    if (publicKey === null) {
+      sessionHostRows.byHostId.delete(hostId);
+    } else {
+      sessionHostRows.byHostId.set(hostId, {
+        ...ownerIdentityRemoteTarget(publicKey),
+        hostId,
+        label: hostId,
+      });
+    }
+    emitRowChanged();
+  };
+}
+
+function installOwnerIdentityRowSource(): () => void {
   const listeners = new Set<() => void>();
   sessionHostRows.userId = OWNER_IDENTITY_FIXTURE_USER_ID;
   installHostConnectionRegistrySource({
@@ -824,18 +908,7 @@ function installOwnerIdentityRows(): (
     },
     leases: null,
   });
-  return (hostId, publicKey) => {
-    // `null` removes the row - a deregistration, after which the owner
-    // reading for that host is absent rather than rotated.
-    if (publicKey === null) {
-      sessionHostRows.byHostId.delete(hostId);
-    } else {
-      sessionHostRows.byHostId.set(hostId, {
-        ...ownerIdentityRemoteTarget(publicKey),
-        hostId,
-        label: hostId,
-      });
-    }
+  return () => {
     for (const listener of [...listeners]) {
       listener();
     }
@@ -2662,6 +2735,109 @@ describe("<TestEpicSessionTab />", () => {
     expect(streams).toHaveLength(2);
     expect(streams[0].closeCount).toBe(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  describe("a host whose row is below the minimum version", () => {
+    interface FloorSession {
+      readonly streams: ControlledStream[];
+      readonly publishRow: (appVersion: string | null) => void;
+      readonly handle: () => OpenEpicStoreHandle | undefined;
+    }
+
+    async function mountSessionAtFloor(): Promise<FloorSession> {
+      minimumHostVersion.value = "2.0.0";
+      const streams: ControlledStream[] = [];
+      installStreamFactory((_epicId, _callbacks) => {
+        const stream: ControlledStream = { closeCount: 0 };
+        streams.push(stream);
+        return {
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          applyArtifactRoomUpdate: () => undefined,
+          artifactRoomAwareness: () => undefined,
+          retryMigration: () => undefined,
+          close: () => {
+            stream.closeCount += 1;
+          },
+        };
+      });
+      hostBindingRef.value = { hostClient: buildOwnerIdentityHostClient() };
+      hostState.id = OWNER_IDENTITY_HOST_ID;
+      const emitRowChanged = installOwnerIdentityRowSource();
+      const target = ownerIdentityRemoteTarget("pubkey-a");
+      const publishRow = (appVersion: string | null): void => {
+        if (appVersion === null) {
+          sessionHostRows.byHostId.delete(OWNER_IDENTITY_HOST_ID);
+        } else {
+          sessionHostRows.byHostId.set(OWNER_IDENTITY_HOST_ID, {
+            ...target,
+            remoteStatus: { ...target.remoteStatus, appVersion },
+          });
+        }
+        emitRowChanged();
+      };
+      publishRow("2.0.0");
+      let handle: OpenEpicStoreHandle | undefined;
+      render(
+        <TestEpicSessionTab
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(mounted) => {
+              handle = mounted;
+            }}
+          />
+        </TestEpicSessionTab>,
+      );
+      await waitFor(() => {
+        expect(streams).toHaveLength(1);
+      });
+      return {
+        streams,
+        publishRow,
+        handle: () => handle,
+      };
+    }
+
+    afterEach(() => {
+      minimumHostVersion.value = "0.0.0";
+    });
+
+    it("releases the mounted session's durable stream when its row falls below the floor", async () => {
+      const { streams, publishRow } = await mountSessionAtFloor();
+
+      act(() => {
+        publishRow("1.5.4");
+      });
+
+      await waitFor(() => {
+        expect(streams[0].closeCount).toBe(1);
+      });
+      // The worker's own stream attach is not a session build, so transports are counted.
+      const transports = fakeDurableStreamTransports().records;
+      expect(transports).toHaveLength(1);
+      act(() => {
+        publishRow("2.0.0");
+      });
+      await waitFor(() => {
+        expect(transports).toHaveLength(2);
+      });
+      expect(streams[0].closeCount).toBe(1);
+    });
+
+    it("keeps the stream when its row is removed", async () => {
+      const { streams, publishRow, handle } = await mountSessionAtFloor();
+
+      act(() => {
+        publishRow(null);
+      });
+      // A round trip over the worker's bridge answers after any close the removal sent.
+      const mounted = handle();
+      if (mounted === undefined) throw new Error("expected a mounted session");
+      await mounted.encodeRootState();
+      expect(streams[0].closeCount).toBe(0);
+    });
   });
 
   it("defers acquisition without crashing while the active host is null, then acquires when it binds", async () => {

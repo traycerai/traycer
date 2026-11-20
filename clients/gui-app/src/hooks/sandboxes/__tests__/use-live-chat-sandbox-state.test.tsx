@@ -13,6 +13,8 @@ import {
 } from "./sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "./sandbox-fixtures";
 
+const PERSONAL_ENVIRONMENT_ID = vi.hoisted(() => "env-personal");
+
 const sources = vi.hoisted(
   (): {
     binding: FakeSandboxBinding | null;
@@ -56,6 +58,9 @@ vi.mock(
     >()),
     useSandboxConfigurations: () => ({
       configurations: [{ kind: "personal" }],
+      teamEnvironmentIds: new Set<string>(),
+      complete: true,
+      personalEnvironmentId: PERSONAL_ENVIRONMENT_ID,
     }),
   }),
 );
@@ -83,7 +88,12 @@ function listed(
 ): SandboxListResponse {
   return {
     sandboxes: [
-      sandboxSummaryFixture({ hostId: HOST, displayName: "test-box", state }),
+      sandboxSummaryFixture({
+        hostId: HOST,
+        displayName: "test-box",
+        environmentId: PERSONAL_ENVIRONMENT_ID,
+        state,
+      }),
     ],
   };
 }
@@ -123,7 +133,6 @@ function setup(response: SandboxListResponse) {
         ...live,
         view: resolveChatSandbox(live.state, {
           reachable: live.reachable,
-          canEdit: true,
           ownedByViewer: true,
           environmentOwned: false,
         }),

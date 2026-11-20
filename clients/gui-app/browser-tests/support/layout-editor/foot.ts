@@ -337,7 +337,8 @@ interface HostMenuRow {
   readonly hostId: string;
   readonly name: string | null;
   readonly nameVisible: boolean;
-  readonly wrapped: boolean;
+  readonly oneLine: boolean;
+  readonly truncated: boolean;
   readonly overflows: boolean;
 }
 
@@ -352,18 +353,19 @@ const HOST_MENU_PROBE = `(() => {
     const inside = (rect, parent) =>
       rect.left >= parent.left - 0.5 && rect.right <= parent.right + 0.5 &&
       rect.top >= parent.top - 0.5 && rect.bottom <= parent.bottom + 0.5;
-    const range = document.createRange();
-    if (name !== undefined) range.selectNodeContents(name);
-    const lines = [...range.getClientRects()];
     const nameBox = name?.getBoundingClientRect();
+    const nameStyle = name === undefined ? null : getComputedStyle(name);
+    const lineHeight = nameStyle === null
+      ? 0
+      : parseFloat(nameStyle.lineHeight) || parseFloat(nameStyle.fontSize) * 1.5;
     return {
       hostId,
       name: name?.textContent ?? null,
       nameVisible: name !== undefined &&
         name.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
-        lines.length > 0 &&
-        lines.every((line) => inside(line, nameBox) && inside(line, box)),
-      wrapped: lines.length > 1,
+        nameBox.width > 0 && inside(nameBox, box),
+      oneLine: name !== undefined && nameBox.height > 0 && nameBox.height <= lineHeight * 1.5,
+      truncated: name !== undefined && name.scrollWidth > name.clientWidth + 0.5,
       overflows: row.scrollWidth > row.clientWidth + 1 ||
         row.scrollHeight > row.clientHeight + 1 ||
         [...row.querySelectorAll("*")].some((child) =>
@@ -416,10 +418,32 @@ function opensTowardTrigger(toward: MenuToward, geo: MenuGeometry): boolean {
   return geo.menu.top >= geo.trigger.bottom - 0.5;
 }
 
+function hostRowProblems(
+  hostId: string,
+  fullName: string,
+  row: HostMenuRow | undefined,
+): string[] {
+  if (row === undefined) return [`no ${hostId} row`];
+  const problems: string[] = [];
+  if (row.name !== fullName || !row.nameVisible) {
+    problems.push(`${hostId}'s name is not visible`);
+  }
+  if (!row.oneLine) {
+    problems.push(`${hostId}'s name does not occupy one line`);
+  }
+  if (hostId !== "fixture-host-studio" && !row.truncated) {
+    problems.push(`${hostId}'s long name is not truncated`);
+  }
+  if (row.overflows) {
+    problems.push(`${hostId}'s contents overflow its row`);
+  }
+  return problems;
+}
+
 /**
  * A menu's width whatever a host is called - no wider than 256px, inside
- * the window, opening toward the content. Every full name is visible, long
- * names wrap, and no row's contents overflow it. Call with the menu open.
+ * the window, opening toward the content. Host names occupy one line and
+ * truncate when needed; no row's contents overflow it. Call with the menu open.
  */
 export async function hostMenuProblems(
   page: Page,
@@ -456,19 +480,7 @@ export async function hostMenuProblems(
   }
   for (const { hostId, fullName } of HOST_ROWS) {
     const row = rows.find((entry) => entry.hostId === hostId);
-    if (row === undefined) {
-      problems.push(`no ${hostId} row`);
-      continue;
-    }
-    if (row.name !== fullName || !row.nameVisible) {
-      problems.push(`${hostId}'s full name is not visible`);
-    }
-    if (hostId !== "fixture-host-studio" && !row.wrapped) {
-      problems.push(`${hostId}'s long name does not wrap`);
-    }
-    if (row.overflows) {
-      problems.push(`${hostId}'s contents overflow its row`);
-    }
+    problems.push(...hostRowProblems(hostId, fullName, row));
   }
   return problems;
 }

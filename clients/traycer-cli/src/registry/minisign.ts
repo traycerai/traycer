@@ -211,14 +211,63 @@ export async function verifyMinisignArchive(
     }
     archiveMessage = await readFileBuffer(opts.archivePath);
   }
-  const archiveOk = verify(null, archiveMessage, publicKey, parsed.signature);
+  return verifyMessage(
+    archiveMessage,
+    parsed,
+    publicKey,
+    opts.signatureSourceLabel,
+  );
+}
+
+export function verifyMinisignPayload(
+  payload: string,
+  signatureText: string,
+  signatureSourceLabel: string,
+  trustedKeys: readonly ParsedMinisignPublicKey[],
+): VerifyMinisignArchiveResult {
+  const parsed = parseMinisignSignatureFile(
+    signatureText,
+    signatureSourceLabel,
+  );
+  const trustedKey = trustedKeys.find(
+    (key) => key.keyId.toLowerCase() === parsed.keyId.toLowerCase(),
+  );
+  if (trustedKey === undefined) {
+    throw signatureMalformed(
+      signatureSourceLabel,
+      "signature key is not trusted",
+    );
+  }
+  const publicKey = createPublicKey({
+    key: Buffer.concat([
+      ED25519_SPKI_PREFIX,
+      Buffer.from(trustedKey.publicKey),
+    ]),
+    format: "der",
+    type: "spki",
+  });
+  const bytes = Buffer.from(payload, "utf8");
+  const message =
+    parsed.algorithm === "prehashed"
+      ? createHash("blake2b512").update(bytes).digest()
+      : bytes;
+  return verifyMessage(message, parsed, publicKey, signatureSourceLabel);
+}
+
+function verifyMessage(
+  message: Buffer,
+  parsed: ParsedMinisignSignature,
+  publicKey: import("node:crypto").KeyObject,
+  signatureSourceLabel: string,
+): VerifyMinisignArchiveResult {
+  const archiveOk = verify(null, message, publicKey, parsed.signature);
   if (!archiveOk) {
     throw cliError({
       code: CLI_ERROR_CODES.HOST_VERIFY_FAILED,
       message: `minisign verify: archive signature did not verify against trusted key id '${parsed.keyId}'`,
       details: {
         signatureKeyId: parsed.keyId,
-        signatureSource: opts.signatureSourceLabel,
+        signatureSource: signatureSourceLabel,
         algorithm: parsed.algorithm,
       },
       exitCode: 1,
@@ -240,7 +289,7 @@ export async function verifyMinisignArchive(
       message: `minisign verify: trusted-comment global signature did not verify against trusted key id '${parsed.keyId}'`,
       details: {
         signatureKeyId: parsed.keyId,
-        signatureSource: opts.signatureSourceLabel,
+        signatureSource: signatureSourceLabel,
       },
       exitCode: 1,
     });

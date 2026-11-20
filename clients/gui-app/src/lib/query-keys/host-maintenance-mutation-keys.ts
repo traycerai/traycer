@@ -14,6 +14,7 @@
  */
 export const hostMaintenanceMutationKeys = {
   restart: () => ["host.restart"] as const,
+  identityGet: () => ["host.identity.get"] as const,
   identitySet: () => ["host.identity.set"] as const,
   doctorRun: () => ["host.doctor"] as const,
   // Its own key even though only the Doctor card issues it. Tailing the log

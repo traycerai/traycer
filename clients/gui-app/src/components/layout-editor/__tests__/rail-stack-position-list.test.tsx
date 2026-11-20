@@ -16,7 +16,11 @@ import {
   stackRailPanels,
   unstackRail,
 } from "@/lib/layout/layout-arrangement";
-import { railStackId, type RailEntry } from "@/lib/layout/rail";
+import {
+  BROWSERS_SIMULATORS_STACK_ID,
+  railStackId,
+  type RailEntry,
+} from "@/lib/layout/rail";
 import type { RegionId } from "@/lib/layout/region-id";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -239,6 +243,16 @@ describe("stacking a panel from its own row (L-166, L-168)", () => {
   });
 
   it("keeps the pressed panel ABOVE and moves nothing (L-170)", () => {
+    // Browsers must stand alone for Terminals to join it, so start from the
+    // rail without the shipped Browsers and Simulators stack.
+    useLayoutStore.setState({
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        rail: DEFAULT_ARRANGEMENT.rail.filter(
+          (entry) => entry.id !== BROWSERS_SIMULATORS_STACK_ID,
+        ),
+      },
+    });
     render(section("railAgents", vi.fn()));
     const before = panelIds(rail());
 

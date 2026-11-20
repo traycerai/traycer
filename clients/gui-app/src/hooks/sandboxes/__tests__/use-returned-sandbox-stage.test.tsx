@@ -396,6 +396,7 @@ describe("useLandingReturnedSandbox", () => {
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
       returnedSandbox: null,
+      namedHostId: null,
       durability: "saved",
     });
     drafts.setDraftReturnedSandbox(id, returned);

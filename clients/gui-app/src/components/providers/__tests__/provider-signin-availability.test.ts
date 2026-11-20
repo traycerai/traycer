@@ -102,7 +102,7 @@ describe("providerSignInUnavailableHint", () => {
       providerId: "kiro",
       name: "Kiro",
       usage: true,
-      tab: "Profiles & Limits",
+      tab: "Account",
     },
   ] as const)(
     "names $tab when $name has no browser sign-in and a key",
@@ -283,7 +283,7 @@ describe("providerSignInUnavailableHint", () => {
       name: "Kiro",
       apiKeySupported: true,
       usage: true,
-      tab: "Profiles & Limits",
+      tab: "Account",
     },
     {
       providerId: "hermes",

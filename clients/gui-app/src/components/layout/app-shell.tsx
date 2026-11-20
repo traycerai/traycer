@@ -1,3 +1,4 @@
+import { SoundtrackPageControlsScope } from "@/components/soundtrack/soundtrack-page-controls-scope";
 import { useState, type ReactNode } from "react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
@@ -11,6 +12,7 @@ import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppColumnFrame } from "@/components/layout/app-column-frame";
 import { AppHeader } from "@/components/layout/header/app-header";
+import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
 import {
   appColumnChrome,
   PHONE_SHELL_STRIP_CHROME,
@@ -28,6 +30,7 @@ import { SessionConnectivityStrip } from "@/components/layout/session-connectivi
 import { useHostSessionConnectivity } from "@/lib/host/session-connectivity";
 import { StatusBarKeybindingBridge } from "@/components/layout/status-bar/status-bar-keybinding-bridge";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
+import { SignInStorageBanner } from "@/components/layout/sign-in-storage-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { useSystemBack } from "@/components/layout/shell/use-system-back";
 import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
@@ -60,9 +63,13 @@ interface AppShellProps {
  */
 export function AppShell(props: AppShellProps) {
   return (
-    <MobileDrawerHistoryGateProvider>
-      <AppShellBody>{props.children}</AppShellBody>
-    </MobileDrawerHistoryGateProvider>
+    <MobileBotHeaderSlotProvider>
+      <MobileDrawerHistoryGateProvider>
+        <SoundtrackPageControlsScope>
+          <AppShellBody>{props.children}</AppShellBody>
+        </SoundtrackPageControlsScope>
+      </MobileDrawerHistoryGateProvider>
+    </MobileBotHeaderSlotProvider>
   );
 }
 
@@ -152,6 +159,7 @@ function AppShellBody(props: AppShellProps) {
                     the interruption the strip reports, so if both are showing
                     the actionable one has to be read first. */}
                   <ClockSkewBanner />
+                  <SignInStorageBanner />
                   <SessionConnectivityStrip
                     connectivity={sessionConnectivity}
                   />

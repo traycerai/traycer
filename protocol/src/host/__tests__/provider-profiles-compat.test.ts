@@ -16,8 +16,12 @@ import {
   providerCliStateSchemaV30,
   providerMutationCliStateSchemaV20,
   providerProfileActionSchema,
+  providersAwaitLoginRequestSchema,
+  providersAwaitLoginRequestSchemaV23,
   providersAwaitLoginResponseSchema,
   providersAwaitLoginResponseSchemaV21,
+  providersAwaitLoginResponseSchemaV23,
+  providersAwaitLoginResponseSchemaV24,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersSetEnabledRequestSchemaV21,
@@ -682,7 +686,7 @@ describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
   });
 });
 
-describe("providers.awaitLogin@2.2 (provider refusal)", () => {
+describe("providers.awaitLogin wire compatibility", () => {
   const refusal = {
     reason: "Your current account is not eligible for Antigravity.",
     actionUrl: "https://accounts.google.com/signin/continue?sarp=1",
@@ -758,9 +762,27 @@ describe("providers.awaitLogin@2.2 (provider refusal)", () => {
     expect(parsed.state).toBeNull();
   });
 
-  it("wires the registry's 2.1 contract to the frozen schema and 2.2 to the live one", () => {
+  it("wires 2.1 to 2.4 to frozen schemas and 2.5 to the live schema", () => {
     const line = hostRpcRegistry["providers.awaitLogin"][2];
-    expect(line.latestMinor).toBe(2);
+    expect(line.latestMinor).toBe(5);
+    expect(line.versions[3].contract.requestSchema).toBe(
+      providersAwaitLoginRequestSchemaV23,
+    );
+    expect(line.versions[3].contract.responseSchema).toBe(
+      providersAwaitLoginResponseSchemaV23,
+    );
+    expect(line.versions[4].contract.requestSchema).toBe(
+      providersAwaitLoginRequestSchemaV23,
+    );
+    expect(line.versions[4].contract.responseSchema).toBe(
+      providersAwaitLoginResponseSchemaV24,
+    );
+    expect(line.versions[5].contract.requestSchema).toBe(
+      providersAwaitLoginRequestSchema,
+    );
+    expect(line.versions[5].contract.responseSchema).toBe(
+      providersAwaitLoginResponseSchema,
+    );
     expect(
       line.versions[1].contract.responseSchema.parse({ state: null, refusal }),
     ).not.toHaveProperty("refusal");
@@ -768,6 +790,72 @@ describe("providers.awaitLogin@2.2 (provider refusal)", () => {
       line.versions[2].contract.responseSchema.parse({ state: null, refusal })
         .refusal,
     ).toEqual(refusal);
+    const waiting = {
+      state: null,
+      existingProfileId: null,
+      codeRejected: false,
+      refusal: null,
+      installation: {
+        kind: "waiting-for-readers",
+        admissionId: "admission-opaque-1",
+        count: 2,
+      },
+    };
+    const frozen = line.versions[2].contract.responseSchema.parse(waiting);
+    expect(frozen.state).toBeNull();
+    expect(frozen).not.toHaveProperty("installation");
+    expect(
+      line.versions[3].contract.responseSchema.parse(waiting).installation,
+    ).toEqual({
+      kind: "waiting-for-readers",
+      admissionId: "admission-opaque-1",
+      count: 2,
+    });
+    expect(
+      line.versions[3].contract.responseSchema.parse({
+        ...waiting,
+        profileOutcome: { kind: "signed-in", profileId: "row-1" },
+      }),
+    ).not.toHaveProperty("profileOutcome");
+    expect(
+      line.versions[4].contract.responseSchema.parse({
+        ...waiting,
+        profileOutcome: { kind: "signed-in", profileId: "row-1" },
+      }).profileOutcome,
+    ).toEqual({ kind: "signed-in", profileId: "row-1" });
+    expect(
+      providersAwaitLoginResponseSchemaV23.parse({ state: null }),
+    ).not.toHaveProperty("profileOutcome");
+  });
+
+  it("upgrades the frozen 2.2 request and response into frozen 2.3 wait fields", () => {
+    const upgradedRequest = upgradeRequestToVersion(
+      hostRpcRegistry["providers.awaitLogin"],
+      { major: 2, minor: 2 },
+      { major: 2, minor: 3 },
+      { providerId: "codex", profileId: "profile-1" },
+    );
+    expect(upgradedRequest).toEqual({
+      providerId: "codex",
+      profileId: "profile-1",
+      lastSeenReaderCount: null,
+    });
+    const upgradedResponse = upgradeResponseToVersion(
+      hostRpcRegistry["providers.awaitLogin"],
+      { major: 2, minor: 2 },
+      { major: 2, minor: 3 },
+      {
+        state: null,
+        existingProfileId: null,
+        codeRejected: false,
+        refusal: null,
+      },
+    );
+    expect(upgradedResponse).toMatchObject({
+      state: null,
+      refusal: null,
+      installation: null,
+    });
   });
 
   it("downgrades a 2.2 response carrying a refusal to the v1.0 shape", () => {

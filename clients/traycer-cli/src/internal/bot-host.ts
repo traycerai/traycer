@@ -1,3 +1,10 @@
+import { localTeamAdmissionCliError } from "./local-open-auth";
+import { requireCliHostSession } from "./cli-host-tokens";
+import {
+  hostDoorRefusalCliError,
+  hostTokenFailureCliError,
+  signedOutCliError,
+} from "./host-door-words";
 /**
  * What the `traycer bot` commands share: finding a bot by id or title,
  * reading the environments the bots are grouped under, one `bot.subscribe`
@@ -18,13 +25,8 @@ import {
   type BotRecord,
   type BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
-import {
-  environmentListResponseSchemaV11,
-  type EnvironmentDescriptor,
-} from "@traycer/protocol/host/environment/contracts";
 import { isIncompatibleCloseForMethod } from "@traycer/protocol/host-transport/stream-session";
 import type { HostTransportEndpoint } from "../../../shared/host-transport/host-messenger";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
 import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
@@ -76,17 +78,6 @@ export async function listBots(): Promise<readonly BotRecord[]> {
   const result = await toBotCliError(callHostRpc("bot.list", {}));
   return parseCanonicalHostResponse("bot.list", botListResponseSchema, result)
     .bots;
-}
-
-export async function listEnvironments(): Promise<
-  readonly EnvironmentDescriptor[]
-> {
-  const result = await toBotCliError(callHostRpc("environment.list", {}));
-  return parseCanonicalHostResponse(
-    "environment.list",
-    environmentListResponseSchemaV11,
-    result,
-  ).environments;
 }
 
 /**
@@ -176,21 +167,23 @@ export async function openLocalStreamClient(): Promise<{
   readonly endpoint: HostTransportEndpoint;
 }> {
   const auth = await resolveHostAuth();
-  if (auth === null) {
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
-  }
+  if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();
-  const lease = new MutableBearerLease(auth.token, auth.userId);
+  // The token is all these short reads need: nothing here refreshes the
+  // sign-in once the client is built, so the session is released at once.
+  const session = await requireCliHostSession(
+    auth,
+    endpoint.hostId,
+    hostTokenFailureCliError,
+  );
+  session.dispose();
+  const bearer = session.bearer;
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
-    bearer: () => lease,
+    bearer: () => bearer,
+    userId: bearer.identity.userId,
     auth: null,
     clock: null,
     hostCredentialMint: null,
@@ -265,8 +258,15 @@ export function readBotSnapshot(
       }
       if (frame.kind === "deleted") finish(() => resolve(null));
     });
-    session.onStatusChange((status, reason) => {
+    session.onStatusChange((status, reason, retryCause) => {
       if (status === "connecting" || status === "open") return;
+      if (retryCause) {
+        const admissionError = localTeamAdmissionCliError(retryCause);
+        if (admissionError !== null) {
+          finish(() => reject(admissionError));
+          return;
+        }
+      }
       if (
         client.getMethodSupport("bot.subscribe") === "unsupported" ||
         isIncompatibleCloseForMethod(reason, "bot.subscribe")
@@ -274,11 +274,20 @@ export function readBotSnapshot(
         finish(() => reject(botHostUpdateError()));
         return;
       }
-      const detail =
-        reason !== null && reason.kind === "fatalError"
-          ? ` - ${reason.details.reason}`
-          : "";
-      finish(() => reject(botReadFailedError(detail)));
+      if (reason?.kind === "fatalError") {
+        const details = reason.details;
+        const readFailed = (): CliError =>
+          botReadFailedError(` - ${details.reason}`);
+        // No sign-in is refreshed while this read runs (`auth: null`), so
+        // nothing here knows the machine to be signed out.
+        const fatalError =
+          hostDoorRefusalCliError(details, false, readFailed) ??
+          localTeamAdmissionCliError(details) ??
+          readFailed();
+        finish(() => reject(fatalError));
+        return;
+      }
+      finish(() => reject(botReadFailedError("")));
     });
   });
 }

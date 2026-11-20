@@ -20,6 +20,10 @@ function withFilesResolved(stems: StemManifest, base: URL): StemManifest {
   const resolved = (files: readonly string[]): readonly string[] =>
     files.map((file) => new URL(file, base).href);
   return {
+    recordings: stems.recordings?.map((recording) => ({
+      ...recording,
+      file: new URL(recording.file, base).href,
+    })),
     tracks: stems.tracks.map((track) => ({
       ...track,
       layers: track.layers.map((layer) =>

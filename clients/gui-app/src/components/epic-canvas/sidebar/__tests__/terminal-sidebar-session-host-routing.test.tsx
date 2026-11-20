@@ -50,6 +50,7 @@ vi.mock("@/hooks/terminal/use-task-home-directory", () => ({
   useTaskHomeDirectoryFor: () => () => null,
 }));
 vi.mock("@/lib/host", () => ({
+  useHostDirectory: () => ({ findById: () => null }),
   useHostClient: () => clients.ambient,
   useHostRuntimeClient: () => clients.ambient,
 }));

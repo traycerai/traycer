@@ -1,3 +1,4 @@
+import { credentialVersionSchema } from "@traycer/protocol/host/provider-credential-home-schemas";
 import { z } from "zod";
 import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
@@ -82,9 +83,78 @@ export const chatEventSchema = lazySchema(() =>
     blockId: z.string().nullable(),
     severity: chatEventSeveritySchema,
     metadata: z.record(z.string(), z.unknown()).nullable(),
+    providerSelection: z
+      .object({
+        homeAddress: z.string(),
+        bindingVersion: credentialVersionSchema,
+        holderRevision: z.union([
+          z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+          z.literal("self"),
+        ]),
+        dispatchedAt: z.number(),
+      })
+      .optional(),
   }),
 );
 export type ChatEvent = z.infer<typeof chatEventSchema>;
+
+/** The event shape served before chat.subscribe@1.44; persistence stays live. */
+export const chatEventSchemaPreProviderSelection = lazySchema(() =>
+  z.object({
+    eventId: z.string(),
+    type: z.enum([
+      "send.accepted",
+      "send.failed",
+      "queue.added",
+      "queue.edited",
+      "queue.reordered",
+      "queue.cancelled",
+      "queue.steerRequested",
+      "queue.steerAborted",
+      "queue.paused",
+      "queue.resumed",
+      "queue.started",
+      "queue.steered",
+      "queue.fallback",
+      "turn.started",
+      "turn.completed",
+      "turn.stopped",
+      "turn.interrupted",
+      "approval.requested",
+      "approval.resolved",
+      "approval.denied",
+      "approval.abandoned",
+      "interview.requested",
+      "interview.resolved",
+      "interview.errored",
+      "checkpoint.captured",
+      "checkpoint.restoreStarted",
+      "checkpoint.restored",
+      "permission.blocked",
+      "harness.error",
+      "history.deleted",
+      "chat.forked",
+      "chat.imported",
+      "setup.creating",
+      "setup.running",
+      "setup.succeeded",
+      "setup.failed",
+      "setup.cancelled",
+      "worktree.missing",
+    ]),
+    timestamp: z.number(),
+    clientActionId: z.string().nullable(),
+    actor: userMessageSenderSchema.nullable(),
+    message: z.string().nullable(),
+    turnId: z.string().nullable(),
+    messageId: z.string().nullable(),
+    queueItemId: z.string().nullable(),
+    approvalId: z.string().nullable(),
+    blockId: z.string().nullable(),
+    severity: z.enum(["info", "warning", "error"]),
+    metadata: z.record(z.string(), z.unknown()).nullable(),
+  }),
+);
 
 /**
  * Wire-freeze copy of the event-type enum WITHOUT `chat.imported`, bound to

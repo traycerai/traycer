@@ -17,25 +17,27 @@ import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-setti
 import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
 import { BROWSER } from "@/components/settings/panels/browser-settings.definitions";
+import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import { BROWSER_AGENT_ACCESS } from "@/components/settings/panels/browser-agent-access.definitions";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { KEYBINDINGS } from "@/components/settings/panels/keybindings-settings.definitions";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { LINK_PHONE } from "@/components/settings/panels/link-phone.definitions";
-import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { OPENING_BEHAVIOR } from "@/components/settings/panels/opening-behavior.definitions";
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import { PROVIDERS } from "@/components/settings/panels/providers-settings.definitions";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
 import { AGENT_DEFINITIONS } from "@/components/settings/panels/agent-definitions.definitions";
 import { MACHINE_SETUP } from "@/components/settings/panels/machine-setup.definitions";
+import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definitions";
 import { SKILLS } from "@/components/settings/panels/skills.definitions";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { USAGE } from "@/components/settings/panels/usage-settings.definitions";
 import { CREDITS } from "@/components/settings/environment/credits-page.definitions";
 import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
+import { STORAGE } from "@/components/settings/environment/storage-page.definitions";
 import { MEMBERS } from "@/components/settings/environment/members-page.definitions";
 import { WORKTREES } from "@/components/settings/panels/worktrees-settings.definitions";
 import { LAYOUT_LAUNCH_ENTRIES } from "@/components/layout-editor/layout-search.definitions";
@@ -62,6 +64,7 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     MCP_SERVERS,
     SKILLS,
     PERMISSIONS,
+    AGENT_MEMORIES,
     FALLBACK,
     SHELL,
     AGENT_SELECTION,
@@ -69,13 +72,14 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     SECRETS,
     AGENT_DEFINITIONS,
     SANDBOXES,
+    STORAGE,
     MEMBERS,
     MACHINE_SETUP,
+    HOST_NOTIFICATIONS,
     DEVICES,
     LINK_PHONE,
     USAGE,
     CREDITS,
-    HOST_NOTIFICATIONS,
     DELETE_ACCOUNT,
     HOST_OVERVIEW,
     WORKTREES,

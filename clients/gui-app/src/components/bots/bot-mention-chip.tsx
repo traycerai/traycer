@@ -1,9 +1,13 @@
 import { useContext, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
+import { useTracyTranscriptOrigin } from "@/components/bots/tracy-transcript-origin-context";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
+import {
+  fromTracyTranscript,
+  openEpicFromListIntent,
+} from "@/lib/tab-navigation/intents";
 import { cn } from "@/lib/utils";
 
 // A name is one unit: it never breaks across lines, and a bot or task
@@ -115,6 +119,7 @@ export function TaskMentionChip(props: {
 }): ReactNode {
   const directory = useContext(BotMentionsContext);
   const navigate = useNavigate();
+  const tracyOrigin = useTracyTranscriptOrigin();
   if (directory === null) return <>{props.children}</>;
   const title =
     directory.tasks.find((entry) => entry.id === props.taskId)?.name ?? null;
@@ -138,12 +143,15 @@ export function TaskMentionChip(props: {
       onClick={() =>
         navigateToTabIntent(
           navigate,
-          openEpicFromListIntent({
-            epicId: props.taskId,
-            focus: undefined,
-            name: title,
-            replaceEmptyDraftId: null,
-          }),
+          fromTracyTranscript(
+            openEpicFromListIntent({
+              epicId: props.taskId,
+              focus: undefined,
+              name: title,
+              replaceEmptyDraftId: null,
+            }),
+            tracyOrigin,
+          ),
           undefined,
         )
       }

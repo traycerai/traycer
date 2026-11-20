@@ -86,7 +86,7 @@ describe("useDesktopAppResourceUsage", () => {
         {
           pid: 1,
           type: "Browser",
-          cpu: { percentCPUUsage: 7 },
+          cpu: { cpuSharePercent: 7 },
           memory: { workingSetSize: 512 * 1024 },
         },
       ],
@@ -94,7 +94,7 @@ describe("useDesktopAppResourceUsage", () => {
 
     const first = renderHook(() => useDesktopAppResourceUsage(true));
     await vi.advanceTimersByTimeAsync(0);
-    expect(first.result.current?.cpuPercent).toBe(7);
+    expect(first.result.current?.cpuSharePercent).toBe(7);
 
     // The interval stops with the last subscriber, so the reading it was
     // refreshing has to stop with it.
@@ -109,7 +109,7 @@ describe("useDesktopAppResourceUsage", () => {
     expect(second.result.current).toBeNull();
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(second.result.current?.cpuPercent).toBe(7);
+    expect(second.result.current?.cpuSharePercent).toBe(7);
 
     second.unmount();
   });
@@ -139,7 +139,7 @@ describe("useDesktopAppResourceUsage", () => {
         {
           pid: 1,
           type: "Browser",
-          cpu: { percentCPUUsage: 7 },
+          cpu: { cpuSharePercent: 7 },
           memory: { workingSetSize: 512 * 1024 },
         },
       ],

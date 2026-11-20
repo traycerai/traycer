@@ -12,7 +12,8 @@ import type { MixSignals, SoundtrackView } from "../signals";
 import type { StemSource } from "../stems";
 import type { VariableTrack } from "../variable-sound";
 import { makeAudioBuffer } from "./audio-buffer";
-import { FakeOutput, FakeStems } from "./fakes";
+import { SoundtrackLogRelay } from "../session-log";
+import { captureNothing, FakeOutput, FakeStems } from "./fakes";
 
 const HOME: MixSignals = {
   view: "home",
@@ -75,6 +76,8 @@ function openWith(config: SessionConfig) {
     setVolume: vi.fn<(volume: number) => void>(),
     duck: vi.fn<(chimeSeconds: number) => void>(),
     close: vi.fn<(afterSeconds: number) => void>(),
+    log: new SoundtrackLogRelay(),
+    captureMix: captureNothing,
     pause: () => {
       output.stopClock();
     },

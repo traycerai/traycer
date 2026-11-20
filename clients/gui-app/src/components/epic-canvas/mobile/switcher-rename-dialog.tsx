@@ -34,7 +34,7 @@ export function SwitcherRenameDialog(props: {
         // viewport in both mobile shells, so `dvh` resolves against the
         // uncovered strip and Save stays above the keyboard rather than under
         // it.
-        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,28rem)] max-w-[min(92vw,28rem,var(--safe-area-width))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         data-testid="switcher-rename-dialog"
       >
         <DialogHeader>

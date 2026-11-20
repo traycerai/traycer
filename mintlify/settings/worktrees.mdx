@@ -91,7 +91,7 @@ An agent can create worktrees itself, for example when it splits work across [ch
 | **Ask first** | The agent's chat shows a question naming each repository and branch. **Allow** creates the worktree; **Don't allow**, or a typed answer, refuses it and passes your words to the agent. |
 | **Never** | Agents aren't offered worktree creation at all, and keep working in the workspace they were given. |
 
-With **Ask first**, an agent that another agent started, in a chat nobody has open, can't reach you, so its request is refused and it reports back to the agent that started it. Open the agent's chat before it asks if you want to approve worktrees for it, or ask the coordinating agent to create them.
+With **Ask first**, an agent that another agent started asks you the same way, in its own chat, and waits there until you answer.
 
 The setting also covers `traycer worktree create` when an agent runs it in its own shell. There it is refused under **Never**, and under **Ask first** too, because the command has no way to ask you. Running the command yourself is unaffected.
 

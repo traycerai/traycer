@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { SoundtrackRecordingRow } from "@/components/settings/panels/soundtrack-recording-row";
 import {
   Select,
   SelectContent,
@@ -25,6 +26,7 @@ import {
   isMixDirectorId,
   type MixDirectorId,
 } from "@/lib/soundtrack/directors";
+import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const VOLUME_STEP = 0.05;
@@ -37,11 +39,18 @@ const DIRECTOR_LABELS: Readonly<Record<MixDirectorId, string>> = {
 const DIRECTOR_IDS: readonly MixDirectorId[] = ["static", "rules"];
 
 /**
- * The soundtrack's switch, its level and what it follows. The level and what it
- * follows stay editable while it is off, so it comes back the way it was set.
- * Its playback controls show only while it is on, and keep their value.
+ * The soundtrack's switch, its level and what it follows, and on a build that
+ * can save one, a recording of it. The level and what it follows stay editable
+ * while it is off, so it comes back the way it was set. Its playback controls
+ * show only while it is on, and keep their value.
  */
 export function SoundtrackSettingsSection(): ReactNode {
+  const setPiecesEnabled = useSoundtrackStore(
+    (state) => state.setPiecesEnabled,
+  );
+  const setSetPiecesEnabled = useSoundtrackStore(
+    (state) => state.setSetPiecesEnabled,
+  );
   const availability = useSettingsAvailabilityContext();
   const on = useSettingsStore((state) => state.soundtrackEnabled);
   const playbackControls = useSettingsStore(
@@ -82,6 +91,20 @@ export function SoundtrackSettingsSection(): ReactNode {
               checked={playbackControls}
               onCheckedChange={setPlaybackControlsOn}
               aria-label="Playback controls"
+            />
+          }
+        />
+      ) : null}
+      {APP_NOTIFICATIONS.definitions.soundtrackSetPieces.availableWhen(
+        availability,
+      ) ? (
+        <SettingsRow
+          row={APP_NOTIFICATIONS.definitions.soundtrackSetPieces}
+          control={
+            <Switch
+              checked={setPiecesEnabled}
+              onCheckedChange={setSetPiecesEnabled}
+              aria-label="Set pieces"
             />
           }
         />
@@ -131,6 +154,11 @@ export function SoundtrackSettingsSection(): ReactNode {
           </Select>
         }
       />
+      {APP_NOTIFICATIONS.definitions.soundtrackRecording.availableWhen(
+        availability,
+      ) ? (
+        <SoundtrackRecordingRow />
+      ) : null}
     </SettingsGroup>
   );
 }

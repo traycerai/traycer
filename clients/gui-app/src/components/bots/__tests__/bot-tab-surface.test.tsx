@@ -11,9 +11,11 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
+ * The surface under the phone app header and beside the bots column, and the
+ * one music group, are in `bot-tab-surface-header.test.tsx`.
  */
 import {
   botListChangedMock,
@@ -40,13 +42,10 @@ import {
   tabHostProviderMock,
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
-import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
-
 import {
   useVoiceSessionStore,
   type VoiceSessionDriver,
 } from "@/stores/voice/voice-session-store";
-import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 
 import {
@@ -56,41 +55,50 @@ import {
   SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
-import { StrictMode, useContext, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BotOpenPausedReason } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotAppearance,
+  BotOpenPausedReason,
+} from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 
-import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
 import { readFocusedHostNotificationPresence } from "@/lib/notifications/notification-presence";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
-import type { BotOpenSession } from "@/components/bots/bot-session-view";
-import type {
-  BotOpenMemory,
-  BotOpenThread,
-  BotSessionOpen,
-  BotTurnOpen,
-} from "@/stores/bots/bot-open-thread-store";
 import {
   answer,
   BOT_ID,
   BOUND_HOST,
-  endBotTabSurfaceCase,
   NEEDS_HOST_SETUP,
   OTHER_BOT_ID,
-  resetBotTabSurfaceMocks,
   setUpNewTeam,
   SETUP_BOT_ID,
+  snapshot,
   TAB_HOST,
 } from "./bot-tab-surface-harness";
 
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => true,
+}));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
+}));
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
+}));
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => null,
+}));
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => null,
+}));
+vi.mock("@/components/notifications/mobile-notifications-button", () => ({
+  MobileNotificationsButton: () => null,
 }));
 vi.mock("@/lib/tab-navigation", async (importOriginal) =>
   tabNavigationMock(
@@ -125,6 +133,7 @@ vi.mock("@/hooks/host/use-host-queries", () => hostQueriesMock);
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostBinding: () => mocks.binding,
+  useHostClient: () => null,
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
   ...(await importOriginal<
@@ -171,237 +180,31 @@ vi.mock(
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
 vi.mock("@/hooks/bots/use-bot-mutations", () => botMutationsMock);
-vi.mock("@/components/bots/bot-channel-sidebar", () => ({
-  BotChannelSidebar: (props: {
-    activeBotId: string | null;
-    hostId: string;
-    threadsView: {
-      shown: boolean;
-      onShow: () => void;
-      onLeave: () => void;
-    } | null;
-    onChannelOpened: () => void;
-  }) => (
-    <div
-      data-testid="stub-sidebar"
-      data-active-bot-id={props.activeBotId ?? "none"}
-      data-host-id={props.hostId}
-      data-threads-shown={String(props.threadsView?.shown ?? "none")}
-    >
-      <button
-        type="button"
-        data-testid="stub-sidebar-pick"
-        onClick={props.onChannelOpened}
-      />
-      <button
-        type="button"
-        data-testid="stub-sidebar-threads"
-        onClick={props.threadsView?.onShow}
-      />
-      <button
-        type="button"
-        data-testid="stub-sidebar-own-channel"
-        onClick={props.threadsView?.onLeave}
-      />
-    </div>
-  ),
-}));
-/** What the tab hands its content to mention (`BotMentionsContext`), as the stub channel sees it. */
-function MentionsProbe(): ReactNode {
-  const mentionable = useContext(BotMentionsContext);
-  if (mentionable === null) return null;
-  return (
-    <output
-      data-testid="stub-mentionable"
-      data-bots={
-        mentionable.bots === null
-          ? "unread"
-          : mentionable.bots.map((target) => target.name).join("|")
-      }
-      data-tasks={mentionable.tasks.map((target) => target.name).join("|")}
-    />
-  );
-}
-
-vi.mock("@/components/bots/bot-channel-view", () => ({
-  BotChannelView: (props: {
-    botId: string;
-    hostId: string;
-    boundHostId: string | null;
-    botTitle: string;
-    appConversationChatId: string | null;
-    openThread: BotOpenThread | null;
-    landOn: BotChannelLanding | null;
-    trunkChatId: string;
-    openMemory: BotOpenMemory | null;
-    onOpenMemory: (open: BotOpenMemory | null) => void;
-    onOpenTurn: BotTurnOpen;
-    onOpenSession: BotSessionOpen;
-    resolveMember: (
-      userId: string,
-    ) => { displayName: string | null; avatarUrl: string | null } | null;
-    setupHistory: ReactNode;
-    tiles: number | null;
-  }) => (
-    <div
-      data-testid="stub-channel"
-      data-tiles={String(props.tiles)}
-      data-host-id={props.hostId}
-      data-bound-host-id={props.boundHostId ?? "none"}
-      data-bot-title={props.botTitle}
-      data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
-      data-open-thread={props.openThread?.anchorMessageId ?? "none"}
-      data-land-on={props.landOn?.messageId ?? "none"}
-      data-land-on-thread={props.landOn?.threadId ?? "none"}
-      data-open-memory={String(props.openMemory !== null)}
-      data-trunk-chat-id={props.trunkChatId}
-      data-teammate-name={
-        props.resolveMember("user-teammate")?.displayName ?? "unresolved"
-      }
-    >
-      <button
-        type="button"
-        data-testid="stub-channel-open-memory"
-        onClick={() => props.onOpenMemory({ back: null })}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-turn"
-        onClick={() => props.onOpenTurn(REPLY_TURN, null)}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-thread-session"
-        onClick={() =>
-          props.onOpenSession({
-            chatId: "session-thread-1",
-            threadId: "thread-1",
-            messageId: null,
-            sendPostId: null,
-          })
-        }
-      />
-      {props.setupHistory}
-      <MentionsProbe />
-      {/* The two boxes' places in the real view: the channel's own, and one
-          inside the thread panel, which the header tells apart by its marker. */}
-      <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-        <textarea aria-label="Channel box" />
-      </div>
-      <section data-bot-thread-panel="">
-        <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-          <textarea aria-label="Thread box" />
-        </div>
-      </section>
-    </div>
-  ),
-}));
-// The session view is driven in `bot-session-view.test.tsx`; here, what the
-// tab hands it and what its links do to the tab.
-vi.mock("@/components/bots/bot-session-view", () => ({
-  BotSessionView: (props: {
-    session: BotOpenSession;
-    onClose: () => void;
-    onOpenChannel: (messageId: string | null) => void;
-    onOpenThread: (threadId: string, messageId: string | null) => void;
-  }) => (
-    <div
-      data-testid="stub-session"
-      data-chat-id={props.session.chatId}
-      data-thread-id={props.session.threadId ?? "none"}
-      data-land-on={props.session.landOn?.messageId ?? "none"}
-      data-visit={String(props.session.landOn?.visit ?? "none")}
-    >
-      <button
-        type="button"
-        data-testid="stub-session-back"
-        onClick={props.onClose}
-      />
-      <button
-        type="button"
-        data-testid="stub-session-channel"
-        onClick={() => props.onOpenChannel(null)}
-      />
-      <button
-        type="button"
-        data-testid="stub-session-post"
-        onClick={() => props.onOpenChannel("post-1")}
-      />
-      <button
-        type="button"
-        data-testid="stub-session-thread"
-        onClick={() => props.onOpenThread("thread-1", null)}
-      />
-      <button
-        type="button"
-        data-testid="stub-session-thread-post"
-        onClick={() => props.onOpenThread("thread-1", "thread-reply-9")}
-      />
-    </div>
-  ),
-}));
-// The Activity page takes whether this host runs the bot, and the list the
-// tab's count is read from: its rows are what the page would draw.
-vi.mock("@/components/bots/bot-activity-page", () => ({
-  BotActivityPage: (props: {
-    boundHere: boolean;
-    active: { rows: ReadonlyArray<{ task: { taskId: string } }> };
-  }) => (
-    <div
-      data-testid="stub-activity"
-      data-is-this-host={String(props.boundHere)}
-      data-row-ids={props.active.rows.map((row) => row.task.taskId).join(",")}
-    />
-  ),
-}));
-vi.mock("@/components/bots/bot-threads-view", () => ({
-  BotThreadsView: (props: {
-    hostId: string;
-    channelTitle: string;
-    onBack: () => void;
-  }) => (
-    <div
-      data-testid="stub-threads"
-      data-host-id={props.hostId}
-      data-channel-title={props.channelTitle}
-    >
-      <button
-        type="button"
-        data-testid="stub-threads-back"
-        onClick={props.onBack}
-      />
-    </div>
-  ),
-}));
+vi.mock(
+  "@/components/bots/bot-channel-sidebar",
+  () => import("./bot-tab-surface-view-stubs"),
+);
+vi.mock(
+  "@/components/bots/bot-channel-view",
+  () => import("./bot-tab-surface-view-stubs"),
+);
+vi.mock(
+  "@/components/bots/bot-session-view",
+  () => import("./bot-tab-surface-view-stubs"),
+);
+vi.mock(
+  "@/components/bots/bot-activity-page",
+  () => import("./bot-tab-surface-view-stubs"),
+);
+vi.mock(
+  "@/components/bots/bot-threads-view",
+  () => import("./bot-tab-surface-view-stubs"),
+);
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => botThreadListQueryMock);
-// The panel takes the bot, whether its environment is a person's own, its
-// channel, its environment's bots and how to close, and nothing else: no prop
-// says which host serves the tab, so no control can be gated on it. The stub lists the props it was given.
-vi.mock("@/components/bots/bot-settings-panel", () => ({
-  BotChannelSettingsPanel: (props: {
-    personal: boolean;
-    channelId: string | null;
-    onClose: () => void;
-    onDeleted: () => void;
-  }) => (
-    <div
-      data-testid="stub-settings"
-      data-personal={String(props.personal)}
-      data-channel-id={props.channelId ?? "none"}
-    >
-      <button
-        type="button"
-        data-testid="stub-settings-close"
-        onClick={props.onClose}
-      />
-      <button
-        type="button"
-        data-testid="stub-settings-deleted"
-        onClick={props.onDeleted}
-      />
-    </div>
-  ),
-}));
+vi.mock(
+  "@/components/bots/bot-settings-panel",
+  () => import("./bot-tab-surface-view-stubs"),
+);
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
@@ -413,34 +216,22 @@ import {
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  installBotTabSurfaceCaseLifecycle,
+  queryClient,
+  surface,
+  surfaceFor,
+} from "./bot-tab-surface-render";
 
-/** The trunk's turn behind a reply in the channel. */
-const REPLY_TURN: BotTurnRef = {
-  chatId: "trunk-1",
-  turnIds: ["turn-reply"],
-  userMessageId: "prompt-reply",
-  threadId: null,
-  startedAt: 1_000,
-  endedAt: 2_000,
-  summary: null,
-  messageIds: ["reply-1"],
-  requestIds: [],
-};
+installBotTabSurfaceCaseLifecycle();
 
-let queryClient = new QueryClient();
-
-function surfaceFor(botId: string | null): ReactNode {
+/** The surface outside StrictMode, for a case that counts its mount's opens. */
+function unstrictSurface(): ReactNode {
   return (
-    <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <BotTabSurface botId={botId} hostId={TAB_HOST} />
-      </QueryClientProvider>
-    </StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
+    </QueryClientProvider>
   );
-}
-
-function surface(): ReactNode {
-  return surfaceFor(BOT_ID);
 }
 
 /** Nothing on a tab says where a bot runs or offers to move it. */
@@ -460,17 +251,6 @@ function expectNoMachineWording(container: HTMLElement): void {
 function isKept(botId: string): boolean {
   return useBotDraftsStore.getState().threadBoxes[botId] !== undefined;
 }
-
-beforeEach(() => {
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  resetBotTabSurfaceMocks();
-});
-
-afterEach(() => {
-  endBotTabSurfaceCase(queryClient);
-});
 
 describe("<BotTabSurface /> on a host without bot.open", () => {
   it("asks about bot.open on the tab's own host", () => {
@@ -533,9 +313,9 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
     ).toEqual([
-      "Give the team a host",
+      "Give the team a computer",
       "Enable cloud for the team",
-      "Create a team host on a machine",
+      "Add a computer",
     ]);
     expect(within(card).queryAllByRole("link")).toHaveLength(0);
     expect(channel.textContent).not.toMatch(/github|starter|seat/i);
@@ -592,7 +372,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     ).toHaveProperty("disabled", true);
     expect(
       within(composer).getByTestId("team-setup-composer-reason").textContent,
-    ).toBe("Tracy can reply once the team has a host.");
+    ).toBe("Tracy can reply once the team has a computer.");
   });
 
   it("opens, subscribes to and closes nothing: the bot does not exist", () => {
@@ -749,7 +529,12 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
    */
   it("shows the channel could not be loaded, never opening or closing the tab, when the environment list's refresh failed over a list from before the team; Retry reads it again and the setup then shows", async () => {
     mocks.state.environments = [
-      { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+      {
+        environmentId: "env-team",
+        label: "Acme",
+        ownerKind: "organization",
+        providerHandle: null,
+      },
     ];
     mocks.state.environmentsStatus = "error";
     mocks.state.environmentsKept = true;
@@ -996,7 +781,7 @@ describe("<BotTabSurface /> bot.open", () => {
   });
 
   it("opens the bot once on mount, for this bot", () => {
-    render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
+    render(unstrictSurface());
 
     expect(mocks.open).toHaveBeenCalledTimes(1);
     expect(mocks.open).toHaveBeenCalledWith({ botId: BOT_ID });
@@ -1252,16 +1037,16 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
     expect(within(post).getByText("Release Bot")).toBeTruthy();
     expect(post.textContent).toContain("I'm this team's main bot.");
     expect(post.textContent).toContain(
-      "Before I can run, the team needs a host",
+      "Before I can run, the team needs a computer for its bots.",
     );
     expect(
       within(within(post).getByTestId("team-host-options"))
         .getAllByRole("heading")
         .map((heading) => heading.textContent),
     ).toEqual([
-      "Give the team a host",
+      "Give the team a computer",
       "Enable cloud for the team",
-      "Create a team host on a machine",
+      "Add a computer",
     ]);
     expect(within(post).queryAllByRole("button")).toEqual([]);
     expect(post.textContent).not.toContain("Not available yet.");
@@ -1278,7 +1063,7 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
 
     const channel = screen.getByTestId("stub-channel");
     expect(within(channel).getByTestId("team-setup-arrival").textContent).toBe(
-      "Acme's machine joined · bots run on it",
+      "Acme's computer joined · bots run on it",
     );
     const option = within(channel).getByTestId("team-host-option-machine");
     expect(within(option).queryAllByRole("button")).toEqual([]);
@@ -1441,10 +1226,10 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("conversation-app");
   });
 
-  it("names the channel's members from the bot's environment when the tab's host lists them", () => {
+  it("names the channel's members from the bot's environment through authn", () => {
     render(surface());
 
-    expect(mocks.supportQueries).toContainEqual({
+    expect(mocks.supportQueries).not.toContainEqual({
       hostId: TAB_HOST,
       method: "environment.members",
     });
@@ -1457,11 +1242,14 @@ describe("<BotTabSurface /> paused", () => {
     ).toBe("Tess Teammate");
   });
 
-  it("leaves the members unresolved on a host without environment.members", () => {
-    mocks.state.membersSupport = false;
+  it("leaves the members unresolved while authn membership is unavailable", () => {
+    mocks.state.membersReadAvailable = false;
     render(surface());
 
-    expect(mocks.membersQueries.every((q) => !q.enabled)).toBe(true);
+    expect(mocks.membersQueries).toContainEqual({
+      environmentId: "env-team",
+      enabled: true,
+    });
     expect(
       screen.getByTestId("stub-channel").getAttribute("data-teammate-name"),
     ).toBe("unresolved");
@@ -1500,7 +1288,12 @@ describe("<BotTabSurface /> paused", () => {
     async (_name, ownerKind, expected) => {
       const user = userEvent.setup();
       mocks.state.environments = [
-        { environmentId: "env-team", label: "Acme", ownerKind },
+        {
+          environmentId: "env-team",
+          label: "Acme",
+          ownerKind,
+          providerHandle: null,
+        },
       ];
       render(surface());
 
@@ -1554,7 +1347,12 @@ describe("<BotTabSurface /> paused", () => {
         },
       });
       mocks.state.environments = [
-        { environmentId: "env-team", label: "Acme", ownerKind },
+        {
+          environmentId: "env-team",
+          label: "Acme",
+          ownerKind,
+          providerHandle: null,
+        },
       ];
       render(surface());
 
@@ -1570,7 +1368,12 @@ describe("<BotTabSurface /> paused", () => {
   it("treats the environment as not personal until the environment list names it", async () => {
     const user = userEvent.setup();
     mocks.state.environments = [
-      { environmentId: "env-other", label: "Mine", ownerKind: "user" },
+      {
+        environmentId: "env-other",
+        label: "Mine",
+        ownerKind: "user",
+        providerHandle: null,
+      },
     ];
     render(surface());
 
@@ -1586,7 +1389,7 @@ describe("<BotTabSurface /> paused", () => {
       kind: "paused",
       reason: "reachability-unknown",
     });
-    render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
+    render(unstrictSurface());
     expect(mocks.open).toHaveBeenCalledTimes(1);
 
     mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
@@ -1602,7 +1405,7 @@ describe("<BotTabSurface /> bot.open fails", () => {
   it("shows the error with a Retry, and no tab, when there is no earlier answer", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = { kind: "error", message: "the host is busy" };
-    render(<BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />);
+    render(unstrictSurface());
 
     const alert = screen.getByTestId("bot-tab-error");
     expect(alert.textContent).toContain(
@@ -1836,5 +1639,129 @@ describe("<BotTabSurface /> focused notification presence", () => {
       epicId: "epic-behind",
       chatId: "chat-behind",
     });
+  });
+});
+describe("<BotTabSurface /> channel background", () => {
+  /** What a channel's tint leaves on a page: its variable, its marker and its class. */
+  const TINT =
+    '[data-channel-background], [style*="channel-tint"], [class*="channel-tint"]';
+
+  afterEach(() => {
+    document.documentElement.classList.remove("dark");
+  });
+
+  it.each([false, true])(
+    "keeps the page's own colour in the header and everywhere else though the host still delivers the bot a background (dark: %s)",
+    (dark) => {
+      document.documentElement.classList.toggle("dark", dark);
+      const deliveredLook: BotAppearance & { readonly background: number } = {
+        mark: null,
+        color: null,
+        background: 7,
+      };
+      mocks.state.listAppearance = new Map([[BOT_ID, deliveredLook]]);
+      render(surface());
+
+      const header = screen.getByTestId("bot-channel-header");
+      expect(header.hasAttribute("data-channel-background")).toBe(false);
+      expect(header.style.getPropertyValue("--channel-tint")).toBe("");
+      expect(header.className).not.toContain("channel-tint");
+      expect(document.body.querySelector(TINT)).toBeNull();
+    },
+  );
+});
+
+describe("<BotTabSurface /> header mascot while the bot replies", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function stubMotionAllowed(): void {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  }
+
+  function mascotPaths(root: HTMLElement): string[] {
+    const mascot = within(root)
+      .getByTestId("bot-avatar")
+      .querySelector('[data-slot="bot-mascot"]');
+    if (mascot === null) throw new Error("the avatar drew no mascot");
+    return [...mascot.querySelectorAll("path")].map(
+      (path) => path.getAttribute("d") ?? "",
+    );
+  }
+
+  it("keeps the title's eyes as they are at rest across beats while the typing line's mascot moves", () => {
+    vi.useFakeTimers();
+    stubMotionAllowed();
+    const headerAvatar = (): HTMLElement =>
+      screen.getByTestId("bot-tab-avatar");
+    const view = render(surface());
+    expect(screen.queryByTestId("stub-replying-strip")).toBeNull();
+    const idle = mascotPaths(headerAvatar());
+
+    mocks.state.snapshot = {
+      ...snapshot(),
+      activity: {
+        trunk: {
+          state: "replying",
+          startedAt: 1_000,
+          step: null,
+          requestId: "req-1",
+          reason: null,
+        },
+        threads: {},
+      },
+    };
+    view.rerender(surface());
+    const strip = screen.getByTestId("stub-replying-strip");
+    const stripBefore = mascotPaths(strip);
+
+    // Three beats of 500 ms put the working mascot's eyes on its blink.
+    act(() => {
+      vi.advanceTimersByTime(1_500);
+    });
+
+    expect(mascotPaths(strip)).not.toEqual(stripBefore);
+    expect(mascotPaths(headerAvatar())).toEqual(idle);
+  });
+
+  it("draws the title's eyes shut while the trunk is parked, and keeps them so across beats", () => {
+    vi.useFakeTimers();
+    stubMotionAllowed();
+    const headerAvatar = (): HTMLElement =>
+      screen.getByTestId("bot-tab-avatar");
+    const view = render(surface());
+    const idle = mascotPaths(headerAvatar());
+
+    mocks.state.snapshot = {
+      ...snapshot(),
+      activity: {
+        trunk: {
+          state: "parked",
+          startedAt: null,
+          step: null,
+          requestId: null,
+          reason: null,
+        },
+        threads: {},
+      },
+    };
+    view.rerender(surface());
+    const parked = mascotPaths(headerAvatar());
+
+    act(() => {
+      vi.advanceTimersByTime(1_500);
+    });
+
+    expect(parked).not.toEqual(idle);
+    expect(mascotPaths(headerAvatar())).toEqual(parked);
   });
 });

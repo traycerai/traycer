@@ -559,7 +559,7 @@ function describeStreamClose(reason: StreamCloseReason | null): string | null {
     return null;
   }
   if (reason === null || reason.kind === "caller") {
-    return "The workspace files stream closed unexpectedly.";
+    return "The folder files stream closed unexpectedly.";
   }
-  return `The workspace files stream failed (${reason.details.code}): ${reason.details.reason}`;
+  return `The folder files stream failed (${reason.details.code}): ${reason.details.reason}`;
 }

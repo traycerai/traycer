@@ -1810,6 +1810,18 @@ describe("<SessionImportWizard /> on a phone", () => {
     expect(screen.queryByTestId("session-import-filters-dot")).toBeNull();
 
     fireEvent.click(screen.getByTestId("session-import-filters"));
+    const filterSheet = screen.getByRole("dialog", { name: "Filters" });
+    expect(
+      filterSheet.classList.contains(
+        "data-[side=bottom]:max-h-[min(85svh,calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)))]",
+      ),
+    ).toBe(true);
+    expect(
+      filterSheet.classList.contains(
+        "data-[side=bottom]:max-h-[calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom))]",
+      ),
+    ).toBe(false);
+    expect(filterSheet.classList.contains("max-h-[85svh]")).toBe(false);
     fireEvent.click(screen.getByRole("radio", { name: "By project" }));
 
     expect(screen.getByTestId("session-import-filters-dot")).toBeTruthy();

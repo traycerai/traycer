@@ -40,7 +40,9 @@ import {
 } from "@/lib/layout/arrangement-persist";
 import {
   areRailsEqual,
+  BROWSERS_SIMULATORS_STACK_ID,
   DEFAULT_RAIL,
+  GIT_DIFF_PULL_REQUESTS_STACK_ID,
   isLastShownRailPanel,
   isRailStackDrawn,
   railDisplayEntries,
@@ -90,13 +92,15 @@ const FLAT_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
 );
 
 /**
- * The shipped rail without its Git Diff and Pull Requests stack: the one
- * Agents and Artifacts stack an install from before the second stack had. The
- * stacking and unstacking cases below build on that single pair, so each
- * expectation names the one stack it is about.
+ * The shipped rail without its Browsers and Simulators and Git Diff and Pull
+ * Requests stacks: the one Agents and Artifacts stack an install from before
+ * the later stacks had. The stacking and unstacking cases below build on that
+ * single pair, so each expectation names the one stack it is about.
  */
 const ONE_STACK_RAIL: ReadonlyArray<RailEntry> = DEFAULT_RAIL.filter(
-  (entry) => entry.id !== "stack:railGitDiff+railPullRequests",
+  (entry) =>
+    entry.id !== BROWSERS_SIMULATORS_STACK_ID &&
+    entry.id !== GIT_DIFF_PULL_REQUESTS_STACK_ID,
 );
 
 /** The rail as the ids it holds, panels and dividers alike, in order. */
@@ -114,13 +118,14 @@ function withRail(rail: ReadonlyArray<RailEntry>): LayoutArrangement {
 }
 
 describe("the shipped rail (L-155, L-166)", () => {
-  it("is the ten panels in order, with two stacks and no dividers", () => {
+  it("is the ten panels in order, with three stacks and no dividers", () => {
     expect(idsOf(DEFAULT_RAIL)).toEqual([
       "railAgents",
       "stack:railAgents+railArtifacts",
       "railArtifacts",
       "railTerminals",
       "railBrowsers",
+      "stack:railBrowsers+railSimulators",
       "railSimulators",
       "railGitDiff",
       "stack:railGitDiff+railPullRequests",
@@ -134,6 +139,7 @@ describe("the shipped rail (L-155, L-166)", () => {
     );
     expect(DEFAULT_RAIL.filter((entry) => entry.kind === "stack")).toEqual([
       { kind: "stack", id: "stack:railAgents+railArtifacts" },
+      { kind: "stack", id: "stack:railBrowsers+railSimulators" },
       { kind: "stack", id: "stack:railGitDiff+railPullRequests" },
     ]);
   });

@@ -1,6 +1,9 @@
 export const authMutationKeys = {
+  claimTeamComputer: (environmentId: string) =>
+    ["auth", "claimTeamComputer", environmentId] as const,
   revalidateContextAfterInvalidation: (userId: string | null) =>
     ["auth", "revalidateContextAfterInvalidation", userId] as const,
+  signOut: () => ["auth", "signOut"] as const,
   signIn: () => ["auth", "signIn"] as const,
   signInWithLinkCode: () => ["auth", "signInWithLinkCode"] as const,
   respondLinkLogin: () => ["auth", "respondLinkLogin"] as const,

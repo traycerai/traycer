@@ -443,8 +443,9 @@ const NO_GIVEN: ReadonlyArray<SweepStep> = [];
 
 /**
  * The context every row's rule reads, for the layout the plan starts from.
- * General > Voice input stays at its shipped value, on: the sweep never writes
- * it, and the Microphone's rule reads nothing else of it.
+ * The sweep explicitly enables Voice input and restores it afterward, so
+ * General > Voice input is on here though it ships off; the Microphone's rule
+ * reads nothing else of it.
  */
 function formContext(input: SweepPlanInput): LayoutFormContext {
   const { shipped, availability } = input;

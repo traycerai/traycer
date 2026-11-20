@@ -3,8 +3,12 @@ import type { Command } from "commander";
 import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-selection-guide-format";
 import { buildProgram } from "../../index";
 import { buildAgentForkCommand } from "../agent-fork";
+import { AGENT_FORK_SPEED_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import { parseForkProfileSelection } from "../../internal/profile-selection";
-import { callHostRpc } from "../../internal/host-rpc";
+import {
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
+} from "../../internal/host-rpc";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
@@ -31,11 +35,13 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpc: vi.fn(),
+    callAgentHostRpc: vi.fn(),
+    callAgentHostRpcWithDispatch: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpc);
+const rpcMock = vi.mocked(callAgentHostRpc);
+const dispatchMock = vi.mocked(callAgentHostRpcWithDispatch);
 const PREV_ENV = {
   epic: process.env.TRAYCER_EPIC_ID,
   agent: process.env.TRAYCER_AGENT_ID,
@@ -75,6 +81,8 @@ function createOpts(profile: string | null) {
     name: null,
     permissionMode: null,
     profile,
+    serviceTier: null,
+    fast: null,
     cwd: null,
     workspacePaths: [],
     workspaceEntries: [],
@@ -160,6 +168,45 @@ describe("--profile parsing", () => {
 });
 
 describe("agent fork", () => {
+  it("omits both speed fields when fork should inherit the source", async () => {
+    rpcMock.mockResolvedValue(forkResponse);
+    await buildAgentForkCommand(createOpts(null))(makeCtx());
+    const params = rpcMock.mock.calls[0]?.[1];
+    expect(params).not.toHaveProperty("serviceTier");
+    expect(params).not.toHaveProperty("fastMode");
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends fast-mode false with the fork speed floor", async () => {
+    dispatchMock.mockResolvedValue(forkResponse);
+    await buildAgentForkCommand({ ...createOpts(null), fast: false })(
+      makeCtx(),
+    );
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.fork",
+      expect.objectContaining({ fastMode: false }),
+      expect.objectContaining({
+        requiredHostMethodVersion: AGENT_FORK_SPEED_REQUIRED_HOST_VERSION,
+      }),
+    );
+  });
+
+  it("lets a named service tier take precedence over fast mode", async () => {
+    dispatchMock.mockResolvedValue(forkResponse);
+    await buildAgentForkCommand({
+      ...createOpts(null),
+      serviceTier: "priority",
+      fast: false,
+    })(makeCtx());
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "agent.fork",
+      expect.objectContaining({ serviceTier: "priority", fastMode: false }),
+      expect.objectContaining({
+        requiredHostMethodVersion: AGENT_FORK_SPEED_REQUIRED_HOST_VERSION,
+      }),
+    );
+  });
+
   it("sends inherit when --profile is omitted", async () => {
     rpcMock.mockResolvedValue(forkResponse);
 
@@ -371,6 +418,9 @@ describe("command registration", () => {
         "--name",
         "--permission-mode",
         "--profile",
+        "--service-tier",
+        "--fast",
+        "--no-fast",
         "--cwd",
         "--workspace-path",
         "--workspace-entry",

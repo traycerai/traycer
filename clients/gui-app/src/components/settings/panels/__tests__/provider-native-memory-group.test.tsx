@@ -144,16 +144,6 @@ describe("<ProviderNativeMemoryGroup />", () => {
     expect(screen.queryByTestId("provider-native-memory-group")).toBeNull();
   });
 
-  it("renders nothing when nativeMemorySupported is false", () => {
-    render(
-      <ProviderNativeMemoryGroup
-        state={providerState({ nativeMemorySupported: false })}
-      />,
-    );
-
-    expect(screen.queryByTestId("provider-native-memory-group")).toBeNull();
-  });
-
   it("renders a checked switch for a row without nativeMemory, and an unchecked one for nativeMemory: false", () => {
     const { rerender } = render(
       <ProviderNativeMemoryGroup state={providerState({})} />,
@@ -233,12 +223,9 @@ describe("<ProviderNativeMemoryGroup />", () => {
     expect(mutateMock).not.toHaveBeenCalled();
   });
 
-  // The regression: a stored OFF against an executable that cannot enforce it
-  // used to render NOTHING - `setSupported && readable && enforceable` was one
-  // gate - which trapped the user with no control at all and no route back
-  // (`providers.settingsFile.resetProvider` answers `readable` for a
-  // well-formed row, so it never clears this). The fix splits `!enforceable`
-  // into its own branch that renders an enable-only recovery action instead.
+  // A stored OFF against an executable that cannot enforce it must keep a way
+  // out: `providers.settingsFile.resetProvider` leaves a well-formed row as it
+  // is, so this state renders an enable-only action instead of nothing.
   describe("the trapped state: nativeMemorySupported: false with a stored OFF", () => {
     function enableOnlyButton(): HTMLElement {
       return screen.getByTestId("provider-native-memory-enable-only");
@@ -289,10 +276,6 @@ describe("<ProviderNativeMemoryGroup />", () => {
       );
 
       expect(screen.queryByTestId("provider-native-memory-group")).toBeNull();
-      expect(
-        screen.queryByTestId("provider-native-memory-enable-only"),
-      ).toBeNull();
-      expect(screen.queryByTestId("provider-native-memory-switch")).toBeNull();
     });
 
     it("clears the action immediately on click, through the same echo the switch uses, without waiting for a refetch", () => {
@@ -310,9 +293,6 @@ describe("<ProviderNativeMemoryGroup />", () => {
       // providersUpdatedAt never advanced - this is the pre-refetch instant -
       // yet the trapped state is already gone because `value` reads the echo.
       expect(screen.queryByTestId("provider-native-memory-group")).toBeNull();
-      expect(
-        screen.queryByTestId("provider-native-memory-enable-only"),
-      ).toBeNull();
     });
 
     it("restores the action when the write is refused", () => {

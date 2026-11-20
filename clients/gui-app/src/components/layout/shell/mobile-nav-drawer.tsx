@@ -1,5 +1,8 @@
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
-import { labelWithUnreadCount } from "@/lib/notifications/unread-count";
+import {
+  formatUnreadCount,
+  labelWithUnreadCount,
+} from "@/lib/notifications/unread-count";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
@@ -59,10 +62,16 @@ import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-st
 import { useOptimisticActivityHistoryItems } from "@/hooks/home/use-optimistic-activity-history-items";
 import { hasActiveHistoryFilters } from "@/lib/history-search";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
-import type { HistoryItem } from "@/components/home/data/home-page.data";
+import {
+  historyRowTimeMs,
+  type HistoryItem,
+} from "@/components/home/data/home-page.data";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
-import { useMergedNotificationUnreadCount } from "@/stores/notifications/merged-notifications";
+import {
+  notificationBellAccessibleLabel,
+  useNotificationBellState,
+} from "@/stores/notifications/merged-notifications";
 import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
 import { useEpicDeleteInFlightReader } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
@@ -333,14 +342,17 @@ export function MobileNavDrawer(): ReactNode {
 }
 
 /**
- * The strip's Notifications row in the drawer: it opens the notifications sheet,
- * as the header's bell does, and it is gated as the strip's row is.
+ * The strip's Notifications row in the drawer: it opens the notifications sheet
+ * and picks its mark as the phone header's bell does (the count of what
+ * needs attention, else a dot for anything unread, and none while the status
+ * is unavailable, which its name alone says), drawn neutral as the strip's
+ * row draws it, and it is gated as the strip's row is.
  */
 function MobileNavNotificationsRow(props: {
   readonly onOpen: () => void;
 }): ReactNode {
   const admitted = useAuthStore((state) => admitsLocalPlane(state.status));
-  const unreadCount = useMergedNotificationUnreadCount();
+  const bellState = useNotificationBellState();
   const openNotifications = useOpenMobileNotificationCenter();
   if (!admitted) return null;
   return (
@@ -349,7 +361,7 @@ function MobileNavNotificationsRow(props: {
       variant="ghost"
       className={cn(ROW_CLASS, "mb-1 shrink-0")}
       data-testid="mobile-nav-notifications"
-      aria-label={labelWithUnreadCount("Notifications", unreadCount)}
+      aria-label={notificationBellAccessibleLabel(bellState)}
       onClick={() => {
         props.onOpen();
         openNotifications();
@@ -357,10 +369,24 @@ function MobileNavNotificationsRow(props: {
     >
       <Bell className="size-4" />
       <span className="flex-1 text-left">Notifications</span>
-      {unreadCount > 0 ? (
-        <Badge variant="muted" size="sm" aria-hidden>
-          <span className="tabular-nums">{unreadCount}</span>
+      {bellState.kind === "attention" ? (
+        <Badge
+          variant="muted"
+          size="sm"
+          aria-hidden
+          data-testid="mobile-nav-notifications-attention-count"
+        >
+          <span className="tabular-nums">
+            {formatUnreadCount(bellState.count)}
+          </span>
         </Badge>
+      ) : null}
+      {bellState.kind === "quietDot" ? (
+        <span
+          aria-hidden
+          data-testid="mobile-nav-notifications-quiet-dot"
+          className="size-2 shrink-0 rounded-full bg-primary"
+        />
       ) : null}
     </Button>
   );
@@ -411,12 +437,7 @@ function MobileNavTracyButton(props: {
         props.onOpen();
       }}
     >
-      <TracyEntryIcon
-        className={undefined}
-        unreadCount={signals.unreadCount}
-        muted={signals.muted}
-        ground="drawer"
-      />
+      <TracyEntryIcon className={undefined} muted={signals.muted} />
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left",
@@ -498,6 +519,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     currentUserId,
     activityRefreshScope,
     hostId,
+    sort,
   } = useHistoryQuery({ search, nowMs: null });
   // Memoized so the id list below only changes when the page does, not on
   // every render's fresh empty array.
@@ -506,8 +528,9 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     items: pageItems,
     userId: currentUserId,
     hostId,
-    enabled: !hasActiveHistoryFilters(search) && search.sort === "recent",
-    refreshEnabled: search.sort === "recent",
+    // The sort the rows are in, as History's panel judges it.
+    enabled: !hasActiveHistoryFilters({ ...search, sort }) && sort === "recent",
+    refreshEnabled: sort === "recent",
     refreshScope: activityRefreshScope,
     refetch: refetchTasks,
   });
@@ -573,6 +596,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     openEpicFromList(navigate, item.epicId, pathname, {
       title: item.title,
       source: "direct_ui",
+      tracyOrigin: null,
     });
   };
 
@@ -683,12 +707,7 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
                 in a third of the width. Formatted here rather than by changing
                 `updatedLabel`, which the landing list and the tray also read. */}
             <span className="shrink-0 text-ui-xs text-muted-foreground">
-              {formatRelativeTimestamp(
-                search.sort === "oldest"
-                  ? item.updatedAtMs
-                  : (item.recentAtMs ?? item.updatedAtMs),
-                now,
-              )}
+              {formatRelativeTimestamp(historyRowTimeMs(item, sort), now)}
             </span>
             {/* A tap on this row opens the task, so the status dot's sentence
                 has no hover to live in. The two-word label is the visible

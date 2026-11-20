@@ -6,7 +6,7 @@ import {
   useState,
   type RefObject,
 } from "react";
-import type { LegendListRef } from "@legendapp/list/react";
+import type { LegendListRef, LegendListState } from "@legendapp/list/react";
 import { SANDBOX_SCROLL_GESTURE_EVENT } from "@/lib/sandbox/bridge-host";
 
 /** Matches the library's own strict-edge tolerance (`EDGE_POSITION_EPSILON`
@@ -449,8 +449,9 @@ type ArmedReaderDeparture =
        *  measured from here. A report that did not move past it is a tap. */
       readonly scrollTopAtStep: number;
       /** A row that started below the viewport's top edge at that step, or
-       *  the last row: the list moves it with any growth above it that it
-       *  compensates, so the finger's movement is the view's net of it. */
+       *  the last row, with its top where the list placed it
+       *  (`placedRowTop`): the list moves it with any growth above it that
+       *  it compensates, so the finger's movement is the view's net of it. */
       readonly rowAtStep: ListRowTop | null;
       /** The element at the viewport's top edge at that step: the list's
        *  compensation holds it still on screen, so only the finger moves it. */
@@ -1153,8 +1154,17 @@ function listRowShift(
     : null;
 }
 
+/** Where the list placed a row it positions at `position`. An adjust the
+ *  list holds in its layout - an animated scroll's, or a touch scroll's
+ *  until it ends - places every row that much short of its position and
+ *  leaves the offset unwritten, so a row's position alone moves with growth
+ *  above it while the view does not, and reads as the finger moving away. */
+function placedRowTop(state: LegendListState, position: number): number {
+  return position - state.scrollAdjustPending;
+}
+
 /** The first row whose top is below the viewport's top edge; the last row
- *  when one row spans the whole view. */
+ *  when one row spans the whole view. Its top is where the list placed it. */
 function touchReferenceRow(
   list: LegendListRef | null,
   geometry: ChatTimelineScrollGeometry,
@@ -1168,8 +1178,10 @@ function touchReferenceRow(
     index < state.data.length && index <= state.end + 1;
     index += 1
   ) {
-    const top = state.positionAtIndex(index);
-    if (top !== undefined && top > geometry.scrollTop) {
+    const position = state.positionAtIndex(index);
+    if (position === undefined) continue;
+    const top = placedRowTop(state, position);
+    if (top > geometry.scrollTop) {
       return {
         key: state.keyAtIndex(index),
         top,
@@ -1177,7 +1189,8 @@ function touchReferenceRow(
       };
     }
   }
-  return lastListRowTop(list);
+  const last = lastListRowTop(list);
+  return last === null ? null : { ...last, top: placedRowTop(state, last.top) };
 }
 
 /** An element at or just below the scroll node's top edge, and where it sat
@@ -1284,9 +1297,11 @@ function touchStep(
 ): "toward-end" | "still" | "away" {
   const row = arm.rowAtStep;
   if (list === null || row === null) return "away";
-  const top = list.getState().positionByKey(row.key);
+  const state = list.getState();
+  const position = state.positionByKey(row.key);
   const rise = edgeMarkRise(arm.edgeAtStep);
-  if (top === undefined || rise === null) return "away";
+  if (position === undefined || rise === null) return "away";
+  const top = placedRowTop(state, position);
   const net = geometry.scrollTop - arm.scrollTopAtStep - (top - row.top);
   const epsilon = CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
   if (net > epsilon && rise > epsilon) return "toward-end";

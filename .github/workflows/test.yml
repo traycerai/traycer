@@ -12,6 +12,23 @@ on:
   # A manual trigger for a sparing branch run, when a check is actually
   # needed before the merge (AGENTS.md, "When CI runs").
   workflow_dispatch:
+    inputs:
+      bootstrap_matrix:
+        description: Prove cold mirror and upstream bootstrap on all five shipped platforms
+        type: boolean
+        default: false
+      mirror_base_url:
+        description: Tools mirror base URL override for staging acceptance
+        type: string
+        default: ""
+      cold:
+        description: Empty every tool and computation cache and assert acquisition steps executed
+        type: boolean
+        default: false
+      blackhole_github:
+        description: Block GitHub before tool setup (requires a populated mirror)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,7 +40,87 @@ concurrency:
   group: tests-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
+env:
+  CI_TOOLS_MIRROR: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+  NX_SKIP_NX_CACHE: ${{ inputs.cold && 'true' || 'false' }}
+  NX_DISABLE_NX_CACHE: ${{ inputs.cold && 'true' || 'false' }}
+  NX_SKIP_REMOTE_CACHE: ${{ inputs.cold && 'true' || 'false' }}
+  NX_DAEMON: "false"
+
 jobs:
+  bootstrap-proof:
+    name: cold bootstrap (${{ matrix.platform }}, ${{ matrix.origin }})
+    if: >-
+      (github.event_name != 'pull_request'
+        || (github.base_ref != 'main' && !startsWith(github.base_ref, 'integration/') && !startsWith(github.base_ref, 'land/'))
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      ) && github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64]
+        origin: [mirror, upstream]
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin-x64
+            runner: macos-15-intel
+          - platform: darwin-arm64
+            runner: macos-latest
+          - platform: win32-x64
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require an explicit mirror for mirror rows
+        shell: bash
+        env:
+          ORIGIN: ${{ matrix.origin }}
+          MIRROR_BASE_URL: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+        run: |
+          if [ "$ORIGIN" = mirror ]; then test -n "$MIRROR_BASE_URL"; fi
+      - name: Empty caches and blackhole GitHub before mirror acquisition
+        id: ci_cold
+        shell: bash
+        env:
+          COLD_BLACKHOLE: ${{ matrix.origin == 'mirror' }}
+          COLD_MIRROR_BASE_URL: ${{ matrix.origin == 'mirror' && (inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL) || '' }}
+        run: node scripts/ci-cold.cjs prepare true "$COLD_BLACKHOLE" "$COLD_MIRROR_BASE_URL"
+      - name: Run the gates' checked-in bootstrap
+        id: bootstrap
+        uses: ./.github/actions/bootstrap-ci-tools
+        with:
+          tools: node bun buf electron
+          mirror-base-url: ${{ matrix.origin == 'mirror' && (inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL) || '' }}
+          cold: "true"
+      - name: Assert the acquired runtimes execute and came from the requested origin
+        shell: bash
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_ORIGIN: ${{ matrix.origin }}
+          NODE_ORIGIN: ${{ steps.ci_cold.outputs.node-origin }}
+          BUN_ORIGIN: ${{ steps.bootstrap.outputs.bun-origin }}
+          BOOTSTRAP_EXECUTED: ${{ steps.bootstrap.outputs.executed }}
+        run: |
+          test "$BOOTSTRAP_EXECUTED" = true
+          test "$NODE_ORIGIN" = "$EXPECTED_ORIGIN"
+          test "$BUN_ORIGIN" = "$EXPECTED_ORIGIN"
+          test "$(node -p 'process.platform + "-" + process.arch')" = "$EXPECTED_PLATFORM"
+          test "$(node --version)" = v24.20.0
+          test "$(bun --version)" = 1.4.4
+          test "$(bunx --no-install node --version)" = v24.20.0
+          buf --version
+      - name: Restore GitHub access after the origin proof
+        if: always() && matrix.origin == 'mirror'
+        shell: bash
+        run: node scripts/ci-cold.cjs restore
+
   test:
     name: ${{ matrix.name }}
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
@@ -180,21 +277,45 @@ jobs:
             cache_key: "scripts"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Fetch the host-v1.1.5 tag the schema oracle regenerates from
+        if: matrix.project == '@traycer/protocol'
+        run: git fetch --depth=1 origin tag host-v1.1.5
+      - name: Prepare cold tools and optional GitHub blackhole
+        id: ci_cold
+        if: inputs.cold || inputs.blackhole_github
+        shell: bash
+        env:
+          COLD_MODE: ${{ inputs.cold }}
+          COLD_BLACKHOLE: ${{ inputs.blackhole_github }}
+          COLD_MIRROR_BASE_URL: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+        run: node scripts/ci-cold.cjs prepare "$COLD_MODE" "$COLD_BLACKHOLE" "$COLD_MIRROR_BASE_URL"
+
+      - uses: ./.github/actions/bootstrap-ci-tools
+        id: ci_tool_1
         with:
-          bun-version: "1.3.14"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+          mirror-base-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+          cold: ${{ inputs.cold }}
+          bun-version: "1.4.4"
+          tools: bun electron
+      - uses: ./.github/actions/bootstrap-ci-tools
+        id: ci_tool_2
         with:
-          package-manager-cache: false
-          node-version: "24.20.0"
+          tools: node
+          cold: ${{ inputs.cold }}
+          mirror-base-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
       - name: Cache bun global install cache
+        if: ${{ !inputs.cold }}
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - id: ci_acquisition_1
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd clients/desktop install-electron
+          echo "executed=true" >> "$GITHUB_OUTPUT"
       # The host-v1.1.5 oracle in `provider-native-schemas.test.ts` regenerates
       # the checked-in fixture straight from the tag and deep-equals the two.
       # `actions/checkout` fetches no tags, so without this it skips itself and
@@ -204,9 +325,6 @@ jobs:
       # A shallow single-tag fetch is enough — the tag's commit arrives with a
       # complete tree, so the blobs the oracle reads are all present (~2s, ~6MB;
       # a full `fetch-depth: 0` clone would buy nothing here).
-      - name: Fetch the host-v1.1.5 tag the schema oracle regenerates from
-        if: matrix.project == '@traycer/protocol'
-        run: git fetch --depth=1 origin tag host-v1.1.5
       # `--outputStyle=stream` sends the child's stdout/stderr straight to the
       # step log. Nx's default buffers it into an internal stream and replays
       # it AFTER the failure banner, capped — so a failing gui-app job printed
@@ -296,6 +414,11 @@ jobs:
       # a killed vitest parent leaves an empty file. A replay from the Nx cache
       # leaves none, so a missing file is not an upload failure. Kept for the
       # repository's retention, the same seven days as the job log.
+      - name: Restore GitHub access after acquisition proof
+        if: always() && inputs.blackhole_github
+        shell: bash
+        run: node scripts/ci-cold.cjs restore
+
       - name: Upload the JUnit report
         if: always() && matrix.project == 'traycer-clients-gui-app'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -368,6 +491,15 @@ jobs:
           df -h 2>/dev/null | head -10 || true
           echo "::endgroup::"
 
+      - name: Assert cold census tool steps executed
+        if: inputs.cold
+        shell: bash
+        run: |
+          test '${{ steps.ci_cold.outputs.node }}' = executed
+          test '${{ steps.ci_tool_1.outputs.executed == 'true' }}' = true
+          test '${{ steps.ci_tool_2.outputs.executed == 'true' }}' = true
+          test '${{ steps.ci_acquisition_1.outputs.executed == 'true' }}' = true
+
   # The one required check for the whole matrix above. The `main` ruleset used to
   # require four matrix names (`test (@traycer/protocol)`,
   # `test (traycer-clients-gui-app)`, `test (@traycer-clients/desktop)` and
@@ -378,7 +510,7 @@ jobs:
   # `always()` makes it report even when a leg failed or was cancelled.
   tests:
     name: tests
-    needs: [test]
+    needs: [test, bootstrap-proof]
     # A team PR into `main`, `integration/*` or `land/*` skips this job: the
     # merge to `main` runs it once. A fork PR, a bot PR and a PR into any
     # other branch run it in full.
@@ -395,7 +527,11 @@ jobs:
       - name: Every test leg passed
         env:
           RESULT: ${{ needs.test.result }}
-        run: test "$RESULT" = success
+          PROOF_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_matrix }}
+          PROOF_RESULT: ${{ needs.bootstrap-proof.result }}
+        run: |
+          test "$RESULT" = success
+          if [ "$PROOF_REQUESTED" = true ]; then test "$PROOF_RESULT" = success; fi
 
   # Windows job: the ONLY Windows execution of CLI code in PR CI. Until this
   # existed, `smoke:sea` ran solely inside the release workflows, so every
@@ -428,17 +564,38 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Prepare cold tools and optional GitHub blackhole
+        id: ci_cold
+        if: inputs.cold || inputs.blackhole_github
+        shell: bash
+        env:
+          COLD_MODE: ${{ inputs.cold }}
+          COLD_BLACKHOLE: ${{ inputs.blackhole_github }}
+          COLD_MIRROR_BASE_URL: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+        run: node scripts/ci-cold.cjs prepare "$COLD_MODE" "$COLD_BLACKHOLE" "$COLD_MIRROR_BASE_URL"
+
+      - uses: ./.github/actions/bootstrap-ci-tools
+        id: ci_tool_1
         with:
-          bun-version: "1.3.14"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+          mirror-base-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+          cold: ${{ inputs.cold }}
+          bun-version: "1.4.4"
+          tools: bun electron
+      - uses: ./.github/actions/bootstrap-ci-tools
+        id: ci_tool_2
         with:
-          package-manager-cache: false
-          node-version: "24.20.0"
+          tools: node
+          cold: ${{ inputs.cold }}
+          mirror-base-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
       # The standard runner starts immediately. A larger runner queued for
       # more than three minutes, while cache restore on this runner took 3m27
       # plus a 32s install versus 3m51 for the uncached install below.
-      - run: bun install --frozen-lockfile
+      - id: ci_acquisition_1
+        shell: bash
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd clients/desktop install-electron
+          echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Build the CLI SEA
         run: bun run --filter @traycer-clients/traycer-cli build:sea
       # Proves the artifact runs at all before the loop below attributes an
@@ -480,6 +637,20 @@ jobs:
       - name: Finalize helper launch, a real PowerShell handoff
         working-directory: clients/traycer-cli
         run: bunx vitest run src/upgrade/__tests__/finalize-helper-launch.win32.test.ts
+
+      - name: Assert cold census tool steps executed
+        if: inputs.cold
+        shell: bash
+        run: |
+          test '${{ steps.ci_cold.outputs.node }}' = executed
+          test '${{ steps.ci_tool_1.outputs.executed == 'true' }}' = true
+          test '${{ steps.ci_tool_2.outputs.executed == 'true' }}' = true
+          test '${{ steps.ci_acquisition_1.outputs.executed == 'true' }}' = true
+
+      - name: Restore GitHub access after acquisition proof
+        if: always() && inputs.blackhole_github
+        shell: bash
+        run: node scripts/ci-cold.cjs restore
 
   # Decides whether the macOS job below has anything to test. It is the
   # slowest job in this workflow by minutes (a real electron-builder pack), and
@@ -630,19 +801,40 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Prepare cold tools and optional GitHub blackhole
+        id: ci_cold
+        if: inputs.cold || inputs.blackhole_github
+        shell: bash
+        env:
+          COLD_MODE: ${{ inputs.cold }}
+          COLD_BLACKHOLE: ${{ inputs.blackhole_github }}
+          COLD_MIRROR_BASE_URL: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+        run: node scripts/ci-cold.cjs prepare "$COLD_MODE" "$COLD_BLACKHOLE" "$COLD_MIRROR_BASE_URL"
+
+      - uses: ./.github/actions/bootstrap-ci-tools
+        id: ci_tool_1
         with:
-          bun-version: "1.3.14"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+          mirror-base-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+          cold: ${{ inputs.cold }}
+          bun-version: "1.4.4"
+          tools: bun electron
+      - uses: ./.github/actions/bootstrap-ci-tools
+        id: ci_tool_2
         with:
-          package-manager-cache: false
-          node-version: "24.20.0"
-      - run: bun install --frozen-lockfile
+          tools: node
+          cold: ${{ inputs.cold }}
+          mirror-base-url: ${{ inputs.mirror_base_url || vars.CI_TOOLS_MIRROR_BASE_URL }}
+      - id: ci_acquisition_1
+        run: |
+          bun install --frozen-lockfile
+          bun run --cwd clients/desktop install-electron
+          echo "executed=true" >> "$GITHUB_OUTPUT"
       - name: Read the installed Electron version
         id: electron
         working-directory: clients/desktop
         run: echo "version=$(node -p "require('electron/package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Cache the Electron downloads
+        if: ${{ !inputs.cold }}
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/Library/Caches/electron
@@ -672,3 +864,16 @@ jobs:
       - name: Real electron-builder packaging test
         run: bun run test:packaging
         working-directory: clients/desktop
+      - name: Assert cold census tool steps executed
+        if: inputs.cold
+        shell: bash
+        run: |
+          test '${{ steps.ci_cold.outputs.node }}' = executed
+          test '${{ steps.ci_tool_1.outputs.executed == 'true' }}' = true
+          test '${{ steps.ci_tool_2.outputs.executed == 'true' }}' = true
+          test '${{ steps.ci_acquisition_1.outputs.executed == 'true' }}' = true
+
+      - name: Restore GitHub access after acquisition proof
+        if: always() && inputs.blackhole_github
+        shell: bash
+        run: node scripts/ci-cold.cjs restore

@@ -7,9 +7,9 @@ import type { SavedChatTabScrollState } from "@/stores/chats/chat-tab-state-cach
 const MAX_PENDING_HYDRATION_RESTORES = 100;
 
 /**
- * The ordinary caches are normalized to a measured surviving neighbor so a
- * deleted anchor cannot hold persistence behind a restore gate forever. Keep
- * the original snapshot separately for the narrower reconnect/backfill race:
+ * A late part can temporarily restore to its known owner and normalize the
+ * ordinary cache before the part arrives. Keep the original snapshot for that
+ * reconnect/backfill race:
  * a rapid remount may still see the missing row later in the same renderer
  * session. Reader/navigation intent and successful catch-up remove the
  * entry; the LRU-style cap prevents abandoned tabs from growing this

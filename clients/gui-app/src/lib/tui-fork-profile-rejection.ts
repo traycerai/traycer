@@ -1,5 +1,7 @@
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { isProfileLifecycleRejection } from "@traycer-clients/shared/host-transport/profile-lifecycle-rejection";
+import { REMOVED_PROFILE_PIN_TEXT } from "@/components/providers/profile-sync-copy";
+import { isRemovedProfileRefusalCode } from "@/lib/chats/rejected-frame-reason";
 import type { TuiForkProfileAdmissionSubcode } from "@traycer/protocol/host/agent/tui/unary-schemas";
 
 /**
@@ -71,11 +73,33 @@ export function resolveTuiForkRejectionView(
   if (error instanceof TuiForkProfileRejectedError) {
     return buildRejectionView(error.subcode, labels, null);
   }
+  const removed = removedProfileRejectionView(error);
+  if (removed !== null) return removed;
   const lateGuard = parseLateGuardRejection(error);
   if (lateGuard !== null) {
     return buildRejectionView(lateGuard.subcode, labels, lateGuard.detail);
   }
   return null;
+}
+
+// The envelope carries only `{ code, message }`, so the sentence is found by its
+// text at the end: if the wording changes the note is dropped, never replaced.
+const FORK_REJECTION_WORKTREE_NOTE =
+  "If a worktree or workspace folder was already prepared for this launch attempt, it has not been removed - review it from workspace/worktree management if unused.";
+
+/** The computer's own sentence names the profile id and is never shown for this code. */
+function removedProfileRejectionView(
+  error: unknown,
+): TuiForkRejectionView | null {
+  if (!(error instanceof HostRpcError)) return null;
+  if (error.method !== "agent.tui.prepareLaunch") return null;
+  if (!isRemovedProfileRefusalCode(error.code)) return null;
+  return {
+    message: REMOVED_PROFILE_PIN_TEXT,
+    residueNote: error.message.endsWith(FORK_REJECTION_WORKTREE_NOTE)
+      ? FORK_REJECTION_WORKTREE_NOTE
+      : null,
+  };
 }
 
 function parseLateGuardRejection(error: unknown): {

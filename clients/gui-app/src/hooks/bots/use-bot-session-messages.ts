@@ -142,7 +142,7 @@ export function useBotSessionMessages(input: {
       resolveUserSenderLabel: (sender) =>
         botUserSenderLabel(sender, displayContext, resolveMember),
       resolveUserSenderAvatarUrl: (sender) =>
-        botUserSenderAvatarUrl(sender, resolveMember),
+        botUserSenderAvatarUrl(sender, displayContext.profile, resolveMember),
       resolveUserSenderId: botUserSenderId,
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),

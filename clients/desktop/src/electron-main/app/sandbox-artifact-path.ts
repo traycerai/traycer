@@ -1,9 +1,12 @@
-/** Resolve directory documents before either navigation or file requests are admitted. */
-export function normalizeSandboxArtifactPath(url: string): string | null {
+/**
+ * Resolve directory documents before either navigation or file requests are
+ * admitted. Takes the path as the URL wrote it: `URL.pathname` has already
+ * removed dot segments, and those must be refused, not resolved.
+ */
+export function normalizeSandboxArtifactRawPath(
+  rawPath: string,
+): string | null {
   try {
-    // URL.pathname has already removed dot segments, so guard the supplied path.
-    const rawPath = /^[^:]+:\/\/[^/?#]+([^?#]*)/.exec(url)?.[1];
-    if (rawPath === undefined) return null;
     let path = decodeURIComponent(rawPath).replace(/^\//, "");
     if (path === "" || path.endsWith("/")) path += "index.html";
     if (

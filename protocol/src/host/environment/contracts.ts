@@ -96,6 +96,26 @@ export type EnvironmentEffectiveRole = z.infer<
   typeof environmentEffectiveRoleSchema
 >;
 
+/** An environment role somebody HOLDS. */
+export type GrantedEnvironmentRole = "owner" | "admin" | "editor" | "viewer";
+
+export function grantedEnvironmentRole(
+  role: string,
+): GrantedEnvironmentRole | null {
+  switch (role) {
+    case "owner":
+      return "owner";
+    case "admin":
+      return "admin";
+    case "editor":
+      return "editor";
+    case "viewer":
+      return "viewer";
+    default:
+      return null;
+  }
+}
+
 /**
  * `environment.list@1.1`: each environment with the caller's `effectiveRole`,
  * whether it is the `personal` one or a `team`'s, how many hosts run it, and
@@ -200,6 +220,37 @@ export const environmentHostReadV10 = defineRpcContract({
 });
 
 /**
+ * The sharing arrangement reported by this host. Null means the host cannot
+ * report the generation, including an answer upgraded from `@1.0`.
+ * The frozen binding schema also serves methods that have not gained it.
+ */
+export const environmentHostReadResponseSchemaV11 = lazySchema(() =>
+  environmentHostBindingSchema.extend({
+    sharingGeneration: z.number().int().nonnegative().nullable(),
+  }),
+);
+export type EnvironmentHostReadResponseV11 = z.infer<
+  typeof environmentHostReadResponseSchemaV11
+>;
+
+export const environmentHostReadV11 = defineRpcContract({
+  method: "environment.host.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentHostReadRequestSchema,
+  responseSchema: environmentHostReadResponseSchemaV11,
+});
+
+export const environmentHostReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentHostReadV10,
+  typeof environmentHostReadV11
+>({
+  from: environmentHostReadV10.schemaVersion,
+  to: environmentHostReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, sharingGeneration: null }),
+});
+
+/**
  * The environment the named host is bound to, as the signed-in user sees it:
  * the same answer `environment.host.read` gives on that host, read from
  * authn's host directory instead of asking the host. Served by the server
@@ -249,6 +300,24 @@ export const environmentHostBindV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentHostBindRequestSchema,
   responseSchema: environmentHostBindingSchema,
+});
+
+/** Advertises team-target transfer; new hosts serve both minors through one handler. */
+export const environmentHostBindV11 = defineRpcContract({
+  method: "environment.host.bind",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: environmentHostBindRequestSchema,
+  responseSchema: environmentHostBindingSchema,
+});
+
+export const environmentHostBindUpgradeV10ToV11 = defineUpgradePath<
+  typeof environmentHostBindV10,
+  typeof environmentHostBindV11
+>({
+  from: environmentHostBindV10.schemaVersion,
+  to: environmentHostBindV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const environmentHostListRequestSchema = lazySchema(() =>
@@ -483,11 +552,29 @@ export const environmentMembersV10 = defineRpcContract({
   responseSchema: environmentMembersResponseSchema,
 });
 
-/** A team member's role. */
+/** A team member's role as it DECODES. */
 export const environmentMemberRoleSchema = lazySchema(() =>
   z.enum(["admin", "editor", "viewer"]),
 );
 export type EnvironmentMemberRole = z.infer<typeof environmentMemberRoleSchema>;
+
+/** A team-member role somebody HOLDS. */
+export type GrantedTeamMemberRole = "admin" | "editor" | "viewer";
+
+export function grantedTeamMemberRole(
+  role: string,
+): GrantedTeamMemberRole | null {
+  switch (role) {
+    case "admin":
+      return "admin";
+    case "editor":
+      return "editor";
+    case "viewer":
+      return "viewer";
+    default:
+      return null;
+  }
+}
 
 /**
  * `environment.members@1.1`'s member: `@1.0`'s plus their `effectiveRole`,
@@ -751,6 +838,42 @@ export const environmentMembersRemovePreviewV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: environmentMembersRemovePreviewRequestSchema,
   responseSchema: environmentMembersRemovePreviewResponseSchema,
+});
+
+/**
+ * For `computer`, the work under its own owner, read before a claim or a give
+ * stops it. A count the computer cannot read is null, never zero; `terminals` is
+ * always null for a `plan`.
+ */
+export const environmentPreviewLocalFactsRequestSchema = lazySchema(() =>
+  z.object({
+    environmentId: z.string().min(1),
+    subject: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("plan"), profileId: z.string().min(1) }),
+      z.object({ kind: z.literal("member"), userId: z.string().min(1) }),
+      z.object({ kind: z.literal("computer") }),
+    ]),
+  }),
+);
+export type EnvironmentPreviewLocalFactsRequest = z.infer<
+  typeof environmentPreviewLocalFactsRequestSchema
+>;
+
+export const environmentPreviewLocalFactsResponseSchema = lazySchema(() =>
+  z.object({
+    activeTurns: z.number().int().nonnegative().nullable(),
+    terminals: z.number().int().nonnegative().nullable(),
+  }),
+);
+export type EnvironmentPreviewLocalFactsResponse = z.infer<
+  typeof environmentPreviewLocalFactsResponseSchema
+>;
+
+export const environmentPreviewLocalFactsV10 = defineRpcContract({
+  method: "environment.previewLocalFacts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: environmentPreviewLocalFactsRequestSchema,
+  responseSchema: environmentPreviewLocalFactsResponseSchema,
 });
 
 /**

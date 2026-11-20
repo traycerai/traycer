@@ -4,6 +4,7 @@ import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatQueuedManagedCommandItem,
   ChatQueuedPromptItem,
+  ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   consumeSettledRestoreCompletion,
@@ -641,6 +642,7 @@ describe("chat-queue-reconciler", () => {
         browserAnnotations: [],
         reason: "Prior failure",
         displacedReason: "Prior failure",
+        reasonIsRemovedProfile: false,
         stated: false,
       };
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
@@ -1370,6 +1372,7 @@ describe("chat-queue-reconciler", () => {
         reason: "The message was not recorded before the turn stopped.",
         displacedReason:
           "The message was not recorded before the turn stopped.",
+        reasonIsRemovedProfile: false,
         stated: false,
       });
     });
@@ -1478,6 +1481,7 @@ describe("chat-queue-reconciler", () => {
         reason: "The message was not recorded before the turn stopped.",
         displacedReason:
           "The message was not recorded before the turn stopped.",
+        reasonIsRemovedProfile: false,
         stated: false,
       });
     });
@@ -1573,6 +1577,7 @@ describe("chat-queue-reconciler", () => {
         reason: "The message was not recorded before the turn stopped.",
         displacedReason:
           "The message was not recorded before the turn stopped.",
+        reasonIsRemovedProfile: false,
         stated: false,
       });
     });
@@ -1594,6 +1599,7 @@ describe("chat-queue-reconciler", () => {
         browserAnnotations: [],
         reason: "Message was not accepted.",
         displacedReason: "Message was not accepted.",
+        reasonIsRemovedProfile: false,
         stated: false,
       };
       const result = reconcileTurnSettled(
@@ -1638,6 +1644,7 @@ describe("chat-queue-reconciler", () => {
             browserAnnotations: [],
             reason: "Message was not accepted.",
             displacedReason: "Message was not accepted.",
+            reasonIsRemovedProfile: false,
             stated: false,
           },
         }),
@@ -1674,13 +1681,14 @@ describe("chat-queue-reconciler", () => {
 
     function noticeFor(
       content: JsonContent,
-      currentSettings: typeof SETTINGS,
+      currentSettings: ChatRunSettings,
     ): string {
       return unrecoverableSendNotice({
         clientActionId: "action-1",
         content,
         browserAnnotations: [],
         circumstance: "A message was not recorded",
+        reasonIsRemovedProfile: false,
         account: {
           worktree: NO_WORKTREE_SWEEP,
           sentSettings: SETTINGS,
@@ -1768,6 +1776,7 @@ describe("chat-queue-reconciler", () => {
         content: CONTENT,
         browserAnnotations: [],
         circumstance: "A message was not recorded",
+        reasonIsRemovedProfile: false,
         account: {
           worktree: NO_WORKTREE_SWEEP,
           sentSettings: SETTINGS,
@@ -1790,6 +1799,7 @@ describe("chat-queue-reconciler", () => {
         content: CONTENT,
         browserAnnotations: [],
         circumstance: "A message was not recorded",
+        reasonIsRemovedProfile: false,
         account: {
           worktree: NO_WORKTREE_SWEEP,
           sentSettings: SETTINGS,
@@ -1828,6 +1838,24 @@ describe("chat-queue-reconciler", () => {
 
     it("says no more after a draft that needs no clauses", () => {
       expect(noticeFor(CONTENT, SETTINGS)).toBe(`${PREAMBLE}${MARKER}Hello`);
+    });
+
+    it("does not describe a profile binding change or expose its account key", () => {
+      const accountKeyMarker = "synthetic-key-hidden-from-notice";
+      const currentSettings: ChatRunSettings = {
+        ...SETTINGS,
+        profileBinding: {
+          kind: "key",
+          key: {
+            providerId: "codex",
+            accountId: accountKeyMarker,
+            organizationId: null,
+          },
+        },
+      };
+      const message = noticeFor(CONTENT, currentSettings);
+
+      expect(message).toBe(`${PREAMBLE}${MARKER}Hello`);
     });
 
     it("omits the marker entirely when there is no draft to quote", () => {

@@ -40,6 +40,7 @@ test.describe.configure({ mode: "default" });
 // test needs are set live (`setWindow`, the area's tab, `probe.reset()`), so a
 // test never inherits what the last one left. Any uncaught error or unhandled
 // rejection raised during a test fails it (the fixture enforces that).
+// Below md the Providers page's rail is a Provider select of every provider.
 
 const PANE = "[data-fixture-settings-pane]";
 const ACTIVE_PANEL = `${PANE} [role="tabpanel"]:not([hidden])`;
@@ -394,15 +395,13 @@ test.describe("below md, the area select", () => {
 const PROVIDERS_PAGE_QUERY =
   "settings=1&pane=full&panel=providers&account=1&hosts=1&readings=both";
 
-/** The Providers page's phone configured-provider rail. */
-function providerRail(page: Page): Locator {
-  return page
-    .locator(PANE)
-    .getByRole("navigation", { name: "Configured providers", exact: true });
+/** The Providers page's phone select. The desktop rail stays mounted, hidden. */
+function providerSelect(page: Page): Locator {
+  return page.locator(PANE).getByRole("combobox", { name: "Provider" });
 }
 
-test.describe("below md, the Providers page's configured-provider rail", () => {
-  test("selects a configured provider and shows its pane", async ({
+test.describe("below md, the Providers page's rail", () => {
+  test("selects a provider and shows its pane", async ({
     browser,
     baseURL,
   }) => {
@@ -421,29 +420,23 @@ test.describe("below md, the Providers page's configured-provider rail", () => {
         `${fixture("layout-editor-canvas")}?${PROVIDERS_PAGE_QUERY}`,
       );
       await page.waitForFunction("window.__layoutCanvasProbe?.ready === true");
-      const rail = providerRail(page);
+      const rail = page.locator(`${PANE} nav[aria-label="Providers"]`);
+      await expect(rail).toHaveCount(1);
+      await expect(rail).toBeHidden();
+      const select = providerSelect(page);
+      await expect(select, "the Provider select is not drawn").toBeVisible();
+      await expect(select).toContainText("Codex");
+      await select.click();
+      await expect(page.getByRole("listbox")).toBeVisible();
+      await page
+        .getByRole("option", { name: "Claude Code", exact: true })
+        .click();
+      await expect(page.getByRole("listbox")).toHaveCount(0);
+      await expect(select).toContainText("Claude Code");
       await expect(
-        rail,
-        "the configured-provider rail is not drawn",
-      ).toBeVisible();
-      await expect(
-        rail.getByRole("button", { name: "Codex", exact: true }),
-      ).toHaveAttribute("aria-current", "true");
-      const next = rail.getByRole("button", {
-        name: "Claude Code",
-        exact: true,
-      });
-      await expect(
-        next,
-        "the configured Claude Code row is missing",
-      ).toBeVisible();
-      await next.click();
-      await expect(next).toHaveAttribute("aria-current", "true");
-      await expect(
-        page
-          .locator("[data-settings-panel-body] div.font-medium.text-foreground")
-          .filter({ hasText: /^Claude Code$/ })
-          .last(),
+        page.locator(PANE).getByText("Anthropic's Claude Code CLI.", {
+          exact: true,
+        }),
         "selecting Claude Code does not show its detail pane",
       ).toBeVisible();
       expect(

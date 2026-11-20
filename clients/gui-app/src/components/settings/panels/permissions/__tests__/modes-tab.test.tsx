@@ -90,7 +90,7 @@ describe("ModesTab", () => {
 
     const expected = {
       supervised: ["Reads and searches"],
-      auto_accept_edits: ["Reads and searches", "File edits in the workspace"],
+      auto_accept_edits: ["Reads and searches", "File edits in the folder"],
       auto: ["Reads, searches, edits", "Commands the judge approves"],
       full_access: ["Everything, unreviewed"],
     };

@@ -4,14 +4,13 @@ import {
   poolHostDirectoryEntry,
   POOL_HOST_ID,
   type HostDirectoryEntry,
+  type LocalHostDirectoryEntry,
   type PoolHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
+import { hostDirectoryEntryEquals } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import {
   fetchRemoteHosts,
-  hostUnavailability,
-  isRelayFuseRecoveryCandidate,
-  isRemoteHostDirectoryEntry,
   type RemoteHostFetchOutcome,
   type RemoteHostFetcher,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
@@ -21,7 +20,6 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import { lastLocalHostIdKey } from "@/lib/persist";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
@@ -160,7 +158,7 @@ export class HostDirectoryService implements IHostDirectoryService {
   private readonly authContextId: () => string | null;
   private readonly credentialGeneration: () => number;
   private readonly localHostIdSeeder: () => Promise<string | null>;
-  private localEntry: HostDirectoryEntry | null = null;
+  private localEntry: LocalHostDirectoryEntry | null = null;
   /**
    * The hostId this MACHINE's local host last published.
    *
@@ -252,6 +250,25 @@ export class HostDirectoryService implements IHostDirectoryService {
    * identity lifecycle because `getCardinality()` reads it.
    */
   private concludedUnderIdentity: string | null = null;
+  /**
+   * Whether the conclusion above was a FAILURE: the registry read failed, or
+   * the fleet the listing should have reached the selection authority with
+   * could not be read. Meaningful only while {@link hasConcludedDiscovery}
+   * holds; read through {@link hasFailedDiscovery}. Cleared once a fleet
+   * refresh publishes for the same identity.
+   */
+  private concludedAsFailure = false;
+  /**
+   * Set when a fleet refresh came back `unavailable`, naming the identity it
+   * was requested under; null when no fleet is known to be stale. While it
+   * names the current identity, every listing commit re-requests the fleet
+   * even when membership did not move - at most one request per commit, with
+   * no timer of its own: the 60 s poll and Retry are what bound it. Cleared on
+   * `published`; `superseded` neither sets nor clears it. Read through the
+   * identity, like the conclusion, so another identity never sees it: a
+   * return to this one concludes afresh with a fleet refresh of its own.
+   */
+  private staleFleet: { readonly identity: string | null } | null = null;
   private readonly listeners = new Set<HostDirectoryListener>();
   /**
    * Refresh-liveness subscribers, kept OFF the main `listeners` fan-out on
@@ -296,6 +313,15 @@ export class HostDirectoryService implements IHostDirectoryService {
    * order worth fencing on).
    */
   private lastCommitCredentialGeneration: number | null = null;
+  /**
+   * Advances when a fleet refresh is REQUESTED, and when a commit withdraws
+   * the listing (`signed-out`). An outcome applies only while this still
+   * names its own request; see {@link requestFleet}. It deliberately does not
+   * advance on a commit that requests nothing - an unchanged listing landing
+   * while a read is in flight - because that read is still the newest word on
+   * the fleet, and dropping it would leave nothing to report its outcome.
+   */
+  private fleetRequestSequence = 0;
   /**
    * The identity the committed `remoteEntries` belong to - the OWNERSHIP half
    * of the retention rule. The `failed` branch keeps the last-known list on
@@ -405,6 +431,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.hasObservedRemoteListing = false;
     this.hasConcludedRemoteAttempt = false;
     this.concludedUnderIdentity = null;
+    this.concludedAsFailure = false;
     // BEFORE the first refresh: the very first launch after the upgrade that
     // introduced the persisted key has nothing stored, and that launch is
     // exactly the reinstall this guard exists for - the host is down, so no
@@ -637,8 +664,14 @@ export class HostDirectoryService implements IHostDirectoryService {
     return null;
   }
 
-  getLocalEntry(): HostDirectoryEntry | null {
-    return this.localEntry;
+  getLocalEntry(): LocalHostDirectoryEntry | null {
+    const local = this.localEntry;
+    if (local === null) return null;
+    // The process snapshot proves locality; only the registry names its owner.
+    const twin = this.remoteEntries.find(
+      (entry) => entry.hostId === local.hostId,
+    );
+    return { ...local, owner: twin?.owner ?? null };
   }
 
   /**
@@ -663,8 +696,9 @@ export class HostDirectoryService implements IHostDirectoryService {
    * merged directory, answered in one place - for the surfaces that ask it.
    */
   getDefaultEntry(): HostDirectoryEntry | null {
-    if (this.localEntry !== null) {
-      return this.localEntry;
+    const local = this.getLocalEntry();
+    if (local !== null) {
+      return local;
     }
     const entries = this.snapshot();
     if (entries.length === 1) {
@@ -767,6 +801,17 @@ export class HostDirectoryService implements IHostDirectoryService {
       this.hasConcludedRemoteAttempt &&
       this.concludedUnderIdentity === this.authContextId()
     );
+  }
+
+  /**
+   * Whether discovery concluded on a FAILURE for the current identity: the
+   * registry read failed, or the fleet refresh a listing triggered came back
+   * `unavailable`. A surface that would otherwise read an empty selection as
+   * "no host" reads this first: the hosts were not ruled out, they could not
+   * be read.
+   */
+  hasFailedDiscovery(): boolean {
+    return this.hasConcludedDiscovery() && this.concludedAsFailure;
   }
 
   onChange(listener: HostDirectoryListener): Disposable {
@@ -985,9 +1030,6 @@ export class HostDirectoryService implements IHostDirectoryService {
       );
       return this.snapshot();
     }
-    if (outcome.kind === "failed") {
-      return this.retainOrDropAfterFailedRefresh(era);
-    }
     // The ORDERING fence, completing the era fences above. A constructive
     // read issued under a superseded credential is still ALLOWED to commit -
     // it describes the right account's hosts, and discarding it outright
@@ -1007,8 +1049,13 @@ export class HostDirectoryService implements IHostDirectoryService {
       );
       return this.snapshot();
     }
-    this.lastCommitCredentialGeneration = era.credentialGeneration;
-    this.lastCommitIdentity = era.identity;
+    // After the ordering fence, so a FAILED read from an older credential
+    // generation that lands after a newer commit is discarded like any other
+    // stale result, rather than recording a failure over the newer success.
+    if (outcome.kind === "failed") {
+      return this.retainOrDropAfterFailedRefresh(era);
+    }
+    this.recordCommit(era, outcome.kind === "signed-out");
     // Captured BEFORE the overwrite: this is the only place that holds both
     // sides of a membership transition.
     const previousRemoteIds = new Set(
@@ -1026,25 +1073,27 @@ export class HostDirectoryService implements IHostDirectoryService {
     // re-arms the answer without any outcome committing, so the raw flag can
     // sit at `true` across a transition this commit is the conclusion of.
     const concludedBefore = this.hasConcludedDiscovery();
+    const failedBefore = this.hasFailedDiscovery();
     this.hasObservedRemoteListing = outcome.kind === "hosts";
+    const fleetStep = this.fleetStepFor(
+      outcome,
+      previousRemoteIds,
+      concludedBefore,
+      failedBefore,
+    );
     // Tracked with the listing flag and cleared by the same outcome: a
     // `signed-out` is the fetcher saying it had no bearer to ask WITH, so
     // nothing was asked and nothing concluded. Only the `failed` arm below
     // makes the two disagree.
-    this.hasConcludedRemoteAttempt = outcome.kind === "hosts";
+    this.hasConcludedRemoteAttempt =
+      outcome.kind === "hosts" && fleetStep !== "hold-conclusion";
     this.concludedUnderIdentity = this.hasConcludedRemoteAttempt
       ? era.identity
       : null;
+    // A known failure stands until a fleet refresh publishes: a listing alone
+    // does not put its hosts in front of the authority.
+    this.concludedAsFailure = this.hasConcludedRemoteAttempt && failedBefore;
     const observedChanged = observedBefore !== this.hasObservedRemoteListing;
-    // The conclusion flag crosses on its own schedule, and the snapshot compare
-    // cannot see it. Two empty listings either side of an account switch are
-    // byte-identical rows with an identical observed flag, while the SCOPED
-    // answer goes false -> true because the new identity's own attempt has now
-    // concluded - so the compared emit would swallow the one notification its
-    // subscribers exist to receive. Same rule and same reason as the failed
-    // arm's emit: a flag nobody is told about is a flag no subscriber can act
-    // on.
-    const concludedChanged = concludedBefore !== this.hasConcludedDiscovery();
     // A host registered late - from the CLI, or from another machine - reaches
     // this directory through its own poll, while the selection authority's
     // fleet (desktop main) stays stale. Activate on it then refuses
@@ -1063,17 +1112,20 @@ export class HostDirectoryService implements IHostDirectoryService {
     // noise - main's fleet can be exactly as stale at cold start as at any
     // other moment.
     //
-    // The `hosts` check IS load-bearing for removals: `signed-out` commits an
-    // empty set, which would otherwise read as every host removed (`failed`
-    // returns above this line).
-    if (outcome.kind === "hosts") {
-      const listedIds = new Set(outcome.entries.map((entry) => entry.hostId));
-      const added = outcome.entries.some(
-        (entry) => !previousRemoteIds.has(entry.hostId),
-      );
-      const removed = [...previousRemoteIds].some((id) => !listedIds.has(id));
-      if (added || removed) requestFleetRefresh(this.runnerHost);
+    if (fleetStep === "hold-conclusion") {
+      await this.requestFleet(era, true);
+    } else if (fleetStep === "request") {
+      void this.requestFleet(era, false);
     }
+    // The conclusion flag crosses on its own schedule, and the snapshot compare
+    // cannot see it. Two empty listings either side of an account switch are
+    // byte-identical rows with an identical observed flag, while the SCOPED
+    // answer goes false -> true because the new identity's own attempt has now
+    // concluded - so the compared emit would swallow the one notification its
+    // subscribers exist to receive. Same rule and same reason as the failed
+    // arm's emit: a flag nobody is told about is a flag no subscriber can act
+    // on.
+    const concludedChanged = concludedBefore !== this.hasConcludedDiscovery();
     await this.reseedLocalHostIdIfUnknown();
     if (observedChanged || concludedChanged) {
       // Crossing between "unknown" and "zero" changes `getCardinality()`'s
@@ -1095,6 +1147,105 @@ export class HostDirectoryService implements IHostDirectoryService {
       totalCount: this.snapshot().length,
     });
     return this.snapshot();
+  }
+
+  /**
+   * The bookkeeping every success-path commit makes before touching rows: the
+   * ordering watermark and the owning identity. A withdrawal also retires any
+   * fleet read in flight - its outcome describes a listing that no longer
+   * stands, including one withdrawn within the same era after the
+   * session-verified path dropped the in-flight slot.
+   */
+  private recordCommit(era: AuthEra, withdraws: boolean): void {
+    this.lastCommitCredentialGeneration = era.credentialGeneration;
+    this.lastCommitIdentity = era.identity;
+    if (withdraws) this.fleetRequestSequence += 1;
+  }
+
+  /**
+   * What this commit asks of the selection authority's fleet.
+   *
+   * On a shell with no local host the window narrator reads the discovery
+   * conclusion against that fleet, and reads it on any render, not only on an
+   * emit. So a listing that would conclude discovery there concludes it only
+   * once a fleet refresh it triggered has settled; until then the narrator
+   * would read "concluded" over an empty fleet as "No host is available".
+   * That holds whether or not the listing moves membership: a newer era
+   * listing the same hosts is no evidence the authority has the fleet, and an
+   * older era's held refresh does not conclude for it (see
+   * {@link concludeAfterFleetRefresh}).
+   *
+   * Otherwise a listing requests a refresh when it moves membership, when the
+   * last fleet refresh for this identity was `unavailable`, or when discovery
+   * stands on a known failure - the last two are what let the 60 s poll and
+   * Retry recover a fleet that could not be read, one request per commit.
+   * The `hosts` check IS load-bearing for removals: `signed-out` commits an
+   * empty set, which would otherwise read as every host removed (`failed`
+   * returns before this).
+   */
+  private fleetStepFor(
+    outcome: RemoteHostFetchOutcome,
+    previousRemoteIds: ReadonlySet<string>,
+    concludedBefore: boolean,
+    failedBefore: boolean,
+  ): "none" | "request" | "hold-conclusion" {
+    if (outcome.kind !== "hosts") return "none";
+    if (!concludedBefore && !this.hasLocalHost) return "hold-conclusion";
+    const fleetStale =
+      this.staleFleet !== null &&
+      this.staleFleet.identity === this.authContextId();
+    return failedBefore ||
+      fleetStale ||
+      listingMovesMembership(previousRemoteIds, outcome.entries)
+      ? "request"
+      : "none";
+  }
+
+  /**
+   * Every fleet refresh this directory requests, held or not, and what its
+   * outcome does - one rule in one place, so no path can ignore an
+   * `unavailable` and leave the fleet stale with nothing re-asking.
+   *
+   * The outcome applies only while this is still the newest fleet request,
+   * nothing has withdrawn the listing, and the identity is unchanged (see
+   * {@link fleetRequestSequence}). A newer request - a newer era's own hold,
+   * or a later membership change - owns the answer instead; a later commit
+   * that requests nothing does not, so its read's `unavailable` still marks
+   * the fleet stale. `superseded` applies nothing: nothing current came of
+   * the read, and whichever era is current holds or requests its own.
+   *
+   * `holdsConclusion`: this request is what discovery waits on (a phone's
+   * first listing for the identity), so the outcome concludes it - `published`
+   * as a listing, `unavailable` as a failure. Otherwise discovery has already
+   * concluded and the outcome only moves the failure and stale marks: a fleet
+   * that published ends a known failure, one that did not keeps or starts it.
+   */
+  private async requestFleet(
+    era: AuthEra,
+    holdsConclusion: boolean,
+  ): Promise<void> {
+    this.fleetRequestSequence += 1;
+    const request = this.fleetRequestSequence;
+    const fleet = await this.runnerHost.refreshHostFleet();
+    if (
+      fleet.kind === "superseded" ||
+      this.authContextId() !== era.identity ||
+      this.fleetRequestSequence !== request
+    ) {
+      return;
+    }
+    const published = fleet.kind === "published";
+    this.staleFleet = published ? null : { identity: era.identity };
+    if (holdsConclusion) {
+      this.hasConcludedRemoteAttempt = true;
+      this.concludedUnderIdentity = era.identity;
+      this.concludedAsFailure = !published;
+      return;
+    }
+    if (!this.hasConcludedDiscovery()) return;
+    const failedBefore = this.concludedAsFailure;
+    this.concludedAsFailure = !published;
+    if (failedBefore !== this.concludedAsFailure) this.emit();
   }
 
   /**
@@ -1136,8 +1287,10 @@ export class HostDirectoryService implements IHostDirectoryService {
     // standing by a previous account is not a conclusion this identity has
     // seen, so the crossing it would otherwise swallow is a real one.
     const concludedBefore = this.hasConcludedDiscovery();
+    const failedBefore = this.hasFailedDiscovery();
     this.hasConcludedRemoteAttempt = true;
     this.concludedUnderIdentity = era.identity;
+    this.concludedAsFailure = true;
     const foreignIdentity = this.lastCommitIdentity !== era.identity;
     const foreignObservedListing =
       foreignIdentity && this.hasObservedRemoteListing;
@@ -1194,8 +1347,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     // in failure. Same reasoning as the commit path's unconditional emit on the
     // observed flip - and gated on the FLIP, never on the outcome, because
     // every later poll tick lands here too and an unconditional emit would fan
-    // a failed 60s poll out to every consumer of the snapshot.
-    if (!concludedBefore) {
+    // a failed 60s poll out to every consumer of the snapshot. The failure flag
+    // crossing (a good listing, then a failed poll) is the same kind of flip.
+    if (!concludedBefore || !failedBefore) {
       this.emit();
     }
     return this.snapshot();
@@ -1359,9 +1513,10 @@ export class HostDirectoryService implements IHostDirectoryService {
   private snapshot(): readonly HostDirectoryEntry[] {
     const entries: HostDirectoryEntry[] = [];
     const seenHostIds = new Set<string>();
-    if (this.localEntry !== null) {
-      entries.push(this.localEntry);
-      seenHostIds.add(this.localEntry.hostId);
+    const local = this.getLocalEntry();
+    if (local !== null) {
+      entries.push(local);
+      seenHostIds.add(local.hostId);
     }
     for (const entry of this.remoteEntries) {
       if (seenHostIds.has(entry.hostId)) {
@@ -1387,7 +1542,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     const snapshot = this.snapshot();
     this.lastEmittedSnapshot = snapshot;
     for (const listener of this.listeners) {
-      listener(snapshot, this.localEntry);
+      listener(snapshot, this.getLocalEntry());
     }
   }
 
@@ -1446,58 +1601,6 @@ function persistLocalHostId(hostId: string): void {
   }
 }
 
-/**
- * Field-equality check mirroring `useHostDirectoryEntry`'s cache (React
- * hooks land, this class predates React entirely, so the comparison is
- * reimplemented rather than imported across that boundary). Remote/local
- * entries are freshly allocated on every fetch/IPC snapshot even when
- * nothing observable changed, so a bound remote selection would otherwise
- * reassign and fan out to every `onSelectionChange` handler on every 60s
- * poll tick for no reason.
- */
-function hostDirectoryEntriesEqual(
-  a: HostDirectoryEntry,
-  b: HostDirectoryEntry,
-): boolean {
-  return (
-    a.hostId === b.hostId &&
-    a.label === b.label &&
-    a.kind === b.kind &&
-    a.websocketUrl === b.websocketUrl &&
-    a.version === b.version &&
-    // The DERIVED verdict, not the coarse bit. Same reason as
-    // `useHostDirectoryEntry`'s twin: a host moving from `indeterminate` to a
-    // confirmed `offline` is not-dialable on both sides, and swallowing that
-    // emit would freeze every surface reading the reason at "we don't know".
-    hostUnavailability(a) === hostUnavailability(b) &&
-    // The recovery-dial window (F7). Computed at projection time from
-    // `lastSeenAt` recency, so an `offline` row whose ONLY change is aging
-    // past RELAY_FUSE_MAX_ATTACH_MS flips this field and nothing else this
-    // comparison reads (the derived verdict stays `offline` on both sides).
-    // Without it that flip was swallowed as a field-identical poll tick, and
-    // every consumer kept a `relayFuseGrace: true` entry forever - recovery
-    // dials permitted indefinitely past the documented 4h cap.
-    isRelayFuseRecoveryCandidate(a) === isRelayFuseRecoveryCandidate(b) &&
-    remotePublicKeyOf(a) === remotePublicKeyOf(b) &&
-    // A sandbox's lifecycle word and frozen flag. Most state moves also move
-    // connectivity, but not all (a frozen flag set on an already-suspended
-    // row moves nothing else), and a surface deciding whether a tab open may
-    // wake the sandbox must see the move.
-    sandboxStateKeyOf(a) === sandboxStateKeyOf(b)
-  );
-}
-
-function sandboxStateKeyOf(entry: HostDirectoryEntry): string | null {
-  if (!isRemoteHostDirectoryEntry(entry) || entry.sandbox === null) {
-    return null;
-  }
-  return `${entry.sandbox.state ?? "none"}:${entry.sandbox.frozen ? "frozen" : "thawed"}`;
-}
-
-function remotePublicKeyOf(entry: HostDirectoryEntry): string | null {
-  return isRemoteHostDirectoryEntry(entry) ? entry.publicKey : null;
-}
-
 function hostDirectorySnapshotsEqual(
   a: readonly HostDirectoryEntry[],
   b: readonly HostDirectoryEntry[],
@@ -1506,7 +1609,7 @@ function hostDirectorySnapshotsEqual(
     return false;
   }
   // Index access is in-bounds for both arrays under the length check above.
-  return a.every((entry, index) => hostDirectoryEntriesEqual(entry, b[index]));
+  return a.every((entry, index) => hostDirectoryEntryEquals(entry, b[index]));
 }
 
 /**
@@ -1549,11 +1652,12 @@ function hostDirectorySnapshotsEqual(
  * `host-starting`, the same verdict the empty directory has produced since
  * 2026-07-14 for the same "not published yet" reason.
  */
-function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
+function bootingLocalEntry(twin: HostDirectoryEntry): LocalHostDirectoryEntry {
   return {
     hostId: twin.hostId,
     label: twin.label,
     kind: "local",
+    owner: twin.owner ?? null,
     websocketUrl: null,
     version: twin.version,
     transportDialability: "not-dialable",
@@ -1568,7 +1672,7 @@ function bootingLocalEntry(twin: HostDirectoryEntry): HostDirectoryEntry {
  */
 function toLocalEntry(
   snapshot: LocalHostSnapshot | null,
-): HostDirectoryEntry | null {
+): LocalHostDirectoryEntry | null {
   if (snapshot === null) {
     return null;
   }
@@ -1576,6 +1680,7 @@ function toLocalEntry(
     hostId: snapshot.hostId,
     label: snapshot.displayName,
     kind: "local",
+    owner: null,
     websocketUrl: snapshot.websocketUrl,
     version: snapshot.version,
     // Projected from the shell, never assumed. This is the ONE place a
@@ -1593,4 +1698,15 @@ function toLocalEntry(
       ? "dialable"
       : "not-dialable",
   };
+}
+
+function listingMovesMembership(
+  previousIds: ReadonlySet<string>,
+  entries: readonly HostDirectoryEntry[],
+): boolean {
+  const listedIds = new Set(entries.map((entry) => entry.hostId));
+  return (
+    entries.some((entry) => !previousIds.has(entry.hostId)) ||
+    [...previousIds].some((id) => !listedIds.has(id))
+  );
 }

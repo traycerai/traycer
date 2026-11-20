@@ -1,3 +1,5 @@
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { hostNameFromLabel } from "@/lib/host/host-name";
 import type { NestedFocusProvenance } from "@/lib/epic-nested-focus-navigation";
 import { useBrowserViewport } from "./use-browser-viewport";
 import { BrowserViewportToolbar } from "./browser-viewport-toolbar";
@@ -799,11 +801,12 @@ function ElectronTabSurfaceReason(props: {
   readonly reason: string | null;
   readonly hostId: string;
 }) {
+  const entry = useHostDirectoryEntry(props.hostId);
   return (
     <div className="flex max-w-[min(90vw,32rem)] flex-col items-center gap-1 text-ui-sm text-muted-foreground">
       {props.reason === null ? null : <span>{props.reason}</span>}
       <TooltipWrapper
-        label={`Host ${props.hostId}`}
+        label={hostNameFromLabel(entry?.label ?? null, props.hostId)}
         side="top"
         sideOffset={undefined}
         align={undefined}

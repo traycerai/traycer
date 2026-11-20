@@ -110,7 +110,10 @@ describe("fetchDevManifest", () => {
       window.location.href,
     ).href;
     expect(fetchMock).toHaveBeenCalledWith("/__soundtrack-dev/manifest.json");
-    expect(manifest.tracks).toEqual([AQUILO_1, GROUPED]);
+    expect(manifest.tracks).toEqual([
+      { ...AQUILO_1, kind: "generative" },
+      { ...GROUPED, kind: "generative" },
+    ]);
     expect(manifest.views).toEqual(served().views);
     expect(manifest.stems).toEqual({
       tracks: [
@@ -197,6 +200,9 @@ describe("readSoundtrackManifest", () => {
     const read = readSoundtrackManifest();
 
     expect(read).toBeInstanceOf(Promise);
-    expect((await read).tracks).toEqual([AQUILO_1, GROUPED]);
+    expect((await read).tracks).toEqual([
+      { ...AQUILO_1, kind: "generative" },
+      { ...GROUPED, kind: "generative" },
+    ]);
   });
 });

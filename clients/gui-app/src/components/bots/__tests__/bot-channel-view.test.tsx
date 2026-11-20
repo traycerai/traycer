@@ -5,12 +5,20 @@
  * the channel PASSES them is what is asserted: the thread line it draws under
  * each post, the chat the thread panel reads, and where each box writes.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
 import type { ComponentProps, ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  BotLooksContext,
+  type BotLooks,
+} from "@/hooks/bots/use-bot-appearance";
 import {
   useVoiceSessionStore,
   type VoiceSessionDriver,
@@ -28,21 +36,27 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { hostFailure } from "@/lib/host/test-support/cloud-failure-reads";
+import { createAppQueryClient } from "@/lib/query-client";
+import { isDeepStrictEqual } from "node:util";
 import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
   BotThreadAnchors,
+  BotThreadListResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type {
-  BotReadCursorAdvanceRequest,
-  BotNotificationLevel,
-  BotReadCursorReadResponse,
-  BotThreadFollow,
+import {
+  type BotAppearance,
+  type BotReadCursorAdvanceRequest,
+  type BotNotificationLevel,
+  type BotReadCursorReadResponse,
+  type BotThreadFollow,
 } from "@traycer/protocol/host/bot/schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
@@ -121,8 +135,8 @@ const mocks = vi.hoisted(() => {
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
-      // Whether the read of the bot's conversations failed.
-      conversationsError: false,
+      // What the read of the bot's conversations failed with; `null` = it did not.
+      conversationsFailure: null as HostRpcError | null,
       // Whether a `bot.conversation.send` is in flight.
       sending: false,
       // The person's follows of the threads; `undefined` = not read.
@@ -131,8 +145,6 @@ const mocks = vi.hoisted(() => {
       readCursors: undefined as BotReadCursorReadResponse | undefined,
       // Whether the host keeps read cursors at all.
       readCursorsKept: true,
-      // The next advance fails, as one to an offline host does.
-      failNextAdvance: false,
       // The person's notification levels by channel id; `undefined` = not read.
       levels: undefined as Record<string, BotNotificationLevel> | undefined,
       chats,
@@ -141,6 +153,15 @@ const mocks = vi.hoisted(() => {
     },
   };
 });
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
@@ -160,10 +181,55 @@ vi.mock(
     usePaneVisible: () => mocks.state.paneVisible,
   }),
 );
+/** Has the app's own query client fetch the state's thread list, as a host answers it. */
+async function fetchThreadList(): Promise<void> {
+  const client = createAppQueryClient();
+  const queryKey = ["host", "host-bound", "bot.thread.list", {}];
+  const answer = await client.fetchQuery({
+    queryKey,
+    queryFn: () => currentThreadList(),
+  });
+  // The mock must hand out the object the cache holds, which it marked.
+  if (client.getQueryData(queryKey) !== answer) {
+    throw new Error("the fetched answer is not the one the cache holds");
+  }
+  fetched.answer = answer;
+}
+
+/** The thread list's answer as the mock hands it out: what the state says now. */
+function currentThreadList(): BotThreadListResponse {
+  return {
+    threads: mocks.state.threads,
+    threadAnchors: mocks.state.threadAnchors,
+  } as BotThreadListResponse;
+}
+
+/**
+ * The answer a real fetch of the thread list returned, which the app's cache
+ * marks as readable by the person it was fetched for; `null` until a case
+ * fetches one.
+ */
+const fetched: { answer: BotThreadListResponse | null } = { answer: null };
+
+/**
+ * What the thread list holds: the fetched answer while the state still says
+ * the same, so a failed refetch keeps rows the person may read, and the
+ * state's own answer otherwise.
+ */
+function answeredThreadList(): BotThreadListResponse {
+  const now = currentThreadList();
+  return fetched.answer !== null && isDeepStrictEqual(fetched.answer, now)
+    ? fetched.answer
+    : now;
+}
+
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: mocks.state.conversations },
-    isError: mocks.state.conversationsError,
+    isError: mocks.state.conversationsFailure !== null,
+    error: mocks.state.conversationsFailure,
+    dataUpdatedAt: 1_700_000_000_000,
+    isFetching: false,
     refetch: vi.fn(),
   }),
 }));
@@ -175,13 +241,11 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   ) => {
     mocks.threadListCalls.push({ botId, ...args });
     return {
-      data: mocks.state.threadListAnswered
-        ? {
-            threads: mocks.state.threads,
-            threadAnchors: mocks.state.threadAnchors,
-          }
-        : undefined,
+      data: mocks.state.threadListAnswered ? answeredThreadList() : undefined,
       isError: mocks.state.threadListError,
+      error: null,
+      dataUpdatedAt: 1_700_000_000_000,
+      isFetching: false,
       refetch: mocks.refetchThreads,
     };
   },
@@ -241,9 +305,7 @@ vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
   useBotReadCursorAdvanceMutation: () => ({
     mutateAsync: (request: BotReadCursorAdvanceRequest): Promise<void> => {
       mocks.advance(request);
-      if (!mocks.state.failNextAdvance) return Promise.resolve();
-      mocks.state.failNextAdvance = false;
-      return Promise.reject(new Error("the host is offline"));
+      return Promise.resolve();
     },
   }),
 }));
@@ -263,11 +325,13 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => null,
 }));
+vi.mock("@/components/bots/bot-transcript-image-scope", () => ({
+  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
+}));
 vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/components/bots/bot-chat-transcript")
   >()),
-  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
   BotChatTranscript: (props: {
     chatId: string;
     surface: BotTranscriptSurface | null;
@@ -280,6 +344,8 @@ vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
         data-testid={`stub-transcript-${surface === null ? "session" : surface.kind}`}
         data-chat-id={props.chatId}
         data-land-on={props.landOn?.messageId ?? "none"}
+        data-land-visit={props.landOn?.visit ?? "none"}
+        data-land-reports-miss={String(props.landOn?.reportsMiss === true)}
         data-answer-threads={
           surface !== null && surface.kind === "channel"
             ? String(surface.threadAnchorKinds.includes("answer"))
@@ -307,7 +373,9 @@ vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
 }));
 /** The channel surface's option pick, or a mark that none can be sent now. */
 function ChannelChoice(props: {
-  readonly chooseOption: ((choice: string) => void) | null;
+  readonly chooseOption:
+    | ((messageId: string | null, choice: string) => void)
+    | null;
 }): ReactNode {
   if (props.chooseOption === null) {
     return <span data-testid="stub-choose-unavailable" />;
@@ -365,14 +433,14 @@ vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
 });
 
 function ChooseStub(props: {
-  readonly chooseOption: (choice: string) => void;
+  readonly chooseOption: (messageId: string | null, choice: string) => void;
 }): ReactNode {
   const { chooseOption } = props;
   return (
     <button
       type="button"
       data-testid="stub-choose"
-      onClick={() => chooseOption("Ship it")}
+      onClick={() => chooseOption("answer-1", "Ship it")}
     />
   );
 }
@@ -547,6 +615,12 @@ let mountLanding: BotChannelLanding | null = null;
 /** How many tiles the next mount is told the installed app shows; `null` off it. */
 let mountTiles: MobileTileCount | null = null;
 
+/**
+ * The channel background a host of the same method version still delivers on
+ * the bot's look on the next mount, raw as it arrives, or `null` for none.
+ */
+let mountStaleBackground: number | null = null;
+
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
   /** Renders the same view again, reading the mocks' current state. */
@@ -556,43 +630,51 @@ function mount(options: MountOptions): {
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const queryClient = new QueryClient();
+  const deliveredLook: BotAppearance & {
+    readonly background: number | null;
+  } = { mark: null, color: null, background: mountStaleBackground };
+  const looks: BotLooks = {
+    appearances: new Map([[BOT_ID, deliveredLook]]),
+    main: null,
+  };
   const runnerHost = createFakeRunnerHost({});
   const tree = (openThread: BotOpenThread | null): ReactNode => (
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostContext value={runnerHost}>
-        <TooltipProvider>
-          <ChatExpansionTestProviders tileInstanceId="tile-1">
-            <BotChannelView
-              tiles={mountTiles}
-              botId={BOT_ID}
-              hostId={HOST_ID}
-              boundHostId={mocks.state.binding.hostId}
-              boundHostEpoch={mocks.state.binding.epoch}
-              botTitle="Release Bot"
-              directive={null}
-              appConversationChatId={mocks.state.appConversationChatId}
-              trunkChatId="trunk-chat"
-              onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
-              landOn={mountLanding}
-              openMemory={null}
-              onOpenMemory={vi.fn()}
-              environmentId="env-1"
-              botNameOf={() => null}
-              environmentBots={null}
-              openExchange={null}
-              exchangeRail={{ open: () => undefined, close: () => undefined }}
-              resolveMember={resolveMember}
-              tasks={[]}
-              surfaceActions={null}
-              openThread={openThread}
-              onOpenThread={onOpenThread}
-              setupHistory={null}
-            />
-          </ChatExpansionTestProviders>
-        </TooltipProvider>
-      </RunnerHostContext>
-    </QueryClientProvider>
+    <BotLooksContext value={looks}>
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostContext value={runnerHost}>
+          <TooltipProvider>
+            <ChatExpansionTestProviders tileInstanceId="tile-1">
+              <BotChannelView
+                tiles={mountTiles}
+                botId={BOT_ID}
+                hostId={HOST_ID}
+                boundHostId={mocks.state.binding.hostId}
+                boundHostEpoch={mocks.state.binding.epoch}
+                botTitle="Release Bot"
+                directive={null}
+                appConversationChatId={mocks.state.appConversationChatId}
+                trunkChatId="trunk-chat"
+                onOpenTurn={vi.fn()}
+                landOn={mountLanding}
+                openMemory={null}
+                onOpenMemory={vi.fn()}
+                environmentId="env-1"
+                botNameOf={() => null}
+                environmentBots={null}
+                openExchange={null}
+                exchangeRail={{ open: () => undefined, close: () => undefined }}
+                resolveMember={resolveMember}
+                tasks={[]}
+                surfaceActions={null}
+                openThread={openThread}
+                onOpenThread={onOpenThread}
+                setupHistory={null}
+              />
+            </ChatExpansionTestProviders>
+          </TooltipProvider>
+        </RunnerHostContext>
+      </QueryClientProvider>
+    </BotLooksContext>
   );
   let current: BotOpenThread | null =
     options.openThreadPostId === null
@@ -621,6 +703,7 @@ function lastThreadListCall(): ThreadListCall {
 }
 
 beforeEach(() => {
+  fetched.answer = null;
   vi.clearAllMocks();
   mocks.sendAsync.mockReset();
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {}, unsentBoxes: {} });
@@ -640,14 +723,13 @@ beforeEach(() => {
   mocks.answerIds = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
-  mocks.state.conversationsError = false;
+  mocks.state.conversationsFailure = null;
   mocks.state.sending = false;
   mocks.state.chats = {};
   mocks.state.realComposer = false;
   mocks.state.follows = undefined;
   mocks.state.readCursors = undefined;
   mocks.state.readCursorsKept = true;
-  mocks.state.failNextAdvance = false;
   mocks.state.levels = undefined;
   mocks.postIds = [];
   mocks.sendResponse = {
@@ -664,6 +746,30 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  mountStaleBackground = null;
+  document.documentElement.classList.remove("dark");
+});
+
+describe("<BotChannelView tiles={null} /> channel background", () => {
+  /** What a channel's tint leaves on a page: its variable, its marker and its class. */
+  const TINT =
+    '[data-channel-background], [style*="channel-tint"], [class*="channel-tint"]';
+
+  it.each([false, true])(
+    "keeps the page's own colour in the message area and everywhere else though the host still delivers the bot a background (dark: %s)",
+    (dark) => {
+      document.documentElement.classList.toggle("dark", dark);
+      mountStaleBackground = 11;
+      mount({ openThreadPostId: "post-1" });
+
+      const area = screen.getByTestId("bot-channel-messages");
+      expect(area.hasAttribute("data-channel-background")).toBe(false);
+      expect(area.style.getPropertyValue("--channel-tint")).toBe("");
+      expect(area.className).not.toContain("channel-tint");
+      expect(within(area).getByTestId("stub-transcript-channel")).toBeTruthy();
+      expect(document.body.querySelector(TINT)).toBeNull();
+    },
+  );
 });
 
 describe("<BotChannelView tiles={null} /> channel", () => {
@@ -847,7 +953,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     expect(marked("post-e")).toBe("false");
   });
 
-  it("stacks a thread's line with the post's writer, and the bot once the thread has a reply", () => {
+  it("does not infer participants from legacy thread counts or the root writer", () => {
     mocks.state.threads = [
       thread("thread-a", "post-a", { replyCount: 0 }),
       thread("thread-b", "post-b", { replyCount: 2, lastReplyAt: 8_000 }),
@@ -859,8 +965,54 @@ describe("<BotChannelView tiles={null} /> channel", () => {
       screen
         .getByTestId(`stub-line-${postId}`)
         .getAttribute("data-participants");
-    expect(participants("post-a")).toBe("Tess Teammate");
-    expect(participants("post-b")).toBe("Tess Teammate,bot");
+    expect(participants("post-a")).toBe("");
+    expect(participants("post-b")).toBe("");
+  });
+
+  it("shows only the actors supplied for each thread's replies", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", {
+        replyCount: 1,
+        replyParticipants: [{ kind: "person", userId: "user-teammate" }],
+      }),
+      thread("thread-b", "post-b", {
+        replyCount: 2,
+        replyParticipants: [
+          { kind: "bot" },
+          { kind: "person", userId: "user-teammate" },
+        ],
+      }),
+    ];
+    mocks.postIds = ["post-a", "post-b"];
+    mount({ openThreadPostId: null });
+    expect(
+      screen.getByTestId("stub-line-post-a").getAttribute("data-participants"),
+    ).toBe("Tess Teammate");
+    expect(
+      screen.getByTestId("stub-line-post-b").getAttribute("data-participants"),
+    ).toBe("bot,Tess Teammate");
+  });
+
+  it("does not invent a bot reply from a legacy thread count under an assistant root", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", {
+        anchor: {
+          messageId: "post-a",
+          requestId: "request-a",
+          senderUserId: null,
+          sentAt: 1_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+        replyCount: 1,
+      }),
+    ];
+    mocks.postIds = ["post-a"];
+    mount({ openThreadPostId: null });
+
+    const line = screen.getByTestId("stub-line-post-a");
+    expect(line.getAttribute("data-reply-count")).toBe("1");
+    expect(line.getAttribute("data-participants")).toBe("");
   });
 
   it("asks the host to open a post's thread when its line is clicked", async () => {
@@ -1148,6 +1300,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
     mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    await fetchThreadList();
     const { reopen } = mount({ openThreadPostId: null });
     reopen(ANSWER_THREAD);
     const box = screen.getByTestId("stub-bot-thread-composer");
@@ -1160,7 +1313,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
     expect(box.getAttribute("data-sendable")).toBe("false");
     await user.click(
-      within(screen.getByTestId("bot-thread-error")).getByRole("button", {
+      within(screen.getByTestId("bot-thread-stale")).getByRole("button", {
         name: "Retry",
       }),
     );
@@ -1170,7 +1323,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     mocks.state.threadAnchors = saidBy("host-capable", 4, ["answer"]);
     reopen(ANSWER_THREAD);
 
-    expect(screen.queryByTestId("bot-thread-error")).toBeNull();
+    expect(screen.queryByTestId("bot-thread-stale")).toBeNull();
     expect(screen.getByTestId("stub-bot-thread-composer")).toBe(box);
     expect(box.getAttribute("data-sendable")).toBe("true");
   });
@@ -1292,6 +1445,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
         lastReplyAt: 8_000,
       }),
     ];
+    await fetchThreadList();
     const { reopen } = mount({ openThreadPostId: null });
     reopen(ANSWER_THREAD);
 
@@ -1309,7 +1463,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
         .getAttribute("data-sendable"),
     ).toBe("false");
     await user.click(
-      within(within(panel).getByTestId("bot-thread-error")).getByRole(
+      within(within(panel).getByTestId("bot-thread-stale")).getByRole(
         "button",
         { name: "Retry" },
       ),
@@ -1319,7 +1473,7 @@ describe("<BotChannelView tiles={null} /> channel", () => {
     mocks.state.threadListError = false;
     mocks.state.threadAnchors = saidBy("host-other", 4, ["answer"]);
     reopen(ANSWER_THREAD);
-    expect(within(panel).queryByTestId("bot-thread-error")).toBeNull();
+    expect(within(panel).queryByTestId("bot-thread-stale")).toBeNull();
     expect(
       within(panel)
         .getByTestId("stub-bot-thread-composer")
@@ -1586,9 +1740,11 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     mocks.state.realComposer = true;
     // The other channel already holds a draft of its own, which every typed
     // draft's seed (`seedId` 0) shares with the one typed below.
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(BOT_ID, "conversation-later", "Draft for B", null);
+    useBotDraftsStore.getState().typeThreadBox(BOT_ID, "conversation-later", {
+      text: "Draft for B",
+      content: null,
+      held: [],
+    });
     const held = Promise.withResolvers<BotConversationSendResponse>();
     mocks.sendAsync.mockImplementationOnce(() => held.promise);
     const user = userEvent.setup();
@@ -1727,78 +1883,47 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
   const OLD_ROW = { messageId: "row-old", seq: 1_000 };
   const NEW_ROW = { messageId: "row-new", seq: 2_000 };
 
-  it("advances the channel's cursor to its newest row once, only while shown, and not again when the read catches up", () => {
+  // Retired: the channel used to advance its cursor to the metadata `latest`
+  // the moment it was presented (once, again for a landed row, again after a
+  // failed write). Presenting alone reads nothing now; the rows must be drawn
+  // and held in view (bot-channel-unread-banner.test.tsx, over the real
+  // transcript rows), so this stubbed-transcript rig only pins that it asks
+  // for no write on its own.
+  it("writes no cursor of its own for a channel being shown or becoming shown, whatever newest row the host names, however long it stays", async () => {
+    // A write held back by a dwell would arrive after the render: the clock
+    // runs past it after EACH change of what is presented or of the newest row.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const pass = async (ms: number): Promise<void> => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
     mocks.state.paneVisible = false;
     mocks.state.readCursors = {
       cursors: { "conversation-channel": OLD_ROW },
       latest: { "conversation-channel": NEW_ROW },
     };
     const { rerender } = mount({ openThreadPostId: null });
+    await pass(1_500);
     expect(mocks.advance).not.toHaveBeenCalled();
 
     mocks.state.paneVisible = true;
     rerender();
-    rerender();
-    expect(mocks.advance).toHaveBeenCalledTimes(1);
-    expect(mocks.advance).toHaveBeenCalledWith({
-      botId: BOT_ID,
-      conversationId: "conversation-channel",
-      ...NEW_ROW,
-    });
-
-    mocks.state.readCursors = {
-      cursors: { "conversation-channel": NEW_ROW },
-      latest: { "conversation-channel": NEW_ROW },
-    };
-    rerender();
-    expect(mocks.advance).toHaveBeenCalledTimes(1);
-  });
-
-  it("advances again for a row that lands while the channel is shown", () => {
-    mocks.state.readCursors = {
-      cursors: { "conversation-channel": NEW_ROW },
-      latest: { "conversation-channel": NEW_ROW },
-    };
-    const { rerender } = mount({ openThreadPostId: null });
+    await pass(1_500);
     expect(mocks.advance).not.toHaveBeenCalled();
 
     const landed = { messageId: "row-landed", seq: 3_000 };
     mocks.state.readCursors = {
-      cursors: { "conversation-channel": NEW_ROW },
+      cursors: { "conversation-channel": OLD_ROW },
       latest: { "conversation-channel": landed },
     };
     rerender();
-    expect(mocks.advance).toHaveBeenCalledWith({
-      botId: BOT_ID,
-      conversationId: "conversation-channel",
-      ...landed,
-    });
-  });
+    await pass(1_500);
 
-  it("advances again to the same row when an advance failed and the channel is presented again", async () => {
-    mocks.state.failNextAdvance = true;
-    mocks.state.readCursors = {
-      cursors: { "conversation-channel": OLD_ROW },
-      latest: { "conversation-channel": NEW_ROW },
-    };
-    const { rerender } = mount({ openThreadPostId: null });
-    expect(mocks.advance).toHaveBeenCalledTimes(1);
-    // Let the rejected advance settle, so the view has forgotten it.
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    mocks.state.paneVisible = false;
-    rerender();
-    mocks.state.paneVisible = true;
-    rerender();
-
-    expect(mocks.advance).toHaveBeenCalledTimes(2);
-    expect(mocks.advance).toHaveBeenLastCalledWith({
-      botId: BOT_ID,
-      conversationId: "conversation-channel",
-      ...NEW_ROW,
-    });
+    expect(mocks.advance).not.toHaveBeenCalled();
   });
 
   it("says no new replies on a followed thread of a channel set to Nothing", () => {
@@ -1869,7 +1994,7 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
     expect(marked("post-c")).toBe("false");
   });
 
-  it("clears a thread's new replies once the cursor catches up, and advances the thread that is open", () => {
+  it("clears a thread's new replies once the cursor catches up, and writes nothing for the thread that is open merely for being shown", () => {
     mocks.state.threads = [
       thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
     ];
@@ -1882,11 +2007,7 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
     };
     mocks.postIds = ["post-a"];
     const { rerender } = mount({ openThreadPostId: "post-a" });
-    expect(mocks.advance).toHaveBeenCalledWith({
-      botId: BOT_ID,
-      conversationId: "thread-a",
-      ...NEW_ROW,
-    });
+    expect(mocks.advance).not.toHaveBeenCalled();
 
     mocks.state.readCursors = {
       cursors: { "thread-a": NEW_ROW },
@@ -2168,6 +2289,192 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
     ).toBe("none");
   });
 
+  it("lands a channel that is already shown on each message the tab names after its mount", () => {
+    const view = mount({ openThreadPostId: null });
+    const channelLanding = (): string | null =>
+      screen
+        .getByTestId("stub-transcript-channel")
+        .getAttribute("data-land-on");
+    expect(channelLanding()).toBe("none");
+
+    mountLanding = {
+      messageId: "post-a",
+      sendPostId: null,
+      threadId: null,
+      visit: 1,
+    };
+    view.rerender();
+    expect(channelLanding()).toBe("post-a");
+
+    mountLanding = {
+      messageId: "post-b",
+      sendPostId: null,
+      threadId: null,
+      visit: 2,
+    };
+    view.rerender();
+    expect(channelLanding()).toBe("post-b");
+  });
+
+  describe("a landing on a channel row that reports its miss, withdrawn by the tab while the channel stays mounted", () => {
+    const REPORTING: BotChannelLanding = {
+      messageId: "post-a",
+      sendPostId: null,
+      threadId: null,
+      visit: 1,
+      reportsMiss: true,
+    };
+    const channelTranscript = (): HTMLElement =>
+      screen.getByTestId("stub-transcript-channel");
+
+    it("hands the channel's transcript the landing, with its miss reported, for as long as the tab holds it", () => {
+      const view = mount({ openThreadPostId: null });
+
+      mountLanding = REPORTING;
+      view.rerender();
+      view.rerender();
+
+      expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+      expect(channelTranscript().getAttribute("data-land-reports-miss")).toBe(
+        "true",
+      );
+    });
+
+    it("hands the channel's transcript no landing once the tab withdraws it", () => {
+      const view = mount({ openThreadPostId: null });
+      mountLanding = REPORTING;
+      view.rerender();
+      expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+
+      mountLanding = null;
+      view.rerender();
+
+      expect(channelTranscript().getAttribute("data-land-on")).toBe("none");
+    });
+
+    it("jumps again when the tab asks for the same message after withdrawing it", () => {
+      const view = mount({ openThreadPostId: null });
+      mountLanding = REPORTING;
+      view.rerender();
+      const firstVisit = Number(
+        channelTranscript().getAttribute("data-land-visit"),
+      );
+      mountLanding = null;
+      view.rerender();
+
+      mountLanding = { ...REPORTING, visit: 2 };
+      view.rerender();
+
+      expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+      expect(
+        Number(channelTranscript().getAttribute("data-land-visit")),
+      ).toBeGreaterThan(firstVisit);
+    });
+
+    describe("replaced by a landing on a message of a listed thread", () => {
+      const THREAD_LANDING: BotChannelLanding = {
+        messageId: "reply-a9",
+        sendPostId: null,
+        threadId: "thread-a",
+        visit: 2,
+      };
+
+      it("hands the channel's transcript no landing once the tab asks for the thread's message instead", () => {
+        const view = mount({ openThreadPostId: null });
+        mountLanding = REPORTING;
+        view.rerender();
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+
+        mountLanding = THREAD_LANDING;
+        view.rerender();
+
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("none");
+      });
+
+      it("keeps handing it a landing that reports no miss", () => {
+        const view = mount({ openThreadPostId: null });
+        mountLanding = { ...REPORTING, reportsMiss: false };
+        view.rerender();
+
+        mountLanding = THREAD_LANDING;
+        view.rerender();
+
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+        expect(channelTranscript().getAttribute("data-land-reports-miss")).toBe(
+          "false",
+        );
+      });
+
+      it("jumps again when the tab then asks for the same channel message", () => {
+        const view = mount({ openThreadPostId: null });
+        mountLanding = REPORTING;
+        view.rerender();
+        const firstVisit = Number(
+          channelTranscript().getAttribute("data-land-visit"),
+        );
+        mountLanding = THREAD_LANDING;
+        view.rerender();
+
+        mountLanding = { ...REPORTING, visit: 3 };
+        view.rerender();
+
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+        expect(
+          Number(channelTranscript().getAttribute("data-land-visit")),
+        ).toBeGreaterThan(firstVisit);
+      });
+    });
+  });
+
+  it("lands the thread beside a channel that is already shown on the message the tab names after its mount", () => {
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("none");
+
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    view.rerender();
+
+    expect(threadLanding()).toBe("reply-a9");
+  });
+
+  it("lands a second notification's thread after the first's has landed, when both the thread and the landing change at once", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("reply-a9");
+
+    mountLanding = {
+      messageId: "reply-b3",
+      sendPostId: null,
+      threadId: "thread-b",
+      visit: 2,
+    };
+    view.reopen({
+      anchorMessageId: "post-b",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    });
+
+    expect(threadLanding()).toBe("reply-b3");
+  });
+
   it("lands the thread once: the memory taking its place and Back to it open it where it opens", () => {
     mountLanding = {
       messageId: "reply-a9",
@@ -2209,11 +2516,14 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
         .getAttribute("data-land-on");
     expect(threadLanding()).toBe("reply-a9");
 
-    mocks.state.conversationsError = true;
+    mocks.state.conversationsFailure = hostFailure(
+      "FORBIDDEN",
+      "bot.conversation.list",
+    );
     view.rerender();
     expect(screen.getByTestId("bot-channel-error")).toBeTruthy();
     expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
-    mocks.state.conversationsError = false;
+    mocks.state.conversationsFailure = null;
     view.rerender();
 
     expect(threadLanding()).toBe("none");
@@ -2540,5 +2850,97 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     await user.click(screen.getByTestId("stub-bot-thread-composer-sent"));
 
     expect(onOpenThread).not.toHaveBeenCalled();
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a box whose stored draft names images still being read (T186)", () => {
+  const STORED = "Words stored with an image";
+  const WAITING = {
+    [BOT_ID]: { "conversation-channel": { text: STORED, replyTo: null } },
+  };
+
+  afterEach(() => {
+    useBotDraftsStore.setState({ boxesReading: {} });
+  });
+
+  const channelBox = (): HTMLElement =>
+    within(screen.getByTestId("bot-channel-composer")).getByRole("textbox");
+
+  it("shows the stored text in a box that cannot be edited or sent, with a line saying it waits and a Discard draft button, in place of the composer", () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+
+    mount({ openThreadPostId: null });
+
+    const input = screen.getByTestId("bot-channel-composer-input");
+    expect(input).toHaveProperty("value", STORED);
+    expect(input).toHaveProperty("disabled", true);
+    expect(input).toHaveProperty("readOnly", true);
+    expect(screen.getByTestId("bot-channel-composer-send")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+    expect(
+      within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
+        name: "Discard draft",
+      }),
+    ).toBeTruthy();
+    expect(mocks.sendAsync).not.toHaveBeenCalled();
+  });
+
+  it("gives an empty box to type in after a discard", async () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+    const user = userEvent.setup();
+    mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("bot-channel-composer-discard"));
+
+    expect(useBotDraftsStore.getState().boxesReading).toEqual({});
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
+    expect(textOf(channelBox())).toBe("");
+    typeInto(channelBox(), "Typed after the discard");
+    expect(textOf(channelBox())).toBe("Typed after the discard");
+  });
+
+  it("gives the box with its whole draft once the images settle", () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+    mount({ openThreadPostId: null });
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+
+    act(() => {
+      useBotDraftsStore.setState({
+        boxesReading: {},
+        threadBoxes: {
+          [BOT_ID]: {
+            "conversation-channel": {
+              text: STORED,
+              content: null,
+              seedId: 1,
+              replyTo: null,
+            },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
+    expect(textOf(channelBox())).toBe(STORED);
+  });
+
+  it("leaves another conversation's box usable while this one waits", () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+
+    mocks.state.appConversationChatId = "conversation-later";
+    rerender();
+
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
+    typeInto(channelBox(), "Typed beside a waiting box");
+    expect(textOf(channelBox())).toBe("Typed beside a waiting box");
   });
 });

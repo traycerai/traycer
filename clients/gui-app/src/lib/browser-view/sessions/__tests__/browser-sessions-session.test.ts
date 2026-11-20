@@ -264,6 +264,7 @@ function fakeHostStreamClient(): {
       onStatusChange = handler;
     },
     getNegotiatedSchemaVersion: () => null,
+    hasSentOpenRequest: () => false,
     requestReconnect: () => undefined,
     close: () => {
       state.closed = true;

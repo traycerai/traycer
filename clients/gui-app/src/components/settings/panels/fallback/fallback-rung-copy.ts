@@ -1,5 +1,4 @@
 import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
-
 import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 
 /**
@@ -41,7 +40,11 @@ import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 export interface FallbackRungCopy {
   /** The step's own line in "Try these in order". */
   readonly label: string;
-  /** The step's explanation in Help. */
+  /**
+   * The explanation under the step. Account and model switches also carry
+   * {@link FRESH_SESSION_HELPER}; wait and notify do not, because they do
+   * not start a session. The editor still states the shared cost above the list.
+   */
   readonly description: string;
   /**
    * The short form used as a column chip in the per-failure overrides matrix,
@@ -54,38 +57,11 @@ export interface FallbackRungCopy {
 export const FALLBACK_RUNG_COPY: Record<FallbackRungKind, FallbackRungCopy> = {
   profile: {
     label: "Another account on the same provider",
-    // "Continues" was the wrong verb, and wrong in the direction that costs the
-    // reader most: `profile` and `tier` are both a wire `switch`, which carries
-    // a target tuple and therefore starts a new agent session. The chat has
-    // always said so at the moment it happens - the grace card and the spoken
-    // announcement both push `FRESH_SESSION_HELPER` - so Settings was the one
-    // surface promising continuity the engine does not provide, to the reader
-    // deciding whether to arm the step at all.
-    //
-    // The same sentence rather than a paraphrase: this is the identical
-    // consequence, and a second wording of it invites the two to drift.
     description: `Switches to a different account you're signed in to. ${FRESH_SESSION_HELPER}`,
     chipLabel: "other account",
   },
   tier: {
     label: "An equivalent model on another provider",
-    // Never "model groups", "tier", "ladder" or "rung" - engine words, and
-    // "groups" would name under a second name the thing the tab already calls
-    // Equivalent models.
-    //
-    // This line has now failed twice in opposite directions, which is what
-    // fixed its shape. It was CIRCULAR ("uses your equivalent models to find
-    // one you have said is interchangeable" - the term defined by itself), and
-    // the fix for that was still unactionable ("a model you've marked
-    // interchangeable"), because a reader has marked nothing and has no idea
-    // where marking happens. Defaults exist without anyone having marked them.
-    // So it names the DESTINATION - the tab - rather than trying to define
-    // equivalence in one line at all. That is where the answer is.
-    //
-    // Carries the fresh-session sentence for the same reason `profile` does:
-    // it is the other `switch` step, and the two differ in WHERE the turn goes,
-    // never in what a switch costs. Stating it on one and not the other would
-    // read as a contrast the engine does not draw.
     description: `Tries a backup model from the Equivalent models tab. ${FRESH_SESSION_HELPER}`,
     chipLabel: "equivalent model",
   },

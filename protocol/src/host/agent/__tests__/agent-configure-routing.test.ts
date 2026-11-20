@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
-  agentConfigureDowngradeV71ToV10,
-  agentConfigureDowngradeV71ToV60,
+  agentConfigureDowngradeV72ToV10,
+  agentConfigureDowngradeV72ToV60,
+  agentConfigureResponseSchemaV71,
   agentConfigureRequestSchemaV20,
   agentConfigureRequestSchemaV71,
+  agentConfigureRequestSchemaV72,
   agentConfigureUpgradeV70ToV71,
   agentConfigureV70,
   agentConfigureV71,
+  agentConfigureV72,
+  agentConfigureUpgradeV71ToV72,
 } from "../profiles";
 
 /**
@@ -28,12 +32,13 @@ const tuple = {
   permissionMode: "full_access",
 } as const;
 
-describe("agent.configure@7.1 routing", () => {
+describe("agent.configure routing and service tier versions", () => {
   it("installs 7.1 over a 7.0 that keeps its released request", () => {
     const line = hostRpcRegistry["agent.configure"][7];
-    expect(line.latestMinor).toBe(1);
+    expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(agentConfigureV70);
     expect(line.versions[1].contract).toBe(agentConfigureV71);
+    expect(line.versions[2].contract).toBe(agentConfigureV72);
     expect(agentConfigureV70.requestSchema).toBe(
       agentConfigureRequestSchemaV20,
     );
@@ -56,8 +61,11 @@ describe("agent.configure@7.1 routing", () => {
       agentConfigureRequestSchemaV71.parse({ ...tuple, routing: null }).routing,
     ).toBeNull();
     expect(
-      agentConfigureRequestSchemaV71.parse({ ...tuple, routing: "hold" })
-        .routing,
+      agentConfigureRequestSchemaV72.parse({
+        ...tuple,
+        routing: "hold",
+        serviceTier: null,
+      }).routing,
     ).toBe("hold");
     expect(
       agentConfigureRequestSchemaV71.safeParse({ ...tuple, routing: "wait" })
@@ -75,28 +83,79 @@ describe("agent.configure@7.1 routing", () => {
     );
   });
 
+  it("keeps 7.1 frozen and upgrades old responses with no service tier", () => {
+    expect(
+      agentConfigureRequestSchemaV71.parse({
+        ...tuple,
+        serviceTier: "priority",
+        routing: null,
+      }),
+    ).not.toHaveProperty("serviceTier");
+    expect(
+      agentConfigureRequestSchemaV72.parse({
+        ...tuple,
+        serviceTier: "priority",
+        routing: null,
+      }).serviceTier,
+    ).toBe("priority");
+    const response = agentConfigureResponseSchemaV71.parse({
+      settings: {
+        harnessId: "claude",
+        model: "opus-4.7",
+        profileSelection: { kind: "profile", profileId: "profile-1" },
+        reasoningEffort: "high",
+        fastMode: false,
+        permissionMode: "full_access",
+        agentMode: "regular",
+      },
+      warnings: [],
+    });
+    expect(
+      agentConfigureUpgradeV71ToV72.upgradeResponse(response).settings
+        .serviceTier,
+    ).toBeNull();
+  });
+
   it("refuses to downgrade a request that names a routing", () => {
     expect(
-      agentConfigureDowngradeV71ToV60.downgradeRequest(
-        agentConfigureRequestSchemaV71.parse({ ...tuple, routing: "hold" }),
+      agentConfigureDowngradeV72ToV60.downgradeRequest(
+        agentConfigureRequestSchemaV72.parse({
+          ...tuple,
+          routing: "hold",
+          serviceTier: null,
+        }),
       ),
     ).toMatchObject({ ok: false, error: { code: "DOWNGRADE_UNSUPPORTED" } });
     expect(
-      agentConfigureDowngradeV71ToV60.downgradeRequest(
-        agentConfigureRequestSchemaV71.parse({ ...tuple, routing: "policy" }),
+      agentConfigureDowngradeV72ToV60.downgradeRequest(
+        agentConfigureRequestSchemaV72.parse({
+          ...tuple,
+          routing: "policy",
+          serviceTier: null,
+        }),
       ),
     ).toMatchObject({ ok: false, error: { code: "DOWNGRADE_UNSUPPORTED" } });
   });
 
-  it("downgrades a request that leaves routing alone without the key", () => {
-    const result = agentConfigureDowngradeV71ToV60.downgradeRequest(
-      agentConfigureRequestSchemaV71.parse({ ...tuple, routing: null }),
-    );
+  it("downgrades when serviceTier is null but refuses a named tier", () => {
+    const request = agentConfigureRequestSchemaV72.parse({
+      ...tuple,
+      routing: null,
+      serviceTier: null,
+    });
+    const result = agentConfigureDowngradeV72ToV60.downgradeRequest(request);
     expect(result).toEqual({ ok: true, value: tuple });
     expect(
-      agentConfigureDowngradeV71ToV10.downgradeRequest(
-        agentConfigureRequestSchemaV71.parse({ ...tuple, routing: null }),
+      agentConfigureDowngradeV72ToV60.downgradeRequest(
+        agentConfigureRequestSchemaV72.parse({
+          ...tuple,
+          routing: null,
+          serviceTier: "priority",
+        }),
       ),
+    ).toMatchObject({ ok: false, error: { code: "DOWNGRADE_UNSUPPORTED" } });
+    expect(
+      agentConfigureDowngradeV72ToV10.downgradeRequest(request),
     ).toMatchObject({ ok: false, error: { code: "DOWNGRADE_UNSUPPORTED" } });
   });
 });

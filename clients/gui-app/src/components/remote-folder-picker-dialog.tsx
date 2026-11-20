@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import {
   useMemo,
   useRef,
@@ -244,6 +245,7 @@ function RemoteFolderPickerBody(): ReactNode {
   });
 
   const setPath = (path: string): void => {
+    if (showHostUpdateNeededForGesture(hostId)) return;
     setPathInput({ source: "navigation", value: path });
     setSelectedIndex(UNSET_SELECTION);
     setKeyboardAim(null);
@@ -374,6 +376,7 @@ function RemoteFolderPickerBody(): ReactNode {
           onEnter={enterEntry}
           onShowFullPath={setFullPath}
           onRetry={() => {
+            if (showHostUpdateNeededForGesture(hostId)) return;
             // Retry receives focus and disappears when it succeeds - hand
             // the keyboard back to the combobox field either way.
             void browseQuery.refetch().finally(() => {
@@ -510,7 +513,7 @@ function useRemoteFolderPickerNative(args: {
           title: "Could not add folders",
           message: "The folder picker failed to open.",
           code: null,
-          source: "Workspace folders",
+          source: "Folders",
         });
       }
     } finally {

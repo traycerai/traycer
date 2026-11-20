@@ -198,6 +198,7 @@ function makeDeps(overrides: Partial<ChatLinkPolicyDeps>): ChatLinkPolicyDeps {
     client: DEFAULT_CLIENT,
     workspaceClient: WORKSPACE_CLIENT,
     navigate: (() => undefined) as never,
+    tracyOrigin: null,
     openTile,
     ...overrides,
   };
@@ -615,6 +616,25 @@ describe("buildChatLinkPolicy", () => {
     expect(
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).not.toHaveBeenCalled();
+  });
+
+  it("carries the Tracy transcript's bot into a cross-epic artifact navigation made after the async resolve", async () => {
+    mocks.resolveArtifactByPath.mockResolvedValue({
+      artifactId: "artifact-cross",
+      kind: "ticket",
+    });
+    const run = buildChatLinkPolicy(
+      makeDeps({ tracyOrigin: { botId: "bot-1" } }),
+    );
+
+    run(fileLink({ path: CROSS_EPIC_ARTIFACT_PATH }), lifecycle);
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+    await flush();
+
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.navigateToTabIntent.mock.calls[0][1]).toMatchObject({
+      tracyOrigin: { botId: "bot-1" },
+    });
   });
 
   it("falls back to a file preview when the artifact resolves to null", async () => {

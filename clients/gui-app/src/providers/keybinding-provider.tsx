@@ -763,7 +763,14 @@ function handleDigitKeyDown(
 function isAnyDialogOpen(): boolean {
   if (typeof document === "undefined") return false;
   const dialogs = document.querySelectorAll(
-    '[role="dialog"][data-state="open"]',
+    // A NATIVE modal `<dialog>` is the second kind, and it carries no `role`
+    // for this to match - the element's own semantics are the dialog
+    // (`components/artifacts/artifact-expansion.tsx`). It is asked for by the
+    // same `data-state` the selector beside it uses, which is what excludes a
+    // surface that stays open while collapsed so it can lay out in place; and
+    // `:modal`, the browser's own answer, is not in jsdom, where the barrier's
+    // regression has to run.
+    '[role="dialog"][data-state="open"], dialog[data-state="open"]',
   );
   // A dialog that hosts a leader scope (the system-tab modal, the model picker
   // popover, …) opts out of the block via `data-leader-scope`: it's the

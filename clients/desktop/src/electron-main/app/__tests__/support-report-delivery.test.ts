@@ -135,7 +135,7 @@ const FAKE_PROCESS_METRICS = {
       pid: 1111,
       name: undefined,
       serviceName: undefined,
-      cpu: { percentCPUUsage: 1.5, idleWakeupsPerSecond: 2 },
+      cpu: { cpuSharePercent: 1.5, idleWakeupsPerSecond: 2 },
       memory: { workingSetSize: 51_200, peakWorkingSetSize: 61_440 },
     },
     {
@@ -143,7 +143,7 @@ const FAKE_PROCESS_METRICS = {
       pid: 2222,
       name: "Network Service",
       serviceName: undefined,
-      cpu: { percentCPUUsage: 0.2, idleWakeupsPerSecond: 0 },
+      cpu: { cpuSharePercent: 0.2, idleWakeupsPerSecond: 0 },
       memory: { workingSetSize: 10_240, peakWorkingSetSize: 12_288 },
     },
   ],
@@ -771,7 +771,9 @@ describe("DesktopSupportService.submitReport - delivered", () => {
             readonly main: unknown;
             readonly cpuUsage: unknown;
           };
-          readonly appMetrics: Record<string, Record<string, unknown>>;
+          readonly appMetrics: Readonly<
+            Record<string, Readonly<Record<string, unknown>>>
+          >;
         }
       | undefined;
     expect(contexts).toBeDefined();
@@ -782,17 +784,17 @@ describe("DesktopSupportService.submitReport - delivered", () => {
       ),
     ).toBe(false);
 
-    // Object.values, not array indexing: the wire shape is a numeric-keyed
-    // record ({"0": {...}, "1": {...}}), not an array - Sentry's `Contexts`
-    // type requires a plain record for every named context, and the two
-    // shapes normalize identically.
-    const entries = Object.values(contexts?.appMetrics ?? {});
+    // The wire shape is a numeric-keyed record ({"0": {...}, "1": {...}}), not
+    // an array - Sentry's `Contexts` type requires a plain record for every
+    // named context, and the two shapes normalize identically.
+    const appMetrics = contexts?.appMetrics ?? {};
+    const entries = Object.values(appMetrics);
     expect(entries).toEqual([
       {
         type: "Browser",
         pid: 1111,
         name: null,
-        cpuPercent: 1.5,
+        cpuSharePercent: 1.5,
         cpuIdleWakeupsPerSecond: 2,
         memoryWorkingSetKb: 51_200,
         memoryPeakWorkingSetKb: 61_440,
@@ -801,7 +803,7 @@ describe("DesktopSupportService.submitReport - delivered", () => {
         type: "Utility",
         pid: 2222,
         name: "Network Service",
-        cpuPercent: 0.2,
+        cpuSharePercent: 0.2,
         cpuIdleWakeupsPerSecond: 0,
         memoryWorkingSetKb: 10_240,
         memoryPeakWorkingSetKb: 12_288,
@@ -817,6 +819,9 @@ describe("DesktopSupportService.submitReport - delivered", () => {
         expect(isScalarOrNull).toBe(true);
       }
     }
+
+    // Electron's CPU value remains in machine-share units in support reports.
+    expect(Object.keys(appMetrics)).toEqual(["0", "1"]);
 
     // main/cpuUsage are already flat in Electron's own types - ride through
     // unchanged, still nested under processMetrics.

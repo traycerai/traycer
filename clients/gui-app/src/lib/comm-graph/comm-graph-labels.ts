@@ -7,6 +7,7 @@
  * knows and falls back to the RAW STRING; it may never become an exhaustive
  * match, and may never drop a row.
  */
+import { ownValue } from "@/lib/own-value";
 
 const NOTICE_REASON_LABELS: Readonly<Record<string, string>> = {
   "turn-ended": "Turn ended",
@@ -16,7 +17,7 @@ const NOTICE_REASON_LABELS: Readonly<Record<string, string>> = {
 
 export function commGraphNoticeReasonLabel(reason: string | null): string {
   if (reason === null) return "Notice";
-  return NOTICE_REASON_LABELS[reason] ?? reason;
+  return ownValue(NOTICE_REASON_LABELS, reason) ?? reason;
 }
 
 /**

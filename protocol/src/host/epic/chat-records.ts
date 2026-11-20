@@ -1,4 +1,7 @@
-import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  chatRunSettingsSchema,
+  chatRunSettingsSchemaPreProfileBinding,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
@@ -536,6 +539,101 @@ export type ListChatRecordsRequestV13 = z.infer<
   typeof listChatRecordsRequestV13Schema
 >;
 
+// ─── `epic.listChatRecords@1.4` - whether the host holds the chat's records ──
+//
+// A host may drop a published chat's local records once the cloud holds them,
+// and bring them back when the chat is written to again. While they are gone
+// the host cannot serve the transcript; the server pool serves it from the
+// published copy. The row says so, so a client routes the chat's tile without
+// a round trip to the serving witness first.
+//
+// Request unchanged from `@1.3`; the row gains one key, which an older peer's
+// schema strips. Nothing is drawn from it: an evicted chat reads like any
+// other.
+
+/**
+ * The `@1.4` row: the `@1.2` row plus `evicted`.
+ *
+ * `evicted` is `true` while the serving host has dropped this chat's records
+ * (its eviction marker is set, whatever state the drop or the bring-back is
+ * in). Only an own store row can be `true`: a replica or a doc-resident entry
+ * is not this host's to drop, and reads `false`.
+ *
+ * Required rather than optional: an older host never evicts, so the
+ * `@1.3 -> @1.4` upgrade can state `false` as a fact about that peer.
+ *
+ * LIST-ONLY, like `docResident`: the stream row
+ * ({@link chatRecordSummaryStreamV13Schema}) does not carry it, so a consumer
+ * keeps the value the last list answer stated across a stream upsert. A drop
+ * or a bring-back writes no registry row, so the stream has nothing to say
+ * about it; the list's stamp moves instead, and the next poll answers a
+ * snapshot.
+ */
+export const chatRecordSummaryV14Schema = lazySchema(() =>
+  chatRecordSummaryV12Schema.extend({
+    evicted: z.boolean(),
+  }),
+);
+export type ChatRecordSummaryV14 = z.infer<typeof chatRecordSummaryV14Schema>;
+
+/** The `@1.3` response with `@1.4` rows on the `snapshot` arm. */
+export const listChatRecordsResponseV14Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      listStamp: recordListStampSchema.nullable(),
+      chats: z.array(chatRecordSummaryV14Schema),
+    }),
+    z.object({
+      kind: z.literal("unchanged"),
+      listStamp: recordListStampSchema,
+      touched: z.array(recordListRecencyPatchSchema),
+    }),
+  ]),
+);
+export type ListChatRecordsResponseV14 = z.infer<
+  typeof listChatRecordsResponseV14Schema
+>;
+
+// `epic.listChatRecords@1.5`: request unchanged from `@1.3`; the row gains one
+// optional key, which an older peer's schema strips.
+
+/**
+ * Who the chat's work is attributed to: its recorded creator, else a person owner,
+ * else `"system"`. Absent on a record saved before the field and on every foreign
+ * replica row. Set with the record and never patched, so no list revision moves for it.
+ */
+const chatRecordStarterUserIdSchema = lazySchema(() =>
+  z.string().min(1).optional(),
+);
+
+/** The `@1.5` row: the `@1.4` row plus `starterUserId`. */
+export const chatRecordSummaryV15Schema = lazySchema(() =>
+  chatRecordSummaryV14Schema.extend({
+    starterUserId: chatRecordStarterUserIdSchema,
+  }),
+);
+export type ChatRecordSummaryV15 = z.infer<typeof chatRecordSummaryV15Schema>;
+
+/** The `@1.4` response with `@1.5` rows on the `snapshot` arm. */
+export const listChatRecordsResponseV15Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      listStamp: recordListStampSchema.nullable(),
+      chats: z.array(chatRecordSummaryV15Schema),
+    }),
+    z.object({
+      kind: z.literal("unchanged"),
+      listStamp: recordListStampSchema,
+      touched: z.array(recordListRecencyPatchSchema),
+    }),
+  ]),
+);
+export type ListChatRecordsResponseV15 = z.infer<
+  typeof listChatRecordsResponseV15Schema
+>;
+
 /**
  * The `host.chatRecords.subscribe@1.3` chat row: the FROZEN base row plus the
  * publication head - and deliberately NOT {@link chatRecordSummaryV12Schema}.
@@ -568,6 +666,16 @@ export const chatRecordSummaryStreamV13Schema = lazySchema(() =>
 );
 export type ChatRecordSummaryStreamV13 = z.infer<
   typeof chatRecordSummaryStreamV13Schema
+>;
+
+/** The `@1.3` stream row plus `starterUserId`, as on the list row: the app's table takes rows from both. */
+export const chatRecordSummaryStreamV15Schema = lazySchema(() =>
+  chatRecordSummaryStreamV13Schema.extend({
+    starterUserId: chatRecordStarterUserIdSchema,
+  }),
+);
+export type ChatRecordSummaryStreamV15 = z.infer<
+  typeof chatRecordSummaryStreamV15Schema
 >;
 
 /**
@@ -737,8 +845,8 @@ export const chatRunSettingsHarnessIdSchemaV10 = lazySchema(() =>
  * caller decodes this response against a three-mode enum, so an `auto` chat
  * read on that line would fail the whole response rather than one field. 2.0
  * below is RELEASED and carries the identical pin for the identical reason;
- * major 3 (the head) binds the live tuple and is the only line that may spell
- * `auto`.
+ * major 3 first carries `auto` through its frozen tuple. The separate current
+ * line carries later additions.
  */
 export const chatRunSettingsSchemaV10 = lazySchema(() =>
   z.object({
@@ -813,8 +921,8 @@ export const chatRunSettingsSchemaV20 = lazySchema(() =>
     model: z.string().min(1),
     // Pinned pre-`auto` for the same half-freeze reason the id is: 2.0 is
     // RELEASED, so an `auto` chat read on that line would fail the whole
-    // response rather than one field. Major 3 (the head) binds the live tuple
-    // and is the only line that may spell `auto`.
+    // response rather than one field. Major 3 first carries `auto` through
+    // its frozen tuple; later additions belong to the separate current line.
     permissionMode: permissionModeSchemaPreAuto,
     reasoningEffort: z.string().nullable(),
     serviceTier: z.string().nullable().default(null),
@@ -1334,6 +1442,56 @@ export type HostChatRecordsSubscribeServerFrameV14 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV14
 >;
 
+// `host.chatRecords.subscribe@1.5`: every arm restated beside `@1.4`, for `@1.4`'s reason.
+export const hostChatRecordsSubscribeServerFrameSchemaV15 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("upsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        chatId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        listRevision: recordListRevisionSchema,
+        record: chatRecordSummaryStreamV15Schema,
+      }),
+      z.object({
+        kind: z.literal("remove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        chatId: z.string().min(1),
+        listRevision: recordListRevisionSchema,
+        reason: chatRecordRemovalReasonSchema,
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("tuiUpsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        listRevision: recordListRevisionSchema,
+        record: tuiAgentRecordSummaryV13Schema,
+      }),
+      z.object({
+        kind: z.literal("tuiRemove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        listRevision: recordListRevisionSchema,
+        reason: chatRecordRemovalReasonSchema,
+      }),
+    ])
+    .superRefine(refineChatUpsertEnvelope)
+    .superRefine(refineTuiUpsertEnvelope),
+);
+export type HostChatRecordsSubscribeServerFrameV15 = z.infer<
+  typeof hostChatRecordsSubscribeServerFrameSchemaV15
+>;
+
 export const hostChatRecordsSubscribeClientFrameSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -1391,9 +1549,17 @@ export const hostChatRecordsSubscribeV14 = defineStreamRpcContract({
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });
 
+export const hostChatRecordsSubscribeV15 = defineStreamRpcContract({
+  method: "host.chatRecords.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV15,
+  clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
+});
+
 export const getChatRunSettingsResponseSchemaV41 = lazySchema(() =>
   getChatRunSettingsResponseSchema.extend({
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreProfileBinding.nullable(),
   }),
 );
 export type GetChatRunSettingsResponseV41 = z.infer<
@@ -1401,7 +1567,7 @@ export type GetChatRunSettingsResponseV41 = z.infer<
 >;
 export const getChatRunSettingsBatchEntrySchemaV21 = lazySchema(() =>
   getChatRunSettingsBatchEntrySchema.extend({
-    settings: chatRunSettingsSchema.nullable(),
+    settings: chatRunSettingsSchemaPreProfileBinding.nullable(),
   }),
 );
 export const getChatRunSettingsBatchResponseSchemaV21 = lazySchema(() =>
@@ -1430,3 +1596,26 @@ export function projectChatRunSettingsBatchResponseBeforeUltracode(
     })),
   };
 }
+
+/** Portable provenance is absent on the released 4.1 / 2.1 read lines. */
+export const getChatRunSettingsResponseSchemaV42 = lazySchema(() =>
+  getChatRunSettingsResponseSchemaV41.extend({
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
+export type GetChatRunSettingsResponseV42 = z.infer<
+  typeof getChatRunSettingsResponseSchemaV42
+>;
+export const getChatRunSettingsBatchEntrySchemaV22 = lazySchema(() =>
+  getChatRunSettingsBatchEntrySchemaV21.extend({
+    settings: chatRunSettingsSchema.nullable(),
+  }),
+);
+export const getChatRunSettingsBatchResponseSchemaV22 = lazySchema(() =>
+  getChatRunSettingsBatchResponseSchemaV21.extend({
+    entries: z.array(getChatRunSettingsBatchEntrySchemaV22),
+  }),
+);
+export type GetChatRunSettingsBatchResponseV22 = z.infer<
+  typeof getChatRunSettingsBatchResponseSchemaV22
+>;

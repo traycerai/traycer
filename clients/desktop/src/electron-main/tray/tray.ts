@@ -1,7 +1,16 @@
-import { Menu, Notification, Tray, app, nativeImage } from "electron";
+import {
+  Menu,
+  Notification,
+  Tray,
+  app,
+  nativeImage,
+  nativeTheme,
+} from "electron";
+import { execFile } from "node:child_process";
 import { access, constants } from "node:fs/promises";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { platform as nodePlatform } from "node:process";
+import { promisify } from "node:util";
 import { isDevBuild } from "../../config";
 import type {
   DesktopTrayEpic,
@@ -33,6 +42,7 @@ export const TRAY_NOTICE_CONFIRM_TIMEOUT_MS = 5_000;
 export interface TrayAssetContext {
   readonly platform: NodeJS.Platform;
   readonly trayDir: string;
+  readonly systemUsesDarkColors: boolean;
 }
 
 export interface TrayIconAsset {
@@ -44,6 +54,8 @@ export function buildTrayAssetContext(): TrayAssetContext {
   return {
     platform: nodePlatform,
     trayDir: resolveTrayDir(),
+    // Keep the existing white glyph until the asynchronous Windows probe resolves.
+    systemUsesDarkColors: true,
   };
 }
 
@@ -57,12 +69,16 @@ function resolveTrayDir(): string {
 /**
  * Resolves the on-disk location of the tray icon for the current platform.
  * macOS uses a black-on-alpha template image so AppKit inverts it for the
- * active menu-bar appearance; every other platform uses an opaque white
- * glyph so the icon stays visible against dark trays.
+ * active menu-bar appearance. Windows follows the system tray's theme,
+ * which can differ from the app's theme; Linux keeps its white glyph.
  */
 export function resolveTrayIconPath(ctx: TrayAssetContext): TrayIconAsset {
   const isMac = ctx.platform === "darwin";
-  const baseName = isMac ? "trayTemplate.png" : "tray.png";
+  const baseName = isMac
+    ? "trayTemplate.png"
+    : ctx.platform === "win32" && !ctx.systemUsesDarkColors
+      ? "tray-dark.png"
+      : "tray.png";
   return { path: join(ctx.trayDir, baseName), isTemplate: isMac };
 }
 
@@ -96,6 +112,83 @@ export async function loadTrayIconImage(
     image.setTemplateImage(true);
   }
   return image;
+}
+
+const execFileAsync = promisify(execFile);
+
+async function readInitialWindowsTrayTheme(): Promise<boolean> {
+  // Electron 42.11.12 caches SystemUsesLightTheme only after its first native
+  // update; before that the getter falls back to the APP theme. Read once here:
+  // https://github.com/electron/electron/blob/v42.11.12/shell/browser/api/electron_api_native_theme.h#L71-L72
+  // https://github.com/electron/electron/blob/v42.11.12/shell/browser/api/electron_api_native_theme.cc#L40-L51
+  // https://github.com/electron/electron/blob/v42.11.12/shell/browser/api/electron_api_native_theme.cc#L90-L92
+  try {
+    const { stdout } = await execFileAsync(
+      win32.join(
+        process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows",
+        "System32",
+        "reg.exe",
+      ),
+      [
+        "query",
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        "/v",
+        "SystemUsesLightTheme",
+      ],
+      { timeout: 1_000, windowsHide: true, encoding: "utf8", maxBuffer: 4_096 },
+    );
+    const match = /^\s*SystemUsesLightTheme\s+REG_DWORD\s+0x([01])\s*$/im.exec(
+      stdout,
+    );
+    if (match !== null) return match[1] === "0";
+  } catch {
+    // Missing values, access errors and timeouts all use Electron's best answer.
+  }
+  log.debug("[tray] system-theme probe unavailable; using native theme");
+  return nativeTheme.shouldUseDarkColorsForSystemIntegratedUI;
+}
+
+/** Keep each Windows tray in step with the taskbar, including mixed app/system themes. */
+export function watchWindowsTrayTheme(
+  tray: Pick<Tray, "setImage" | "isDestroyed">,
+  platform: NodeJS.Platform,
+): () => void {
+  if (platform !== "win32") return () => {};
+  let generation = 0;
+  const refresh = async (
+    systemUsesDarkColors: boolean,
+    current: number,
+  ): Promise<void> => {
+    if (current !== generation || tray.isDestroyed()) return;
+    try {
+      const image = await loadTrayIconImage(
+        resolveTrayIconPath({
+          platform,
+          trayDir: resolveTrayDir(),
+          systemUsesDarkColors,
+        }),
+      );
+      // A newer theme or disposal can overtake the asynchronous asset probe.
+      if (current === generation && !tray.isDestroyed()) tray.setImage(image);
+    } catch (error) {
+      if (current === generation) {
+        log.warn("[tray] could not refresh the system-theme icon", error);
+      }
+    }
+  };
+  const onUpdated = (): void => {
+    void refresh(
+      nativeTheme.shouldUseDarkColorsForSystemIntegratedUI,
+      ++generation,
+    );
+  };
+  nativeTheme.on("updated", onUpdated);
+  // A live update supersedes this initial read if it lands while reg.exe runs.
+  void readInitialWindowsTrayTheme().then((dark) => refresh(dark, 0));
+  return () => {
+    generation += 1;
+    nativeTheme.removeListener("updated", onUpdated);
+  };
 }
 
 /**
@@ -190,6 +283,7 @@ function formatAccountLabel(account: DesktopTrayAccount): string {
  */
 export class DesktopTrayController {
   private readonly tray: Tray;
+  private readonly stopWatchingTheme: () => void;
   private readonly window: TrayManagedWindow;
   private epics: readonly DesktopTrayEpic[] = [];
   private indicator: DesktopTrayIndicatorState = "idle";
@@ -234,6 +328,7 @@ export class DesktopTrayController {
     this.tray.setToolTip("Traycer");
     this.tray.on("click", () => this.showMainWindow());
     this.rebuildMenu();
+    this.stopWatchingTheme = watchWindowsTrayTheme(this.tray, nodePlatform);
   }
 
   /**
@@ -375,6 +470,7 @@ export class DesktopTrayController {
   }
 
   dispose(): void {
+    this.stopWatchingTheme();
     if (this.tray.isDestroyed()) {
       return;
     }

@@ -29,6 +29,7 @@ import {
   overrideRungAfterNotify,
   OVERRIDE_ACTION_LABELS,
   OVERRIDE_ACTION_HELP,
+  OVERRIDE_STEP_LABELS,
 } from "./fallback-overrides-presentation";
 import type { OverrideResetUndo } from "./fallback-overrides-reset";
 import { FALLBACK } from "../fallback-settings.definitions";
@@ -102,6 +103,16 @@ export function FallbackOverridesMatrix(
             Use your main plan, or choose different actions for a specific
             problem.
           </p>
+        </div>
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 rounded-md border border-border bg-foreground/3 px-3 py-2.5 text-ui-xs">
+          <span className="font-medium">Your main plan</span>
+          <span className="min-w-0 text-muted-foreground">
+            {policy.ladder.length === 0
+              ? "No recovery actions configured"
+              : policy.ladder
+                  .map((rung) => OVERRIDE_STEP_LABELS[rung])
+                  .join(" → ")}
+          </span>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-ui-xs text-muted-foreground">
@@ -294,7 +305,9 @@ function OverrideRow(props: {
           <span className="min-w-0 flex-1 space-y-1 text-left">
             <span className="flex flex-wrap items-center gap-2">
               <span>{label}</span>
-              {custom ? <Badge variant="info">Custom</Badge> : null}
+              <Badge variant={custom ? "info" : "muted"}>
+                {custom ? "Custom" : "Main plan"}
+              </Badge>
               {needsAttention ? (
                 <Badge variant="warning">Check save</Badge>
               ) : null}

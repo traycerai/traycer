@@ -17,6 +17,11 @@ import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
+  AGENT_SANDBOX,
+  costLine,
+  keptByLine,
+  startedByLine,
+  teamPossessive,
   KEPT_UNTIL_YOU_DESTROY_IT,
   LESS_THAN_A_CENT_SO_FAR,
   burstIdleLine,
@@ -237,9 +242,9 @@ export function sandboxRowMatches(
   }
   const term = filter.search.trim().toLowerCase();
   if (term.length === 0) return true;
-  // The task is matched by id: the summary carries no task title.
   return (
     summary.displayName.toLowerCase().includes(term) ||
+    (summary.createdByTaskTitle?.toLowerCase().includes(term) ?? false) ||
     (summary.createdByTaskId?.toLowerCase().includes(term) ?? false)
   );
 }
@@ -267,13 +272,54 @@ export function sandboxDestroyAllIdleOffered(
 
 // ── Who ─────────────────────────────────────────────────────────────────────
 
+/**
+ * `you`, or the member's name. Null when this viewer is not them and the
+ * server sends no name: row copy leaves the person out rather than saying
+ * `a member`.
+ */
+function facingMemberName(
+  member: SandboxMember,
+  viewerUserId: string | null,
+): string | null {
+  if (viewerUserId !== null && member.userId === viewerUserId) return "you";
+  return member.displayName;
+}
+
 /** `you`, the member's name, or `a member` when they have none to show. */
 export function sandboxMemberName(
   member: SandboxMember,
   viewerUserId: string | null,
 ): string {
-  if (viewerUserId !== null && member.userId === viewerUserId) return "you";
-  return member.displayName ?? "a member";
+  return facingMemberName(member, viewerUserId) ?? "a member";
+}
+
+/**
+ * Starter history; Automations already names its role in the row's title.
+ * A row an agent created and someone kept reads `Started by <agent>`, or
+ * `Started by an agent` where the server does not name it to this viewer:
+ * Keep changes who keeps it, never who started it.
+ */
+export function sandboxStartedByLabel(
+  summary: SandboxSummary,
+  viewerUserId: string | null,
+): string | null {
+  if (summary.kind === "automation") return "Automations";
+  if (summary.burst) return AGENT_SANDBOX;
+  if (summary.createdByAgentId !== null) {
+    return startedByLine(summary.createdByAgentName ?? "an agent");
+  }
+  if (summary.createdBy === null) return startedByLine("you");
+  const name = facingMemberName(summary.createdBy, viewerUserId);
+  return name === null ? null : startedByLine(name);
+}
+
+export function sandboxKeptByLabel(
+  summary: SandboxSummary,
+  viewerUserId: string | null,
+): string | null {
+  if (summary.keptBy === null) return null;
+  const name = facingMemberName(summary.keptBy, viewerUserId);
+  return name === null ? null : keptByLine(name);
 }
 
 // ── The shape and cost line ─────────────────────────────────────────────────
@@ -284,68 +330,78 @@ export function sandboxShapeLine(summary: SandboxSummary): string {
   return `${os} · ${summary.cpus} vCPU · ${formatMemory(summary.memoryMb)}`;
 }
 
-/** The row's resources, awake rate and current payer, without lifecycle history. */
+/**
+ * The row's second line: the shape, then the cost line. An agent sandbox
+ * names the agent that created it and its task. A kept row is not burst and
+ * still carries that task, in the same clause. A team row's cost line names
+ * the team's credits whoever woke it last.
+ */
 export function sandboxShapeAndCostLine(
   summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
 ): string {
-  if (summary.kind === "automation") return automationsShapeLine(configuration);
-  const resting =
-    summary.state === "suspended" ||
-    summary.state === "stopped" ||
-    summary.state === "suspending" ||
-    summary.state === "stopping";
-  let payer: string | null = null;
-  if (configuration.kind === "personal") payer = "you";
-  else if (summary.wakePayer !== null) {
-    payer = sandboxMemberName(summary.wakePayer, viewerUserId);
-  }
-  return joinParts(
-    sandboxShapeLine(summary),
-    summary.priceMcPerHour === null
-      ? null
-      : `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`,
-    summary.frozen || summary.state === "destroying" || payer === null
-      ? null
-      : `${resting && configuration.kind === "team" ? "storage paid" : "paid"} by ${payer}`,
-  );
+  return sandboxRowShapeAndCostLine(summary, configuration);
 }
 
-/** The payer consequence sits on its own line before the row's actions. */
-export function sandboxWakePayerConsequence(
+/** `credits` null (unknown) leaves the funding clause out. */
+export function sandboxRowShapeAndCostLine(
   summary: SandboxSummary,
-  configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
-): string | null {
-  if (summary.frozen)
-    return sandboxFrozenCause(summary, configuration, viewerUserId);
-  if (configuration.kind !== "team" || summary.wakePayer === null) return null;
-  const resting =
-    summary.state === "suspended" ||
-    summary.state === "stopped" ||
-    summary.state === "suspending" ||
-    summary.state === "stopping";
-  return resting && sandboxMemberName(summary.wakePayer, viewerUserId) !== "you"
-    ? "Resuming changes the payer to you."
-    : null;
+  credits: SandboxPageConfiguration | null,
+): string {
+  if (summary.kind === "automation") {
+    return credits === null
+      ? AUTOMATIONS_RUN_NO_AGENTS
+      : automationsShapeLine(credits);
+  }
+  const creator = agentCreatorClause(summary);
+  if (summary.priceMcPerHour === null) {
+    return joinParts(sandboxShapeLine(summary), creator);
+  }
+  const hourly = `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
+  // A burst creator replaces the funding clause. A kept row's task does not.
+  const cost =
+    (summary.burst && creator !== null) || credits === null
+      ? hourly
+      : costLine(summary.priceMcPerHour.awakeMc, configurationCopy(credits));
+  return joinParts(sandboxShapeLine(summary), cost, creator);
 }
+
+/**
+ * `created by Planner for Sandbox setup` on an agent sandbox, and the same
+ * clause on a kept row that still names its task. A kept row is not burst.
+ * With a task and no agent name, the clause is `for <task>`.
+ */
+function agentCreatorClause(summary: SandboxSummary): string | null {
+  const agent = summary.createdByAgentName;
+  const task = summary.createdByTaskTitle;
+  if (summary.burst) {
+    if (agent === null) return null;
+    return task === null
+      ? `created by ${agent}`
+      : `created by ${agent} for ${task}`;
+  }
+  if (task === null) return null;
+  return agent === null ? `for ${task}` : `created by ${agent} for ${task}`;
+}
+
+const AUTOMATIONS_RUN_NO_AGENTS = "agents can't run here";
 
 /** What the configuration's Automations host is for, and what it costs. */
 export function automationsShapeLine(
   configuration: SandboxPageConfiguration,
 ): string {
   return configuration.kind === "team"
-    ? `Runs ${configuration.teamName}'s long-running shells · agents can't run here · uses ${configuration.teamName}'s shared credits, not a member's allowance`
-    : "Runs your long-running shells · agents can't run here · no charge";
+    ? `Runs ${configuration.teamName}'s long-running shells · ${AUTOMATIONS_RUN_NO_AGENTS} · uses ${configuration.teamName}'s shared credits, not a member's allowance`
+    : `Runs your long-running shells · ${AUTOMATIONS_RUN_NO_AGENTS} · no charge`;
 }
 
 const RELEASED_CLAUSE = "files kept · the next shell starts it";
 /**
- * The Automations host at rest, or not created yet: the next shell starts it.
- * Its badge and line read Not running; its files are kept.
+ * The Automations host before its first shell creates it. The badge reads
+ * Not running; this line says the files stay and a shell starts the host.
  */
-export const AUTOMATIONS_RELEASED_LINE = `${hostSandboxStateWord("released")} · ${RELEASED_CLAUSE}`;
+export const AUTOMATIONS_RELEASED_LINE =
+  "Files are kept; starts when you open a shell.";
 
 /** The released row's line with the sandbox as its subject, for its chat. */
 export function sandboxReleasedChatLine(name: string): string {
@@ -378,6 +434,8 @@ export interface SandboxClockInput {
   readonly resumePending?: boolean;
   readonly summary: SandboxSummary;
   readonly configuration: SandboxPageConfiguration;
+  /** `null` (unknown) leaves both out. */
+  readonly credits: SandboxPageConfiguration | null;
   readonly cost: SandboxCost | null;
   /** The class's wake string, or `null` when the catalogue does not say. */
   readonly wakeString: string | null;
@@ -456,7 +514,9 @@ export function sandboxDestroyedLine(
   },
   viewerUserId: string | null,
 ): string {
-  return `${ended.name} was destroyed by ${sandboxMemberName(ended.actor, viewerUserId)} at ${formatSandboxTime(ended.at)}.`;
+  const who = facingMemberName(ended.actor, viewerUserId);
+  const by = who === null ? "" : ` by ${who}`;
+  return `${ended.name} was destroyed${by} at ${formatSandboxTime(ended.at)}.`;
 }
 
 /**
@@ -522,40 +582,25 @@ function idleMinutesOf(summary: SandboxSummary): number {
 }
 
 /**
- * The row's last payer names whose credits ran out. The out-of-credits badge
- * sits beside the state; this line says what happened and whether resuming
- * changes the payer.
+ * Whose credits ran out: the person's own on Personal, the team's on a
+ * team's sandbox, whoever woke it last. The out-of-credits badge sits beside
+ * the state.
  */
 export function sandboxFrozenCause(
-  summary: SandboxSummary,
   configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
 ): string {
   if (configuration.kind === "personal") {
     return "Your credits ran out.";
   }
-  const team = configuration.teamName;
-  const payer = summary.wakePayer;
-  if (
-    payer === null ||
-    (viewerUserId !== null && payer.userId === viewerUserId)
-  ) {
-    return `Your ${team} credits ran out.`;
-  }
-  return `${payer.displayName ?? "A member"}'s ${team} credits ran out. Resuming changes the payer to you.`;
+  return `${teamPossessive(configuration.teamName)} credits ran out.`;
 }
 
-/** Whether a frozen row's remedy is the viewer's own top-up. */
-export function sandboxFrozenNeedsOwnCredits(
-  summary: SandboxSummary,
+/** Never the person's own top-up for a team's sandbox: only the team's Admin may buy its credits. */
+export function sandboxFrozenOffersAddCredits(
   configuration: SandboxPageConfiguration,
-  viewerUserId: string | null,
+  teamBillingAdmin: boolean,
 ): boolean {
-  if (configuration.kind === "personal") return true;
-  const payer = summary.wakePayer;
-  return (
-    payer === null || (viewerUserId !== null && payer.userId === viewerUserId)
-  );
+  return configuration.kind === "personal" || teamBillingAdmin;
 }
 
 /** The frozen clock's sentence; the frozen date governs even a `never` period. */
@@ -612,8 +657,7 @@ export function sandboxRetentionIsWithdrawn(summary: SandboxSummary): boolean {
 /**
  * What this row does when it goes idle, and what decides how long it is then
  * kept: `destroys itself after 30 idle minutes · files on it are lost then`
- * for a burst row, `Suspends after 30 idle min · destroyed after 7 resting
- * days` for an ordinary one, and the idle clause alone for a withdrawn row,
+ * for a burst row, `Suspends after 30 idle min · destroyed after 7 days suspended or stopped` for an ordinary one, and the idle clause alone for a withdrawn row,
  * where that is decided by its own `destroyAt` if it has one and by the
  * announced date otherwise, never by its resting policy.
  *
@@ -685,15 +729,15 @@ export function sandboxClockLine(input: SandboxClockInput): string {
     case "destroying":
       return "Pending.";
     case "frozen":
-      return [
-        sandboxFrozenCause(summary, input.configuration, input.viewerUserId),
-        sandboxFrozenClock(summary.frozenAt),
-      ]
+      return [rowFrozenCause(input), sandboxFrozenClock(summary.frozenAt)]
         .filter((item): item is string => item !== null)
         .join(" ");
     case "failed":
-      // Details names the failure's support reference.
-      return `Couldn't start at ${formatSandboxTime(summary.lastTransitionAt)}`;
+      return joinParts(
+        `Couldn't start at ${formatSandboxTime(summary.lastTransitionAt)}`,
+        sandboxCreateFailureReason(summary.failureCode),
+        sandboxSupportReference(summary.failureCode),
+      );
     case "creating":
       return "Pending.";
     case "awake":
@@ -717,10 +761,11 @@ function awakeClockLine(input: SandboxClockInput): string {
       ? "Running, but Traycer can't connect"
       : `Running, but Traycer can't connect · last contact ${formatSandboxAge(contact, now)}`;
   }
-  // The row's name and its Awake · Setup failed pill sit just above, and the
-  // support reference is in Details: the line names only whose settings failed.
   if (summary.guestConfigured === false) {
-    return `${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`;
+    return joinParts(
+      `${configurationLabel(configurationCopy(input.configuration))}'s settings didn't apply`,
+      sandboxSupportReference(summary.failureCode) ?? "SBX-0520",
+    );
   }
   const awakeMs = input.cost?.todayAwakeMs ?? null;
   const today = sandboxTodayCost(
@@ -747,6 +792,23 @@ function awakeClockLine(input: SandboxClockInput): string {
   );
 }
 
+function rowFrozenCause(input: SandboxClockInput): string | null {
+  return input.credits === null ? null : sandboxFrozenCause(input.credits);
+}
+
+/**
+ * Whose credits a resting row's storage draws on: the person's, or the
+ * team's; nothing while that is not known.
+ */
+function storageCreditClause(
+  credits: SandboxPageConfiguration | null,
+): string | null {
+  if (credits === null) return null;
+  return credits.kind === "personal"
+    ? "storage uses your credits"
+    : `storage uses ${teamPossessive(credits.teamName)} credits`;
+}
+
 function restingClockLine(
   input: SandboxClockInput,
   state: "suspended" | "stopped",
@@ -767,6 +829,7 @@ function restingClockLine(
         );
   return joinParts(
     resting,
+    storageCreditClause(input.credits),
     cost !== null && cost.todayMillicredits > 0
       ? `${formatSandboxCost(cost.todayMillicredits)} today`
       : null,
@@ -787,28 +850,63 @@ function stoppedLead(
   if (operation.outcomeCause === "failure")
     return `${word} after a failed wake`;
   if (operation.actor === null) return word;
-  return `${word} by ${sandboxMemberName(operation.actor, viewerUserId)}`;
+  const who = facingMemberName(operation.actor, viewerUserId);
+  if (who === null) return word;
+  return `${word} by ${who}`;
 }
 
 /** The failed-create sentence shared by the row and its chat. */
 export function sandboxFailedChatLine(summary: SandboxSummary): string {
   return joinParts(
     `Couldn't start ${summary.displayName} at ${formatSandboxTime(summary.lastTransitionAt)}`,
+    sandboxCreateFailureReason(summary.failureCode),
     sandboxSupportReference(summary.failureCode),
   );
 }
 
-/**
- * `Failed to start (SBX-0412)`, by the failure's support reference; with no
- * reference, `Failed to start` alone. Never the raw code.
- */
+/** The known create failure category, with its support reference secondary. */
 export function sandboxFailedToStart(failureCode: string | null): string {
-  return `Failed to start${referenceSuffix(failureCode)}`;
+  return joinParts(
+    "Failed to start",
+    sandboxCreateFailureReason(failureCode),
+    sandboxSupportReference(failureCode),
+  );
 }
 
-function referenceSuffix(failureCode: string | null): string {
-  const reference = sandboxSupportReference(failureCode);
-  return reference === null ? "" : ` (${reference})`;
+const CREATE_FAILURE_REASONS: ReadonlyMap<string, string> = new Map([
+  ["boot-timeout", "The sandbox took too long to start."],
+  ["wake-timeout", "The sandbox took too long to start."],
+  ["wake-window-spent", "The sandbox took too long to start."],
+  ["wake-prepare", "The sandbox couldn't finish setting up."],
+  ["wake-complete", "The sandbox couldn't finish starting."],
+  [
+    "wake-complete:wake_cancelled",
+    "The start was cancelled before it finished. Try creating the sandbox again.",
+  ],
+  ["wake-complete:generation_superseded", "A newer start replaced this one."],
+  ["envelope-delivery", "The sandbox couldn't receive its settings."],
+  ["chat-store-newer", "The sandbox needs an update to open its saved chats."],
+  ["boot-token-mint", "The sandbox couldn't sign in to Traycer."],
+  ["boot-token-delivery", "The sandbox couldn't sign in to Traycer."],
+  ["grant_set_failed", "The sandbox couldn't get access to its settings."],
+  [
+    "environment_placement_failed",
+    "The sandbox couldn't join the selected environment.",
+  ],
+  ["provider-unavailable", "Sandboxes aren't available right now."],
+  ["provider-pending", "The sandbox service hasn't finished starting it."],
+  ["create", "The sandbox service couldn't start it."],
+  ["provider-error", "The sandbox service couldn't start it."],
+]);
+
+function sandboxCreateFailureReason(failureCode: string | null): string | null {
+  if (failureCode === null) return null;
+  const stage = failureCode.split(":", 1)[0];
+  return (
+    CREATE_FAILURE_REASONS.get(failureCode) ??
+    CREATE_FAILURE_REASONS.get(stage) ??
+    null
+  );
 }
 
 /**
@@ -966,7 +1064,6 @@ export type SandboxRowAction =
   | "retry"
   | "retry-applying"
   | "repair-setup"
-  | "resume-paying"
   | "add-credits"
   | "open-tab"
   | "open-terminal"
@@ -991,8 +1088,7 @@ const NO_ROW_ACTIONS: SandboxRowActions = { primary: null, menu: [] };
 export function sandboxRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
-  /** A frozen row's remedy is the viewer's own top-up. */
-  readonly frozenNeedsOwnCredits: boolean;
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const actions = matrixRowActions(input);
@@ -1003,7 +1099,7 @@ export function sandboxRowActions(input: {
 function matrixRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
-  readonly frozenNeedsOwnCredits: boolean;
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }): SandboxRowActions {
   const { summary } = input;
@@ -1019,7 +1115,7 @@ function matrixRowActions(input: {
   const state = sandboxPublicState(summary);
   if (state === "frozen") {
     return {
-      primary: input.frozenNeedsOwnCredits ? "add-credits" : "resume-paying",
+      primary: input.frozenOffersAddCredits ? "add-credits" : "resume",
       menu: ["rename", "destroy"],
     };
   }
@@ -1076,18 +1172,17 @@ const SANDBOX_ROW_ACTION_LABEL = {
   stop: "Stop",
   keep: "Keep this sandbox",
   retry: "Retry",
-  "retry-applying": "Retry setup",
-  "repair-setup": "Retry setup",
+  "retry-applying": "Retry applying",
+  "repair-setup": "Repair setup",
   "add-credits": "Add credits ↗",
   "open-tab": "Open a tab",
   "open-terminal": "Open terminal",
   rename: "Rename",
   "idle-settings": "Idle settings…",
   destroy: "Destroy",
-} satisfies Record<Exclude<SandboxRowAction, "resume-paying">, string>;
+} satisfies Record<SandboxRowAction, string>;
 
 export function sandboxRowActionLabel(action: SandboxRowAction): string {
-  if (action === "resume-paying") return "Resume";
   return SANDBOX_ROW_ACTION_LABEL[action];
 }
 
@@ -1139,7 +1234,7 @@ export function sandboxGiveAnotherLabel(
 // ── Header ──────────────────────────────────────────────────────────────────
 
 /**
- * `5 sandboxes and Automations · $0.34 today, $0.16 of it yours.`
+ * `5 sandboxes and Automations · $0.34 today (UTC day), $0.16 of it yours.`
  * The share is left out only when it is none of the day's or not known
  * (`null`); all of it reads `$0.04 of it yours`. The count is of the rows
  * shown, an Automations host not created yet (`unstartedAutomations`)
@@ -1163,7 +1258,7 @@ export function sandboxListHeader(input: {
     count = sandboxes === 0 ? "Automations only" : `${count} and Automations`;
   }
   if (input.todayMc === null) return count;
-  const today = `${formatSandboxCost(input.todayMc)} today`;
+  const today = `${formatSandboxCost(input.todayMc)} today (UTC day)`;
   if (input.todayYoursMc === null || input.todayYoursMc <= 0) {
     return `${count} · ${today}`;
   }

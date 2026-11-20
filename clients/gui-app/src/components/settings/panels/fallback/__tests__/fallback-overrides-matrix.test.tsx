@@ -156,9 +156,15 @@ describe("FallbackOverridesMatrix - the expandable list", () => {
       expect(rowButton(reason).getAttribute("aria-expanded")).toBe("false");
     }
     const rateLimit = screen.getByTestId("fallback-override-row-rate_limit");
-    expect(rateLimit.textContent).toContain("Try another account");
-    expect(rateLimit.textContent).toContain("Wait for the limit to reset");
+    const chain = within(rateLimit).getByText(
+      "Another account → Equivalent model → Wait for reset → Notify if needed",
+    );
+    expect(chain.textContent).not.toContain("Try another account");
     expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    const list = screen.getByTestId("fallback-overrides-list");
+    expect(list.className).not.toContain("overflow-hidden");
+    const mainPlan = within(rateLimit).getByText("Main plan");
+    expect(mainPlan.getAttribute("data-variant")).toBe("muted");
   });
 
   it("draws exactly five editable rows, each keeping its row testid on the whole row", () => {
@@ -314,7 +320,8 @@ describe("FallbackOverridesMatrix - editing", () => {
       }),
     );
     const row = screen.getByTestId("fallback-override-row-rate_limit");
-    expect(within(row).getByText("Custom")).not.toBeNull();
+    const custom = within(row).getByText("Custom");
+    expect(custom.getAttribute("data-variant")).toBe("info");
     expect(within(row).queryByText("Main plan")).toBeNull();
   });
 
@@ -329,7 +336,11 @@ describe("FallbackOverridesMatrix - editing", () => {
     ).not.toBeNull();
     expect(screen.getByText("4 problems follow the main plan")).toBeTruthy();
     expect(screen.getByText("· 1 custom")).toBeTruthy();
-    expect(screen.queryByText("Main plan")).toBeNull();
+    expect(screen.getAllByText("Main plan")).toHaveLength(4);
+    const custom = within(
+      screen.getByTestId("fallback-override-row-rate_limit"),
+    ).getByText("Custom");
+    expect(custom.getAttribute("data-variant")).toBe("info");
   });
 
   it("counts the one problem still on the main plan in the singular", () => {
@@ -501,6 +512,22 @@ describe("FallbackOverridesMatrix - reset and undo", () => {
         })
         .hasAttribute("disabled"),
     ).toBe(false);
+    expect(screen.getByText("5 problems follow the main plan")).toBeTruthy();
+    expect(screen.queryByText("· 1 custom")).toBeNull();
+  });
+
+  it("names the saved ladder above the summary, and an empty ladder as unconfigured", () => {
+    renderMatrix(policy({}));
+    const stripLabel = screen.getByText("Your main plan");
+    const strip = stripLabel.parentElement;
+    if (strip === null) throw new Error("main plan strip has no parent");
+    expect(strip.textContent).toContain(
+      "Another account → Equivalent model → Wait for reset → Notify if needed",
+    );
+    cleanup();
+    renderMatrix(policy({ ladder: [] }));
+    expect(screen.getByText("Your main plan")).toBeTruthy();
+    expect(screen.getByText("No recovery actions configured")).toBeTruthy();
   });
 
   it("shows Undo with its message and invokes onUndo", () => {

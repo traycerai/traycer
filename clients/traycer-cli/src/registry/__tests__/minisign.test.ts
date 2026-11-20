@@ -1,75 +1,15 @@
-import {
-  createHash,
-  generateKeyPairSync,
-  randomBytes,
-  sign,
-  type KeyObject,
-} from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CliError } from "../../runner/errors";
-import { verifyMinisignArchive } from "../minisign";
-import type { ParsedMinisignPublicKey } from "../trusted-keys";
-
-// We generate an Ed25519 key pair on the fly and produce a minisign-
-// compatible signature for an in-memory archive, then feed both into
-// the verifier. This proves the byte-for-byte compatibility of our
-// parser/verifier with what `minisign -S -H` produces, without
-// depending on the `minisign` CLI being installed.
-
-interface GeneratedKey {
-  readonly trustedPublicKey: ParsedMinisignPublicKey;
-  readonly keyIdBuf: Buffer;
-  readonly cryptoPrivateKey: KeyObject;
-}
-
-function makeKey(): GeneratedKey {
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const spki = publicKey.export({ format: "der", type: "spki" }) as Buffer;
-  // SPKI for Ed25519 is `30 2a 30 05 06 03 2b 65 70 03 21 00 || raw32`.
-  // Strip the fixed 12-byte prefix to get the 32-byte raw key.
-  const publicKeyRaw = spki.subarray(12);
-  const keyIdBuf = randomBytes(8);
-  const keyId = keyIdBuf.toString("hex");
-  return {
-    trustedPublicKey: {
-      raw: "test-fixture",
-      keyId,
-      publicKey: new Uint8Array(publicKeyRaw),
-    },
-    keyIdBuf,
-    cryptoPrivateKey: privateKey,
-  };
-}
-
-function makeSignatureFile(opts: {
-  readonly archivePath: string;
-  readonly key: GeneratedKey;
-  readonly trustedComment: string;
-  readonly prehashed: boolean;
-}): string {
-  const archiveBytes = readFileSync(opts.archivePath);
-  const message = opts.prehashed
-    ? createHash("blake2b512").update(archiveBytes).digest()
-    : archiveBytes;
-  const sigBytes = sign(null, message, opts.key.cryptoPrivateKey);
-  const algoTag = Buffer.from(opts.prehashed ? "ED" : "Ed", "ascii");
-  const sigPayload = Buffer.concat([algoTag, opts.key.keyIdBuf, sigBytes]);
-
-  const trustedCommentBuf = Buffer.from(opts.trustedComment, "utf8");
-  const globalMessage = Buffer.concat([sigBytes, trustedCommentBuf]);
-  const globalSig = sign(null, globalMessage, opts.key.cryptoPrivateKey);
-
-  return [
-    "untrusted comment: signature from minisign fixture",
-    sigPayload.toString("base64"),
-    `trusted comment: ${opts.trustedComment}`,
-    globalSig.toString("base64"),
-    "",
-  ].join("\n");
-}
+import { verifyMinisignArchive, verifyMinisignPayload } from "../minisign";
+import { parseMinisignPublicKey } from "../trusted-keys";
+import {
+  makeArchiveSignatureFile,
+  makeKey,
+  type GeneratedKey,
+} from "./minisign-test-helpers";
 
 let tmpRoot: string;
 
@@ -86,7 +26,7 @@ describe("verifyMinisignArchive", () => {
     const key = makeKey();
     const archivePath = join(tmpRoot, "ok-archive.tar.gz");
     writeFileSync(archivePath, Buffer.from("hello world\n".repeat(100)));
-    const signatureText = makeSignatureFile({
+    const signatureText = makeArchiveSignatureFile({
       archivePath,
       key,
       trustedComment: "traycer-host 1.0.0 darwin-arm64",
@@ -107,7 +47,7 @@ describe("verifyMinisignArchive", () => {
     const key = makeKey();
     const archivePath = join(tmpRoot, "ok-pure.bin");
     writeFileSync(archivePath, Buffer.from("short payload"));
-    const signatureText = makeSignatureFile({
+    const signatureText = makeArchiveSignatureFile({
       archivePath,
       key,
       trustedComment: "pure mode",
@@ -127,7 +67,7 @@ describe("verifyMinisignArchive", () => {
     const otherKey = makeKey();
     const archivePath = join(tmpRoot, "untrusted.tar.gz");
     writeFileSync(archivePath, Buffer.from("payload"));
-    const signatureText = makeSignatureFile({
+    const signatureText = makeArchiveSignatureFile({
       archivePath,
       key,
       trustedComment: "untrusted",
@@ -147,7 +87,7 @@ describe("verifyMinisignArchive", () => {
     const key = makeKey();
     const archivePath = join(tmpRoot, "tampered.tar.gz");
     writeFileSync(archivePath, Buffer.from("original payload"));
-    const signatureText = makeSignatureFile({
+    const signatureText = makeArchiveSignatureFile({
       archivePath,
       key,
       trustedComment: "tampered",
@@ -169,7 +109,7 @@ describe("verifyMinisignArchive", () => {
     const key = makeKey();
     const archivePath = join(tmpRoot, "trusted-comment.bin");
     writeFileSync(archivePath, Buffer.from("payload"));
-    const signatureText = makeSignatureFile({
+    const signatureText = makeArchiveSignatureFile({
       archivePath,
       key,
       trustedComment: "original comment",
@@ -193,7 +133,7 @@ describe("verifyMinisignArchive", () => {
     const key = makeKey();
     const archivePath = join(tmpRoot, "empty-trust.bin");
     writeFileSync(archivePath, Buffer.from("payload"));
-    const signatureText = makeSignatureFile({
+    const signatureText = makeArchiveSignatureFile({
       archivePath,
       key,
       trustedComment: "empty-trust",
@@ -207,5 +147,33 @@ describe("verifyMinisignArchive", () => {
         trustedKeys: [],
       }),
     ).rejects.toThrow(/no trusted public keys/);
+  });
+
+  it("accepts a prehashed signature emitted by the minisign CLI", () => {
+    interface MinisignGoldenVector {
+      readonly payload: string;
+      readonly publicKey: string;
+      readonly signature: string;
+    }
+    const vector: MinisignGoldenVector = JSON.parse(
+      readFileSync(
+        new URL("./fixtures/minisign-feed-golden.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    const trustedKey = parseMinisignPublicKey(
+      vector.publicKey,
+      "minisign golden fixture",
+    );
+
+    const result = verifyMinisignPayload(
+      vector.payload,
+      vector.signature,
+      "fixture://minisign-feed-golden",
+      [trustedKey],
+    );
+
+    expect(result.algorithm).toBe("prehashed");
+    expect(result.keyId).toBe(trustedKey.keyId);
   });
 });

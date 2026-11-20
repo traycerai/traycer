@@ -1,0 +1,395 @@
+// The computers running Personal are its host list's rows, plus those this
+// window reads that run it by their own status. The scope, the per-host
+// reads and the host list are the boundary; the membership rule runs for real.
+const reads = vi.hoisted(
+  (): {
+    scope: HostScope | null;
+    readonly statuses: Map<string, unknown>;
+    readonly versions: Map<string, unknown>;
+    servers: EnvironmentMcpServerDeclaration[];
+    readonly listed: unknown[];
+    hostList: EnvironmentHostRecordV12[];
+  } => ({
+    scope: null,
+    statuses: new Map<string, unknown>(),
+    versions: new Map<string, unknown>(),
+    servers: [],
+    listed: [],
+    hostList: [],
+  }),
+);
+const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: navigateToSettingsSectionMock,
+}));
+vi.mock("@/components/settings/host-scope/use-host-scope", () => ({
+  useHostScope: () => reads.scope,
+  useHostScopeFor: () => reads.scope,
+  WINDOW_HOST_SELECTION: {
+    scopedHostId: null,
+    setScopedHostId: () => undefined,
+  },
+}));
+vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
+  useRegisteredHostEnvironmentStatuses: () => reads.statuses,
+}));
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersions: () => reads.versions,
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentMcpServerDeclaration } from "@traycer/protocol/host/environment/configuration-contracts";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  hostScopeFixture,
+  hostScopeOptionFixture,
+} from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import {
+  mountTeamPage,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { SecretRow } from "@/components/settings/secrets/secret-row";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
+
+const ADDED = Date.UTC(2026, 9, 24, 9, 30);
+
+function dayMonth(at: number): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+  }).format(at);
+}
+
+const PERSONAL = environmentStatusFixture({ principal: { kind: "personal" } });
+
+const secret: EnvironmentSecretV12 = {
+  ...RETIRED_SECRET_ROW_FIELDS,
+  providerVariables: [...RETIRED_PROVIDER_VARIABLES],
+  secretId: "sec-1",
+  name: "STRIPE_KEY",
+  kind: "api_key",
+  protocol: "https",
+  destinations: ["api.stripe.com"],
+  currentVersionId: "ver-1",
+  revoked: false,
+  updatedAt: 1,
+  variables: [],
+};
+
+function computer(name: string): HostScopeOption {
+  return hostScopeOptionFixture({
+    hostId: name,
+    name,
+    isLocalMachine: false,
+    registered: true,
+  });
+}
+
+/** Computers by name, each answering with the status given for it. */
+function setComputers(
+  statusOf: Readonly<Record<string, unknown>>,
+  extra: readonly HostScopeOption[],
+): void {
+  const hosts = [...Object.keys(statusOf).map(computer), ...extra];
+  reads.scope = hostScopeFixture({ hosts, host: hosts[0] });
+  for (const [name, status] of Object.entries(statusOf)) {
+    reads.statuses.set(name, status);
+    reads.versions.set(name, { major: 1, minor: 1 });
+  }
+}
+
+function mcpServer(
+  name: string,
+  secretId: string | null,
+  kind: "secret" | "oauth",
+): EnvironmentMcpServerDeclaration {
+  return {
+    serverId: `srv-${name}`,
+    name,
+    transport: "http",
+    url: `https://${name}.example.test`,
+    command: null,
+    args: [],
+    env: [],
+    credential:
+      secretId === null
+        ? { kind: "none", secretId: null, secretName: null, owned: false }
+        : { kind, secretId, secretName: "STRIPE_KEY", owned: false },
+    item: null,
+  };
+}
+
+function mountRow(
+  source: "host" | "pool" | "pool-personal",
+  pick: EnvironmentPick | null,
+): void {
+  useSettingsEnvironmentPickStore.setState({ pick });
+  const harness = mountTeamPage(
+    source === "host"
+      ? { kind: "host" }
+      : {
+          kind: "pool",
+          configuration: source === "pool" ? "team" : "personal",
+          environmentId: source === "pool" ? "env-team" : "env-personal",
+          roomId: "room-team",
+          providerHandle: "handle",
+          effectiveRole: "owner",
+        },
+    {
+      "environment.status": () => PERSONAL,
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-personal",
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Personal",
+            effectiveRole: "owner" as const,
+            kind: "personal" as const,
+            hostCount: 0,
+            providerHandle: null,
+          },
+        ],
+      }),
+      "environment.host.list": () => ({ hosts: reads.hostList }),
+      "environment.configuration.items": () => ({ items: [] }),
+      "environment.configuration.mcpServers.list": (request: unknown) => {
+        reads.listed.push(request);
+        return { servers: reads.servers };
+      },
+      "environment.secrets.versions": () => ({
+        versions: [
+          {
+            versionId: "ver-1",
+            ordinal: 1,
+            createdAt: ADDED,
+            supersededAt: null,
+            destroyedAt: null,
+            current: true,
+            rotationState: null,
+          },
+        ],
+        removal: null,
+      }),
+      "environment.secrets.rotation": () => ({
+        rotation: null,
+        lastVerify: null,
+      }),
+    },
+  );
+  if (pick?.kind === "local") {
+    const hostId = requireTeamHostClient().getActiveHostId();
+    if (hostId === null) {
+      throw new Error("the Local Secrets fixture has no selected host");
+    }
+    recordNegotiatedHostMethods(hostId, ["environment.status"]);
+  }
+  render(
+    <SecretRow
+      secret={secret}
+      client={requireTeamHostClient()}
+      hostId="host-secrets"
+      hostName={(hostId) => hostId}
+      onChanged={() => undefined}
+    />,
+    { wrapper: harness.Wrapper },
+  );
+}
+
+async function previewText(): Promise<string> {
+  fireEvent.click(await screen.findByTestId("secret-row-remove"));
+  const dialog = await screen.findByTestId("confirm-destructive-dialog");
+  await vi.waitFor(() => {
+    expect(dialog.textContent).toContain("Version 1.");
+  });
+  return dialog.textContent;
+}
+
+beforeEach(() => {
+  resetNegotiatedManifests();
+  useSettingsEnvironmentPickStore.setState({
+    defaultPick: { kind: "personal" },
+  });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 25, 12, 0));
+  reads.statuses.clear();
+  reads.servers = [];
+  reads.hostList = [];
+  reads.listed.length = 0;
+  navigateToSettingsSectionMock.mockReset();
+  reads.versions.clear();
+  useAuthStore.setState({ status: "signed-in" });
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+  resetTeamPageHarness();
+  resetNegotiatedManifests();
+  reads.scope = null;
+  useAuthStore.setState({ status: "signed-out" });
+});
+
+describe("Remove's preview", () => {
+  it("shows the version origin without recipient or restart details", async () => {
+    reads.hostList = [
+      {
+        hostId: "id-dev-box",
+        hostLabel: "dev-box",
+        hostPlatform: "darwin",
+        enrolledByUserId: "user-me",
+        kind: "personal",
+        boundAt: 1,
+        reachable: false,
+        lastReportedAt: 1,
+        hasLocalRow: false,
+        applied: [],
+      },
+    ];
+    setComputers({ "dev-box": PERSONAL }, []);
+    mountRow("host", null);
+
+    const text = await previewText();
+    expect(text).toContain(`Added by you on ${dayMonth(ADDED)}. Version 1.`);
+    expect(text).not.toContain("dev-box");
+    expect(text).not.toMatch(/restart|old running value/i);
+  });
+});
+
+describe("Remove's preview names the MCP servers that use the secret", () => {
+  const added = `Added by you on ${dayMonth(ADDED)}. Version 1.`;
+  const TAIL_ONE =
+    "without a credential; if the server needs one, it stops working until you pick another secret on MCP servers.";
+  const TAIL_MANY =
+    "without a credential; any that need one stop working until you pick another secret on MCP servers.";
+
+  async function usedByLine(): Promise<string> {
+    fireEvent.click(await screen.findByTestId("secret-row-remove"));
+    return (await screen.findByTestId("secret-remove-used-by")).textContent;
+  }
+
+  it("names one server first, before the added line, with the exact text", async () => {
+    reads.servers = [mcpServer("github", "sec-1", "secret")];
+    setComputers({}, []);
+    mountRow("host", null);
+
+    expect(await usedByLine()).toBe(
+      `Used by github. Removing it leaves github ${TAIL_ONE}`,
+    );
+    const text = await previewText();
+    expect(text.indexOf("Used by github.")).toBeGreaterThan(-1);
+    expect(text.indexOf("Used by github.")).toBeLessThan(
+      text.indexOf("Added by you"),
+    );
+    expect(text).toContain(`MCP servers.${added}`);
+    expect(reads.listed).toEqual([{ environmentId: "env-personal" }]);
+  });
+
+  it("names two and three servers, counting the rest", async () => {
+    reads.servers = [
+      mcpServer("github", "sec-1", "secret"),
+      mcpServer("linear", "sec-1", "secret"),
+    ];
+    setComputers({}, []);
+    mountRow("host", null);
+    expect(await usedByLine()).toBe(
+      `Used by github and linear. Removing it leaves them ${TAIL_MANY}`,
+    );
+    cleanup();
+
+    reads.servers = [
+      mcpServer("github", "sec-1", "secret"),
+      mcpServer("linear", "sec-1", "secret"),
+      mcpServer("notion", "sec-1", "secret"),
+    ];
+    mountRow("host", null);
+    expect(await usedByLine()).toBe(
+      `Used by github, linear and 1 more. Removing it leaves them ${TAIL_MANY}`,
+    );
+  });
+
+  it("has no line when no server uses it, and does not name a server bound to another secret or none", async () => {
+    reads.servers = [
+      mcpServer("github", "sec-other", "secret"),
+      mcpServer("plain", null, "secret"),
+    ];
+    setComputers({}, []);
+    mountRow("host", null);
+
+    const text = await previewText();
+    await vi.waitFor(() => {
+      expect(reads.listed).toHaveLength(1);
+    });
+    expect(screen.queryByTestId("secret-remove-used-by")).toBeNull();
+    expect(text).not.toMatch(/Used by|github|plain|signed-in/);
+  });
+
+  it("takes Remove's 'MCP servers' link to that page and closes the dialog", async () => {
+    reads.servers = [mcpServer("github", "sec-1", "secret")];
+    setComputers({}, []);
+    mountRow("host", null);
+    await usedByLine();
+
+    fireEvent.click(screen.getByRole("button", { name: "MCP servers" }));
+
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("mcp-servers");
+    await vi.waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+  });
+
+  it("asks for no servers on a Local pick, and shows no line", async () => {
+    reads.servers = [mcpServer("github", "sec-1", "secret")];
+    setComputers({}, []);
+    mountRow("host", {
+      kind: "local",
+      hostId: "host-secrets",
+      hostName: "Studio",
+    });
+
+    await previewText();
+
+    expect(reads.listed).toEqual([]);
+    expect(screen.queryByTestId("secret-remove-used-by")).toBeNull();
+  });
+
+  it("reads a team's servers by the team's id on its page", async () => {
+    reads.servers = [mcpServer("github", "sec-1", "secret")];
+    setComputers({}, []);
+    mountRow("pool", { kind: "team", environmentId: "env-team" });
+
+    await usedByLine();
+
+    expect(reads.listed).toEqual([{ environmentId: "env-team" }]);
+  });
+});

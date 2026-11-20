@@ -1,15 +1,21 @@
 import {
   useCallback,
   useContext,
+  useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
+import type { TaskContextResult } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
 import type {
   BotInputNeeded,
+  BotNotificationSubscription,
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import { Badge } from "@/components/ui/badge";
@@ -24,10 +30,16 @@ import {
   type ChatDescendantStatusRollup,
 } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
+import { usePaneFocusProbe } from "@/components/epic-tabs/pane-visibility-context";
+import { BotActivityDetails } from "@/components/bots/bot-activity-details";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
+import { TaskFocusBoundary } from "@/components/bots/task-focus-boundary";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
-import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import {
+  ChatIndicatorAttestedContext,
+  ChatIndicatorFreshHostsContext,
+} from "@/components/notifications/chat-indicator-fresh-hosts-context";
 import type { BotActiveTasks } from "@/hooks/bots/use-bot-active-tasks";
 import {
   useBotTaskAgents,
@@ -40,10 +52,7 @@ import {
   agentActivityTiers,
   type AgentActivityTier,
 } from "@/lib/agent-activity";
-import {
-  isPeriodicTask,
-  type BotActiveTask,
-} from "@/lib/bots/bot-activity-model";
+import type { BotActiveTask } from "@/lib/bots/bot-activity-model";
 import {
   botActivityMemberName,
   type BotMemberResolver,
@@ -51,6 +60,7 @@ import {
 import { describeTaskInterval, firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import { displayTitle } from "@/lib/display-title";
+import { BOT_SEARCH_PAGE_SIZE } from "@/lib/bots/bot-search-model";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import { useRegisteredEpicLiveAgents } from "@/lib/epic-selectors";
@@ -65,7 +75,10 @@ import {
 } from "@/lib/tab-navigation";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
 import { cn } from "@/lib/utils";
-import { useEpicAgentActivity } from "@/stores/agent-activity-store";
+import {
+  useAgentActivityCoverage,
+  useAttestedEpicAgentActivity,
+} from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
@@ -74,6 +87,21 @@ import {
   selectNotificationIndicatorState,
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
+
+function reportingFocusSurface(target: HTMLElement): "menu" | "dialog" | null {
+  if (target.closest('[role="menu"]')) return "menu";
+  if (target.closest('[role="dialog"]')) return "dialog";
+  return null;
+}
+
+function taskRowFor(
+  activity: HTMLElement,
+  taskId: string,
+): HTMLElement | undefined {
+  return Array.from(
+    activity.querySelectorAll<HTMLElement>("[data-task-id]"),
+  ).find((element) => element.dataset.taskId === taskId);
+}
 
 const NO_WAITING: ReadonlyArray<BotInputNeeded> = [];
 const NO_FOCUS = {
@@ -85,8 +113,8 @@ const NO_FOCUS = {
 
 /**
  * A bot's Activity page (Tracy Bots, decision 182): one list of the tasks
- * the bot started, across its trunk and every thread, while anything is
- * still going on in them (`activeTasksOf`). A row is drawn as the Chats
+ * the bot started, across its trunk and every thread: active tasks first,
+ * then recently ended tracking. A row is drawn as the Chats
  * panel draws a parent: its status rolled up from the task's agents, its
  * title and badges, what it is doing in words, and, where this window holds
  * the task's session, its agents folded under a chevron.
@@ -94,76 +122,325 @@ const NO_FOCUS = {
 export function BotActivityPage(props: {
   readonly botId: string;
   readonly hostId: string;
-  readonly botTitle: string;
   /** Whether the tab's host is the one running the bot. */
   readonly boundHere: boolean;
   readonly active: BotActiveTasks;
+  readonly roomFresh: boolean;
+  readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+  readonly trunkChatId: string;
+  readonly onOpenSession: BotSessionOpen;
   /** Names the members who paused or ran something. */
   readonly resolveMember: BotMemberResolver;
   /** The bot's threads, as listed; `null` while the list is not read. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
 }): ReactNode {
-  const { botId, hostId, botTitle, boundHere, active, resolveMember } = props;
+  const { botId, hostId, boundHere, active, resolveMember } = props;
+  const activityRef = useRef<HTMLElement>(null);
+  const lastTaskFocus = useRef<{
+    taskId: string;
+    target: HTMLElement;
+    reportingSurface: "menu" | "dialog" | null;
+    reportingTrigger: HTMLButtonElement | null;
+  } | null>(null);
+  const rememberTaskFocus = useCallback(
+    (taskId: string, target: EventTarget): void => {
+      if (target instanceof HTMLElement) {
+        const activity = activityRef.current;
+        const reportingSurface = reportingFocusSurface(target);
+        const row =
+          activity === null ? undefined : taskRowFor(activity, taskId);
+        lastTaskFocus.current = {
+          taskId,
+          target,
+          reportingSurface,
+          reportingTrigger:
+            reportingSurface === null
+              ? null
+              : (row?.querySelector<HTMLButtonElement>(
+                  '[aria-label="Reporting actions"]',
+                ) ?? null),
+        };
+      }
+    },
+    [],
+  );
+  useEffect(() => {
+    const clearFocusOwner = (): void => {
+      lastTaskFocus.current = null;
+    };
+    document.addEventListener("focusin", clearFocusOwner, true);
+    return () => document.removeEventListener("focusin", clearFocusOwner, true);
+  }, []);
+  const captureTaskFocus = useCallback((): void => {
+    const owner = lastTaskFocus.current;
+    if (
+      owner !== null &&
+      owner.target.isConnected &&
+      document.activeElement !== owner.target
+    )
+      lastTaskFocus.current = null;
+  }, []);
+  const isPaneFocused = usePaneFocusProbe();
+  const restoreTaskFocus = useCallback((): void => {
+    const previous = lastTaskFocus.current;
+    const activity = activityRef.current;
+    if (previous === null || activity === null || previous.target.isConnected)
+      return;
+    if (document.activeElement !== document.body) return;
+    if (!isPaneFocused()) {
+      lastTaskFocus.current = null;
+      return;
+    }
+    const row = taskRowFor(activity, previous.taskId);
+    const reportingTrigger =
+      previous.reportingSurface !== null
+        ? row?.querySelector<HTMLButtonElement>(
+            '[aria-label="Reporting actions"]',
+          )
+        : null;
+    if (
+      previous.reportingSurface === "menu" &&
+      reportingTrigger &&
+      reportingTrigger === previous.reportingTrigger
+    )
+      return;
+    const target =
+      reportingTrigger ??
+      row?.querySelector<HTMLButtonElement>(
+        '[data-testid="bot-activity-task-open"]',
+      ) ??
+      activity;
+    lastTaskFocus.current = null;
+    target.focus();
+  }, [isPaneFocused]);
+  useLayoutEffect(() => {
+    restoreTaskFocus();
+  });
   const viewer = useAuthStore((s) => s.profile);
   const nameOf = useCallback(
     (memberId: string): string =>
       botActivityMemberName(memberId, viewer, resolveMember),
     [resolveMember, viewer],
   );
+  const [pageSize, setPageSize] = useState(BOT_SEARCH_PAGE_SIZE);
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const recentRows = active.recentRows;
+  const indicatorOf = active.indicatorOf;
+  const visibleRecent = useMemo(
+    () =>
+      recentRows.filter((entry, index) => {
+        const indicator = indicatorOf(entry.task.taskId);
+        return (
+          index < pageSize ||
+          expandedIds.has(entry.task.taskId) ||
+          (entry.task.inputNeeded?.length ?? 0) > 0 ||
+          indicator.pendingApproval ||
+          indicator.pendingInterview ||
+          indicator.pendingFork ||
+          indicator.unreadFailure
+        );
+      }),
+    [recentRows, indicatorOf, pageSize, expandedIds],
+  );
+  const visibleRows = useMemo(
+    () => [...active.rows, ...visibleRecent],
+    [active.rows, visibleRecent],
+  );
   const taskIds = useMemo(
-    () => active.rows.map((row) => row.task.taskId),
-    [active.rows],
+    () => visibleRows.map((row) => row.task.taskId),
+    [visibleRows],
   );
   const contexts = useEpicGetTaskContexts(taskIds, viewer?.userId ?? null, {
     enabled: taskIds.length > 0,
   });
-  const heading = `Tasks ${botTitle} started`;
+  const heading = "Tasks";
   return (
     <section
+      ref={activityRef}
+      tabIndex={-1}
       aria-label={heading}
       className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-4"
       data-testid="bot-activity-page"
     >
-      <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
-        {heading}
-      </h3>
-      {active.rows.length === 0 ? (
-        <p
-          className="py-1 text-ui-xs text-muted-foreground"
-          data-testid="bot-activity-empty"
-        >
-          A task leaves this list once nothing in it is running, nothing waits
-          on you and you have seen its result. History keeps every task.
-        </p>
-      ) : (
+      {visibleRows.length === 0 && !props.roomFresh ? (
+        <p className="py-1 text-ui-xs text-muted-foreground">Status unknown</p>
+      ) : null}
+      {visibleRows.length === 0 &&
+      props.roomFresh &&
+      props.notificationSubscriptions?.length === 0 ? (
+        <ActivityEmptyState />
+      ) : null}
+      {visibleRows.length > 0 ? (
         <ul className="flex flex-col gap-0.5">
-          {active.rows.map((entry) => (
+          {active.rows.length > 0 ? (
+            <li key="heading-active">
+              <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+                {heading}
+              </h3>
+            </li>
+          ) : null}
+          {visibleRows.map((entry, index) => (
             <li key={entry.task.taskId}>
+              {index === active.rows.length ? (
+                <h3 className="text-ui-xs tracking-[0.08em] text-muted-foreground uppercase">
+                  Recently finished
+                </h3>
+              ) : null}
               <ActiveTaskRow
                 botId={botId}
                 hostId={hostId}
                 boundHere={boundHere}
                 nameOf={nameOf}
                 entry={entry}
+                onTaskFocus={rememberTaskFocus}
+                onBeforeTaskChange={captureTaskFocus}
+                onReportingRemoved={restoreTaskFocus}
                 indicator={active.indicatorOf(entry.task.taskId)}
                 title={
                   contexts.tasksById.get(entry.task.taskId)?.epic?.light
                     ?.title ?? null
                 }
+                titleState={taskTitleState(
+                  contexts.resolutionsById.get(entry.task.taskId),
+                  contexts.pendingTaskIds.has(entry.task.taskId),
+                )}
                 threads={props.threads}
+                expanded={expandedIds.has(entry.task.taskId)}
+                onExpandedChange={(open) =>
+                  setExpandedIds((prior) => {
+                    const next = new Set(prior);
+                    if (open) next.add(entry.task.taskId);
+                    else next.delete(entry.task.taskId);
+                    return next;
+                  })
+                }
               />
             </li>
           ))}
         </ul>
-      )}
+      ) : null}
+      {visibleRecent.length < recentRows.length ? (
+        <button
+          type="button"
+          onClick={() => setPageSize((size) => size + BOT_SEARCH_PAGE_SIZE)}
+          className="self-start text-ui-sm text-muted-foreground underline"
+        >
+          Show older
+        </button>
+      ) : null}
+      <BotActivityDetails
+        roomFresh={props.roomFresh}
+        trunkChatId={props.trunkChatId}
+        threads={props.threads}
+        onOpenSession={props.onOpenSession}
+        subscriptions={
+          !props.roomFresh && props.notificationSubscriptions?.length === 0
+            ? null
+            : props.notificationSubscriptions
+        }
+      />
     </section>
   );
+}
+
+function ActivityEmptyState(): ReactNode {
+  return (
+    <div
+      data-testid="bot-activity-empty"
+      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 py-8 text-center"
+    >
+      <svg
+        data-testid="bot-activity-empty-art"
+        aria-hidden="true"
+        className="size-24 text-muted-foreground"
+        viewBox="0 0 116 98"
+        fill="none"
+      >
+        <rect
+          x="15"
+          y="18"
+          width="78"
+          height="53"
+          rx="8"
+          stroke="currentColor"
+          strokeOpacity=".22"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="23"
+          y="25"
+          width="78"
+          height="53"
+          rx="8"
+          fill="var(--background)"
+          stroke="currentColor"
+          strokeOpacity=".55"
+          strokeWidth="1.5"
+        />
+        <circle cx="39" cy="43" r="5" stroke="currentColor" strokeWidth="1.5" />
+        <path
+          d="M49 41h31M49 47h21M34 60h5M46 60h34"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeOpacity=".7"
+        />
+        <circle
+          cx="87"
+          cy="70"
+          r="12"
+          fill="var(--background)"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <path
+          d="m82 70 3 3 6-6"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <div className="space-y-1">
+        <p className="text-ui-sm font-medium">No activity yet</p>
+        <p className="max-w-sm text-ui-sm text-muted-foreground">
+          Keep track of work Tracy is handling. Tasks and updates that need your
+          attention will appear here.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+type TaskTitleState = "loading" | "denied" | "absent" | "unknown";
+
+function activityTaskTitle(
+  title: string | null,
+  state: TaskTitleState,
+): string {
+  if (title !== null) return displayTitle(title, "epic");
+  if (state === "loading") return "Loading task title…";
+  if (state === "denied" || state === "absent") return "Task unavailable";
+  return "Task";
+}
+
+function taskTitleState(
+  result: TaskContextResult | undefined,
+  pending: boolean,
+): TaskTitleState {
+  if (result?.status === "confirmed-absent") return "absent";
+  if (result?.status === "unknown" && result.reason === "denied")
+    return "denied";
+  return pending ? "loading" : "unknown";
 }
 
 /** One agent the row's glyph rolls up, with what it holds unread or pending. */
 type TaskAgentState = {
   readonly id: string;
   readonly indicator: NotificationIndicatorState;
+  readonly fresh: boolean;
 };
 
 /**
@@ -199,7 +476,27 @@ function taskRollup(input: {
       ),
     );
   }
-  const known = [...states.values()];
+  const known = [...states.entries()].map(([id, state]) =>
+    withSurfaces(state, input.inputNeeded, id),
+  );
+  if (
+    input.aggregate.pendingApproval &&
+    !known.some((state) => state.pendingApproval)
+  ) {
+    kinds.push("approval");
+  }
+  if (
+    input.aggregate.pendingInterview &&
+    !known.some((state) => state.pendingInterview)
+  ) {
+    kinds.push("interview");
+  }
+  if (
+    input.aggregate.pendingFork &&
+    !known.some((state) => state.pendingFork)
+  ) {
+    kinds.push("fork");
+  }
   if (
     input.aggregate.unreadFailure &&
     !known.some((state) => state.unreadFailure)
@@ -237,10 +534,16 @@ type ActiveTaskRowProps = {
   readonly boundHere: boolean;
   readonly nameOf: (userId: string) => string;
   readonly entry: BotActiveTask;
+  readonly onTaskFocus: (taskId: string, target: EventTarget) => void;
+  readonly onBeforeTaskChange: () => void;
+  readonly onReportingRemoved: () => void;
   /** What the task's agents hold unread, together. */
   readonly indicator: NotificationIndicatorState;
   readonly title: string | null;
+  readonly titleState: TaskTitleState;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  readonly expanded: boolean;
+  readonly onExpandedChange: (open: boolean) => void;
 };
 
 /**
@@ -269,9 +572,23 @@ function ActiveTaskRow(props: ActiveTaskRowProps): ReactNode {
     [agents, taskId],
   );
   return (
-    <ChatIndicatorHostScopes scopes={scopes} chatEpicIds={chatEpicIds}>
-      <ActiveTaskRowBody {...props} agents={agents} />
-    </ChatIndicatorHostScopes>
+    <TaskFocusBoundary
+      beforeChange={props.onBeforeTaskChange}
+      afterChange={props.onReportingRemoved}
+    >
+      <ChatIndicatorHostScopes
+        freshnessMode="activity"
+        scopes={scopes}
+        chatEpicIds={chatEpicIds}
+      >
+        <TaskFocusBoundary
+          beforeChange={props.onBeforeTaskChange}
+          afterChange={props.onReportingRemoved}
+        >
+          <ActiveTaskRowBody {...props} agents={agents} />
+        </TaskFocusBoundary>
+      </ChatIndicatorHostScopes>
+    </TaskFocusBoundary>
   );
 }
 
@@ -290,7 +607,8 @@ function ActiveTaskRowBody(
   const { task } = entry;
   const taskId = task.taskId;
   const inputNeeded = task.inputNeeded ?? NO_WAITING;
-  const tiers = agentActivityTiers(useEpicAgentActivity(taskId));
+  const activity = useAttestedEpicAgentActivity(taskId);
+  const tiers = agentActivityTiers(activity);
   const agentStates = useTaskAgentStates(taskId, agents);
   const rollup = useMemo(
     () =>
@@ -302,7 +620,7 @@ function ActiveTaskRowBody(
       }),
     [agentStates, indicator, inputNeeded, tiers],
   );
-  const [expanded, setExpanded] = useState(false);
+  const { expanded, onExpandedChange } = props;
   const navigate = useNavigate();
   const openTask = (): void =>
     navigateToTabIntent(
@@ -317,8 +635,11 @@ function ActiveTaskRowBody(
     );
   return (
     <div
-      data-testid="bot-activity-task"
+      data-testid={
+        task.state === "ended" ? "bot-activity-ended-task" : "bot-activity-task"
+      }
       data-task-id={taskId}
+      onFocusCapture={(event) => props.onTaskFocus(taskId, event.target)}
       data-band={entry.band}
       className="flex flex-col gap-0.5"
     >
@@ -331,7 +652,7 @@ function ActiveTaskRowBody(
             aria-label={expanded ? "Hide agents" : "Show agents"}
             aria-expanded={expanded}
             data-testid="bot-activity-task-chevron"
-            onClick={() => setExpanded((open) => !open)}
+            onClick={() => onExpandedChange(!expanded)}
             className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/6 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
           >
             <ChevronRight
@@ -354,30 +675,37 @@ function ActiveTaskRowBody(
             hostId={hostId}
             entry={entry}
             title={props.title}
+            titleState={props.titleState}
             rollup={rollup}
             agentsReadable={agents !== null}
             threads={props.threads}
           />
         </button>
-      </div>
-      <div className="flex flex-col gap-0.5 pl-7.5">
         <BotTaskControls
           botId={botId}
           hostId={hostId}
           task={task}
           boundHere={boundHere}
           nameOf={nameOf}
+          onBeforeTaskChange={props.onBeforeTaskChange}
+          onReportingRemoved={props.onReportingRemoved}
         />
       </div>
-      {expanded && agents !== null ? (
-        <TaskAgentRows
-          taskId={taskId}
-          agents={agents}
-          agentStates={agentStates}
-          tiers={tiers}
-          inputNeeded={inputNeeded}
-        />
-      ) : null}
+      <TaskFocusBoundary
+        beforeChange={props.onBeforeTaskChange}
+        afterChange={props.onReportingRemoved}
+      >
+        {expanded && agents !== null ? (
+          <TaskAgentRows
+            taskId={taskId}
+            agents={agents}
+            agentStates={agentStates}
+            tiers={tiers}
+            inputNeeded={inputNeeded}
+            waitingFresh={task.inputNeeded !== null}
+          />
+        ) : null}
+      </TaskFocusBoundary>
     </div>
   );
 }
@@ -391,12 +719,14 @@ function useTaskAgentStates(
   taskId: string,
   agents: BotTaskAgents | null,
 ): ReadonlyArray<TaskAgentState> {
-  const chatIndicators = useContext(NotificationIndicatorsContext);
+  const chatIndicators = useContext(ChatIndicatorAttestedContext);
+  const freshHosts = useContext(ChatIndicatorFreshHostsContext);
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
   return useMemo(
     () =>
       (agents?.nodes ?? []).map((node) => ({
         id: node.id,
+        fresh: freshHosts[agentHostOf(node, agents)],
         indicator: selectNotificationIndicatorState(
           { byId: localRows },
           { epicId: taskId, chatId: node.id },
@@ -404,7 +734,7 @@ function useTaskAgentStates(
           chatIndicators,
         ),
       })),
-    [agents, chatIndicators, localRows, taskId],
+    [agents, chatIndicators, freshHosts, localRows, taskId],
   );
 }
 
@@ -420,44 +750,27 @@ function TaskRowSummary(props: {
   readonly hostId: string;
   readonly entry: BotActiveTask;
   readonly title: string | null;
+  readonly titleState: TaskTitleState;
   readonly rollup: ChatDescendantStatusRollup | null;
   /** Whether this window holds the task's session, which names its agents. */
   readonly agentsReadable: boolean;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
 }): ReactNode {
-  const { entry, rollup } = props;
+  const { entry } = props;
   const { task } = entry;
+  const rollup =
+    task.state === "ended" &&
+    (props.rollup?.kind === "running" || props.rollup?.kind === "background")
+      ? null
+      : props.rollup;
   const inputNeeded = task.inputNeeded ?? NO_WAITING;
-  const interval = describeTaskInterval(task);
   return (
     <>
       <span className="flex min-w-0 items-center gap-2">
-        {rollup === null ? (
-          <span
-            aria-hidden
-            className="size-3.5 shrink-0"
-            data-testid="bot-activity-task-glyph"
-            data-kind="none"
-          />
-        ) : (
-          <span
-            role="img"
-            aria-label={chatStatusRollupWords(rollup)}
-            className="inline-flex size-3.5 shrink-0 items-center justify-center"
-            data-testid="bot-activity-task-glyph"
-            data-kind={rollup.kind}
-          >
-            <NestedChatStatusGlyph kind={rollup.kind} />
-          </span>
-        )}
+        <TaskStatusGlyph rollup={rollup} />
         <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
-          {displayTitle(props.title ?? "", "epic")}
+          {activityTaskTitle(props.title, props.titleState)}
         </span>
-        {interval === null ? null : (
-          <Badge variant="muted" size="xs" data-testid="bot-activity-every">
-            {interval}
-          </Badge>
-        )}
         {inputNeeded.length === 0 ? null : (
           <Badge
             variant="warning"
@@ -468,26 +781,23 @@ function TaskRowSummary(props: {
           </Badge>
         )}
       </span>
-      {task.label === null ? null : (
-        <span className="truncate pl-5.5 text-ui-xs text-foreground">
-          {task.label}
+      {props.title === null && props.titleState === "denied" ? (
+        <span className="pl-5.5 text-ui-xs text-muted-foreground">
+          The task may no longer be available to you.
         </span>
-      )}
+      ) : null}
       <span
         className="flex min-w-0 flex-wrap gap-x-1.5 pl-5.5 text-ui-xs text-muted-foreground"
         data-testid="bot-activity-task-line"
       >
-        <TaskStateWords
-          rollup={rollup}
-          entry={entry}
-          waiting={newestWaiting(inputNeeded)}
-        />
-        {isPeriodicTask(task) && task.nextAt !== null ? (
-          <span className="tabular-nums">
-            next check-in {formatAbsoluteDateTime(task.nextAt)}
-          </span>
-        ) : null}
-        {props.agentsReadable ? null : <TaskHostOffline task={task} />}
+        <TaskSummaryWords entry={entry} rollup={rollup} />
+        <TaskReportingSchedule task={task} />
+        {props.agentsReadable || entry.band === "unknown" ? null : (
+          <TaskHostOffline
+            task={task}
+            showUnknown={task.state !== "ended" && rollup === null}
+          />
+        )}
         <FromThread
           botId={props.botId}
           hostId={props.hostId}
@@ -495,6 +805,85 @@ function TaskRowSummary(props: {
           threads={props.threads}
         />
       </span>
+    </>
+  );
+}
+
+function TaskReportingSchedule(props: {
+  readonly task: BotTaskEntry;
+}): ReactNode {
+  const { task } = props;
+  const interval = describeTaskInterval(task);
+  if (interval === null) return null;
+  return (
+    <>
+      <span data-testid="bot-activity-every">
+        {task.pause === null ? `Reports ${interval}` : "Reports paused"}
+      </span>
+      {task.pause === null && task.nextAt !== null ? (
+        <span className="tabular-nums">
+          next check-in {formatAbsoluteDateTime(task.nextAt)}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+function TaskStatusGlyph(props: {
+  readonly rollup: ChatDescendantStatusRollup | null;
+}): ReactNode {
+  const { rollup } = props;
+  if (rollup === null) {
+    return (
+      <span
+        aria-hidden
+        className="size-3.5 shrink-0"
+        data-testid="bot-activity-task-glyph"
+        data-kind="none"
+      />
+    );
+  }
+  return (
+    <span
+      role="img"
+      aria-label={chatStatusRollupWords(rollup)}
+      className="inline-flex size-3.5 shrink-0 items-center justify-center"
+      data-testid="bot-activity-task-glyph"
+      data-kind={rollup.kind}
+    >
+      <NestedChatStatusGlyph kind={rollup.kind} />
+    </span>
+  );
+}
+
+function TaskSummaryWords(props: {
+  readonly entry: BotActiveTask;
+  readonly rollup: ChatDescendantStatusRollup | null;
+}): ReactNode {
+  const { entry, rollup } = props;
+  const { task } = entry;
+  const inputNeeded = task.inputNeeded ?? NO_WAITING;
+  const words = (
+    <TaskStateWords
+      rollup={rollup}
+      entry={entry}
+      waiting={newestWaiting(inputNeeded)}
+    />
+  );
+  if (task.state !== "ended") return words;
+  let reason = "Tracking ended";
+  if (task.endedReason === "completed") reason = "Check-in completed";
+  else if (task.endedReason === "by-bot") reason = "Reporting ended";
+  const needsAttention =
+    inputNeeded.length > 0 ||
+    rollup?.kind === "failure" ||
+    rollup?.kind === "fork" ||
+    rollup?.kind === "approval" ||
+    rollup?.kind === "interview";
+  return (
+    <>
+      <span data-testid="bot-activity-ended-reason">{reason}</span>
+      {needsAttention ? words : null}
     </>
   );
 }
@@ -540,7 +929,8 @@ function TaskStateWords(props: {
   readonly waiting: BotInputNeeded | null;
 }): ReactNode {
   const { rollup, entry, waiting } = props;
-  if (rollup === null) return null;
+  if (rollup === null)
+    return entry.band === "unknown" ? <span>Status unknown</span> : null;
   const working = Math.max(
     entry.working,
     rollup.runningCount + rollup.backgroundCount,
@@ -585,12 +975,16 @@ function Age(props: { readonly at: number }): ReactNode {
 
 /**
  * "agents on {host}, offline" for a task whose agents this window cannot
- * read because the host that last reported it is unreachable. Nothing while
- * no host has reported the task.
+ * read because the host that last reported it is unreachable. If no host has
+ * reported the task, show unknown only when no positive status is known.
  */
-function TaskHostOffline(props: { readonly task: BotTaskEntry }): ReactNode {
+function TaskHostOffline(props: {
+  readonly task: BotTaskEntry;
+  readonly showUnknown: boolean;
+}): ReactNode {
   const host = reportingHostOf(props.task);
-  if (host === null) return null;
+  if (host === null)
+    return props.showUnknown ? <span>Status unknown</span> : null;
   return <HostOfflineWords hostId={host.hostId} hostName={host.hostName} />;
 }
 
@@ -614,10 +1008,6 @@ function reportingHostOf(
   const waiting = newestWaiting(task.inputNeeded ?? []);
   if (waiting !== null) {
     return { hostId: waiting.hostId, hostName: waiting.hostName };
-  }
-  const reported = task.checkins?.find((record) => record.kind === "received");
-  if (reported?.kind === "received" && reported.hostId !== null) {
-    return { hostId: reported.hostId, hostName: reported.hostName };
   }
   return null;
 }
@@ -676,6 +1066,7 @@ function TaskAgentRows(props: {
   readonly agentStates: ReadonlyArray<TaskAgentState>;
   readonly tiers: ReadonlyMap<string, AgentActivityTier>;
   readonly inputNeeded: ReadonlyArray<BotInputNeeded>;
+  readonly waitingFresh: boolean;
 }): ReactNode {
   const { taskId, agents, tiers, inputNeeded } = props;
   const { nodes, archiveHidden, tree } = agents;
@@ -710,11 +1101,16 @@ function TaskAgentRows(props: {
             taskId={taskId}
             node={node}
             sessionHostId={agents.sessionHostId}
-            kind={ownChatStatusKind(
-              stateById.get(node.id) ?? EMPTY_NOTIFICATION_INDICATOR_STATE,
-              tiers.get(node.id),
-              "covered",
-            )}
+            indicator={
+              stateById.get(node.id) ?? EMPTY_NOTIFICATION_INDICATOR_STATE
+            }
+            tier={tiers.get(node.id)}
+            sourcesFresh={
+              props.waitingFresh
+                ? props.agentStates.find((agent) => agent.id === node.id)
+                    ?.fresh === true
+                : false
+            }
           />
         </li>
       ))}
@@ -738,10 +1134,24 @@ function TaskAgentRow(props: {
   readonly taskId: string;
   readonly node: BotTaskAgentNode;
   readonly sessionHostId: string | null;
-  readonly kind: ChatDescendantStatusKind | "unknown" | null;
+  readonly indicator: NotificationIndicatorState;
+  readonly tier: AgentActivityTier | undefined;
+  readonly sourcesFresh: boolean;
 }): ReactNode {
   const { taskId, node, sessionHostId } = props;
-  const kind = props.kind === "unknown" ? null : props.kind;
+  const activityCoverage = useAgentActivityCoverage(
+    node.ownerHostId ?? sessionHostId,
+  );
+  const kind = ownChatStatusKind(
+    props.indicator,
+    props.tier,
+    props.sourcesFresh && activityCoverage === "covered"
+      ? "covered"
+      : "unserved",
+  );
+  let statusWords = "idle";
+  if (kind === "unknown") statusWords = "Status unknown";
+  else if (kind !== null) statusWords = AGENT_STATE_WORDS[kind];
   const refs = useMemo(
     () => [{ epicId: taskId, agentId: node.id }],
     [taskId, node.id],
@@ -786,14 +1196,15 @@ function TaskAgentRow(props: {
       className="flex w-full min-w-0 items-center gap-2 rounded-sm py-1 pr-1 text-left text-ui-xs hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring"
     >
       <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
-        {kind === null ? null : <NestedChatStatusGlyph kind={kind} />}
+        {kind === null || kind === "unknown" ? null : (
+          <NestedChatStatusGlyph kind={kind} />
+        )}
       </span>
       <span className="min-w-0 flex-1 truncate text-foreground">
         {displayTitle(node.title, "agent")}
       </span>
       <span className="shrink-0 text-muted-foreground">
-        {kind === null ? "idle" : AGENT_STATE_WORDS[kind]} ·{" "}
-        <Age at={node.updatedAt} />
+        {statusWords} · <Age at={node.updatedAt} />
       </span>
     </button>
   );

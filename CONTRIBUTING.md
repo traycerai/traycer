@@ -4,9 +4,9 @@ Thanks for helping improve Traycer! This repo holds the open-source clients, CLI
 
 ## Prerequisites
 
-- **Bun 1.3.14** — the `packageManager` is pinned. Install that exact version with
-  `curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"` (Windows:
-  `iex "& {$(irm https://bun.sh/install.ps1)} -Version 1.3.14"`); the unversioned
+- **Bun 1.4.4** — the `packageManager` is pinned. Install that exact version with
+  `curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4"` (Windows:
+  `iex "& {$(irm https://bun.sh/install.ps1)} -Version 1.4.4"`); the unversioned
   installers and `bun upgrade` fetch the latest release instead
 - **Node 24**
 

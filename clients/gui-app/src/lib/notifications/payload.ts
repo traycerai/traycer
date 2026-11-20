@@ -174,7 +174,7 @@ export type HostSurfaceNotificationPayload = {
     }
   | {
       readonly surface: "notificationSettings";
-      /** A removal notice always opens its affected computer, including offline. */
+      /** The computer whose hooks were removed. Still required on the wire; the row opens Alerts, which no host scopes. */
       readonly hostId: string;
     }
 );
@@ -236,6 +236,49 @@ function parseEpicPayload(
   return { kind: "epic", epicId };
 }
 
+/** A present bot target is never discarded in favour of generic chat routing. */
+function readBotNotificationTarget(
+  value: Record<string, unknown>,
+  nested: boolean,
+): BotNotificationTarget | null {
+  const botId = readString(value.botId);
+  if (botId === null) return null;
+  const threadId = readString(value.threadId);
+  const messageId = readString(value.messageId);
+  if (
+    threadId === null &&
+    value.threadId !== null &&
+    (nested || Object.hasOwn(value, "threadId"))
+  )
+    return null;
+  if (
+    messageId === null &&
+    value.messageId !== null &&
+    (nested || Object.hasOwn(value, "messageId"))
+  )
+    return null;
+  if (threadId !== null && messageId === null) return null;
+  return { botId, threadId, messageId };
+}
+
+/** Native envelopes carry a nested target; mobile and older callers carry flat fields. */
+function parseBotNotificationTarget(
+  value: Record<string, unknown>,
+): BotNotificationTarget | null | undefined {
+  if (!Object.hasOwn(value, "bot")) {
+    return Object.hasOwn(value, "botId")
+      ? readBotNotificationTarget(value, false)
+      : undefined;
+  }
+  if (!isRecord(value.bot) || Array.isArray(value.bot)) return null;
+  const nested = readBotNotificationTarget(value.bot, true);
+  if (nested === null) return null;
+  for (const key of ["botId", "threadId", "messageId"] as const) {
+    if (Object.hasOwn(value, key) && value[key] !== nested[key]) return null;
+  }
+  return nested;
+}
+
 function parseChatPayload(
   value: Record<string, unknown>,
 ): ChatNotificationPayload | null {
@@ -247,7 +290,8 @@ function parseChatPayload(
   const hostId = readString(value.hostId);
   const messageId = readString(value.messageId);
   const eventId = readString(value.eventId);
-  const botId = readString(value.botId);
+  const bot = parseBotNotificationTarget(value);
+  if (bot === null) return null;
   const scrollToEnd =
     value.outcome === "completed" && value.backgroundWorkRunning !== true;
   const includeTranscriptAnchor = !scrollToEnd;
@@ -255,15 +299,7 @@ function parseChatPayload(
     kind: "chat",
     epicId,
     chatId: chatId === null ? undefined : chatId,
-    ...(botId === null
-      ? {}
-      : {
-          bot: {
-            botId,
-            threadId: readString(value.threadId),
-            messageId,
-          },
-        }),
+    ...(bot === undefined ? {} : { bot }),
     ...(hostId === null ? {} : { hostId }),
     messageId:
       includeTranscriptAnchor && messageId !== null ? messageId : undefined,
@@ -779,8 +815,8 @@ function routeHostSurfaceNotification(
   navigate: NotificationNavigate,
   payload: HostSurfaceNotificationPayload,
 ): void {
-  carryViewedHostIntoSettingsScope(payload.hostId ?? null);
   if (payload.surface === "worktreeSettings") {
+    carryViewedHostIntoSettingsScope(payload.hostId ?? null);
     selectWorktreeCleanupView(
       payload.view === "cleanupHistory" ? "cleanupHistory" : "settings",
       payload.focus?.resourceId ?? null,
@@ -810,7 +846,11 @@ const HOST_SURFACE_SETTINGS_SECTION: Record<
   SettingsSectionId
 > = {
   worktreeSettings: "worktrees",
-  notificationSettings: "notifications",
+  // A "hooks removed" row. Notification hooks are gone from the app, and with
+  // them the host page that listed them, so it opens Alerts, where what is
+  // left to set about notifications lives; that page is not the host's, so
+  // the row's host is not carried into the Settings scope.
+  notificationSettings: "alerts",
 };
 
 function routeTerminalNotification(
@@ -944,6 +984,7 @@ function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
       kind: "chat",
       chatId: payload.chatId,
       messageId: payload.messageId ?? null,
+      sendPostId: null,
     },
   };
 }
@@ -963,6 +1004,21 @@ export function isBotChatWithoutDevice(
     botTargetOf(payload) !== null &&
     (tracySurfaceHostId() ?? effectiveHostId) === null
   );
+}
+
+/**
+ * The bot a chat row opens and the host its Tracy surface reads through: the
+ * open surface's own, else the effective host a closed one would bind to.
+ * `null` for any other row, or while the window has no such host.
+ */
+export function botNotificationDestination(
+  payload: NotificationPayload,
+  effectiveHostId: string | null,
+): { readonly botId: string; readonly hostId: string } | null {
+  if (payload.kind !== "chat") return null;
+  const bot = botTargetOf(payload);
+  const hostId = tracySurfaceHostId() ?? effectiveHostId;
+  return bot === null || hostId === null ? null : { botId: bot.botId, hostId };
 }
 
 /**

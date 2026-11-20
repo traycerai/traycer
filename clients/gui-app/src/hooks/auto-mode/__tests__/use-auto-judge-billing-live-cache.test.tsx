@@ -427,6 +427,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         ),
       { wrapper: fixture.Wrapper },
     );
@@ -509,6 +510,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         ),
       { wrapper: fixture.Wrapper },
     );
@@ -570,6 +572,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         ),
       { wrapper: fixture.Wrapper },
     );
@@ -601,6 +604,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         );
         seen.push(billing);
         return billing;
@@ -671,6 +675,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         );
         seen.push(billing);
         return billing;
@@ -739,6 +744,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         );
         seen.push(billing);
         return { billing, save: useAutoJudgeSetMutation() };
@@ -828,6 +834,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           fixture.hostId,
           CLAUDE_HARNESS_ID,
           CLAUDE_MODEL_SLUG,
+          null,
         ),
       { wrapper: fixture.Wrapper },
     );

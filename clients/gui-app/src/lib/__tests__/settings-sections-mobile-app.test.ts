@@ -3,10 +3,12 @@
  * keeps every id either way, because ids resolve routes, remembered tab paths
  * and titles.
  *
- * Two sections the installed mobile app does not offer, for two different
- * reasons: Keybindings because chord capture reads `keydown` on `window` and a
- * touch shell can never commit one, and Link mobile app because the panel is the
- * DISPLAY end of a pairing whose scanner end is the mobile app itself.
+ * Sections the installed mobile app does not offer, for different reasons:
+ * Keybindings because chord capture reads `keydown` on `window` and a touch
+ * shell can never commit one, Link mobile app because the panel is the DISPLAY
+ * end of a pairing whose scanner end is the mobile app itself, and Application
+ * Diagnostics because every control needs a desktop bridge. Unlike the first
+ * two, the diagnostics route does not redirect: the panel says so itself.
  *
  * One section ONLY the installed mobile app offers: Delete account, which
  * exists to satisfy App Store review guideline 5.1.1(v). Desktop and the web
@@ -14,10 +16,11 @@
  * theirs to not have - and `/settings/delete-account` redirects there, which is
  * what `isSettingsSectionVisible` is asked in that route's `beforeLoad`.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setMobileApp } from "@/lib/mobile-app";
 import {
+  RETIRED_SECTION_REPLACEMENTS,
   SETTINGS_SECTIONS,
   isSettingsSectionVisible,
   visibleSettingsSections,
@@ -29,10 +32,22 @@ const RETIRED: ReadonlyArray<SettingsSectionId> = [
   "machine-setup",
   "agent-definitions",
   "browser-agent-access",
+  "notifications",
 ];
+
+const soundtrackOfferedMock = vi.hoisted(() => ({ value: true }));
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => soundtrackOfferedMock.value,
+}));
 
 afterEach(() => {
   setMobileApp(false);
+});
+
+beforeEach(() => {
+  soundtrackOfferedMock.value = true;
 });
 
 describe("visibleSettingsSections", () => {
@@ -47,6 +62,31 @@ describe("visibleSettingsSections", () => {
     expect(isSettingsSectionVisible("keybindings")).toBe(true);
     expect(isSettingsSectionVisible("link-phone")).toBe(true);
     expect(isSettingsSectionVisible("delete-account")).toBe(false);
+  });
+
+  it("offers Sounds on desktop only where the soundtrack is offered", () => {
+    setMobileApp(false);
+    soundtrackOfferedMock.value = false;
+    expect(
+      visibleSettingsSections().map((section) => section.id),
+    ).not.toContain("app-notifications");
+    expect(isSettingsSectionVisible("app-notifications")).toBe(false);
+    expect(RETIRED_SECTION_REPLACEMENTS["app-notifications"]).toBe("alerts");
+
+    soundtrackOfferedMock.value = true;
+    expect(visibleSettingsSections().map((section) => section.id)).toContain(
+      "app-notifications",
+    );
+    expect(isSettingsSectionVisible("app-notifications")).toBe(true);
+  });
+
+  it("never offers Sounds in the installed mobile app, whatever the soundtrack", () => {
+    setMobileApp(true);
+    soundtrackOfferedMock.value = true;
+    expect(
+      visibleSettingsSections().map((section) => section.id),
+    ).not.toContain("app-notifications");
+    expect(isSettingsSectionVisible("app-notifications")).toBe(false);
   });
 
   // Identity, not just equality: consumers memoize on this list and compare it
@@ -74,6 +114,23 @@ describe("visibleSettingsSections", () => {
     expect(isSettingsSectionVisible("link-phone")).toBe(false);
   });
 
+  it("omits app-diagnostics in the installed mobile app and keeps it on desktop", () => {
+    setMobileApp(true);
+    expect(
+      visibleSettingsSections().map((section) => section.id),
+    ).not.toContain("app-diagnostics");
+    expect(isSettingsSectionVisible("app-diagnostics")).toBe(false);
+    expect(SETTINGS_SECTIONS.map((section) => section.id)).toContain(
+      "app-diagnostics",
+    );
+
+    setMobileApp(false);
+    expect(isSettingsSectionVisible("app-diagnostics")).toBe(true);
+    expect(visibleSettingsSections().map((section) => section.id)).toContain(
+      "app-diagnostics",
+    );
+  });
+
   it("offers delete-account only in the installed mobile app", () => {
     setMobileApp(true);
     const ids = visibleSettingsSections().map((section) => section.id);
@@ -93,7 +150,11 @@ describe("visibleSettingsSections", () => {
     const ids = visibleSettingsSections().map((section) => section.id);
     const expected = SETTINGS_SECTIONS.map((section) => section.id).filter(
       (id) =>
-        id !== "keybindings" && id !== "link-phone" && !RETIRED.includes(id),
+        id !== "keybindings" &&
+        id !== "link-phone" &&
+        id !== "app-diagnostics" &&
+        id !== "app-notifications" &&
+        !RETIRED.includes(id),
     );
     expect(ids).toEqual(expected);
   });
@@ -103,6 +164,7 @@ describe("visibleSettingsSections", () => {
     setMobileApp(true);
     expect(ids).toContain("keybindings");
     expect(ids).toContain("link-phone");
+    expect(ids).toContain("app-diagnostics");
     setMobileApp(false);
     expect(ids).toContain("delete-account");
   });

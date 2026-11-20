@@ -225,6 +225,7 @@ function LiveToolbar(): ReactNode {
           presentation
           store={store}
           onAttachImages={() => undefined}
+          onAttachFiles={() => undefined}
           canSubmit={false}
           attachmentPending={false}
           onSubmit={() => undefined}

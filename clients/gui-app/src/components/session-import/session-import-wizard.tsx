@@ -757,7 +757,7 @@ function SessionImportFilterSheet(
       </SheetTrigger>
       <SheetContent
         side="bottom"
-        className="onboarding-import-filter-sheet max-h-[85svh] overflow-y-auto"
+        className="onboarding-import-filter-sheet overflow-y-auto data-[side=bottom]:max-h-[min(85svh,calc(var(--spacing-safe-dvh)-var(--spacing-safe-bottom)))]"
       >
         <SheetHeader>
           <SheetTitle>Filters</SheetTitle>

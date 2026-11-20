@@ -1,3 +1,16 @@
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import { localTeamAdmissionCliError } from "../internal/local-open-auth";
+import {
+  hostDoorRefusalCliError,
+  hostTokenFailureCliError,
+} from "../internal/host-door-words";
+import {
+  createCliHostTokens,
+  type CliHostTokenFailure,
+  type SignInRevalidator,
+  type CliMintRefusalListener,
+} from "../internal/cli-host-tokens";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
 import {
   hostStreamRpcRegistry,
@@ -16,7 +29,9 @@ import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream
 import {
   MutableBearerLease,
   readLeaseBearer,
+  type BearerSourceProvider,
 } from "../../../shared/auth/bearer-source";
+import type { HostCredentialMintFlow } from "../../../shared/host-transport/host-credential-mint-flow";
 import type { RevalidateOutcome } from "../../../shared/auth/bearer-revalidator";
 import {
   createProactiveRefreshScheduler,
@@ -41,7 +56,16 @@ import {
 } from "../host/pid-metadata";
 import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
-import { callHostRpc } from "../internal/host-rpc";
+import {
+  callHostRpcWithAgentCredential,
+  PLAIN_DISPATCH,
+} from "../internal/host-rpc";
+import {
+  PROCESS_AGENT_ENVIRONMENT,
+  readAgentCommandCredential,
+  type AgentCommandCredential,
+  type AgentSessionCapability,
+} from "../internal/agent-session-capability";
 import {
   stdoutReaderClosed,
   writeStderr,
@@ -78,11 +102,11 @@ import { CLI_CLIENT_IDENTITY } from "../cli-version";
  *     it on reconnect. From the negotiated `@1.2` this CLI enqueues the
  *     `agent.inbox.ack` itself; below that there is no event id on the frame
  *     and the host retires the row on its own (see `handleServerFrame`).
- *  2. Credential maintenance - the store-backed revalidator rotates and
+ *  2. Outside an agent session, credential maintenance - the store-backed revalidator rotates and
  *     PERSISTS this machine's credentials, proactively before expiry and
  *     reactively on `UNAUTHORIZED`. A rotation spends a single-use refresh
  *     token, which is why it goes through the locked store.
- *  3. Host-credential provisioning - a host reporting `missing` gets a
+ *  3. Outside an agent session, host-credential provisioning - a host reporting `missing` gets a
  *     delegated credential minted for it, so it keeps serving after this
  *     process exits.
  *
@@ -151,38 +175,15 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     });
     throw new Error("traycer monitor: epic id required — set TRAYCER_EPIC_ID.");
   }
-  const auth = await resolveHostAuth();
-  if (auth === null) {
-    logger.warn("Monitor cannot start without credentials", {
-      environment: config.environment,
-      agentId,
-      epicId,
-    });
-    throw new Error(
-      "traycer monitor: not signed in — run `traycer login` to authenticate.",
-    );
-  }
-  logger.debug("Monitor credentials resolved", {
-    environment: config.environment,
-    agentId,
-    epicId,
-  });
-
-  const lease = new MutableBearerLease(auth.token, auth.userId);
-  // Reactive (on-UNAUTHORIZED) and proactive (pre-TTL) refreshes both route
-  // through the locked `rotate` (§7) so a monitor refresh and a concurrent
-  // desktop refresh can never double-spend the single-use refresh token. One
-  // store for the monitor's lifetime - its background continuation timer can
-  // land a `commit-failed` spend while the monitor keeps running - disposed in
-  // the `finally` below.
-  const store = createCliCredentialsStore();
-  // `signal: null`: the monitor's revalidator lives as long as the command
-  // itself - there is no earlier deadline to cancel a rotation against.
-  const revalidator = createStoreBackedRevalidator({
-    store,
-    lease,
-    signal: null,
-  });
+  const agentCredential = readAgentCommandCredential(PROCESS_AGENT_ENVIRONMENT);
+  const credential =
+    agentCredential.kind === "capability"
+      ? capabilityMonitorCredential(agentCredential.capability)
+      : await signInMonitorCredential(
+          logger,
+          { agentId, epicId },
+          agentCredential.kind === "none",
+        );
 
   // The shared client reads `endpoint()` on every (re)connect, so a poller that
   // refreshes the cached endpoint is the CLI's equivalent of the renderer's
@@ -233,27 +234,28 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // one, and the latch closes it for good after that.
     hostId: endpoint?.hostId ?? null,
     endpoint: () => endpoint,
-    bearer: () => lease,
+    // The supplied capability or the normal host-only token. Neither an
+    // open nor an acknowledgement can replace the captured capability.
+    bearer: () =>
+      endpoint === null ? null : credential.bearer(endpoint.hostId)(),
+    userId: credential.userId,
     // `auth: null` opts out of the WsStreamClient's built-in stream-auth
-    // recovery: the monitor runs its OWN refresh-on-UNAUTHORIZED loop in
-    // `runInboxSubscription` (revalidate, then re-subscribe on `rotated` /
+    // recovery: the monitor runs its OWN recovery loop in
+    // `runInboxSubscription` (a fresh token, then re-subscribe on `rotated` /
     // back off and re-subscribe on `network-error`), so wiring the client
-    // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
+    // handler too would double up. A refusal a fresh token cannot answer stays
+    // terminal there.
     auth: null,
+    // Each admitted open resets the host's recovery, so a refusal hours
+    // after a good reconnect earns its one fresh token again.
+    door: {
+      refused: () => undefined,
+      admitted: () => {
+        if (endpoint !== null) credential.admitted(endpoint.hostId);
+      },
+    },
     clock: null,
-    // Delegated host-credential provisioning. `monitor` is the CLI command that
-    // most needs it: the host it watches should keep serving after this process
-    // exits. Provisioning is silent, so this works the same whether `monitor` is
-    // run from a terminal or as the background command it usually is.
-    hostCredentialMint: createCliHostCredentialMintFlow({
-      authnBaseUrl: auth.authnBaseUrl,
-      bearer: () => readLeaseBearer(lease),
-      diag: (message) => diag(message),
-      signal: null,
-      unavailableNote:
-        "continuing without a host credential — it will stop working when this connection ends.",
-      onUnauthorized: null,
-    }),
+    hostCredentialMint: credential.hostCredentialMint,
     // The monitor provisions opportunistically and never verifies adoption -
     // the next connection's ack settles it.
     onHostCredentialState: null,
@@ -270,33 +272,10 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
-  // Proactively refresh the bearer shortly before its ~4h TTL so a long-running
-  // monitor never carries a dead token into a reconnect (or hands the host a
-  // stale credential it would 401 on). The reactive refresh-on-`UNAUTHORIZED`
-  // loop in `runInboxSubscription` stays as the safety net; this just rotates
-  // ahead of expiry. The scheduler shares the same single-flight `revalidator`,
-  // so a proactive and reactive refresh can't race into a double rotation.
-  const refreshScheduler = createProactiveRefreshScheduler<NodeJS.Timeout>({
-    getToken: () => readLeaseBearer(lease),
-    revalidate: async () => {
-      const outcome = await revalidator.revalidateCurrentContext();
-      if (outcome === "rotated") {
-        // Push the fresh bearer onto the open inbox stream so the host updates
-        // its captured credential in place - no reconnect. The reactive
-        // UNAUTHORIZED path already re-dials with the fresh token, so it needs
-        // no push.
-        client.notifyBearerRotated();
-      }
-      return outcome;
-    },
-    now: () => Date.now(),
-    setTimer: (handler, ms) => setTimeout(handler, ms),
-    clearTimer: (handle) => clearTimeout(handle),
-    leadMs: DEFAULT_REFRESH_LEAD_MS,
-    minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
-    onDiagnostic: (message) => diag(message),
-  });
-  refreshScheduler.start();
+  credential.startUpkeep(
+    () => endpoint?.hostId ?? null,
+    () => client.notifyBearerRotated(),
+  );
 
   diag(`inbox monitor starting — agent=${agentId} epic=${epicId}`);
   logger.info("Monitor subscription loop starting", {
@@ -307,7 +286,17 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   try {
     await runInboxSubscription(
       client,
-      revalidator,
+      (details) =>
+        endpoint === null
+          ? Promise.resolve<RevalidateOutcome>("network-error")
+          : credential.recover(endpoint.hostId, details),
+      credential.signInRejected,
+      (listener) =>
+        credential.onMintRefused((hostId, failure) => {
+          if (endpoint?.hostId === hostId) listener(failure);
+        }),
+      credential.presented,
+      agentCredential,
       { agentId, epicId },
       logger,
       stdoutReaderClosed(),
@@ -318,9 +307,8 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // inbox redelivers it to the next monitor.
     client.close("stdout-reader-closed");
   } finally {
-    refreshScheduler.stop();
+    credential.stopUpkeep();
     clearInterval(poll);
-    store.dispose();
     logger.info("Monitor subscription loop stopped", {
       environment: config.environment,
       agentId,
@@ -329,11 +317,165 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   }
 }
 
+interface MonitorCredential {
+  readonly presented: "host-token" | "agent-capability";
+  readonly userId: string;
+  readonly bearer: (hostId: string) => BearerSourceProvider;
+  readonly recover: (
+    hostId: string,
+    details: FatalErrorDetails,
+  ) => Promise<RevalidateOutcome>;
+  /** The host admitted an open: its recovery's bounds start again. */
+  readonly admitted: (hostId: string) => void;
+  readonly signInRejected: () => boolean;
+  readonly onMintRefused: (listener: CliMintRefusalListener) => () => void;
+  readonly hostCredentialMint: HostCredentialMintFlow | null;
+  /** `onRenewed` pushes a renewed token onto the open stream. */
+  readonly startUpkeep: (
+    hostId: () => string | null,
+    onRenewed: () => void,
+  ) => void;
+  readonly stopUpkeep: () => void;
+}
+
+/**
+ * Spent at authn alone: the host receives this CLI's host-only token, never the
+ * sign-in. `inCapabilitylessSession` presents nothing and reads no sign-in.
+ */
+async function signInMonitorCredential(
+  logger: ILogger,
+  target: InboxTarget,
+  inCapabilitylessSession: boolean,
+): Promise<MonitorCredential> {
+  const auth = inCapabilitylessSession ? null : await resolveHostAuth();
+  if (auth === null) {
+    logger.warn("Monitor cannot start without credentials", {
+      environment: config.environment,
+      agentId: target.agentId,
+      epicId: target.epicId,
+    });
+    throw new Error(
+      "traycer monitor: not signed in — run `traycer login` to authenticate.",
+    );
+  }
+  logger.debug("Monitor credentials resolved", {
+    environment: config.environment,
+    agentId: target.agentId,
+    epicId: target.epicId,
+  });
+  const lease = new MutableBearerLease(auth.token, auth.userId);
+  // Refreshes of the sign-in (when authn refuses it for a mint, and ahead of
+  // its TTL) route through the locked `rotate` (§7) so a monitor refresh and a
+  // concurrent desktop refresh can never double-spend the single-use refresh
+  // token. One store for the monitor's lifetime - its background continuation
+  // timer can land a `commit-failed` spend while the monitor keeps running -
+  // disposed by `stopUpkeep`.
+  const store = createCliCredentialsStore();
+  // `signal: null`: the monitor's revalidator lives as long as the command
+  // itself - there is no earlier deadline to cancel a rotation against.
+  const revalidator: SignInRevalidator = createStoreBackedRevalidator({
+    store,
+    lease,
+    signal: null,
+  });
+  const hostTokens = createCliHostTokens({
+    lease,
+    refresh: () => revalidator.revalidateCurrentContext(),
+    signal: null,
+  });
+  let refreshScheduler: { readonly stop: () => void } | null = null;
+  return {
+    presented: "host-token",
+    userId: lease.identity.userId,
+    bearer: (hostId) => hostTokens.streamBearer(hostId),
+    recover: (hostId, details) =>
+      hostTokens.streamRecovery(hostId).revalidateRefused(details),
+    admitted: (hostId) => hostTokens.streamRecovery(hostId).admitted(),
+    signInRejected: () => hostTokens.signInRejected(),
+    onMintRefused: (listener) => hostTokens.onMintRefused(listener),
+    // Delegated host-credential provisioning. `monitor` is the CLI command
+    // that most needs it: the host it watches should keep serving after this
+    // process exits. Provisioning is silent, so this works the same whether
+    // `monitor` is run from a terminal or as the background command it
+    // usually is.
+    hostCredentialMint: createCliHostCredentialMintFlow({
+      authnBaseUrl: auth.authnBaseUrl,
+      bearer: () => readLeaseBearer(lease),
+      diag: (message) => diag(message),
+      signal: null,
+      unavailableNote:
+        "continuing without a host credential — it will stop working when this connection ends.",
+      onUnauthorized: null,
+    }),
+    // Proactively refresh the sign-in shortly before its ~4h TTL, and buy the
+    // host-only token with it at once, so a long-running monitor never
+    // carries a dead token into a reconnect. The shared single-flight `revalidator` keeps a
+    // proactive and a reactive refresh from racing. The scheduler shares the
+    // same single-flight `revalidator`, so a proactive and reactive refresh
+    // can't race into a double rotation.
+    startUpkeep: (hostId, onRenewed) => {
+      const scheduler = createProactiveRefreshScheduler<NodeJS.Timeout>({
+        getToken: () => readLeaseBearer(lease),
+        revalidate: async () => {
+          const outcome = await hostTokens.refreshSignIn();
+          const current = hostId();
+          if (
+            outcome === "rotated" &&
+            current !== null &&
+            (await hostTokens.renewAfterSignInRefresh(current))
+          ) {
+            // The host updates its captured credential in place - no
+            // reconnect. The reactive path already re-dials with the fresh
+            // token, so it needs no push. Updated in place.
+            onRenewed();
+          }
+          return outcome;
+        },
+        now: () => Date.now(),
+        setTimer: (handler, ms) => setTimeout(handler, ms),
+        clearTimer: (handle) => clearTimeout(handle),
+        leadMs: DEFAULT_REFRESH_LEAD_MS,
+        minDelayMs: DEFAULT_REFRESH_MIN_DELAY_MS,
+        onDiagnostic: (message) => diag(message),
+      });
+      scheduler.start();
+      refreshScheduler = scheduler;
+    },
+    stopUpkeep: () => {
+      refreshScheduler?.stop();
+      store.dispose();
+    },
+  };
+}
+
+/**
+ * The agent session capability: no sign-in is read and nothing is renewed,
+ * minted or provisioned. The host's refusal of it ends the monitor.
+ */
+function capabilityMonitorCredential(
+  capability: AgentSessionCapability,
+): MonitorCredential {
+  return {
+    presented: "agent-capability",
+    userId: capability.bearer.identity.userId,
+    bearer: () => capability.streamBearer,
+    recover: () => capability.streamRecovery(),
+    admitted: () => undefined,
+    signInRejected: () => false,
+    onMintRefused: () => () => undefined,
+    hostCredentialMint: null,
+    startUpkeep: () => undefined,
+    stopUpkeep: () => undefined,
+  };
+}
+
 type InboxTarget = { readonly agentId: string; readonly epicId: string };
 
-type InboxRevalidator = {
-  revalidateCurrentContext(): Promise<RevalidateOutcome>;
-};
+type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
+
+type InboxMintRefusals = (
+  listener: (failure: CliHostTokenFailure) => void,
+) => () => void;
 
 /**
  * Drives the inbox subscription until a terminal failure or until stdout's
@@ -342,16 +484,28 @@ type InboxRevalidator = {
  * non-recoverable close so `traycer monitor` exits non-zero. A healthy stream
  * with a live reader runs forever.
  *
- * Recovery on a host `UNAUTHORIZED` fatal switches on the refresh OUTCOME:
+ * Recovery on a host's credential refusal switches on the fresh token's
+ * OUTCOME:
  *   - `rotated`       → re-subscribe immediately (bounded by the spin guard);
  *   - `network-error` → transient; keep the bearer and re-subscribe after a
  *                       delay (don't kill a long-running monitor on a flaky link);
- *   - `rejected`      → terminal (the host re-spawns monitor after re-auth).
- * Any non-`UNAUTHORIZED` fatal (e.g. `INCOMPATIBLE`) is terminal.
+ *   - `rejected`      → terminal, with the door's line: sign-in advice only
+ *                       when `signInRejected()` says this machine is signed
+ *                       out in fact.
+ * Every other fatal (e.g. `INCOMPATIBLE`) is terminal, with the door's line
+ * when it is a door refusal.
+ *
+ * A mint authn refuses for good, whether the stream was waiting for its first
+ * token or recovering, is terminal with the mint's line: no reconnect could
+ * be given a token. One that cannot reach authn is waited out.
  */
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
-  revalidator: InboxRevalidator,
+  recover: InboxRecovery,
+  signInRejected: () => boolean,
+  mintRefusals: InboxMintRefusals,
+  presented: "host-token" | "agent-capability",
+  credential: AgentCommandCredential,
   target: InboxTarget,
   logger: ILogger,
   readerClosed: AbortSignal,
@@ -362,7 +516,12 @@ function runInboxSubscription(
     let healthTimer: NodeJS.Timeout | null = null;
     let retryTimer: NodeJS.Timeout | null = null;
     let settled = false;
-    const acknowledgements = new InboxAcknowledgementQueue(target, logger);
+    let stopMintRefusals: () => void = () => undefined;
+    const acknowledgements = new InboxAcknowledgementQueue(
+      target,
+      logger,
+      credential,
+    );
 
     const clearHealthTimer = (): void => {
       if (healthTimer !== null) {
@@ -393,6 +552,7 @@ function runInboxSubscription(
       );
       clearHealthTimer();
       clearRetryTimer();
+      stopMintRefusals();
       acknowledgements.dispose();
       session?.close();
       readerClosed.removeEventListener("abort", stopForClosedReader);
@@ -411,6 +571,7 @@ function runInboxSubscription(
       });
       clearHealthTimer();
       clearRetryTimer();
+      stopMintRefusals();
       acknowledgements.dispose();
       session?.close();
       resolve();
@@ -442,19 +603,34 @@ function runInboxSubscription(
           acknowledgements,
         );
       });
-      next.onStatusChange((status, reason) => {
-        void onStatusChange(status, reason);
+      next.onStatusChange((status, reason, retryCause) => {
+        void onStatusChange(status, reason, retryCause);
       });
     };
 
     const onStatusChange = async (
       status: StreamConnectionStatus,
       reason: StreamCloseReason | null,
+      retryCause: FatalErrorDetails | null,
     ): Promise<void> => {
       if (settled) {
         return;
       }
-      diag(`stream ${status}`);
+      // The shared client reports retryable host fatals as reconnecting,
+      // without a close reason. A capability's refusal is terminal there too.
+      if (presented === "agent-capability" && retryCause !== null) {
+        fail(
+          new Error(
+            `traycer monitor: host closed the stream: ${retryCause.reason}`,
+          ),
+        );
+        return;
+      }
+      const admissionError = retryCause
+        ? localTeamAdmissionCliError(retryCause)
+        : null;
+      if (admissionError !== null) diag(admissionError.message);
+      else diag(`stream ${status}`);
       clearHealthTimer();
       if (status === "open") {
         logger.debug("Monitor stream opened", {
@@ -473,23 +649,30 @@ function runInboxSubscription(
       ) {
         return;
       }
-      if (reason.details.code !== "UNAUTHORIZED") {
+      const details = reason.details;
+      const hostClosed = (): Error =>
+        new Error(`traycer monitor: host closed the stream: ${details.reason}`);
+      if (presented === "agent-capability") {
+        fail(hostClosed());
+        return;
+      }
+      if (details.retryable === true || !isCredentialRefusal(details)) {
         logger.warn("Monitor stream closed with non-auth fatal error", {
           environment: config.environment,
-          code: reason.details.code,
+          code: details.code,
           agentId: target.agentId,
           epicId: target.epicId,
         });
         fail(
-          new Error(
-            `traycer monitor: host closed the stream: ${reason.details.reason}`,
-          ),
+          hostDoorRefusalCliError(details, false, hostClosed) ??
+            localTeamAdmissionCliError(details) ??
+            hostClosed(),
         );
         return;
       }
-      // The revalidator never throws (it maps failures to an outcome), so this
+      // The recovery never throws (it maps failures to an outcome), so this
       // await can't reject the swallowed handler promise into a hang.
-      const outcome = await revalidator.revalidateCurrentContext();
+      const outcome = await recover(details);
       if (settled) {
         return;
       }
@@ -539,7 +722,10 @@ function runInboxSubscription(
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
-      fail(new Error("traycer monitor: session expired — re-authenticate."));
+      fail(
+        hostDoorRefusalCliError(details, signInRejected(), hostClosed) ??
+          hostClosed(),
+      );
     };
 
     if (readerClosed.aborted) {
@@ -548,6 +734,15 @@ function runInboxSubscription(
     }
     readerClosed.addEventListener("abort", stopForClosedReader, {
       once: true,
+    });
+    stopMintRefusals = mintRefusals((failure) => {
+      logger.warn("Monitor host-only token mint refused", {
+        environment: config.environment,
+        failure: failure.kind,
+        agentId: target.agentId,
+        epicId: target.epicId,
+      });
+      fail(hostTokenFailureCliError(failure));
     });
     subscribe();
   });
@@ -574,6 +769,7 @@ class InboxAcknowledgementQueue {
   constructor(
     private readonly target: InboxTarget,
     private readonly logger: ILogger,
+    private readonly credential: AgentCommandCredential,
   ) {}
 
   enqueue(eventId: string): void {
@@ -618,11 +814,16 @@ class InboxAcknowledgementQueue {
           InboxAcknowledgementQueue.MAX_EVENT_IDS_PER_ACK,
         );
         try {
-          await callHostRpc("agent.inbox.ack", {
-            epicId: this.target.epicId,
-            agentId: this.target.agentId,
-            eventIds,
-          });
+          await callHostRpcWithAgentCredential(
+            "agent.inbox.ack",
+            {
+              epicId: this.target.epicId,
+              agentId: this.target.agentId,
+              eventIds,
+            },
+            this.credential,
+            PLAIN_DISPATCH,
+          );
           this.retryDelayMs = InboxAcknowledgementQueue.INITIAL_RETRY_DELAY_MS;
           for (const eventId of eventIds) this.pendingEventIds.delete(eventId);
         } catch (error) {

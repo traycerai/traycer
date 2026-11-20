@@ -21,6 +21,7 @@ const SANDBOX = hostScopeOptionFixture({
     state: "awake",
     frozen: false,
     summary: sandboxSummaryFixture({ hostId: "sbx-1", burst: false }),
+    ownerKind: "unknown",
     teamOwned: false,
   },
 });
@@ -29,7 +30,13 @@ const SANDBOX_UNANSWERED = hostScopeOptionFixture({
   hostId: "sbx-2",
   name: "Unlisted box",
   kind: "sandbox",
-  sandbox: { state: "awake", frozen: false, summary: null, teamOwned: false },
+  sandbox: {
+    state: "awake",
+    frozen: false,
+    summary: null,
+    ownerKind: "unknown",
+    teamOwned: false,
+  },
 });
 
 function picker(input: {

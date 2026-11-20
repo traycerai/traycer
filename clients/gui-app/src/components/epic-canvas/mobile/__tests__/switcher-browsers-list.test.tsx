@@ -707,7 +707,7 @@ describe("SwitcherBrowsersList over the task-wide catalog", () => {
     await user.click(screen.getByTestId("switcher-browsers-filter"));
     await user.click(
       await screen.findByRole("menuitemcheckbox", {
-        name: "Show offline devices",
+        name: "Show offline hosts",
       }),
     );
 

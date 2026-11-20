@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { computePosition } from "@floating-ui/dom";
+import { desktopHistoryLayerBlocksNavigation } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import { OnboardingCoachmark } from "@/components/onboarding/onboarding-coachmark";
 
 // See `first-task-coachmark.test.tsx`: jsdom has no layout, so the placement is
@@ -135,6 +136,56 @@ describe("OnboardingCoachmark lifecycle", () => {
     });
     expect(anchors()).not.toContain(target);
     expect(replacement.hasAttribute("data-first-task-highlight")).toBe(false);
+  });
+
+  it("stops counting as a dialog for the back/forward swipe while its target is covered", async () => {
+    const cover = document.body.appendChild(document.createElement("div"));
+    // jsdom has no `inert`; browsers reflect it as an attribute, which is what
+    // the swipe's layer scan reads.
+    Object.defineProperty(HTMLElement.prototype, "inert", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("inert");
+      },
+      set(this: HTMLElement, inert: boolean) {
+        this.toggleAttribute("inert", inert);
+      },
+    });
+    // The placement runs once per mount (`autoUpdate` is stubbed), so each
+    // answer to the hit test gets a fresh mount.
+    const blocksSwipeWhenHitting = async (
+      hit: (target: Element) => Element,
+    ): Promise<boolean> => {
+      render(<CoachmarkHarness />);
+      const target = createVisibleTarget();
+      Object.defineProperty(target, "getBoundingClientRect", {
+        configurable: true,
+        value: () => new DOMRect(16, 60, 44, 44),
+      });
+      const hitTest = vi
+        .spyOn(document, "elementFromPoint")
+        .mockReturnValue(hit(target));
+      screen.getByTestId("guide-root").append(target);
+      const card = await screen.findByTestId("guide-coachmark");
+      await waitFor(() =>
+        expect(
+          card.closest<HTMLElement>(".first-task-coachmark-floater")?.dataset
+            .occluded,
+        ).toBeDefined(),
+      );
+      const blocks = desktopHistoryLayerBlocksNavigation();
+      hitTest.mockRestore();
+      cleanup();
+      return blocks;
+    };
+
+    try {
+      expect(await blocksSwipeWhenHitting((target) => target)).toBe(true);
+      expect(await blocksSwipeWhenHitting(() => cover)).toBe(false);
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, "inert");
+      cover.remove();
+    }
   });
 
   it("holds the next anchor until a closing picker has settled", async () => {

@@ -22,8 +22,12 @@ import {
   type BotMentionDirectory,
   type BotMentioned,
 } from "@/components/bots/bot-mentions-context";
+import { TracyTranscriptOriginScope } from "@/components/bots/tracy-transcript-origin-scope";
 import { AgentReferenceMarkdown } from "@/components/chat/segments/agent-reference-markdown";
-import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
+import {
+  fromTracyTranscript,
+  openEpicFromListIntent,
+} from "@/lib/tab-navigation/intents";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const VIEWER = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
@@ -303,6 +307,33 @@ describe("a task's chip", () => {
       undefined,
     );
     expect(askedTaskIds()).toEqual([]);
+  });
+
+  it("hands the controller the transcript's bot when drawn inside a Tracy transcript", () => {
+    render(
+      <BotMentionsContext value={DIRECTORY}>
+        <TracyTranscriptOriginScope botId={TRIAGE_BOT}>
+          {body(`see <~${RELEASE_TASK}>`)}
+        </TracyTranscriptOriginScope>
+      </BotMentionsContext>,
+      { wrapper: Providers },
+    );
+
+    fireEvent.click(screen.getByTestId("bot-mention-task"));
+
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith(
+      mocks.navigate,
+      fromTracyTranscript(
+        openEpicFromListIntent({
+          epicId: RELEASE_TASK,
+          focus: undefined,
+          name: "Release notes",
+          replaceEmptyDraftId: null,
+        }),
+        { botId: TRIAGE_BOT },
+      ),
+      undefined,
+    );
   });
 
   it("says only 'a task' for one the directory does not list, even one the host would title, keeping its id: a task that fell off Home's first page stays unresolved, never removed", () => {

@@ -4,16 +4,36 @@
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
 }));
+const updateAction = vi.hoisted(() => ({ update: vi.fn() }));
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
     await import("@/components/settings/host-scope/host-scope-fixture");
   const useHostScope = () => hostScopeFixture(scopeOverrides.current);
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
-// The configuration status chip reads the host runtime this suite does not
-// mount, and none of these cases is about it.
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => null,
+vi.mock("@/hooks/host/use-older-host-update", () => ({
+  useOlderHostUpdate: () => ({
+    update: updateAction.update,
+    pending: false,
+    remotePending: false,
+    failure: null,
+  }),
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => null,
+}));
+vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
+  useHostProvisioningProgress: () => null,
 }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -21,13 +41,14 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type {
-  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -116,11 +137,34 @@ function FakePanel(props: {
   );
 }
 
+function LocalSecretsPageProbe(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly onOpen: () => void;
+}): ReactNode {
+  const result = useHostQuery<HostRpcRegistry, "config.env.list">({
+    cacheKeyIdentity: undefined,
+    client: props.client,
+    method: "config.env.list",
+    params: {},
+    options: { enabled: true },
+  });
+  return (
+    <>
+      <button type="button" onClick={props.onOpen}>
+        Open secrets
+      </button>
+      {result.data?.entries.map((entry) => (
+        <span key={entry.key}>{entry.key}</span>
+      ))}
+    </>
+  );
+}
+
 function renderFrame(options: {
   readonly section: SettingsSectionId;
   /** `null` records nothing: no handshake has completed yet. */
   readonly methods: readonly string[] | null;
-  readonly status: EnvironmentStatusResponseV11;
+  readonly status: EnvironmentStatusResponseV13;
   readonly overrides: readonly LocalOverride[];
   readonly target: PersonalRowNotesTarget;
 }): HostCalls {
@@ -168,20 +212,19 @@ describe("<PersonalPageFrame /> on a host that does not advertise environment.st
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    const line = await screen.findByTestId("personal-page-status");
+    const line = await screen.findByTestId("personal-page-read-only");
     expect(line.textContent).toBe(UPDATE_HOST_TEXT);
     // Outside the inert region, so assistive technology still reads it.
     expect(line.closest("[inert]")).toBeNull();
     // The page body is inside it: no edits until the host is updated.
     const edit = screen.getByRole("button", { name: "Edit the page" });
     expect(edit.closest("[inert]")).not.toBeNull();
-    // The shell skips its own copy of the line in this state.
-    expect(screen.getAllByTestId("personal-page-status")).toHaveLength(1);
+    expect(screen.getAllByTestId("personal-page-read-only")).toHaveLength(1);
   });
 });
 
 describe("<PersonalPageFrame /> on a host with a ready status", () => {
-  it("draws the status line inside the panel shell's header, and the page is not inert", async () => {
+  it("draws no line for an item still applying, and leaves the page as it was", async () => {
     renderFrame({
       section: "shell",
       methods: STATUS_METHODS,
@@ -194,79 +237,19 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
           }),
         ],
       }),
-      overrides: [],
-      target: VARIABLE_TARGET,
-    });
-    const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe("Applying LOG_LEVEL on dev-box.");
-    const header = line.closest("header");
-    if (header === null) throw new Error("the line is not inside a header");
-    expect(header.closest("[data-settings-panel-shell]")).not.toBeNull();
-    expect(within(header).getByRole("heading", { name: "Shell" })).toBeTruthy();
-    expect(line.closest("[inert]")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
-    ).toBeNull();
-  });
-
-  it("says nothing once every item applied, and leaves the page as it was", async () => {
-    renderFrame({
-      section: "shell",
-      methods: STATUS_METHODS,
-      status: environmentStatusFixture({
-        items: [itemStatusFixture({ kind: "variable", key: "LOG_LEVEL" })],
-      }),
       // The override's note appears only once the page has rendered the
       // status it read.
       overrides: [variableOverride("LOG_LEVEL")],
       target: VARIABLE_TARGET,
     });
     await screen.findByText("LOG_LEVEL: dev-box uses: local-value");
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
-    expect(screen.queryByText(/^Applied on/)).toBeNull();
+    expect(screen.queryByText("Applying LOG_LEVEL on dev-box.")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
   });
 
-  it("says a failed item did not apply, naming the host", async () => {
-    renderFrame({
-      section: "shell",
-      methods: STATUS_METHODS,
-      status: environmentStatusFixture({
-        items: [
-          itemStatusFixture({
-            kind: "variable",
-            key: "LOG_LEVEL",
-            status: "failed",
-            code: "permission_denied",
-          }),
-        ],
-      }),
-      overrides: [],
-      target: VARIABLE_TARGET,
-    });
-    const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe(
-      "LOG_LEVEL didn't apply on dev-box: permission denied.",
-    );
-  });
-
-  it("says changes wait for a reconnect while the host cannot reach the environment", async () => {
-    renderFrame({
-      section: "shell",
-      methods: STATUS_METHODS,
-      status: environmentStatusFixture({ reachability: "reconnecting" }),
-      overrides: [],
-      target: VARIABLE_TARGET,
-    });
-    const line = await screen.findByTestId("personal-page-status");
-    expect(line.textContent).toBe(
-      "Changes apply on dev-box when it reconnects.",
-    );
-  });
-
-  it("shows no line when the host has no settings of the person's yet, and leaves the page as it was", async () => {
+  it("leaves the page as it was when the host has no settings of the person's yet", async () => {
     const calls = renderFrame({
       section: "shell",
       methods: STATUS_METHODS,
@@ -277,7 +260,6 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
     await vi.waitFor(() => {
       expect(calls.status).toBeGreaterThan(0);
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -291,7 +273,6 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
       overrides: [],
       target: VARIABLE_TARGET,
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -300,6 +281,41 @@ describe("<PersonalPageFrame /> on a host with a ready status", () => {
 });
 
 describe("<PersonalPageFrame /> around a page that is not a Personal page", () => {
+  it("leaves an Application page available for a Local pick below the host minimum", () => {
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {},
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+    });
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({
+        hostId: HOST_ID,
+        name: HOST_NAME,
+        entry: {
+          ...mockLocalHostEntry,
+          hostId: HOST_ID,
+          version: "1.5.4",
+        },
+      }),
+      hostId: HOST_ID,
+      status: "ready",
+      client,
+    };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PersonalPageFrame section="general">
+          <FakePanel target={VARIABLE_TARGET} />
+        </PersonalPageFrame>
+      </QueryClientProvider>,
+    );
+
+    const edit = screen.getByRole("button", { name: "Edit the page" });
+    expect(edit.closest("[inert]")).toBeNull();
+    expect(screen.queryByTestId("host-scope-update-needed")).toBeNull();
+  });
+
   it("renders its children untouched and never asks the host for a status", async () => {
     const calls = renderFrame({
       section: "general",
@@ -315,7 +331,6 @@ describe("<PersonalPageFrame /> around a page that is not a Personal page", () =
         screen.getByRole("button", { name: "Edit the page" }),
       ).toBeTruthy();
     });
-    expect(screen.queryByTestId("personal-page-status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Edit the page" }).closest("[inert]"),
     ).toBeNull();
@@ -324,6 +339,69 @@ describe("<PersonalPageFrame /> around a page that is not a Personal page", () =
     expect(
       within(screen.getByTestId("row-notes")).queryAllByRole("listitem"),
     ).toEqual([]);
+  });
+});
+
+describe("<PersonalPageFrame /> for a Local Secrets page below the minimum", () => {
+  it("keeps secret reads and controls unavailable with a non-null scoped client, then enables them at the floor", async () => {
+    const reads = { list: 0 };
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "config.env.list": () => {
+          reads.list += 1;
+          return { entries: [{ key: "API_TOKEN", value: "stored" }] };
+        },
+      },
+    });
+    recordNegotiatedHostMethods(HOST_ID, ["config.env.list"]);
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: HOST_ID, hostName: HOST_NAME },
+    });
+    const hostAt = (version: string) =>
+      hostScopeOptionFixture({
+        hostId: HOST_ID,
+        name: HOST_NAME,
+        entry: {
+          ...mockLocalHostEntry,
+          hostId: HOST_ID,
+          version,
+        },
+      });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const onOpen = vi.fn();
+    const pageAt = (version: string) => {
+      scopeOverrides.current = {
+        host: hostAt(version),
+        hostId: HOST_ID,
+        status: "ready",
+        client,
+      };
+      return (
+        <QueryClientProvider client={queryClient}>
+          <PersonalPageFrame section="secrets">
+            <LocalSecretsPageProbe client={client} onOpen={onOpen} />
+          </PersonalPageFrame>
+        </QueryClientProvider>
+      );
+    };
+    const { rerender } = render(pageAt("1.5.4"));
+
+    expect(reads.list).toBe(0);
+    expect(scopeOverrides.current.client).toBe(client);
+    expect(
+      screen.getByTestId("host-scope-update-needed").textContent,
+    ).toContain("Host update needed");
+    expect(screen.queryByRole("button", { name: "Open secrets" })).toBeNull();
+
+    rerender(pageAt("2.0.0"));
+
+    expect(await screen.findByText("API_TOKEN")).not.toBeNull();
+    expect(reads.list).toBe(1);
+    screen.getByRole("button", { name: "Open secrets" }).click();
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -470,7 +548,7 @@ describe("<PersonalPageFrame /> around a page that reads the variables", () => {
   it("requests config.env.list again when the host's received revision moves", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const facts: { status: EnvironmentStatusResponseV11 } = {
+      const facts: { status: EnvironmentStatusResponseV13 } = {
         status: environmentStatusFixture({
           receivedRevision: 1,
           appliedRevision: 1,

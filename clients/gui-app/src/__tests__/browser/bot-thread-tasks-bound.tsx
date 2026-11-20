@@ -1,4 +1,13 @@
-import { useEffect, type ReactElement, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import { __setChatStreamClientFactoryForTests } from "@/lib/registries/chat-session-registry";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { createRoot } from "react-dom/client";
 import {
   createMemoryHistory,
@@ -25,10 +34,16 @@ import {
   BotIdentityContext,
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
+import type { BotComposerQuote } from "@/components/bots/bot-message-composer";
 import {
   BotMentionsContext,
   type BotMentionDirectory,
 } from "@/components/bots/bot-mentions-context";
+import {
+  QuoteSinkContext,
+  type QuoteSink,
+} from "@/components/chat/quote/quote-sink-context";
+import { clearBrowserSelection } from "@/components/chat/quote/quote-snapshot-into-draft";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   HostRuntimeProvider,
@@ -75,6 +90,11 @@ import "@/index.css";
  * other bots and tasks, as the tab's directory hands them to the box and the
  * rows (decision 177); and `?post=mentions`, a post that names a bot, a task
  * and a member.
+ *
+ * The quote spec adds `?quote=box`: the fixture plays the channel's part for
+ * a quote, as `BotChannelView` does for a thread's panel, and `?post=paragraphs`,
+ * a post of two paragraphs. Without `quote=box` the panel's quotes go where a
+ * task chat's do, and its box takes none.
  */
 const HOST_ID = "bot-thread-tasks-bound-host";
 const VIEWER_ID = "bot-thread-tasks-bound-user";
@@ -152,7 +172,6 @@ const tasks: ReadonlyArray<BotTaskEntry> = Array.from(
     label: `Watching shard ${String(index + 1)}`,
     originRequestId: null,
     createdByChatId: THREAD_ID,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,
@@ -182,6 +201,89 @@ const thread: BotThreadSummary = {
 function noop(): void {}
 
 const params = new URLSearchParams(window.location.search);
+
+// An opt-in host snapshot exercises the production transcript and list.
+if (params.get("loaded") === "true") {
+  const messages: Message[] = Array.from({ length: 30 }, (_, index) => ({
+    role: "user" as const,
+    messageId: `reply-${String(index)}`,
+    sender: { type: "user" as const, userId: VIEWER_ID },
+    sessionAnchor: null,
+    message: {
+      kind: "user" as const,
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: `Thread reply ${String(index)} — the release needs a careful review.`,
+              },
+            ],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 2_000 + index,
+  }));
+  __setChatStreamClientFactoryForTests((_epicId, chatId, callbacks) => {
+    queueMicrotask(() => {
+      callbacks.onConnectionStatus("open", null, null, null);
+      callbacks.onSnapshot({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: "bot-1",
+        chatId,
+        snapshot: {
+          chat: {
+            id: chatId,
+            parentId: null,
+            userId: VIEWER_ID,
+            hostId: HOST_ID,
+            title: "Thread",
+            createdAt: 1,
+            updatedAt: 1,
+            isTitleEditedByUser: false,
+            settings: null,
+            activeSessionChain: null,
+            claudePendingWakes: [],
+            messages,
+            events: [],
+            archivedAt: null,
+            pinnedUserProviderHandle: null,
+            lastDeliveredRolesDigest: null,
+          },
+          access: { role: "owner", ownerUserId: VIEWER_ID, canAct: true },
+          queue: { status: "idle", items: [] },
+          runStatus: "idle",
+          turnInProgress: false,
+          sendWouldQueue: false,
+          activeTurn: null,
+          pendingApprovals: [],
+          pendingInterviews: [],
+          worktreeBinding: null,
+          missingWorktreePaths: [],
+          pendingFileEditApprovals: [],
+          accumulatedFileChanges: [],
+          managedCommands: [],
+          heldUpdates: [],
+          portForwards: [],
+        },
+      });
+    });
+    return {
+      sendAction: () => undefined,
+      sameTurnSteeringProtocolSupported: () => true,
+      draftBlobBridgeSupported: () => false,
+      requestTranscriptRange: () => undefined,
+      requestResnapshot: () => undefined,
+      close: () => undefined,
+    };
+  });
+}
 
 const keyboardInset = params.get("keyboard");
 if (keyboardInset !== null) {
@@ -214,6 +316,8 @@ function sentText(): string | null {
       return LONG_POST;
     case "short":
       return "Is the release train still leaving at noon?";
+    case "paragraphs":
+      return "The release train leaves at noon, and the freeze starts at eleven.\n\nThe nightly build is red, so someone should rerun it before then.";
     case "mentions":
       return `<#${NOTES_BOT_ID}> can you add <~${RELEASE_TASK_ID}> to the notes? <@member-simar> owns the train.`;
     default:
@@ -238,7 +342,15 @@ function panelThread(): BotThreadPanelThread {
         sendable: true,
       };
     default:
-      return { kind: "listed", thread, retry: null, sendable: true };
+      return {
+        kind: "listed",
+        thread:
+          params.get("loaded") === "true"
+            ? { ...thread, replyCount: 30 }
+            : thread,
+        retry: null,
+        sendable: true,
+      };
   }
 }
 
@@ -343,32 +455,72 @@ function PaneBody(): ReactElement {
           <ActivityGroupOpenStoreProvider store={null}>
             <A2AOpenStoreProvider store={null}>
               <ChatFindForceStoreProvider tileInstanceId="bot-thread-tasks-bound">
-                <BotThreadPanel
-                  botId="bot-1"
-                  hostId={HOST_ID}
-                  boundHostId={HOST_ID}
-                  imageReach="none"
-                  botTitle="Release Bot"
-                  conversationId="channel-1"
-                  originMessageId="post-1"
-                  sent={sentPost}
-                  thread={panelThread()}
-                  tasks={params.get("tasks") === "none" ? [] : tasks}
-                  anchorSenderLabel={() => "You"}
-                  resolveMember={UNRESOLVED_BOT_MEMBERS}
-                  onClose={noop}
-                  onEditPost={noop}
-                  onOpenTurn={noop}
-                  onOpenSession={noop}
-                  landOn={null}
-                  quote={null}
-                />
+                {params.get("quote") === "box" ? (
+                  <BoxQuotedPanel />
+                ) : (
+                  <ThreadPanel quote={null} />
+                )}
               </ChatFindForceStoreProvider>
             </A2AOpenStoreProvider>
           </ActivityGroupOpenStoreProvider>
         </ChatOpenStoreScopeProvider>
       </TabHostContext.Provider>
     </div>
+  );
+}
+
+/**
+ * The channel's part in a quote of the panel: its sink holds what was
+ * selected until the panel's box takes it and clears the browser selection,
+ * as `BotChannelView`'s does for the thread's box.
+ */
+function BoxQuotedPanel(): ReactElement {
+  const [quote, setQuote] = useState<BotComposerQuote | null>(null);
+  const quoteCount = useRef(0);
+  const sink = useCallback<QuoteSink>((_chatId, snapshot) => {
+    quoteCount.current += 1;
+    const id = quoteCount.current;
+    const taken = (): void =>
+      setQuote((held) => (held?.id === id ? null : held));
+    setQuote((held) => ({
+      id,
+      snapshots: [...(held?.snapshots ?? []), snapshot],
+      taken,
+    }));
+    clearBrowserSelection();
+  }, []);
+  return (
+    <QuoteSinkContext value={sink}>
+      <ThreadPanel quote={quote} />
+    </QuoteSinkContext>
+  );
+}
+
+function ThreadPanel(props: {
+  readonly quote: BotComposerQuote | null;
+}): ReactElement {
+  return (
+    <BotThreadPanel
+      botId="bot-1"
+      hostId={HOST_ID}
+      boundHostId={HOST_ID}
+      imageReach={params.get("images") === "delivered" ? "delivered" : "none"}
+      answerReach="each"
+      replyReach="none"
+      botTitle="Release Bot"
+      conversationId="channel-1"
+      originMessageId="post-1"
+      sent={sentPost}
+      thread={panelThread()}
+      tasks={params.get("tasks") === "none" ? [] : tasks}
+      anchorSenderLabel={() => "You"}
+      resolveMember={UNRESOLVED_BOT_MEMBERS}
+      onClose={noop}
+      onEditPost={noop}
+      onOpenTurn={noop}
+      landOn={null}
+      quote={props.quote}
+    />
   );
 }
 

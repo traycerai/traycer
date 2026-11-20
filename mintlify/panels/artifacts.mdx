@@ -50,7 +50,7 @@ Tickets and stories have one of three statuses. New tickets and stories start as
 | **In Progress** | Work is underway.                | `1`               |
 | **Done**        | Work is complete.                | `2`               |
 
-Change the status with the status pill at the top of an open ticket or story. Viewers see the pill but can't change it. The value column is what appears in the artifact's file on disk; see [Artifacts on Disk](#artifacts-on-disk).
+Change the status with the status pill at the top of an open ticket or story. The value column is what appears in the artifact's file on disk; see [Artifacts on Disk](#artifacts-on-disk).
 
 <FeatureVideo src="https://assets.traycer.ai/docs/videos/artifact-status.mp4" label="Change a ticket status" />
 
@@ -94,7 +94,7 @@ Read state is kept per device, so each collaborator and each of your devices has
 
 **Search artifacts** in the ⋯ menu replaces the header with a search field. Typing while the tree has focus starts a search too, and Esc closes it.
 
-Search matches artifact titles, folder paths, and body text. It reads the Task's files on disk, so it isn't offered to Viewers, or in a Task with no artifacts yet.
+Search matches artifact titles, folder paths, and body text. It reads the Task's files on disk, so it isn't offered in a Task with no artifacts yet.
 
 ### Select Several Artifacts
 
@@ -116,8 +116,6 @@ Type **@** in an agent message and choose **Artifacts**, then select the artifac
 | **Export**        | Markdown/PDF for documents; download controls for HTML and files. See [Export](/panels/artifacts/export). |
 | **Delete**        | **Delete** in the row menu. This also deletes the artifacts nested under it.                         |
 
-Creating, editing, moving, and deleting artifacts needs the **Editor** or **Owner** role. See [Roles](/panels/sharing#roles).
-
 ### Deleting and Restoring
 
 Deleting an artifact removes it, and every artifact nested under it, from the tree. You can bring deleted Markdown documents back from **Deleted artifacts** in the panel's ⋯ menu. See [Version history and recovery](/panels/artifacts/version-history).
@@ -134,8 +132,6 @@ The on-disk format depends on the artifact:
 These artifacts sync with the Task, so collaborators can open the published deliverables without sharing your repository folder. The workspace itself is separate; see [File Tree](/panels/file-tree).
 
 A host keeps its copy current only while the Task is open there or one of its agents is working in it. Elsewhere the copy is the one that host last had, and it can be out of date or missing artifacts until the Task opens there again.
-
-The copy exists only for people with the **Editor** or **Owner** role. Viewers have no files on disk.
 
 ```text
 ~/.traycer/epics/<task-id>/artifacts/

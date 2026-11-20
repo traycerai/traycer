@@ -3,11 +3,10 @@
  * besides the mocked boundaries in `bot-tab-surface-mocks.tsx`: the fixtures,
  * the new-team setup and the per-case reset.
  */
-import { cleanup } from "@testing-library/react";
-import { QueryClient } from "@tanstack/react-query";
+import { act, cleanup, render } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type {
   SandboxCatalogueFetchResult,
   TraycerModelsFetchResult,
@@ -26,6 +25,8 @@ import { __resetAgentActivityStoreForTests } from "@/stores/agent-activity-store
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
@@ -145,7 +146,6 @@ export function trackingTask(taskId: string): BotTaskEntry {
     label: null,
     originRequestId: null,
     createdByChatId: null,
-    checkins: null,
     inputNeeded: null,
     pause: null,
     stop: null,
@@ -164,8 +164,13 @@ function openSurfaceOn(botId: string): void {
     hostId: TAB_HOST,
     botId,
     visitedBotIds: [],
+    goneReports: {},
   });
-  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent", null);
+  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", {
+    text: "unsent",
+    content: null,
+    held: [],
+  });
 }
 
 /**
@@ -175,8 +180,18 @@ function openSurfaceOn(botId: string): void {
  */
 export function setUpNewTeam(): void {
   mocks.state.environments = [
-    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
-    { environmentId: "env-new", label: "Newco", ownerKind: "organization" },
+    {
+      environmentId: "env-team",
+      label: "Acme",
+      ownerKind: "organization",
+      providerHandle: "acme",
+    },
+    {
+      environmentId: "env-new",
+      label: "Newco",
+      ownerKind: "organization",
+      providerHandle: "newco",
+    },
   ];
   mocks.state.listedBotIds = [BOT_ID];
   openSurfaceOn(SETUP_BOT_ID);
@@ -216,14 +231,6 @@ export function scriptTeamControlPlane(): void {
           catalogue: CATALOGUE,
         }),
       ),
-      mintTeamHostInstallToken: vi.fn<
-        (environmentId: string) => Promise<TeamHostInstallTokenResult>
-      >(() =>
-        Promise.resolve({
-          kind: "network-error",
-          detail: "mintTeamHostInstallToken was not scripted",
-        }),
-      ),
     },
   };
   mocks.sandboxDefaults = {
@@ -234,6 +241,23 @@ export function scriptTeamControlPlane(): void {
     status: "signed-in",
     contextMetadata: { userId: "user-viewer", username: "olive" },
   });
+}
+
+/**
+ * The bot tab shows its tree only once the signed-in account's own drafts have been read. Mounts the real
+ * bridge long enough to do that read for the identity now in the auth store, so a case that signs in through
+ * the store finds the tab past its connecting state. Call it after the case's last auth change, before it renders the tab.
+ */
+export async function admitBotDrafts(): Promise<void> {
+  const view = render(
+    <QueryClientProvider client={new QueryClient()}>
+      <BotDraftsPersistLifecycleBridge>{null}</BotDraftsPersistLifecycleBridge>
+    </QueryClientProvider>,
+  );
+  await act(async () => {
+    await useBotDraftsStore.persist.rehydrate();
+  });
+  view.unmount();
 }
 
 /** Every mocked boundary and store back at its start, with the surface open on `BOT_ID`. */
@@ -249,7 +273,7 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.taskReads.homePending = false;
   mocks.taskReads.homeRefused = false;
   mocks.membersQueries.length = 0;
-  mocks.state.membersSupport = true;
+  mocks.state.membersReadAvailable = true;
   mocks.state.snapshot = snapshot();
   mocks.state.deleted = false;
   mocks.state.error = null;
@@ -258,8 +282,10 @@ export function resetBotTabSurfaceMocks(): void {
   // The bot is listed, in a team that has bots: nothing is to be set up.
   mocks.state.listedBotIds = [BOT_ID];
   mocks.state.listTitles = new Map([[BOT_ID, "Release Bot"]]);
+  mocks.state.listAppearance = new Map();
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
+  mocks.state.threadListSupport = "inherit";
   mocks.state.onboardingSupport = true;
   mocks.state.onboardingVersion = { major: 1, minor: 1 };
   mocks.state.readAt = 1_000;
@@ -278,7 +304,12 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.environmentsRefetch.mockReset();
   mocks.state.openResult = answer({ kind: "serve-here", claimed: null });
   mocks.state.environments = [
-    { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+    {
+      environmentId: "env-team",
+      label: "Acme",
+      ownerKind: "organization",
+      providerHandle: "acme",
+    },
   ];
   mocks.state.threads = [];
   mocks.state.threadsHeld = true;
@@ -287,8 +318,15 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.subscribed.length = 0;
   for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
   useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST });
-  useBotDraftsStore.setState({ answers: {}, threadBoxes: {}, unsentBoxes: {} });
+  useBotDraftsStore.setState({
+    answers: {},
+    threadBoxes: {},
+    unsentBoxes: {},
+    owner: null,
+    ownDraftsRead: true,
+  });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  useTracyPlaceStore.setState(useTracyPlaceStore.getInitialState(), true);
   useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
   mocks.unreadTaskIds.clear();

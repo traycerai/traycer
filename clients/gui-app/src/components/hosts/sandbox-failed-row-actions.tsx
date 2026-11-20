@@ -1,25 +1,17 @@
 import { useRef, useState, type ReactNode } from "react";
-import { MoreHorizontal } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { SandboxDestroyDialog } from "@/components/hosts/sandbox-confirm-dialogs";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   sandboxConfigurationOf,
   useSandboxConfigurations,
 } from "@/hooks/sandboxes/use-sandbox-configurations";
 import { useSandboxCreate } from "@/hooks/sandboxes/use-sandbox-create-mutation";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
 import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
 import {
@@ -34,16 +26,15 @@ import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 export function SandboxFailedChatActions(props: {
   readonly summary: SandboxSummary;
 }): ReactNode {
-  const { configurations } = useSandboxConfigurations();
+  const configurations = useSandboxConfigurations();
   const environments = useEnvironmentListQuery(
-    useTabHostClient(),
     props.summary.environmentId !== null,
   );
   const configuration = sandboxConfigurationOf(props.summary, configurations);
   // The resolver's Personal fallback is not proof: both personal sandboxes
-  // and team pods can carry an environment id without a recorded creator.
+  // and team pods can carry an environment id without a recorded creator,
+  // and a missing environment id says nothing about whose it is.
   const personal =
-    props.summary.environmentId === null ||
     environments.data?.environments.some(
       (environment) =>
         environment.environmentId === props.summary.environmentId &&
@@ -52,17 +43,25 @@ export function SandboxFailedChatActions(props: {
   const resolved =
     configuration?.kind === "personal" && !personal ? null : configuration;
   return (
-    <SandboxFailedRowActions summary={props.summary} configuration={resolved} />
+    <SandboxFailedRowActions
+      summary={props.summary}
+      configuration={resolved}
+      credits={resolved}
+    />
   );
 }
 
 /** The failed-create row's safe actions, shared by Settings and the chat slot. */
 export function SandboxFailedRowActions(props: {
   readonly summary: SandboxSummary;
+  /** `null` holds Retry back. */
   readonly configuration: SandboxPageConfiguration | null;
+  readonly credits: SandboxPageConfiguration | null;
 }): ReactNode {
-  const { summary, configuration } = props;
-  const create = useSandboxCreate("toast");
+  const { summary, configuration, credits } = props;
+  // Not known whose sandbox it is: worded as for someone who cannot buy.
+  const buysTeamCredits = useOffersAddCredits(credits);
+  const create = useSandboxCreate("toast", buysTeamCredits);
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
   const [destroyOpen, setDestroyOpen] = useState(false);
@@ -72,7 +71,7 @@ export function SandboxFailedRowActions(props: {
   const actions = sandboxRowActions({
     summary,
     unreachable: false,
-    frozenNeedsOwnCredits: false,
+    frozenOffersAddCredits: false,
     settingsFailed: false,
   });
   const pendingVerb = operation?.kind === "pending" ? operation.verb : null;
@@ -114,7 +113,7 @@ export function SandboxFailedRowActions(props: {
   };
 
   return (
-    <div className="flex shrink-0 flex-wrap items-center gap-2">
+    <div className="flex max-w-full min-w-0 flex-wrap items-center gap-2">
       {pendingVerb !== null || actions.primary === "retry" ? (
         <Button
           type="button"
@@ -138,45 +137,32 @@ export function SandboxFailedRowActions(props: {
           )}
         </Button>
       ) : null}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`More actions for ${summary.displayName}`}
-            data-testid="sandbox-row-menu"
-          >
-            <MoreHorizontal className="size-3.5" aria-hidden />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" data-testid="sandbox-row-menu-content">
-          <DropdownMenuItem
-            data-testid="sandbox-row-menu-details"
-            onSelect={() => openSandboxDetails(summary.id)}
-          >
-            Details
-          </DropdownMenuItem>
-          {pendingVerb === null && actions.menu.includes("destroy") ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                disabled={busy}
-                data-testid="sandbox-row-menu-destroy"
-                onSelect={() => setDestroyOpen(true)}
-              >
-                Destroy
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => openSandboxDetails(summary.id)}
+      >
+        Details
+      </Button>
+      {pendingVerb === null && actions.menu.includes("destroy") ? (
+        <Button
+          type="button"
+          variant="destructive-ghost"
+          size="sm"
+          disabled={busy}
+          data-testid="sandbox-row-menu-destroy"
+          aria-label={`Destroy ${summary.displayName}`}
+          onClick={() => setDestroyOpen(true)}
+        >
+          Destroy
+        </Button>
+      ) : null}
       <SandboxOperationFailure
         sandboxId={summary.id}
         name={summary.displayName}
         hostId={summary.hostId}
-        configuration={configuration ?? undefined}
+        configuration={credits ?? undefined}
         operation={operation}
         busy={busy}
         onRetry={

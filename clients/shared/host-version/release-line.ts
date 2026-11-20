@@ -2,8 +2,9 @@
 //
 // The RC-to-stable updater lets an installed release candidate follow its OWN
 // release line without any saved preference: `2.0.0-rc.1` may select
-// `2.0.0-rc.2` or stable `2.0.0`, and nothing else. Two decisions hang off
-// this file, in both the CLI and desktop main, so they must not diverge:
+// `2.0.0-rc.2`, or any newer stable release, and no other prerelease. Two
+// decisions hang off this file, in both the CLI and desktop main, so they
+// must not diverge:
 //
 //   1. Does the installed version activate implicit following at all?
 //   2. Is a candidate on the SAME release line as the installed version?
@@ -111,6 +112,18 @@ export function isCanonicalReleaseCandidate(version: string): boolean {
 }
 
 /**
+ * Whether `version` is a canonical stable release: exactly `X.Y.Z`, valid
+ * SemVer, no pre-release and no build metadata.
+ *
+ * The stable half of `isCanonicalReleaseVersion`, exported on its own because
+ * implicit following needs it alone: a follower takes any newer STABLE on any
+ * line, and only its own line's RCs, so the two shapes are decided separately.
+ */
+export function isCanonicalStableRelease(version: string): boolean {
+  return STABLE_VERSION_PATTERN.test(version) && isValidHostVersion(version);
+}
+
+/**
  * THE BROAD one: is this a pre-release at all, by shape, with no exemptions?
  *
  * Deliberately not {@link isCanonicalReleaseCandidate}, and the two are not
@@ -167,8 +180,8 @@ export function isHiddenFromDefaultCatalog(version: string): boolean {
 /**
  * The release line a version belongs to, for the versions implicit following
  * can reason about: a canonical RC and the stable release it leads to share
- * one line, which is what makes `2.0.0` the terminating candidate for
- * `2.0.0-rc.1`.
+ * one line, which is what lets `2.0.0-rc.1` take `2.0.0-rc.2` while no
+ * stable is newer than it.
  *
  * Every other pre-release shape returns `null` rather than its bare core. A
  * `2.0.0-beta.1` DOES have core `2.0.0`, but treating that as "the 2.0.0
@@ -177,12 +190,11 @@ export function isHiddenFromDefaultCatalog(version: string): boolean {
  *
  * MODULE-PRIVATE. It was exported for a caller that never materialized: every
  * consumer across the CLI, Desktop main, and the GUI asks `isSameReleaseLine`
- * or `isMatchingStableRelease` instead. Keeping it public would publish a bare
- * string whose only correct use is equality against another line from this same
- * function — an invitation to compare cores by hand, which is how
- * `2.0.0-beta.1` ends up on the `2.0.0` line. Export it again only alongside a
- * real caller that genuinely needs to tell "different line" from "cannot
- * classify".
+ * instead. Keeping it public would publish a bare string whose only correct
+ * use is equality against another line from this same function — an
+ * invitation to compare cores by hand, which is how `2.0.0-beta.1` ends up on
+ * the `2.0.0` line. Export it again only alongside a real caller that
+ * genuinely needs to tell "different line" from "cannot classify".
  */
 function hostReleaseLine(version: string): HostReleaseLine | null {
   const canonical = canonicalReleaseCandidateLine(version);
@@ -206,29 +218,4 @@ export function isSameReleaseLine(a: string, b: string): boolean {
   const lineA = hostReleaseLine(a);
   if (lineA === null) return false;
   return lineA === hostReleaseLine(b);
-}
-
-/**
- * Whether `candidate` is the stable release that terminates `installedRc`'s
- * line — the candidate implicit following must prefer over every later RC on
- * that line, since it is what ends implicit participation.
- *
- * Exported ahead of its caller, deliberately. `HostController`'s candidate
- * resolver (the generalization of `resolveRcDownloadTarget`) has to answer
- * exactly this question to pin matching stable with `host download <version>`
- * even when the registry's `latest` pointer still lags on the stable channel —
- * installed `2.0.0-rc.1` must take published `2.0.0` while `latest` says
- * `1.9.0`. That resolver is a Desktop-side consumer, so it cannot own the
- * predicate: this module is the single definition both processes read, and a
- * second copy over there is precisely the RC-detection drift this file exists
- * to prevent. `isSameReleaseLine` alone is not enough — it cannot express
- * "prefer the stable one", which is what guarantees the follow terminates.
- */
-export function isMatchingStableRelease(
-  candidate: string,
-  installedRc: string,
-): boolean {
-  const line = canonicalReleaseCandidateLine(installedRc);
-  if (line === null) return false;
-  return STABLE_VERSION_PATTERN.test(candidate) && candidate === line;
 }

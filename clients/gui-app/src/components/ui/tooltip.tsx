@@ -10,6 +10,7 @@ import {
   subscribeToSafeAreaInsets,
 } from "@/lib/safe-area-insets";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import { useSurfaceOverlayContainerEl } from "@/providers/surface-overlay-container-context";
 
 /**
  * Whether a `TooltipProvider` is already above us. Radix owns the provider's
@@ -83,9 +84,12 @@ function TooltipContent({
     readSafeAreaInsets,
     readSafeAreaInsetsServerSnapshot,
   );
+  // A label raised inside a top-layer surface must portal into it or it paints
+  // beneath it (see `surface-overlay-container-context`).
+  const surfaceContainer = useSurfaceOverlayContainerEl();
   if (concealed) return null;
   return (
-    <TooltipPrimitive.Portal>
+    <TooltipPrimitive.Portal container={surfaceContainer ?? undefined}>
       <TooltipPrimitive.Content
         ref={ref}
         data-slot="tooltip-content"

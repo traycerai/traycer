@@ -100,6 +100,21 @@ function navigationItem(): CommandItem {
   };
 }
 
+function mainBotItem(): CommandItem {
+  return {
+    id: "bot:main",
+    label: "Tracy",
+    description: null,
+    keywords: ["Tracy", "tracy", "bot", "channel", "layout"],
+    group: "mainBots",
+    scope: "bots",
+    shortcut: null,
+    actionId: null,
+    run: () => undefined,
+    subpage: null,
+  };
+}
+
 const ITEMS: ReadonlyArray<CommandItem> = [
   epicItem("epic:1", "Visual Layout Editor Redesign"),
   epicItem("epic:2", "Artifact Sidebar Layout Fix"),
@@ -108,7 +123,10 @@ const ITEMS: ReadonlyArray<CommandItem> = [
   navigationItem(),
 ];
 
-function Harness(props: { readonly initialQuery: string }): ReactNode {
+function Harness(props: {
+  readonly initialQuery: string;
+  readonly items: ReadonlyArray<CommandItem>;
+}): ReactNode {
   const [query, setQuery] = useState(props.initialQuery);
   return (
     <Command filter={paletteFilter} label="Search commands">
@@ -119,7 +137,7 @@ function Harness(props: { readonly initialQuery: string }): ReactNode {
       />
       <CommandList>
         <RootView
-          items={ITEMS}
+          items={props.items}
           loading={false}
           ctx={ctx()}
           effectiveQuery={query}
@@ -134,11 +152,16 @@ function Harness(props: { readonly initialQuery: string }): ReactNode {
   );
 }
 
-/** The group headings cmdk renders, top to bottom. */
+/**
+ * The headings of the groups cmdk shows, top to bottom. A group with no
+ * matching row stays in the DOM, hidden, so it is left out.
+ */
 function groupHeadings(): ReadonlyArray<string | null> {
   return Array.from(
     document.querySelectorAll<HTMLElement>("[cmdk-group-heading]"),
-  ).map((el) => el.textContent);
+  )
+    .filter((el) => el.closest("[hidden]") === null)
+    .map((el) => el.textContent);
 }
 
 function selectedRowLabel(): string | null {
@@ -154,13 +177,13 @@ afterEach(() => {
 
 describe("<RootView /> bucket order (C15)", () => {
   it("keeps the default group order - Tasks before Actions - at rest", () => {
-    render(<Harness initialQuery="" />);
+    render(<Harness initialQuery="" items={ITEMS} />);
 
     expect(groupHeadings()).toEqual(["Tasks", "Actions", "Navigation"]);
   });
 
   it("puts Actions first and selects Customize layout for a 'layout' query", () => {
-    render(<Harness initialQuery="" />);
+    render(<Harness initialQuery="" items={ITEMS} />);
 
     fireEvent.change(
       screen.getByRole("combobox", { name: "Search commands" }),
@@ -176,6 +199,21 @@ describe("<RootView /> bucket order (C15)", () => {
   });
 });
 
+describe("<RootView /> with a main bot", () => {
+  it("follows the best-match order with a query whose best match is in another group", () => {
+    render(<Harness initialQuery="" items={[...ITEMS, mainBotItem()]} />);
+
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Search commands" }),
+      { target: { value: "layout" } },
+    );
+
+    const headings = groupHeadings();
+    expect(headings[0]).toBe("Actions");
+    expect(headings).toContain("Main bots");
+  });
+});
+
 /**
  * `palette-item-row.tsx` dropped its `hover:` fill classes: cmdk already
  * highlights the row under a moving pointer via `data-selected`, so a hover
@@ -184,7 +222,7 @@ describe("<RootView /> bucket order (C15)", () => {
  */
 describe("<PaletteItemRow /> has no hover fill of its own", () => {
   it("carries no hover: class on any row, only the data-selected highlight", () => {
-    render(<Harness initialQuery="" />);
+    render(<Harness initialQuery="" items={ITEMS} />);
 
     const rows = document.querySelectorAll<HTMLElement>(
       '[data-slot="command-item"]',

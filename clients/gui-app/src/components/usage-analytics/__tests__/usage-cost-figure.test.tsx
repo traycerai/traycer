@@ -142,7 +142,7 @@ describe("UsageCostFigure", () => {
     expect(screen.queryByTestId("usage-served-by-local-note")).toBeNull();
   });
 
-  it("names the picked host on screen but marks the note for redaction in a shared image", () => {
+  it("states the narrowing under the amount, without the host name or an export redaction", () => {
     renderFigure({
       totals: totals({}),
       coverage: coverage({}),
@@ -151,11 +151,12 @@ describe("UsageCostFigure", () => {
     });
     const note = screen.getByTestId("usage-served-by-local-note");
     expect(note.textContent).toBe(
-      "Studio Mac only — your other hosts aren't included.",
-    );
-    expect(note.getAttribute(USAGE_EXPORT_REDACT_ATTRIBUTE)).toBe(
       "Selected host only — your other hosts aren't included.",
     );
+    expect(note.textContent).not.toContain("Studio Mac");
+    // The redact attribute moved to the host-filter trigger. This sentence
+    // no longer carries a name, so the shared image has nothing to rewrite.
+    expect(note.hasAttribute(USAGE_EXPORT_REDACT_ATTRIBUTE)).toBe(false);
   });
 
   it("leaves the local-plane note unredacted - it carries no host name to leak", () => {

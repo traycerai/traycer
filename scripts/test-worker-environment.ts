@@ -19,6 +19,12 @@ const allowed = new Set([
   // https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables
   "PSMODULEANALYSISCACHEPATH", // reuse the Windows PowerShell startup cache for bounded real-child probes.
   "CI", // suite concurrency/integration timeout behavior explicitly tested/read in source.
+  "CI_TOOLS_MIRROR_BASE_URL", // public pinned-tool origin used by real CI acquisition fixtures.
+  "ELECTRON_MIRROR", // public Electron artifact origin consumed by real packaging fixtures.
+  "ELECTRON_CUSTOM_DIR", // pinned version directory under the public Electron mirror.
+  "ELECTRON_CACHE", // verified Electron archive cache path supplied by CI bootstrap.
+  "electron_config_cache", // official installer's verified Electron archive cache path.
+  "ELECTRON_CONFIG_CACHE", // Windows canonical form of electron_config_cache.
   "NODE_ENV", // Vitest/React test behavior; overwrite to literal `test`, never preserve production mode.
   "VITEST", // production's test-only gating and Vitest worker identity.
   "VITEST_MODE", // installed runner's run/watch behavior.

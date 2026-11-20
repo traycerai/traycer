@@ -1,3 +1,7 @@
+import {
+  SETUP_STEPS,
+  setupView,
+} from "@/components/settings/host-scope/host-access-model";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import {
   localRowCohort,
@@ -7,6 +11,7 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   PERSONAL_PICK,
+  UNRESOLVED_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
 
@@ -17,8 +22,9 @@ export function needsUpdateSubtitle(hostName: string): string {
   return `${hostName} needs an update to show its settings here.`;
 }
 
-/** A computer row under Personal. */
+/** A computer with its own settings or unfinished setup. */
 export interface LocalPickerRow {
+  readonly kind: "local" | "setup";
   readonly hostId: string;
   readonly name: string;
   readonly subtitle: string;
@@ -55,12 +61,14 @@ export function isEnvironmentComputer(
 }
 
 /**
- * The Local row a host has, from its `environment.status` and the version it
- * negotiated for that method, or `null` for none.
+ * A computer's own-settings or setup row, from `environment.status` and
+ * the version negotiated for that method, or `null` for none.
  *
  * A Local row exists while any plane is still this computer's own or stopped,
- * and its wording comes from those planes (`localRowCohort`) - `setup` says
- * nothing about it. A host whose `environment.status` predates 1.1 reports no
+ * and its wording comes from those planes (`localRowCohort`). An unfinished
+ * setup with no known configuration keeps a separate setup row, so the person
+ * can still open the computer and finish or retry it. A host whose
+ * `environment.status` predates 1.1 reports no
  * planes at all, so one that has not reached `applying` gets the greyed
  * `needs an update` row instead; one that has is already shared and has no
  * row. A host that has not answered, or not been dialled, has no row:
@@ -76,16 +84,42 @@ export function localPickerRow(
   }
   if (status === null) return null;
   const cohort = localRowCohort(status);
-  return cohort.kind === "none"
-    ? null
-    : {
-        hostId: host.hostId,
-        name: host.name,
-        subtitle: cohort.subtitle,
-        verb: cohort.verb,
-        needsUpdate: false,
-        defaultsToLocal: cohort.defaultsToLocal,
-      };
+  if (cohort.kind === "none") {
+    const setup = unresolvedSetupText(status);
+    return setup === null
+      ? null
+      : {
+          kind: "setup",
+          hostId: host.hostId,
+          name: host.name,
+          subtitle: setup,
+          verb: null,
+          needsUpdate: false,
+          defaultsToLocal: true,
+        };
+  }
+  return {
+    kind: "local",
+    hostId: host.hostId,
+    name: host.name,
+    subtitle: cohort.subtitle,
+    verb: cohort.verb,
+    needsUpdate: false,
+    defaultsToLocal: cohort.defaultsToLocal,
+  };
+}
+
+/** An unfinished setup that cannot yet identify its configuration. */
+export function unresolvedSetupText(
+  status: EnvironmentStatusResponseV11,
+): string | null {
+  if (status.principal !== null || localRowCohort(status).kind !== "none")
+    return null;
+  const setup = setupView(status.setup);
+  if (setup === null) return null;
+  return setup.kind === "stopped"
+    ? setup.text
+    : (SETUP_STEPS[setup.stepIndex]?.label ?? "Setting up this computer");
 }
 
 /**
@@ -119,6 +153,7 @@ function isUnmovedOldHost(
 
 function needsUpdateRow(host: EnvironmentPickerHost): LocalPickerRow {
   return {
+    kind: "local",
     hostId: host.hostId,
     name: host.name,
     subtitle: "Update to view these settings.",
@@ -172,20 +207,25 @@ export function environmentPickerModel(input: {
   }
   const windowRow =
     localRows.find((row) => row.hostId === input.windowHostId) ?? null;
-  return {
-    localRows,
-    defaultPick:
+  const windowStatusKnown =
+    input.windowHostId === null ||
+    (input.hosts.some((host) => host.hostId === input.windowHostId) &&
+      (input.statuses.get(input.windowHostId) ?? null) !== null);
+  let defaultPick = UNRESOLVED_PICK;
+  if (windowStatusKnown) {
+    defaultPick =
       windowRow !== null && !windowRow.needsUpdate && windowRow.defaultsToLocal
         ? { kind: "local", hostId: windowRow.hostId, hostName: windowRow.name }
-        : PERSONAL_PICK,
-  };
+        : PERSONAL_PICK;
+  }
+  return { localRows, defaultPick };
 }
 
 /**
- * Whether the person's pick names a Local row that is gone: its computer
- * answered and has moved (or is too old to show its settings). The pick
- * then returns to the default, so a page never reads through a computer
- * that has no local settings left to show. A computer that has not answered
+ * Whether the person's per-computer pick is gone: its computer answered and
+ * has neither local settings nor unfinished setup (or is too old). The pick
+ * then returns to the default, so a page does not retain a finished setup's
+ * per-computer entry. A computer that has not answered
  * yet keeps the pick: nothing is known.
  */
 export function isStaleLocalPick(

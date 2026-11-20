@@ -11,6 +11,7 @@ import {
 import { dirname } from "node:path";
 import {
   bumpMtimeAbove,
+  credentialsWrite,
   errorCode,
   fileMtimeMsOrZero,
   renameWithWindowsRetry,
@@ -155,30 +156,35 @@ export async function writeCredentialsFile(
   credentials: StoredCredentials,
   mtimeFloorMs: number,
 ): Promise<CredentialsWriteResult> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await credentialsWrite(() =>
+    mkdir(dirname(path), { recursive: true, mode: 0o700 }),
+  );
   // `recursive` only applies the mode to dirs it creates; tighten an existing
   // (e.g. pre-refactor 0755) parent so another local user cannot swap our 0600
   // files. Best-effort - never fail a write over a defense-in-depth chmod.
-  await chmod(dirname(path), 0o700).catch(() => {});
+  await credentialsWrite(() => chmod(dirname(path), 0o700)).catch(() => {});
   const floorMs = Math.max(await fileMtimeMsOrZero(path), mtimeFloorMs);
   const tmp = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(tmp, serializeCredentials(credentials), {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    await credentialsWrite(() =>
+      writeFile(tmp, serializeCredentials(credentials), {
+        encoding: "utf8",
+        mode: 0o600,
+        flush: true,
+      }),
+    );
     // Mode on the temp is honored on creation, but a pre-existing temp could
     // have looser bits - re-chmod before the rename to be safe.
-    await chmod(tmp, 0o600);
+    await credentialsWrite(() => chmod(tmp, 0o600));
     // Stamp strictly above the floor, but never below wall-clock now: a plain
     // write (floor 0) must land a "now" mtime, not epoch+1ms. Only a carried
     // future floor (delete->recreate under clock skew) pushes it ahead of now.
     const desired = new Date(Math.max(floorMs + 1, Date.now()));
-    await utimes(tmp, desired, desired);
+    await credentialsWrite(() => utimes(tmp, desired, desired));
     await renameWithWindowsRetry(tmp, path, 0);
   } catch (err) {
     // Don't leave an orphaned temp behind if the write/rename failed.
-    await rm(tmp, { force: true });
+    await credentialsWrite(() => rm(tmp, { force: true }));
     throw err;
   }
   return { mtimeMs: await bumpMtimeAbove(path, floorMs) };
@@ -194,7 +200,7 @@ export async function writeCredentialsFile(
  */
 export async function deleteCredentialsFile(path: string): Promise<boolean> {
   try {
-    await unlink(path);
+    await credentialsWrite(() => unlink(path));
     return true;
   } catch (err) {
     if (errorCode(err) === "ENOENT") return false;

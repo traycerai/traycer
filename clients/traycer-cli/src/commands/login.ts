@@ -9,7 +9,18 @@ import {
   provisionRunningHostCredential,
 } from "../host/install-auth";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import type { CommandFn, CommandResult } from "../runner/runner";
+import type {
+  CommandContext,
+  CommandFn,
+  CommandResult,
+} from "../runner/runner";
+import { resolveHostAuth } from "../internal/host-auth";
+import { resolveEndpoint } from "../internal/host-rpc";
+import {
+  forgetCliHostTokens,
+  openCliHostSession,
+} from "../internal/cli-host-tokens";
+import { readCredentials } from "../store/credentials";
 import type { HostCredentialProvisionOutcome } from "../host/credential-provisioning";
 import type { StoredCredentials } from "../store/credentials";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
@@ -29,6 +40,7 @@ export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   ctx.runtime.logger.info("Interactive login command started", {
     environment: ctx.runtime.environment,
   });
+  const previousUserId = await signedInUserId();
   const result = await runDeviceAuthFlow(ctx);
   ctx.runtime.logger.info("Interactive login command completed", {
     environment: ctx.runtime.environment,
@@ -37,6 +49,7 @@ export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   });
 
   const credentialProvision = await provisionRunningHostCredential(ctx);
+  await mintHostTokenForNewSignIn(ctx, previousUserId);
   return {
     data: { user: result.user, bootstrap: null, credentialProvision },
     human: ctx.runtime.json
@@ -46,11 +59,50 @@ export const loginCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   };
 };
 
+async function signedInUserId(): Promise<string | null> {
+  try {
+    return (await readCredentials())?.user.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * After the host was given its own credential; an account it replaced loses its
+ * tokens. Best effort and silent: the next command mints for itself.
+ */
+async function mintHostTokenForNewSignIn(
+  ctx: CommandContext,
+  previousUserId: string | null,
+): Promise<void> {
+  try {
+    const auth = await resolveHostAuth();
+    if (auth === null) return;
+    if (previousUserId !== null && previousUserId !== auth.userId)
+      await forgetCliHostTokens(previousUserId);
+    const endpoint = await resolveEndpoint().catch(() => null);
+    if (endpoint === null) return;
+    const opened = await openCliHostSession(auth, endpoint.hostId, true, null);
+    if (opened.kind === "ok") opened.session.dispose();
+    ctx.runtime.logger.info("Login host-only token mint completed", {
+      environment: ctx.runtime.environment,
+      hostId: endpoint.hostId,
+      outcome: opened.kind === "ok" ? "ok" : opened.failure.kind,
+    });
+  } catch (error) {
+    ctx.runtime.logger.warn("Login host-only token mint failed", {
+      environment: ctx.runtime.environment,
+      errorName: error instanceof Error ? error.name : typeof error,
+    });
+  }
+}
+
 function formatSignedIn(
   user: StoredCredentials["user"],
   credentialProvision: HostCredentialProvisionOutcome | null,
 ): string {
-  const signedIn = `Signed in as ${user.email || user.name || user.id}.`;
+  const identity = user.email || user.name;
+  const signedIn = identity ? `Signed in as ${identity}.` : "Signed in.";
   const note = formatCredentialProvisionNote(credentialProvision);
   if (note === null) return signedIn;
   // The notes are written as clauses for the host commands' `;`-joined
@@ -172,6 +224,7 @@ function loginWithToken(rawToken: string): CommandFn {
     // Persist through the locked mutation store (§7); `signIn` is unconditional
     // (aside from the refresh-token preservation above) and clears any
     // tombstone - the interactive re-seed semantics.
+    const previousUserId = await signedInUserId();
     const persisted = await runWithCliStore((store) =>
       withCommitRetry(() => store.signIn(credentials, true, null), null),
     );
@@ -195,6 +248,7 @@ function loginWithToken(rawToken: string): CommandFn {
         (persisted.credentials?.refreshToken.length ?? 0) > 0,
     });
     const credentialProvision = await provisionRunningHostCredential(ctx);
+    await mintHostTokenForNewSignIn(ctx, previousUserId);
     return {
       data: { user, bootstrap: null, credentialProvision },
       human: ctx.runtime.json

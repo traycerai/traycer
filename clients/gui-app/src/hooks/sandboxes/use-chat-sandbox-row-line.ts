@@ -22,7 +22,6 @@ export const TaskHostsViewContext = createContext<TaskHostsView>({
 
 const ROW_VIEWER: ChatSandboxViewer = {
   reachable: false,
-  canEdit: false,
   ownedByViewer: false,
   environmentOwned: false,
 };

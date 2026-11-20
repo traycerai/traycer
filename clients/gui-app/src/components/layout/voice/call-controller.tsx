@@ -14,6 +14,7 @@ import type {
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
+import type { VoiceAvailabilityFetchResult } from "@traycer-clients/shared/host-client/voice-sessions";
 import { botPausedCopy } from "@/components/bots/bot-tab-open-state";
 import { useBotActivityForHost } from "@/hooks/bots/use-bot-activity";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
@@ -41,6 +42,7 @@ import {
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
 import {
+  useVoiceCallAvailabilityMutation,
   useVoiceMicrophoneAccessMutation,
   useVoiceSessionEndMutation,
   useVoiceSessionMintMutation,
@@ -48,7 +50,15 @@ import {
   useVoiceShellLiveMutation,
 } from "@/hooks/voice/use-voice-session-mutations";
 import { voiceQueryKeys } from "@/lib/query-keys";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type {
+  VoiceCallAuthority,
+  VoiceCallPrincipalChanged,
+} from "@/lib/auth/auth-service";
+import {
+  useAuthService,
+  useHostClient,
+  type HostRpcRegistry,
+} from "@/lib/host";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { watchAudioLevel, type AudioLevelWatch } from "@/lib/voice/audio-level";
@@ -68,6 +78,11 @@ import {
   isCallEndPhrase,
   type OutputSentence,
 } from "@/lib/voice/call";
+import {
+  callVoiceRequest,
+  confirmCallVoice,
+  type CallVoicePlan,
+} from "@/lib/voice/call-voice";
 import { VoiceEngineError, type VoiceEngine } from "@/lib/voice/engine";
 import {
   baselineReplyWatchExcept,
@@ -83,6 +98,7 @@ import {
 } from "@/lib/voice/scheduler";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
@@ -108,10 +124,10 @@ interface Attempt {
   /** When the engine reported started; `0` until then. */
   startedAt: number;
   /** What the mint refused with, so a pre-start failure keeps its reason. */
-  failure: "credits" | "unavailable" | null;
+  failure: AttemptFailure | null;
   cancelled: boolean;
-  /** The account signed in when the attempt began. */
-  readonly account: string | null;
+  /** The account the call was started under: its mint and end go under it or not at all. */
+  readonly authority: VoiceCallAuthority;
   /**
    * The acknowledgement lines the mint named, as `acknowledgementForms`: the
    * voice's own, which close an utterance.
@@ -155,14 +171,47 @@ function callSendRequest(
 }
 
 /**
- * Whether the end route can answer for this attempt: it goes out under whoever
- * is signed in now, and the server knows a session only to the account that
- * minted it. After a switch the vendor's close is what ends the session, and
- * the server's sideband settles its row.
+ * Why an attempt failed before it started:
+ * - `credits`: the account cannot pay for a session.
+ * - `voice-unavailable`: a renewal's voice is no longer offered.
+ * - `voice-unconfirmed`: the answer did not confirm the voice asked for.
+ * - `session-changed`: the call's account is no longer the one signed in,
+ *   whatever the cause; nothing more of the call is sent or used.
+ * - `unavailable`: anything else.
  */
-function endRouteAnswers(attempt: Attempt): boolean {
-  const current = signedInAccount();
-  return current === null || current === attempt.account;
+type AttemptFailure =
+  | "credits"
+  | "unavailable"
+  | "voice-unavailable"
+  | "voice-unconfirmed"
+  | "session-changed";
+
+/** How a live call that loses its session on `failure` ends. */
+function endReasonFor(failure: AttemptFailure | null): VoiceEndReason {
+  switch (failure) {
+    case "credits":
+    case "voice-unavailable":
+    case "voice-unconfirmed":
+    case "session-changed":
+      return failure;
+    case "unavailable":
+    case null:
+      return "connection";
+  }
+}
+
+/** How a first opening that fails on `failure` is refused. */
+function refusalFor(failure: AttemptFailure | null): VoiceRefusal {
+  switch (failure) {
+    case "credits":
+    case "voice-unconfirmed":
+    case "session-changed":
+      return failure;
+    case "voice-unavailable":
+    case "unavailable":
+    case null:
+      return "unavailable";
+  }
 }
 
 /** The account signed in now; `null` signed out. */
@@ -195,15 +244,20 @@ export function CallController(): ReactNode {
   const runnerHost = useRunnerHost();
   const { mutateAsync: mintAsync } = useVoiceSessionMintMutation();
   const { mutateAsync: endAsync } = useVoiceSessionEndMutation();
+  const { mutateAsync: readCallAvailabilityAsync } =
+    useVoiceCallAvailabilityMutation();
   const { mutateAsync: shellLiveAsync } = useVoiceShellLiveMutation();
   const { mutateAsync: shellIndicatorAsync } = useVoiceShellIndicatorMutation();
   const { mutateAsync: microphoneAccessAsync } =
     useVoiceMicrophoneAccessMutation();
   const queryClient = useQueryClient();
+  const auth = useAuthService();
   // Whether this deployment offers voice, read once per window before Call
   // is drawn; a dormant mint invalidates it, so the answer is read again.
+  // The voices a call may ask for are not taken from it: each call reads
+  // them again as it starts, under its own account.
   const availability = useVoiceAvailabilityQuery(true);
-  const available = availability.data;
+  const available = availability.data?.available;
   useEffect(() => {
     if (available === undefined) return;
     useVoiceSessionStore
@@ -228,7 +282,7 @@ export function CallController(): ReactNode {
 
   const botsSupported = useHostMethodSupport(appHostId, "bot.list") === true;
   const bots = useBotListQuery(appClient, botsSupported);
-  const environments = useEnvironmentListQuery(surfaceClient, true);
+  const environments = useEnvironmentListQuery(true);
   const botTitle = useCallback(
     (botId: string): string =>
       bots.data?.bots.find((bot) => bot.botId === botId)?.title ?? "the bot",
@@ -308,6 +362,7 @@ export function CallController(): ReactNode {
         priority: "focused",
         text,
         delegationId: null,
+        retry: true,
         confirmWords: confirmationWords({
           botTitle: null,
           threadTitle: null,
@@ -362,6 +417,18 @@ export function CallController(): ReactNode {
    * makes, live or last: only that account's sends may leave.
    */
   const callAccountRef = useRef<string | null>(null);
+  /**
+   * The sign-in the call was started under, which its last words are taken
+   * and sent under. Read when an end takes them, and carried by value from
+   * there, so a call started meanwhile cannot change what an earlier call's
+   * words go under.
+   */
+  const callAuthorityRef = useRef<VoiceCallAuthority | null>(null);
+  /**
+   * What the call asks for its voice: settled as the call starts, frozen at
+   * its first confirmed session, and read by every mint of the call.
+   */
+  const voicePlanRef = useRef<CallVoicePlan>({ kind: "legacy" });
   /** The call (its token) whose send is out; `null` with none out. */
   const sendingRef = useRef<number | null>(null);
   /**
@@ -376,6 +443,12 @@ export function CallController(): ReactNode {
   const closingRef = useRef(false);
   /** The thread this call's first send opened; its first snapshot is all arrivals. */
   const [openedThreadId, setOpenedThreadId] = useState<string | null>(null);
+  // Only utterances closed by an observed vendor acknowledgement reach pump.
+  // Retain their actual host request ids for the lifetime of this call.
+  const [acknowledgedRequests, setAcknowledgedRequests] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [awaitingRequest, setAwaitingRequest] = useState(false);
   const pumpRef = useRef<() => void>(() => undefined);
   const unreachableRef = useRef<() => void>(() => undefined);
   const failedSendRef = useRef<() => void>(() => undefined);
@@ -392,6 +465,7 @@ export function CallController(): ReactNode {
     const token = store.sessionToken;
     const threadId = call.threadId;
     sendingRef.current = token;
+    setAwaitingRequest(true);
     const settleSend = (): boolean => {
       if (sendingRef.current === token) {
         sendingRef.current = null;
@@ -402,6 +476,9 @@ export function CallController(): ReactNode {
     const sent = sendRef.current({
       hostId: known.hostId,
       account: callAccountRef.current,
+      // Unchecked, not safe: a live call's sends are not yet held to its
+      // sign-in session (T463), only to its account.
+      authority: null,
       request: callSendRequest(known, threadId, text),
     });
     inFlightRef.current = sent.then(
@@ -411,6 +488,10 @@ export function CallController(): ReactNode {
     sent.then(
       (response: BotConversationSendResponse) => {
         if (!settleSend()) return;
+        setAcknowledgedRequests(
+          (requests) => new Set([...requests, response.requestId]),
+        );
+        setAwaitingRequest(false);
         if (response.delivery === "queued") {
           unreachableRef.current();
           return;
@@ -426,6 +507,7 @@ export function CallController(): ReactNode {
           error: describeLogError(error),
         });
         if (!settleSend()) return;
+        setAwaitingRequest(false);
         failedSendRef.current();
         pumpRef.current();
       },
@@ -594,25 +676,16 @@ export function CallController(): ReactNode {
   );
 
   /**
-   * The vendor side of an attempt that is no longer the controller's: the
-   * peer's close and then the server's end route, for every attempt that was
-   * minted, unless another account has taken over the window since.
+   * The server's end of `sessionId`, sent under the account the call was
+   * started under or not at all: once that account is not the one signed in,
+   * the request is refused unsent and never retried as anyone else. Best
+   * effort either way: the call is over for the person, and whether and when
+   * the vendor session closes is not known here.
    */
-  const settleAttempt = useCallback(
-    async (attempt: Attempt, lastWords: Promise<void>): Promise<void> => {
+  const endRoute = useCallback(
+    async (sessionId: string, authority: VoiceCallAuthority): Promise<void> => {
       try {
-        await attempt.engine.close();
-      } catch (error) {
-        appLogger.warn("[voice] engine close failed", {
-          error: describeLogError(error),
-        });
-      }
-      await lastWords;
-      if (attempt.sessionId === null || !endRouteAnswers(attempt)) return;
-      // Best effort: the call is over for the person either way, and the
-      // server finalizes an unended row from its sideband.
-      try {
-        const result = await endAsync(attempt.sessionId);
+        const result = await endAsync({ voiceSessionId: sessionId, authority });
         if (result.kind !== "ok") {
           appLogger.warn("[voice] end route did not answer", {
             kind: result.kind,
@@ -628,6 +701,27 @@ export function CallController(): ReactNode {
   );
 
   /**
+   * The vendor side of an attempt that is no longer the controller's: the
+   * peer's close and then the server's end route, for every attempt that was
+   * minted.
+   */
+  const settleAttempt = useCallback(
+    async (attempt: Attempt, lastWords: Promise<void>): Promise<void> => {
+      try {
+        await attempt.engine.close();
+      } catch (error) {
+        appLogger.warn("[voice] engine close failed", {
+          error: describeLogError(error),
+        });
+      }
+      await lastWords;
+      if (attempt.sessionId === null) return;
+      await endRoute(attempt.sessionId, attempt.authority);
+    },
+    [endRoute],
+  );
+
+  /**
    * What a call that ends leaves unsent, sent as its last words: the sends
    * still waiting, then what was said since the last boundary, unless that
    * is nothing or only an end phrase. They go one at a time after the send
@@ -637,12 +731,20 @@ export function CallController(): ReactNode {
    * only under the account the call started under, which each send carries
    * to its dispatch: once another account is signed in, at the end or at
    * any point after, nothing more is sent, since the words were another
-   * person's. The check here only stops early. (A call closing on a queued
+   * person's. A call ended because its sign-in session changed sends none
+   * either: they were said under a session that is gone, whoever is signed
+   * in now. The check here only stops early. (A call closing on a queued
    * send let its words go when the microphone went off.)
    */
   const takeLastWords = useCallback(
     (reason: VoiceEndReason | null): (() => Promise<void>) | null => {
-      if (reason === "account") return null;
+      if (reason === "account" || reason === "session-changed") return null;
+      // Words go only under the sign-in session they were said under, whatever
+      // ended the call: once it is not the one signed in, none are taken.
+      const authority = callAuthorityRef.current;
+      if (authority === null || !auth.isVoiceCallAuthorityLive(authority)) {
+        return null;
+      }
       const store = useVoiceSessionStore.getState();
       const call = store.focus;
       const known = channelRef.current;
@@ -668,15 +770,26 @@ export function CallController(): ReactNode {
         const opened = inFlight === null ? null : await inFlight;
         let threadId = call.threadId ?? opened;
         for (const text of words) {
-          if (signedInAccount() !== account) return;
+          // The session can change while an earlier send is awaited: each
+          // send is checked as it goes. One already sent is not recalled.
+          if (
+            signedInAccount() !== account ||
+            !auth.isVoiceCallAuthorityLive(authority)
+          ) {
+            return;
+          }
           try {
             const response = await sendRef.current({
               hostId: known.hostId,
               account,
+              authority,
               request: callSendRequest(known, threadId, text),
             });
             threadId = threadId ?? response.threadId;
           } catch (error) {
+            // Refused because the session went while the send was queued:
+            // the rest are dropped with it, and there is nothing to report.
+            if (!auth.isVoiceCallAuthorityLive(authority)) return;
             appLogger.warn("[voice] call's last words failed", {
               error: describeLogError(error),
             });
@@ -684,7 +797,7 @@ export function CallController(): ReactNode {
         }
       };
     },
-    [],
+    [auth],
   );
 
   /**
@@ -792,254 +905,342 @@ export function CallController(): ReactNode {
     };
   }, [applyCapture, sayLine]);
 
-  /** Opens an engine on the current microphone. A call's mint carries no input. */
-  const connectEngine = useCallback(async (): Promise<boolean> => {
-    const stream = micStreamRef.current;
-    const micTrack = stream?.getAudioTracks()[0] ?? null;
-    if (micTrack === null) return false;
-    const attempt: Attempt = {
-      engine: createBrowserGptLiveEngine(),
-      sessionId: null,
-      expiresAt: 0,
-      started: false,
-      startedAt: 0,
-      failure: null,
-      cancelled: false,
-      account: signedInAccount(),
-      acknowledgements: [],
-      sentence: NO_OUTPUT_SENTENCE,
-    };
-    attemptRef.current = attempt;
-    const owns = (): boolean =>
-      attemptRef.current === attempt && !attempt.cancelled;
-    const closedBeforeStart = (): VoiceEngineError =>
-      new VoiceEngineError(
-        "PEER_FAILED",
-        "The voice session was ended before it started.",
-      );
-    try {
-      await attempt.engine.connect({
-        micTrack,
-        exchangeSdp: async (offerSdp) => {
-          if (!owns()) throw closedBeforeStart();
-          const result = await mintAsync({ offerSdp, input: "" });
-          switch (result.kind) {
-            case "ok":
-              // Owned from this moment: an End during the rest of the
-              // handshake still reaches the end route for it. One that came
-              // while the mint was out already settled the attempt without
-              // an id, so the id just minted is ended here.
-              attempt.sessionId = result.session.voiceSessionId;
-              attempt.expiresAt = result.session.expiresAt;
-              if (!owns()) {
-                if (endRouteAnswers(attempt)) {
-                  void endAsync(result.session.voiceSessionId).catch(
-                    (error: unknown) => {
-                      appLogger.warn("[voice] end route failed", {
-                        error: describeLogError(error),
-                      });
-                    },
+  /**
+   * Why a call whose session was lost ends: its sign-in session changing,
+   * when that is so, and else the connection it was running on.
+   */
+  const lostSessionReason = useCallback(
+    (authority: VoiceCallAuthority): VoiceEndReason =>
+      auth.isVoiceCallAuthorityLive(authority)
+        ? "connection"
+        : "session-changed",
+    [auth],
+  );
+
+  /**
+   * The call's voice, confirmed by a session's answer: every renewal asks for
+   * exactly it from now on, and a saved voice the server replaced with its
+   * default is said.
+   */
+  const freezeCallVoice = useCallback(
+    (voice: string, replaced: string | null) => {
+      voicePlanRef.current = { kind: "frozen", voice };
+      const store = useVoiceSessionStore.getState();
+      store.setAttestedVoice(voice);
+      if (replaced !== null) {
+        store.setVoiceNotice({ kind: "fallback", saved: replaced, voice });
+      }
+    },
+    [],
+  );
+
+  /**
+   * Opens an engine on the current microphone, under the call's account. A
+   * call's mint carries no input; its voice is the call's plan.
+   */
+  const connectEngine = useCallback(
+    async (authority: VoiceCallAuthority): Promise<boolean> => {
+      const stream = micStreamRef.current;
+      const micTrack = stream?.getAudioTracks()[0] ?? null;
+      if (micTrack === null) return false;
+      const attempt: Attempt = {
+        engine: createBrowserGptLiveEngine(),
+        sessionId: null,
+        expiresAt: 0,
+        started: false,
+        startedAt: 0,
+        failure: null,
+        cancelled: false,
+        authority,
+        acknowledgements: [],
+        sentence: NO_OUTPUT_SENTENCE,
+      };
+      attemptRef.current = attempt;
+      const owns = (): boolean =>
+        attemptRef.current === attempt && !attempt.cancelled;
+      const closedBeforeStart = (): VoiceEngineError =>
+        new VoiceEngineError(
+          "PEER_FAILED",
+          "The voice session was ended before it started.",
+        );
+      /**
+       * The attempt failed before it started: it is taken away and settled.
+       * The first opening never was a call, so nothing ended. A replacement
+       * is the live call ending, with the reason its mint gave or else the
+       * connection it was running on. Either way no other session is asked
+       * for: the attempt's id is ended and the call is over.
+       */
+      const failAttempt = (): false => {
+        attemptRef.current = null;
+        attempt.cancelled = true;
+        // Whatever failed, an attempt whose sign-in session is gone ends for
+        // that reason.
+        if (!auth.isVoiceCallAuthorityLive(authority)) {
+          attempt.failure = "session-changed";
+        }
+        let lastWords = NOTHING_LEFT;
+        if (firstOpeningRef.current)
+          refuseLocal(refusalFor(attempt.failure), null);
+        else lastWords = finishLocal(endReasonFor(attempt.failure));
+        void settleAttempt(attempt, lastWords);
+        return false;
+      };
+      try {
+        await attempt.engine.connect({
+          micTrack,
+          exchangeSdp: async (offerSdp) => {
+            if (!owns()) throw closedBeforeStart();
+            // The plan the request asks under is the one its answer is held to.
+            const plan = voicePlanRef.current;
+            const result = await mintAsync({
+              request: { offerSdp, input: "", ...callVoiceRequest(plan) },
+              authority,
+            });
+            switch (result.kind) {
+              case "ok": {
+                // Owned from this moment: an End during the rest of the
+                // handshake still reaches the end route for it. One that came
+                // while the mint was out already settled the attempt without
+                // an id, so the id just minted is ended here, under the call's
+                // own account, and nothing of it reaches the engine.
+                attempt.sessionId = result.session.voiceSessionId;
+                attempt.expiresAt = result.session.expiresAt;
+                if (!owns()) {
+                  void endRoute(result.session.voiceSessionId, authority);
+                  throw closedBeforeStart();
+                }
+                // The account can change while the mint is out before
+                // anything else has seen it (a sign-out moves the identity
+                // before its storage settles): the answer is then not the
+                // call's to use, and its id is ended with the attempt.
+                if (!auth.isVoiceCallAuthorityLive(authority)) {
+                  attempt.failure = "session-changed";
+                  throw new VoiceEngineError(
+                    "EXCHANGE_FAILED",
+                    "the call's account changed while its session was minted",
                   );
                 }
-                throw closedBeforeStart();
-              }
-              // Without a line a sentence can match, no utterance would ever
-              // close: a session that names none cannot carry a call, and
-              // the id just owned is ended with the attempt.
-              attempt.acknowledgements = acknowledgementForms(
-                result.session.acknowledgementLines ?? [],
-              );
-              if (attempt.acknowledgements.length === 0) {
-                attempt.failure = "unavailable";
-                throw new VoiceEngineError(
-                  "EXCHANGE_FAILED",
-                  "voice session mint named no usable acknowledgement lines",
+                // Nothing is heard before the answer confirms the voice asked
+                // for: a session that does not is ended, and the call does not
+                // ask again.
+                const confirmation = confirmCallVoice(
+                  plan,
+                  result.session.voiceSelection,
                 );
+                if (confirmation.kind === "unconfirmed") {
+                  attempt.failure = "voice-unconfirmed";
+                  throw new VoiceEngineError(
+                    "EXCHANGE_FAILED",
+                    "voice session mint did not confirm the call's voice",
+                  );
+                }
+                if (confirmation.kind === "confirmed") {
+                  freezeCallVoice(confirmation.voice, confirmation.replaced);
+                }
+                // Without a line a sentence can match, no utterance would ever
+                // close: a session that names none cannot carry a call, and
+                // the id just owned is ended with the attempt.
+                attempt.acknowledgements = acknowledgementForms(
+                  result.session.acknowledgementLines ?? [],
+                );
+                if (attempt.acknowledgements.length === 0) {
+                  attempt.failure = "unavailable";
+                  throw new VoiceEngineError(
+                    "EXCHANGE_FAILED",
+                    "voice session mint named no usable acknowledgement lines",
+                  );
+                }
+                return result.session.answerSdp;
               }
-              return result.session.answerSdp;
-            case "dormant":
-              // The fallback when the availability read was wrong or stale:
-              // hide Call now, and read the answer again.
-              useVoiceSessionStore.getState().setAvailability("dormant");
-              void queryClient.invalidateQueries({
-                queryKey: voiceQueryKeys.availabilityAll(),
-              });
-              attempt.failure = "unavailable";
-              break;
-            case "credits-exhausted":
-              attempt.failure = "credits";
-              break;
-            case "unavailable":
-            case "unauthorized":
-            case "network-error":
-              attempt.failure = "unavailable";
-              break;
-          }
-          throw new VoiceEngineError(
-            "EXCHANGE_FAILED",
-            `voice session mint answered ${result.kind}`,
-          );
-        },
-        onRemoteAudio: (remote) => {
-          if (!owns()) return;
-          levelWatchRef.current?.stop();
-          const audio = audioRef.current ?? new Audio();
-          audioRef.current = audio;
-          audio.autoplay = true;
-          audio.srcObject = remote;
-          remoteStreamRef.current = remote;
-          applyCapture();
-          // Sound that cannot play is a call nobody can hear: it ends, and
-          // says so, rather than confirming deliveries by transcript.
-          void audio.play().catch((error: unknown) => {
-            appLogger.warn("[voice] remote audio play failed", {
-              error: describeLogError(error),
-            });
-            if (owns()) endRef.current("playback");
-          });
-          levelWatchRef.current = watchAudioLevel(
-            remote,
-            (speaking) => {
-              if (owns()) speechRef.current?.noteOutputLevel(speaking);
-            },
-            (healthy) => {
-              if (owns()) speechRef.current?.setLevelDetection(healthy);
-            },
-          );
-        },
-        events: {
-          onInputTranscriptDelta: (text) => {
-            if (!owns() || closingRef.current) return;
-            const current = useVoiceSessionStore.getState();
-            // Dictation holds the microphone: a word that still arrives is
-            // the person's draft, not something said on the call.
-            if (current.pausedForDictation) return;
-            current.appendInput(text);
-            current.pushCaptionLine({ direction: "input", text });
-            ensureSpeech().noteInputTranscript();
-          },
-          onOutputTranscriptDelta: (text) => {
-            if (!owns()) return;
-            const current = useVoiceSessionStore.getState();
-            // The utterance boundary (VC0): the voice's acknowledgement after
-            // what the person said, one of the lines the mint named. The
-            // vendor marks no turn, so it is told by text (`hearOutput`):
-            // once the line has ended, what the person said before it began
-            // is one message; anything else the voice says closes nothing. A
-            // tail of the person's words transcribed after the acknowledgement
-            // began joins the next utterance: one mis-split, never a loss.
-            const heard = hearOutput(
-              attempt.sentence,
-              attempt.acknowledgements,
-              text,
-              current.inputHeard,
+              case "dormant":
+                // The fallback when the availability read was wrong or stale:
+                // hide Call now, and read the answer again.
+                useVoiceSessionStore.getState().setAvailability("dormant");
+                void queryClient.invalidateQueries({
+                  queryKey: voiceQueryKeys.availabilityAll(),
+                });
+                attempt.failure = "unavailable";
+                break;
+              case "credits-exhausted":
+                attempt.failure = "credits";
+                break;
+              case "voice-unavailable":
+                attempt.failure = "voice-unavailable";
+                break;
+              case "principal-changed":
+                attempt.failure = "session-changed";
+                break;
+              case "unavailable":
+              case "unauthorized":
+              case "network-error":
+                attempt.failure = "unavailable";
+                break;
+            }
+            throw new VoiceEngineError(
+              "EXCHANGE_FAILED",
+              `voice session mint answered ${result.kind}`,
             );
-            attempt.sentence = heard.sentence;
-            current.pushCaptionLine({ direction: "output", text });
-            ensureSpeech().noteOutputTranscript(text);
-            if (!attempt.started) return;
-            for (const began of heard.closes) {
-              const said = useVoiceSessionStore
-                .getState()
-                .takeOpenSpanTo(began);
-              if (said !== null) utteranceRef.current(said);
-            }
           },
-          // The persona never needs a delegation answered, and the app
-          // never answers one: replies are appended under none (VC0).
-          onDelegationCreated: () => undefined,
-          onUsage: (usage) => {
-            // Usage before the session started replaces nothing: a
-            // replacement must retire a session that ran.
-            if (!owns() || !attempt.started) return;
-            if (
-              usage.contextUsageRatio !== null &&
-              usage.contextUsageRatio >= REMINT_CONTEXT_USAGE_RATIO
-            ) {
-              requestRemintWhenClearRef.current();
-            }
+          onRemoteAudio: (remote) => {
+            if (!owns()) return;
+            levelWatchRef.current?.stop();
+            const audio = audioRef.current ?? new Audio();
+            audioRef.current = audio;
+            audio.autoplay = true;
+            audio.srcObject = remote;
+            remoteStreamRef.current = remote;
+            applyCapture();
+            // Sound that cannot play is a call nobody can hear: it ends, and
+            // says so, rather than confirming deliveries by transcript.
+            void audio.play().catch((error: unknown) => {
+              appLogger.warn("[voice] remote audio play failed", {
+                error: describeLogError(error),
+              });
+              if (owns()) endRef.current("playback");
+            });
+            levelWatchRef.current = watchAudioLevel(
+              remote,
+              (speaking) => {
+                if (owns()) speechRef.current?.noteOutputLevel(speaking);
+              },
+              (healthy) => {
+                if (owns()) speechRef.current?.setLevelDetection(healthy);
+              },
+            );
           },
-          onClosed: (reason) => {
-            // A cancelled attempt is being settled by whoever cancelled it;
-            // one that never started is finished by `connect`'s own failure
-            // path, with the mint's reason intact.
-            if (!owns() || !attempt.started) return;
-            attemptRef.current = null;
-            attempt.cancelled = true;
-            // The vendor or the network ended a session that had time left:
-            // a fresh one carries the call on. A session the server closed
-            // for credits refuses the re-mint with 402, which ends the call
-            // with the reason said.
-            if (
-              reason !== "app" &&
-              Date.now() < attempt.expiresAt - REMINT_BEFORE_EXPIRY_MS
-            ) {
-              void remintRef.current(attempt);
-              return;
-            }
-            void settleAttempt(attempt, finishLocal("connection"));
+          events: {
+            onInputTranscriptDelta: (text) => {
+              if (!owns() || closingRef.current) return;
+              const current = useVoiceSessionStore.getState();
+              // Dictation holds the microphone: a word that still arrives is
+              // the person's draft, not something said on the call.
+              if (current.pausedForDictation) return;
+              current.appendInput(text);
+              current.pushCaptionLine({ direction: "input", text });
+              ensureSpeech().noteInputTranscript();
+            },
+            onOutputTranscriptDelta: (text) => {
+              if (!owns()) return;
+              const current = useVoiceSessionStore.getState();
+              // The utterance boundary (VC0): the voice's acknowledgement after
+              // what the person said, one of the lines the mint named. The
+              // vendor marks no turn, so it is told by text (`hearOutput`):
+              // once the line has ended, what the person said before it began
+              // is one message; anything else the voice says closes nothing. A
+              // tail of the person's words transcribed after the acknowledgement
+              // began joins the next utterance: one mis-split, never a loss.
+              const heard = hearOutput(
+                attempt.sentence,
+                attempt.acknowledgements,
+                text,
+                current.inputHeard,
+              );
+              attempt.sentence = heard.sentence;
+              current.pushCaptionLine({ direction: "output", text });
+              ensureSpeech().noteOutputTranscript(text);
+              if (!attempt.started) return;
+              for (const began of heard.closes) {
+                const said = useVoiceSessionStore
+                  .getState()
+                  .takeOpenSpanTo(began);
+                if (said !== null) utteranceRef.current(said);
+              }
+            },
+            // The persona never needs a delegation answered, and the app
+            // never answers one: replies are appended under none (VC0).
+            onDelegationCreated: () => undefined,
+            onUsage: (usage) => {
+              // Usage before the session started replaces nothing: a
+              // replacement must retire a session that ran.
+              if (!owns() || !attempt.started) return;
+              if (
+                usage.contextUsageRatio !== null &&
+                usage.contextUsageRatio >= REMINT_CONTEXT_USAGE_RATIO
+              ) {
+                requestRemintWhenClearRef.current();
+              }
+            },
+            onClosed: (reason) => {
+              // A cancelled attempt is being settled by whoever cancelled it;
+              // one that never started is finished by `connect`'s own failure
+              // path, with the mint's reason intact.
+              if (!owns() || !attempt.started) return;
+              attemptRef.current = null;
+              attempt.cancelled = true;
+              // The vendor or the network ended a session that had time left:
+              // a fresh one carries the call on. A session the server closed
+              // for credits refuses the re-mint with 402, which ends the call
+              // with the reason said.
+              if (
+                reason !== "app" &&
+                Date.now() < attempt.expiresAt - REMINT_BEFORE_EXPIRY_MS
+              ) {
+                void remintRef.current(attempt);
+                return;
+              }
+              void settleAttempt(
+                attempt,
+                finishLocal(lostSessionReason(attempt.authority)),
+              );
+            },
           },
-        },
-      });
-    } catch (error) {
-      // An End or a replacement during the handshake has already finished
-      // locally and is settling the attempt (its minted id included).
-      if (attempt.cancelled) return false;
-      attemptRef.current = null;
-      attempt.cancelled = true;
-      appLogger.warn("[voice] session connect failed", {
-        error: describeLogError(error),
-      });
-      // The first opening never was a call, so nothing ended. A replacement
-      // is the live call ending: credits say so, and anything else is the
-      // connection it was running on.
-      let lastWords = NOTHING_LEFT;
-      if (firstOpeningRef.current)
-        refuseLocal(attempt.failure ?? "unavailable", null);
-      else {
-        lastWords = finishLocal(
-          attempt.failure === "credits" ? "credits" : "connection",
-        );
+        });
+      } catch (error) {
+        // An End or a replacement during the handshake has already finished
+        // locally and is settling the attempt (its minted id included).
+        if (attempt.cancelled) return false;
+        appLogger.warn("[voice] session connect failed", {
+          error: describeLogError(error),
+        });
+        return failAttempt();
       }
-      void settleAttempt(attempt, lastWords);
-      return false;
-    }
-    if (!owns() || attempt.sessionId === null) return false;
-    attempt.started = true;
-    attempt.startedAt = Date.now();
-    firstOpeningRef.current = false;
-    useVoiceSessionStore.getState().sessionLive({
-      id: attempt.sessionId,
-      expiresAt: attempt.expiresAt,
-      engine: attempt.engine,
-    });
-    ensureSpeech().setReady(
-      !useVoiceSessionStore.getState().pausedForDictation,
-    );
-    setShellVoiceLive(true);
-    clearTimers();
-    const untilRemint =
-      attempt.expiresAt - REMINT_BEFORE_EXPIRY_MS - Date.now();
-    expiryTimerRef.current = window.setTimeout(
-      () => {
-        expiryTimerRef.current = null;
-        if (owns()) void remintRef.current(attempt);
-      },
-      Math.max(0, untilRemint),
-    );
-    return true;
-  }, [
-    applyCapture,
-    clearTimers,
-    endAsync,
-    ensureSpeech,
-    finishLocal,
-    mintAsync,
-    queryClient,
-    refuseLocal,
-    setShellVoiceLive,
-    settleAttempt,
-  ]);
+      if (!owns() || attempt.sessionId === null) return false;
+      // Nothing is published live under an account that is no longer the
+      // call's, even when it changed after the answer was taken.
+      if (!auth.isVoiceCallAuthorityLive(authority)) {
+        attempt.failure = "session-changed";
+        return failAttempt();
+      }
+      attempt.started = true;
+      attempt.startedAt = Date.now();
+      firstOpeningRef.current = false;
+      useVoiceSessionStore.getState().sessionLive({
+        id: attempt.sessionId,
+        expiresAt: attempt.expiresAt,
+        engine: attempt.engine,
+      });
+      ensureSpeech().setReady(
+        !useVoiceSessionStore.getState().pausedForDictation,
+      );
+      setShellVoiceLive(true);
+      clearTimers();
+      const untilRemint =
+        attempt.expiresAt - REMINT_BEFORE_EXPIRY_MS - Date.now();
+      expiryTimerRef.current = window.setTimeout(
+        () => {
+          expiryTimerRef.current = null;
+          if (owns()) void remintRef.current(attempt);
+        },
+        Math.max(0, untilRemint),
+      );
+      return true;
+    },
+    [
+      applyCapture,
+      auth,
+      clearTimers,
+      endRoute,
+      ensureSpeech,
+      finishLocal,
+      freezeCallVoice,
+      lostSessionReason,
+      mintAsync,
+      queryClient,
+      refuseLocal,
+      setShellVoiceLive,
+      settleAttempt,
+    ],
+  );
 
   /**
    * Replaces the vendor session under the same call, one at a time: the old
@@ -1063,7 +1264,7 @@ export function CallController(): ReactNode {
       shortSessionsRef.current =
         ran < SHORT_SESSION_MS ? shortSessionsRef.current + 1 : 0;
       if (shortSessionsRef.current >= MAX_SHORT_SESSIONS) {
-        void settleAttempt(old, finishLocal("connection"));
+        void settleAttempt(old, finishLocal(lostSessionReason(old.authority)));
         return;
       }
       ensureSpeech().handoff();
@@ -1080,9 +1281,16 @@ export function CallController(): ReactNode {
       ) {
         return;
       }
-      await connectEngine();
+      await connectEngine(old.authority);
     },
-    [clearTimers, connectEngine, ensureSpeech, finishLocal, settleAttempt],
+    [
+      clearTimers,
+      connectEngine,
+      ensureSpeech,
+      finishLocal,
+      lostSessionReason,
+      settleAttempt,
+    ],
   );
 
   const requestRemintWhenClear = useCallback(() => {
@@ -1156,6 +1364,100 @@ export function CallController(): ReactNode {
   );
 
   /**
+   * The availability read a call makes as it starts, under its own account:
+   * the voices it may ask for come from this answer, never a cached one. A
+   * read that throws is a failed read.
+   */
+  const readCallVoices = useCallback(
+    async (
+      authority: VoiceCallAuthority,
+    ): Promise<VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged> => {
+      try {
+        return await readCallAvailabilityAsync({ authority });
+      } catch (error) {
+        appLogger.warn("[voice] call availability read failed", {
+          error: describeLogError(error),
+        });
+        return {
+          kind: "network-error",
+          detail: "the call's availability read failed",
+        };
+      }
+    },
+    [readCallAvailabilityAsync],
+  );
+
+  /**
+   * Settles what the call asks for its voice from its own availability read:
+   * the saved choice against the voices offered now, or, on a connection that
+   * offers none, nothing, which the call says. The answer also refreshes the
+   * window's cached one, so the settings show what calls use. The refusal
+   * when the dial cannot go on: a read that failed, an account that changed
+   * while it was out, or a deployment that turned voice off (Call hides).
+   */
+  const callVoiceRefusal = useCallback(
+    (
+      answer: VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged,
+      authority: VoiceCallAuthority,
+      saved: string | null,
+    ): VoiceRefusal | null => {
+      if (
+        answer.kind === "principal-changed" ||
+        !auth.isVoiceCallAuthorityLive(authority)
+      ) {
+        return "session-changed";
+      }
+      if (answer.kind !== "ok") return "unavailable";
+      const userId = callAccountRef.current;
+      const fresh = {
+        available: answer.available,
+        voiceSelection: answer.voiceSelection,
+      };
+      queryClient.setQueriesData(
+        {
+          queryKey: voiceQueryKeys.availabilityAll(),
+          predicate: (query) => query.queryKey[3] === userId,
+        },
+        fresh,
+      );
+      if (!answer.available) {
+        useVoiceSessionStore.getState().setAvailability("dormant");
+        return "calls-unavailable";
+      }
+      const capability = answer.voiceSelection;
+      voicePlanRef.current =
+        capability === null
+          ? { kind: "legacy" }
+          : { kind: "initial", saved, capability };
+      if (capability === null) {
+        useVoiceSessionStore.getState().setVoiceNotice({ kind: "legacy" });
+      }
+      return null;
+    },
+    [auth, queryClient],
+  );
+
+  /**
+   * Whether the dial goes on to its mint once its availability read is in:
+   * a dial ended or replaced meanwhile takes nothing from the answer, and
+   * one the answer cannot carry is refused with the reason, minting nothing.
+   */
+  const beginCallVoice = useCallback(
+    (
+      answer: VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged,
+      authority: VoiceCallAuthority,
+      saved: string | null,
+      stillStarting: () => boolean,
+    ): boolean => {
+      if (!stillStarting()) return false;
+      const refusal = callVoiceRefusal(answer, authority, saved);
+      if (refusal !== null) refuseLocal(refusal, null);
+      return refusal === null;
+    },
+    [callVoiceRefusal, refuseLocal],
+  );
+
+  /**
    * The dial: the bot is asked whether a host can run it now (`bot.open`,
    * as its tab asks), and a paused bot is refused with the tab's own line
    * before the microphone is asked for. Then the microphone, then the mint.
@@ -1172,7 +1474,20 @@ export function CallController(): ReactNode {
         threadId: target.threadId,
       };
       store.sessionConnecting(call, namesRef.current.botTitle(target.botId));
+      // The call's account and voice, settled once for the whole call:
+      // every mint and end of it goes under this account, and its voice is
+      // asked for as the settings and the offered voices say now.
+      const authority = auth.captureVoiceCallAuthority();
+      if (authority === null) {
+        refuseLocal("unavailable", null);
+        return;
+      }
+      // Read once for this call, beside the bot's open and the microphone,
+      // and waited for before the first mint.
+      const callVoices = readCallVoices(authority);
+      const saved = useSettingsStore.getState().callVoice;
       callAccountRef.current = signedInAccount();
+      callAuthorityRef.current = authority;
       firstOpeningRef.current = true;
       shortSessionsRef.current = 0;
       closingRef.current = false;
@@ -1180,6 +1495,8 @@ export function CallController(): ReactNode {
       sendingRef.current = null;
       inFlightRef.current = null;
       setOpenedThreadId(null);
+      setAcknowledgedRequests(new Set());
+      setAwaitingRequest(false);
       const { sessionToken: token, engineGeneration: generation } =
         useVoiceSessionStore.getState();
       const stillStarting = (): boolean => {
@@ -1234,14 +1551,19 @@ export function CallController(): ReactNode {
         if (micStreamRef.current === stream) end("interrupted");
       });
       applyCapture();
-      await connectEngine();
+      const answer = await callVoices;
+      if (!beginCallVoice(answer, authority, saved, stillStarting)) return;
+      await connectEngine(authority);
     },
     [
       admitBot,
       applyCapture,
+      auth,
+      beginCallVoice,
       connectEngine,
       end,
       microphoneAccessAsync,
+      readCallVoices,
       refuseLocal,
     ],
   );
@@ -1332,6 +1654,8 @@ export function CallController(): ReactNode {
       botTitle={botTitle(focus.botId)}
       client={focusClient}
       scheduler={speech}
+      acknowledgedRequests={acknowledgedRequests}
+      awaitingRequest={awaitingRequest}
     />
   );
 }
@@ -1370,8 +1694,8 @@ interface ReplyWatchState {
  * joined takes its first snapshot as history.
  *
  * The bot's turn on the thread holds the floor: past `CALL_HOLD_DELAY_MS`
- * of replying, one hold line, and one only for the turn. A reply that lands
- * first takes the place of a hold line still waiting and restarts the wait.
+ * of replying, one hold line per request, unless the voice already acknowledged
+ * that request. A reply withdraws obsolete filler while its audio drains.
  * A turn that fails or parks gets one failure line in place of any hold line
  * still waiting, and the call stays open.
  */
@@ -1383,9 +1707,20 @@ function CallThreadWatch(props: {
   readonly botTitle: string;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly scheduler: SpeechScheduler;
+  readonly acknowledgedRequests: ReadonlySet<string>;
+  readonly awaitingRequest: boolean;
 }): null {
-  const { botId, hostId, threadId, opened, botTitle, client, scheduler } =
-    props;
+  const {
+    botId,
+    hostId,
+    threadId,
+    opened,
+    botTitle,
+    client,
+    scheduler,
+    acknowledgedRequests,
+    awaitingRequest,
+  } = props;
   const handle = useChatSessionHandleForContainer(
     botId,
     threadId,
@@ -1411,13 +1746,19 @@ function CallThreadWatch(props: {
     activity === null ? null : (session?.state ?? ("idle" as const));
   const turnRequest = session?.requestId ?? null;
   const holdTimerRef = useRef<number | null>(null);
-  /** The hold line queued and not appended yet, so a reply can take its place. */
+  /** The hold line, including one in flight whose audio must drain. */
   const holdItemRef = useRef<string | null>(null);
   /**
    * The replying turn has had its one hold line (said, or given to the voice
    * and past taking back): no reply row re-arms it.
    */
   const holdSpentRef = useRef(false);
+  const spentRequestsRef = useRef(new Set<string | null>());
+  const holdRequestRef = useRef<string | null | undefined>(undefined);
+  const awaitingRequestRef = useRef(awaitingRequest);
+  useEffect(() => {
+    awaitingRequestRef.current = awaitingRequest;
+  }, [awaitingRequest]);
   /** Which replying turn is current, so a late delivery spends only its own. */
   const spanRef = useRef(0);
   /** The requests whose failure has been said, so each is said once. */
@@ -1429,7 +1770,7 @@ function CallThreadWatch(props: {
   } | null>(null);
 
   const sayLine = useCallback(
-    (kind: string, text: string, onDelivered: (() => void) | null): string => {
+    (kind: string, text: string, onSettled: (() => void) | null): string => {
       lineSerialRef.current += 1;
       const id = `${kind}:${threadId}:${lineSerialRef.current}`;
       scheduler.enqueue({
@@ -1437,13 +1778,14 @@ function CallThreadWatch(props: {
         priority: "focused",
         text,
         delegationId: null,
+        retry: kind !== "hold",
         confirmWords: confirmationWords({
           botTitle: null,
           threadTitle: null,
           text,
         }),
-        onDelivered,
-        onGivenUp: null,
+        onDelivered: onSettled,
+        onGivenUp: onSettled,
       });
       return id;
     },
@@ -1456,17 +1798,17 @@ function CallThreadWatch(props: {
     }
   }, []);
   /**
-   * Takes back the hold line while it is still queued: it was never said, so
-   * the turn keeps its hold. One already given to the voice cannot be taken
-   * back and is being said: the turn has had it.
+   * Obsolete filler must never retry ahead of a reply. Withdrawing an in-flight
+   * line preserves its audio slot so late words cannot confirm the reply.
    */
   const withdrawHold = useCallback(() => {
     const hold = holdItemRef.current;
     if (hold === null) return;
     holdItemRef.current = null;
-    const pending = scheduler.pendingCount();
-    scheduler.remove(hold);
-    if (scheduler.pendingCount() === pending) holdSpentRef.current = true;
+    if (scheduler.withdraw(hold) !== "unappended") {
+      holdSpentRef.current = true;
+      spentRequestsRef.current.add(holdRequestRef.current ?? null);
+    }
   }, [scheduler]);
   /** Starts the wait for the turn's one hold line, from now. */
   const armHold = useCallback(() => {
@@ -1475,7 +1817,10 @@ function CallThreadWatch(props: {
       holdTimerRef.current = null;
       const span = spanRef.current;
       holdItemRef.current = sayLine("hold", CALL_HOLD_LINE, () => {
-        if (spanRef.current === span) holdSpentRef.current = true;
+        if (spanRef.current === span) {
+          holdSpentRef.current = true;
+          spentRequestsRef.current.add(holdRequestRef.current ?? null);
+        }
       });
     }, CALL_HOLD_DELAY_MS);
   }, [clearHold, sayLine]);
@@ -1488,25 +1833,49 @@ function CallThreadWatch(props: {
   useEffect(() => clearHold, [clearHold]);
 
   useEffect(() => {
-    const previous = turnRef.current;
-    turnRef.current = { state: turnState, requestId: turnRequest };
-    if (turnState === "replying") {
-      if (
-        previous?.state !== "replying" ||
-        previous.requestId !== turnRequest
-      ) {
-        // A new turn: the last one's hold line, if still queued, is not
-        // this one's.
+    if (turnState === "replying" && turnRequest !== null) {
+      if (holdRequestRef.current !== turnRequest) {
+        clearHold();
         withdrawHold();
         spanRef.current += 1;
-        holdSpentRef.current = false;
+        holdRequestRef.current = turnRequest;
+        holdSpentRef.current = spentRequestsRef.current.has(turnRequest);
+      }
+      if (acknowledgedRequests.has(turnRequest)) {
+        clearHold();
+        withdrawHold();
+        holdSpentRef.current = true;
+        spentRequestsRef.current.add(turnRequest);
+      } else if (awaitingRequest) {
+        // Activity can precede the send response naming its request. Wait for
+        // that correlation before deciding whether another acknowledgement is due.
+        clearHold();
+        withdrawHold();
+      } else if (
+        !holdSpentRef.current &&
+        holdTimerRef.current === null &&
+        holdItemRef.current === null
+      ) {
         armHold();
       }
       return;
     }
-    // The turn is over: its hold line, if still queued, is no longer true.
+    // No open post is known: a resolved post may still have a running turn.
     clearHold();
     withdrawHold();
+  }, [
+    acknowledgedRequests,
+    awaitingRequest,
+    armHold,
+    clearHold,
+    turnRequest,
+    turnState,
+    withdrawHold,
+  ]);
+
+  useEffect(() => {
+    const previous = turnRef.current;
+    turnRef.current = { state: turnState, requestId: turnRequest };
     const stopped = turnState === "failed" || turnState === "parked";
     if (!stopped) return;
     // In a thread the call joined, a turn already stopped at the first
@@ -1521,16 +1890,7 @@ function CallThreadWatch(props: {
     if (!news || (!known && announcedRef.current.has(request))) return;
     announcedRef.current.add(request);
     sayLine("failed", callFailureLine(botTitle), null);
-  }, [
-    armHold,
-    botTitle,
-    clearHold,
-    opened,
-    sayLine,
-    turnRequest,
-    turnState,
-    withdrawHold,
-  ]);
+  }, [botTitle, opened, sayLine, turnRequest, turnState]);
 
   // ---- The replies -------------------------------------------------------- //
   useEffect(() => {
@@ -1540,7 +1900,12 @@ function CallThreadWatch(props: {
       // A reply landed: a hold line still waiting is not said. A turn that
       // runs on waits a full delay again, unless it has had its hold line.
       withdrawHoldRef.current();
-      if (turnRef.current?.state === "replying" && !holdSpentRef.current) {
+      if (
+        turnRef.current?.state === "replying" &&
+        turnRef.current.requestId !== null &&
+        !holdSpentRef.current &&
+        !awaitingRequestRef.current
+      ) {
         armHoldRef.current();
       }
       scheduler.enqueue({
@@ -1548,6 +1913,7 @@ function CallThreadWatch(props: {
         priority: "focused",
         text,
         delegationId: null,
+        retry: true,
         confirmWords: confirmationWords({
           botTitle: null,
           threadTitle: null,

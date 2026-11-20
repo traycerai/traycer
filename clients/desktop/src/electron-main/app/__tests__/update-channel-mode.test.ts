@@ -63,19 +63,47 @@ describe("isSelectableCandidate", () => {
   const installedVersion = "2.0.0-rc.1";
 
   it.each([
-    // Same line, strictly newer: the two things implicit following may take.
+    ["1.0.0", false, true],
+    ["2.0.0", true, true],
+    ["2.0.0-rc.2", true, false],
+    ["2.0.0-beta.1", true, false],
+    ["02.0.0", true, false],
+    ["not-a-version", true, false],
+  ])(
+    "stable-only candidate %s (newer=%s) -> %s",
+    (candidateVersion, isStrictlyNewer, expected) => {
+      expect(
+        isSelectableCandidate({
+          mode: "stable-only",
+          installedVersion,
+          candidateVersion,
+          isStrictlyNewer,
+        }),
+      ).toBe(expected);
+    },
+  );
+
+  it.each([
+    // Same line, strictly newer: a later RC, or the line's own stable.
     ["2.0.0-rc.2", true, true],
     ["2.0.0", true, true],
     // Same line but not newer (the installed build itself, or an older RC).
     ["2.0.0-rc.1", false, false],
     ["2.0.0-rc.0", false, false],
-    // Newer, but on another line - the jump implicit following must never make,
-    // at any version distance.
+    // A newer STABLE on any line: taken, so several published releases are
+    // one hop rather than one per relaunch.
+    ["2.1.0", true, true],
+    ["2.0.1", true, true],
+    ["3.0.0", true, true],
+    // A stable that is not newer (another line's older release).
+    ["1.9.0", false, false],
+    // Newer, but an RC on another line - the one jump implicit following never
+    // makes, at any version distance.
     ["2.1.0-rc.1", true, false],
-    ["2.1.0", true, false],
     ["3.0.0-rc.1", true, false],
     // Newer, but names no release line at all.
     ["2.0.0-beta.9", true, false],
+    ["02.1.0", true, false],
   ])(
     "implicit-rc-line: %s (newer=%s) -> %s",
     (candidateVersion, isStrictlyNewer, expected) => {

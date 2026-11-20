@@ -64,6 +64,7 @@ import {
   HarnessModelPickerPanelBody,
   type HarnessModelPickerPanelBodyProps,
 } from "@/components/home/pickers/harness-model-picker-panel";
+import { EMPTY_REMOVED_PROFILES_BY_HARNESS_ID } from "@/components/home/pickers/harness-rail-providers";
 import {
   TEAM_SANDBOX_HARNESS_UNAVAILABLE,
   teamSandboxHarnessBlocked,
@@ -227,6 +228,7 @@ function renderPanel(input: {
       GuiHarnessId,
       ReadonlyArray<ProviderProfile>
     >(),
+    removedProfilesByHarnessId: EMPTY_REMOVED_PROFILES_BY_HARNESS_ID,
     resolvedActiveProviderId: input.browsed,
     activeProfileId: null,
     activeProfileIdByHarnessId: new Map<GuiHarnessId, string | null>(),
@@ -243,10 +245,12 @@ function renderPanel(input: {
     onRefreshCatalog: () => Promise.resolve(),
     hostUnavailableLabel: null,
     onOpenProviderSettings: noop,
+    onOpenHostUpdates: noop,
     onClosePicker: noop,
     listRef,
     listKey: "list",
     visibleRows: [rowOf(input.browsed)],
+    hiddenModelProviders: new Set(),
     selectedRowId: "",
     effectiveActiveRowId: "",
     hoveredRowId: "",

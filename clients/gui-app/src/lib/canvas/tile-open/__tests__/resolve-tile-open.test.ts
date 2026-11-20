@@ -211,7 +211,7 @@ describe("dedupe", () => {
     });
   });
 
-  // The old `openTile(preview: false, "user")` cleared the pane's preview slot on
+  // The old `openTile(preview: false)` cleared the pane's preview slot on
   // a dedupe hit; the plan has to carry that or a double-click stops pinning.
   it("promotes a permanent hit on the pane's own preview", () => {
     const plan = resolve({

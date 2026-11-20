@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useContext } from "react";
 
 import { Info } from "lucide-react";
 import { create, useStore } from "zustand";
@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
@@ -48,6 +49,7 @@ import {
 import { usePublishConfirmedManualFallbackAction } from "./use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-outcome";
 import { RoutingDestinationPicker } from "./routing-destination-picker";
+import { useBotTurnMayChange } from "@/hooks/bots/use-reader-may-change-bot";
 
 /**
  * The failed-turn card's actions: Retry, Switch to…, and "Wait until <time>".
@@ -108,7 +110,8 @@ export function FallbackManualRungActions({
 }) {
   const transcript = useMaybeChatTranscript();
   const epicId = useMaybeOpenEpicHandle()?.epicId ?? null;
-  if (transcript === null || epicId === null) return null;
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  if (readOnly || transcript === null || epicId === null) return null;
   return (
     <ManualRungActions
       turnId={turnId}
@@ -423,6 +426,8 @@ function ManualRungAffordances({
   useHoldFailedTurnRefusal({ hostId, chatId }, attempt.turnId);
   const chatSettings = useChatPersistedSettings({ epicId, chatId, hostId });
   const seedTuple = failedTurnSwitchSeed(attempt, chatSettings);
+  // On a bot's chat a Switch writes the bot's run settings, which a team's Viewer may not change.
+  const mayChangeBot = useBotTurnMayChange(epicId);
   // Any rung in flight for this chat - a bare button here or a pick in the
   // picker - quiets every control, so one press cannot race another.
   const rungsInFlight =
@@ -468,7 +473,9 @@ function ManualRungAffordances({
       retry: attempt.eligibleRungs.includes("retry") && leaves.retry,
       // The composer's banner predicate asks the same function, so the card
       // and the banner cannot disagree about whether "Switch to…" is here.
-      switch: failedTurnSwitchOffered({ attempt, refusal, seedTuple }),
+      switch:
+        mayChangeBot &&
+        failedTurnSwitchOffered({ attempt, refusal, seedTuple }),
       wait: waitUntil !== null && leaves.wait,
     },
   });

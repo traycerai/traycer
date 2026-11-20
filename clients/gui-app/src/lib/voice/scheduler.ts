@@ -19,6 +19,7 @@
  * a word of the item's own (the bot's name, the thread's title, a key noun);
  * a bare "Mm-hmm" is not delivery. An unconfirmed item is retried at the next
  * clear moment up to {@link MAX_DELIVERY_ATTEMPTS}, then left for the bell.
+ * Filler opts out of retries: its acknowledgement budget is one append.
  *
  * Priorities, highest first: an `ask` (the voice has a question for the
  * person), the `focused` reply they are waiting on, a reply `elsewhere`, the
@@ -41,6 +42,8 @@ export interface SpeechItem {
   readonly text: string;
   /** The request this answers, or `null` for an interjection. */
   readonly delegationId: string | null;
+  /** Retry useful speech; filler gets only one append, even if unconfirmed. */
+  readonly retry: boolean;
   /**
    * Words whose appearance in the output transcript prove the item was
    * spoken. Compared case-insensitively on word boundaries; see
@@ -89,16 +92,16 @@ export interface SpeechSchedulerDeps {
 
 export interface SpeechScheduler {
   enqueue(item: SpeechItem): void;
-  /** Drops a queued item that has not been appended; a no-op otherwise. */
-  remove(itemId: string): void;
   /**
    * Takes an item back whatever its stage: a queued one is dropped; one in
    * flight runs neither of its callbacks and is never retried, but keeps the
    * slot while its own output drains (until that utterance completes, or its
    * confirm window ends), so the words it was already given can never be
-   * read as another item's delivery.
+   * read as another item's delivery. Returns whether it was ever appended,
+   * including while queued for retry or after an attempt was refunded; absent
+   * means the item is no longer held by this scheduler.
    */
-  withdraw(itemId: string): void;
+  withdraw(itemId: string): "unappended" | "appended" | "absent";
   /**
    * Re-labels a queued item's delegation before it is appended (its request
    * was placed after it was scheduled). A no-op once the item is in flight
@@ -126,7 +129,8 @@ export interface SpeechScheduler {
    * The voice was silenced under the item being spoken (paused for
    * dictation): the in-flight item goes back to the front of the queue as
    * if it had never been appended, its spent attempt refunded, and the
-   * transcript of its silent speech confirms nothing. It is appended again
+   * transcript of its silent speech confirms nothing. Single-append filler
+   * instead stays withdrawn and draining. Retriable speech is appended again
    * as a fresh item once appends are taken again. One withdrawn while in
    * flight is left draining, never requeued. A no-op with nothing in flight.
    */
@@ -200,6 +204,8 @@ interface QueuedItem {
   /** Re-labelled at a handoff: the delegation id belongs to one session. */
   item: SpeechItem;
   attempts: number;
+  /** An append happened, even if suspension later refunded its attempt. */
+  appended: boolean;
 }
 
 interface InFlight {
@@ -360,7 +366,10 @@ export function createSpeechScheduler(
       current.queued.item.onDelivered?.();
       return;
     }
-    if (current.queued.attempts < MAX_DELIVERY_ATTEMPTS) {
+    if (
+      current.queued.item.retry &&
+      current.queued.attempts < MAX_DELIVERY_ATTEMPTS
+    ) {
       queue.unshift(current.queued);
     } else {
       current.queued.item.onGivenUp?.();
@@ -376,6 +385,7 @@ export function createSpeechScheduler(
     }
     // Every append spends one of the item's attempts, whatever becomes of it.
     next.attempts += 1;
+    next.appended = true;
     const holdMs = estimateSpeechMs(next.item.text);
     inFlight = {
       queued: next,
@@ -412,17 +422,16 @@ export function createSpeechScheduler(
   return {
     enqueue(item) {
       if (disposed) return;
-      queue.push({ item, attempts: 0 });
+      queue.push({ item, attempts: 0, appended: false });
       dispatch();
-    },
-    remove(itemId) {
-      const index = queue.findIndex((entry) => entry.item.id === itemId);
-      if (index !== -1) queue.splice(index, 1);
     },
     withdraw(itemId) {
       const index = queue.findIndex((entry) => entry.item.id === itemId);
-      if (index !== -1) queue.splice(index, 1);
-      if (inFlight?.queued.item.id !== itemId) return;
+      if (index !== -1) {
+        const entry = queue.splice(index, 1)[0];
+        return entry.appended ? "appended" : "unappended";
+      }
+      if (inFlight?.queued.item.id !== itemId) return "absent";
       inFlight.withdrawn = true;
       // Its utterance already came and went: nothing of it is left to drain.
       const drained =
@@ -434,6 +443,7 @@ export function createSpeechScheduler(
         settleInFlight(false);
         onFactsChanged();
       }
+      return "appended";
     },
     relabel(itemId, delegationId) {
       const entry = queue.find((candidate) => candidate.item.id === itemId);
@@ -503,6 +513,10 @@ export function createSpeechScheduler(
       // may still arrive, and they must not land on the item appended next.
       // It is never retried.
       if (current.withdrawn) return;
+      if (!current.queued.item.retry) {
+        current.withdrawn = true;
+        return;
+      }
       inFlight = null;
       if (current.timer !== null) deps.clearTimer(current.timer);
       current.queued.attempts = Math.max(0, current.queued.attempts - 1);
@@ -555,17 +569,20 @@ export function createSpeechScheduler(
   /**
    * Forgets every fact and timer of the engine that produced them. An item
    * whose append was in flight goes back to the front of its queue with its
-   * attempts unchanged: its words were never confirmed heard. Returns the
-   * queue's entries for the caller to re-label.
+   * attempts unchanged if retries remain; spent filler is retired instead.
+   * Returns the queue's entries for the caller to re-label.
    */
   function retireFacts(): QueuedItem[] {
     if (inFlight !== null) {
       if (inFlight.timer !== null) deps.clearTimer(inFlight.timer);
       // Its append was spent on the engine that is going; the item keeps
-      // what is left of its budget, and is given up with none left. One
-      // withdrawn is simply gone.
+      // what is left of its retry budget, and is given up with none left.
+      // Single-append filler has spent its budget. One withdrawn is simply gone.
       if (!inFlight.withdrawn) {
-        if (inFlight.queued.attempts < MAX_DELIVERY_ATTEMPTS) {
+        if (
+          inFlight.queued.item.retry &&
+          inFlight.queued.attempts < MAX_DELIVERY_ATTEMPTS
+        ) {
           queue.unshift(inFlight.queued);
         } else if (!disposed) {
           inFlight.queued.item.onGivenUp?.();

@@ -624,7 +624,10 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   return (
     // The canvas fills the tile: the timeline lives in the epic sidebar now, so
     // the only thing sharing this row is the edge click-through.
-    <div className="flex h-full min-h-0 w-full min-w-0">
+    <div
+      className="flex h-full min-h-0 w-full min-w-0"
+      data-history-gesture-owner=""
+    >
       <div
         ref={canvasRef}
         // `relative` so the mode toggle floats over the graph rather than over

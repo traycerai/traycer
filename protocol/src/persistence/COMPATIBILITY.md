@@ -154,6 +154,15 @@ rebuilding a block from its known fields. A historical fork that rebuilt a
 block may already have lost the key in that copy, and this change does not
 repair that copy or change an older published renderer's label.
 
+### Logged change: provider dispatch provenance
+
+Chat-sync 1.14 and `chat.subscribe` 1.44 add optional `providerSelection` to a
+durable chat event. Existing records omit it and still parse. An older
+chat-sync reader keeps the complete event in its raw envelope even though its
+interpreted event lacks the key, so publication preserves the provenance. Both
+head and shard move together; no reader floor changes. Older stream subscribers
+receive the frozen event without the key through the negotiated-minor projection.
+
 ## Frozen epic-schema guard
 
 `epic-schema-surface-compat.test.ts` resolves the latest epic schema through the
@@ -643,3 +652,25 @@ The guard freezes both IO surfaces of both records. Preserved variants
 deliberately show their open envelope on the `storage` (`io: "input"`) side —
 that openness is the contract; the interpreted message/block/event shapes are
 frozen on the `domain` side.
+
+### Bot feedback projections (chat-sync 1.15)
+
+The live assistant row may mirror a feedback draft with an explicit source
+host/chat/block reference. The canonical tool block may carry a typed
+`feedbackDraftOrigin` beside its unchanged draft stamp. Both fields are
+optional; their absence makes no claim about a draft's destination. The stamp
+on the source tool block remains the decision authority, and a mirror grants
+no permission to send. A reader or repair never submits feedback itself.
+
+`chat.subscribe` 1.45 interprets both additions. Released lines through 1.44
+keep their frozen assistant and tool-block leaves; outbound projection removes
+both additions across full snapshots, tails and ranges. The previous 1.42
+feedback stamp stays available to 1.42–1.44 task-card readers. `bot.subscribe`
+contains no transcript bodies and does not change. Raw replica/history pipes
+preserve bytes and rely on the chat-sync envelope for interpretation.
+
+The legacy epic record is unchanged. A host producer must not write these
+fields through legacy regeneration by stripping them: it must refuse an
+unrepresentable projection before mutation. This additive reader does not
+enable the producer. Older bot readers see the post's standalone text, with
+no promised notification fallback or inline Send action.

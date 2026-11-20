@@ -13,7 +13,7 @@ import {
   hostNotificationEntrySchema,
   hostNotificationEntrySchemaV21,
   hostNotificationEntrySchemaV22,
-  hostNotificationCloudEntrySchemaV27,
+  hostNotificationCloudEntrySchemaV28,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV12,
@@ -25,6 +25,7 @@ import {
   hostNotificationsCloudFeedSubscribeV15,
   hostNotificationsCloudFeedSubscribeV16,
   hostNotificationsCloudFeedSubscribeV17,
+  hostNotificationsCloudFeedSubscribeV18,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
@@ -351,10 +352,13 @@ describe("registry wiring", () => {
     expect(Object.keys(line.versions)).toEqual(["0"]);
   });
 
-  it("advertises cloud feed @1.7 with the prior minors installed for older peers", () => {
+  it("advertises cloud feed @1.8 with the prior minors installed for older peers", () => {
     const line =
       hostStreamRpcRegistry["host.notifications.cloudFeed.subscribe"][1];
-    expect(line.latestMinor).toBe(7);
+    expect(line.latestMinor).toBe(8);
+    expect(line.versions[8].contract).toBe(
+      hostNotificationsCloudFeedSubscribeV18,
+    );
     expect(line.versions[7].contract).toBe(
       hostNotificationsCloudFeedSubscribeV17,
     );
@@ -535,6 +539,7 @@ describe("negotiated-version visibility projection", () => {
           "sandbox.notice",
           "notification.hooks.removed",
           "feedback.drafted",
+          "access.readonly.retired",
         ]);
       }
     }
@@ -543,7 +548,7 @@ describe("negotiated-version visibility projection", () => {
   it("keeps a fully-capable caller's exclusion to the retired kinds", () => {
     const hidden = hiddenHostNotificationKinds(
       { method: "host.notifications.cloudFeed.subscribe" },
-      { major: 1, minor: 7 },
+      { major: 1, minor: 8 },
     );
     expect([...hidden].sort()).toEqual(
       [...RETIRED_HOST_NOTIFICATION_KINDS].sort(),
@@ -551,7 +556,7 @@ describe("negotiated-version visibility projection", () => {
   });
 
   it("covers every kind the entry unions can carry", () => {
-    const armKinds = hostNotificationCloudEntrySchemaV27.options.map(
+    const armKinds = hostNotificationCloudEntrySchemaV28.options.map(
       (option) => option.shape.kind.value,
     );
     expect([...ALL_HOST_NOTIFICATION_KINDS].sort()).toEqual(

@@ -1,4 +1,5 @@
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useCallback,
@@ -10,6 +11,7 @@ import {
   type RefObject,
 } from "react";
 import { useStore } from "zustand";
+import { useProfilePinRemoved } from "@/hooks/providers/use-profile-pin-removed";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { CreateChatForkSourceV11 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -50,6 +52,7 @@ import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import {
+  pressedSignInCurrent,
   isAttachEnvironmentUnsupported,
   toastAttachEnvironmentNeedsOwnHost,
   useEpicAttachEnvironment,
@@ -77,10 +80,13 @@ import {
 } from "@/stores/composer/composer-toolbar-store";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import {
+  chatForkCrossHostExplanations,
   chatForkHostRefusals,
+  chatForkLatestDescription,
   chatForkTargetSupport,
   chatForkRemoteClassState,
   chatForkTargetVerdict,
+  CHAT_FORK_SECOND_CHAT_NOTICE,
   remoteClassIsUnreachable,
   remoteClassNotice,
   verdictAllowsSubmit,
@@ -634,6 +640,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // A harness a team sandbox does not offer holds Fork shut on that host, and
   // the dialog says so.
   const forkHarnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const forkProfileId = useStore(toolbarStore, (s) => s.selection.profileId);
+  const forkProfileRemoved = useProfilePinRemoved(
+    selectedHostClient,
+    forkHarnessId,
+    forkProfileId,
+    open,
+  );
   const pickedHarnessId = useStore(
     toolbarStore,
     (s) => s.values.selection.harnessId,
@@ -724,6 +737,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const attachClient =
     tabHostTeamId === null ? tabHostClient : personalAppWideClient;
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "fork");
+  const takeOperation = useEnvironmentCloud();
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
     client: appWideClient,
     epicId,
@@ -803,6 +817,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     createPending: createChat.isPending || attachEnvironment.isPending,
     hostClientResolved: selectedHostClient !== null,
     teamSandboxHarnessBlocked,
+    forkProfileRemoved,
     // Not a host-build fact any more, and the name says so. This one boolean
     // now carries the SOURCE CHAT's publication too - a frozen publication and
     // a boundary the published head does not cover both hold Fork shut, the
@@ -902,6 +917,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       const attempt = Symbol();
       stagedSubmitAttempt.current = attempt;
       const account = signedInUserId();
+      // The sign-in taken at the press.
+      const operation = takeOperation === null ? null : takeOperation();
       const settings = pickedRunSettings(toolbarStore.getState());
       const settingsKey = JSON.stringify(settings);
 
@@ -932,9 +949,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 current: true,
                 owns: true,
                 epicConfirmed: true,
-                accountActive:
-                  (useAuthStore.getState().profile?.userId ?? null) ===
-                  ownerUserId,
+                accountActive: pressedSignInCurrent(operation, ownerUserId),
                 stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
               },
             );
@@ -972,7 +987,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             return;
           }
           attachEnvironment.mutate(
-            { epicId, teamId: stagedTeamId },
+            { epicId, teamId: stagedTeamId, operation },
             {
               onSuccess: hand,
               onError: (error) => {
@@ -996,6 +1011,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       stagedSignInCheck,
       tabHostTeamId,
       tabId,
+      takeOperation,
       toolbarStore,
       trimmedTitle,
     ],
@@ -1003,6 +1019,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 
   const submit = useCallback(() => {
     if (!canSubmit || target === null) return;
+    // The sign-in taken at the press.
+    const operation = takeOperation === null ? null : takeOperation();
     // A staged sandbox: the fork is handed to the task, which creates the
     // sandbox, waits for the agent there and forks onto it, through a reload.
     const staged = readStagedSandbox(forkSurfaceKey);
@@ -1067,8 +1085,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           current: true,
           owns: true,
           epicConfirmed: true,
-          accountActive:
-            (useAuthStore.getState().profile?.userId ?? null) === submittedBy,
+          accountActive: pressedSignInCurrent(operation, submittedBy),
           stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
         },
       );
@@ -1090,10 +1107,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         },
         {
           onSuccess: (result) => {
-            if (
-              (useAuthStore.getState().profile?.userId ?? null) !== submittedBy
-            )
-              return;
+            if (!pressedSignInCurrent(operation, submittedBy)) return;
             Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
               source: "direct_ui",
               include_history: true,
@@ -1138,7 +1152,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       return;
     }
     attachEnvironment.mutate(
-      { epicId, teamId: attachTeamId },
+      { epicId, teamId: attachTeamId, operation },
       {
         onSuccess: createForkChat,
         // A host that predates the attachment creates as it always has.
@@ -1158,6 +1172,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     forkSurfaceKey,
     navigateNestedFocus,
     submitStagedFork,
+    takeOperation,
     sandboxAgentGate.notice,
     onOpenChange,
     seedIntent,
@@ -1267,9 +1282,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         ))}
         <DialogHeader>
           <DialogTitle>Fork agent</DialogTitle>
-          <DialogDescription className="sr-only">
-            Choose the title, harness and run location for the fork.
-          </DialogDescription>
+          <ChatForkOpenDescription
+            latest={target !== null && target.assistantMessageId === null}
+            crossHost={isCrossHost}
+          />
         </DialogHeader>
         <div
           className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto px-4 pb-2"
@@ -1307,26 +1323,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               </ComposerStagedSurfaceKeyProvider>
             </div>
           </section>
-          <div
-            className="flex min-w-0 flex-col gap-1"
-            aria-label="Run location"
-          >
-            <div className="font-sans text-overline font-medium uppercase text-muted-foreground/70">
-              Run location
-            </div>
-            <p
-              className="text-ui-xs text-muted-foreground"
-              data-testid="chat-fork-result"
-            >
-              {forkResultLine({
-                crossHost: isCrossHost,
-                emptySandbox: forkStage?.target.kind === "new",
-                latest: target?.assistantMessageId === null,
-                carriesChanges:
-                  target !== null && target.seedIntentOverride !== null,
-              })}
-            </p>
-          </div>
+          <p className="min-w-0 break-words text-ui-xs text-muted-foreground">
+            {CHAT_FORK_SECOND_CHAT_NOTICE}
+          </p>
           <ActiveHostWorkspaceControls
             sandboxStaging={sandboxStaging}
             // Locked while the create is in flight, like every other control in
@@ -1339,7 +1338,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             // silently.
             disabled={createChat.isPending || attachEnvironment.isPending}
             stagingKey={stagingKey}
-            layout="stacked-caller-heading"
+            layout="stacked"
             workspaceSeed={workspaceSeed}
             seedIntent={seedIntent}
             seedIntentOverride={seedIntentOverride}
@@ -1358,6 +1357,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             </p>
           ) : null}
           <ChatForkTargetNotices
+            isCrossHost={isCrossHost}
+            emptySandbox={forkStage !== null && forkStage.target.kind === "new"}
+            carriesChanges={
+              target !== null && target.seedIntentOverride !== null
+            }
             support={selectedHostSupport}
             boundaryNotPublished={boundaryNotPublished}
             publicationNotice={publicationNotice}
@@ -1397,46 +1401,38 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   );
 }
 
-/** The result of this pick, without repeating it in the header or host rows. */
-function forkResultLine(input: {
-  readonly crossHost: boolean;
-  readonly emptySandbox: boolean;
+/**
+ * The latest-point sentence is the dialog description when it applies. A fork
+ * from one turn has no snapshot sentence, and keeps the accessible description
+ * that names the form.
+ */
+function ChatForkOpenDescription(props: {
   readonly latest: boolean;
-  readonly carriesChanges: boolean;
-}): string {
-  let result: string;
-  if (input.crossHost) {
-    const transcript = input.latest
-      ? "this chat's latest saved transcript"
-      : "this chat's transcript through this turn";
-    const workspace = input.emptySandbox
-      ? "in an empty sandbox, with no files"
-      : "and the workspace you pick here";
-    result = `Starts from ${transcript} ${workspace}`;
-    result += input.latest
-      ? "; work still in progress may not be included."
-      : ".";
-    if (input.carriesChanges) {
-      result += " Uncommitted changes stay on the source computer.";
-    }
-  } else {
-    const checkpoint = input.latest
-      ? "this chat's latest saved checkpoint"
-      : "this chat through this turn";
-    result = `Starts from ${checkpoint} and the workspace you pick here.`;
+  readonly crossHost: boolean;
+}) {
+  if (!props.latest) {
+    return (
+      <DialogDescription className="sr-only">
+        Choose the title, harness, host and folder for the fork.
+      </DialogDescription>
+    );
   }
-  return `${result} The original agent continues working.`;
+  return (
+    <DialogDescription className="min-w-0 break-words">
+      {chatForkLatestDescription({ crossHost: props.crossHost })}
+    </DialogDescription>
+  );
 }
 
 /**
- * Publication and target refusals live below Run location, separate from the
- * result line that describes what a successful fork starts with.
- *
- * Grouped in one place under the workspace section because they are all answers
- * to the same question — what happens if I press Fork now — and because a
- * cross-host fork can legitimately show several at once.
+ * Publication, target refusals, and the cross-host explanations live below
+ * the chooser. They are visible at rest. A cross-host fork can show several
+ * at once, and each fact is stated once.
  */
 function ChatForkTargetNotices(props: {
+  readonly isCrossHost: boolean;
+  readonly emptySandbox: boolean;
+  readonly carriesChanges: boolean;
   /**
    * The Layer-1 sentence about the SOURCE CHAT, rendered once for the whole
    * dialog rather than per host row — see `chatForkTargetVerdict`.
@@ -1446,7 +1442,13 @@ function ChatForkTargetNotices(props: {
   readonly boundaryNotPublished: boolean;
 }) {
   const { support } = props;
+  const explanations = chatForkCrossHostExplanations({
+    isCrossHost: props.isCrossHost,
+    emptySandbox: props.emptySandbox,
+    carriesChanges: props.carriesChanges,
+  });
   if (
+    !props.isCrossHost &&
     !props.boundaryNotPublished &&
     props.publicationNotice === null &&
     support.kind !== "refused"
@@ -1460,7 +1462,7 @@ function ChatForkTargetNotices(props: {
     >
       {props.publicationNotice === null ? null : (
         <p
-          className="text-ui-xs text-foreground/80"
+          className="min-w-0 break-words text-ui-xs text-foreground/80"
           data-testid="chat-fork-publication-notice"
         >
           {props.publicationNotice}
@@ -1468,7 +1470,7 @@ function ChatForkTargetNotices(props: {
       )}
       {props.boundaryNotPublished ? (
         <p
-          className="text-ui-xs text-foreground/80"
+          className="min-w-0 break-words text-ui-xs text-foreground/80"
           data-testid="chat-fork-boundary-not-published"
         >
           Still syncing this turn to the cloud — retry shortly.
@@ -1476,12 +1478,21 @@ function ChatForkTargetNotices(props: {
       ) : null}
       {support.kind === "refused" ? (
         <p
-          className="text-ui-xs text-foreground/80"
+          className="min-w-0 break-words text-ui-xs text-foreground/80"
           data-testid="chat-fork-target-refused"
         >
           {support.detail}
         </p>
       ) : null}
+      {explanations.map((line) => (
+        <p
+          key={line.id}
+          className="min-w-0 break-words text-ui-xs text-muted-foreground"
+          data-testid={line.id}
+        >
+          {line.text}
+        </p>
+      ))}
     </div>
   );
 }
@@ -1561,6 +1572,7 @@ function canSubmitFork(input: {
   readonly hostClientResolved: boolean;
   /** The selected host is a team sandbox that does not offer the harness. */
   readonly teamSandboxHarnessBlocked: boolean;
+  readonly forkProfileRemoved: boolean;
   /**
    * The combined Layer-1 verdict allows a submit - see `chat-fork-target`. It
    * spans BOTH subjects the dialog gates on: the selected host's build, and the
@@ -1576,6 +1588,7 @@ function canSubmitFork(input: {
   if (input.createPending) return false;
   if (!input.hostClientResolved) return false;
   if (input.teamSandboxHarnessBlocked) return false;
+  if (input.forkProfileRemoved) return false;
   if (!input.verdictAllowsSubmit) return false;
   if (input.requiresStagedPreselection && !input.hasStagedPreselection) {
     return false;

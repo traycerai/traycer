@@ -384,6 +384,38 @@ export async function readBootstrapMarkers(
   } catch {
     return [];
   }
+  return authenticMarkerTail(raw, maxEntries);
+}
+
+/**
+ * {@link readBootstrapMarkers} for a reader that must tell "no log yet" from
+ * "the log could not be read": a missing file is no markers, and any other
+ * read failure throws.
+ */
+export async function readBootstrapMarkersStrict(
+  environment: Environment | undefined,
+  maxEntries: number,
+): Promise<readonly BootstrapLogEntry[]> {
+  let raw: string;
+  try {
+    raw = await readFile(bootstrapLogPath(environment), "utf8");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    ) {
+      return [];
+    }
+    throw error;
+  }
+  return authenticMarkerTail(raw, maxEntries);
+}
+
+function authenticMarkerTail(
+  raw: string,
+  maxEntries: number,
+): readonly BootstrapLogEntry[] {
   const entries: BootstrapLogEntry[] = [];
   for (const line of raw.split(/\r?\n/)) {
     const parsed = parseLine(line);

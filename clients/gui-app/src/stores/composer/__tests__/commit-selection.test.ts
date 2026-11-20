@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  createComposerToolbarStore,
+  type ComposerToolbarCatalog,
+} from "@/stores/composer/composer-toolbar-store";
 import {
   commitProfileSelection,
   commitSelection,
 } from "@/stores/composer/commit-selection";
+import type {
+  HarnessOption,
+  ModelOption,
+  ProviderId,
+} from "@/components/home/data/landing-options";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { composerHarnessMemoryKey } from "@/lib/persist";
@@ -12,6 +20,61 @@ const STORAGE_KEY = composerHarnessMemoryKey(null);
 
 const HOST_A = "host-a";
 const HOST_B = "host-b";
+
+function model(harnessId: ProviderId, slug: string): ModelOption {
+  return {
+    harnessId,
+    slug,
+    label: slug,
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: ["low", "high"].map((id) => ({
+      id,
+      label: id,
+      description: null,
+    })),
+    defaultServiceTier: null,
+    supportedServiceTiers: [{ id: "fast", label: "Fast", description: null }],
+    metadata: {},
+  };
+}
+
+function harness(id: ProviderId): HarnessOption {
+  return {
+    id,
+    label: id,
+    enabled: true,
+    available: true,
+    error: null,
+    modes: ["gui", "tui"],
+    requiresApiKey: false,
+    supportedPermissionModes: ["supervised", "full_access"],
+    nativeAutoJudge: false,
+    availabilityPending: false,
+  };
+}
+
+function settledCatalog(
+  modelsHarnessId: ProviderId,
+  modelsProfileId: string | null,
+  models: ReadonlyArray<ModelOption>,
+): ComposerToolbarCatalog {
+  return {
+    hostId: HOST_A,
+    harnesses: [harness("claude"), harness("codex")],
+    modelsHarnessId,
+    modelsProfileId,
+    models,
+    modelsLoaded: true,
+    modelsFailed: false,
+    tuiOnly: false,
+    chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
+    keepsUnavailablePick: false,
+  };
+}
 
 function resetMemory(): void {
   window.localStorage.clear();
@@ -78,6 +141,15 @@ describe("commitProfileSelection", () => {
     });
     expect(store.getState().reasoning).toBe("high");
     expect(store.getState().serviceTier).toBe("fast");
+    expect(emitted).toEqual([]);
+
+    store
+      .getState()
+      .setCatalog(
+        settledCatalog("claude", "profile-b", [model("claude", "sonnet-4.5")]),
+      );
+
+    expect(store.getState().pendingSettingsEmit).toBe(false);
     expect(emitted.at(-1)).toEqual({
       model: "sonnet-4.5",
       profileId: "profile-b",
@@ -155,6 +227,15 @@ describe("commitSelection - provider switch", () => {
     });
     expect(store.getState().reasoning).toBe("high");
     expect(store.getState().serviceTier).toBe("fast");
+    expect(emitted).toEqual([]);
+
+    store
+      .getState()
+      .setCatalog(
+        settledCatalog("claude", "profile-b", [model("claude", "sonnet-4.5")]),
+      );
+
+    expect(store.getState().pendingSettingsEmit).toBe(false);
     expect(emitted.at(-1)).toEqual({
       modelSlug: "sonnet-4.5",
       profileId: "profile-b",

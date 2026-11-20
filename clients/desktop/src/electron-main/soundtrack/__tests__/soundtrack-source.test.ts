@@ -107,6 +107,7 @@ function source(overrides: Partial<SoundtrackSourceOptions>) {
     keyFilePath,
     audience: "audience-fixture",
     set: "team",
+    manifestVersion: 1,
     fetch: fetchMock,
     now: () => NOW_MS,
     warn,
@@ -165,6 +166,73 @@ describe("read", () => {
       expect(query.get("X-Goog-Credential")).toContain(`${CLIENT_EMAIL}/`);
       expect(query.get("X-Goog-Signature")).toMatch(/^[0-9a-f]+$/);
     }
+  });
+
+  it("reads v2 when requested and signs its complete recording", async () => {
+    const v2Url = MANIFEST_URL.replace("v1.json", "v2.json");
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url === TOKEN_URL) return grantsToken(url);
+      if (url === v2Url)
+        return Promise.resolve(
+          Response.json({
+            version: 2,
+            tracks: [
+              {
+                kind: "composed",
+                name: "piece",
+                title: "Piece",
+                recording: "master",
+              },
+            ],
+            views: { home: ["piece"], task: [], bot: [], settings: [] },
+            stems: {
+              tracks: [],
+              recordings: [{ name: "master", file: "piece/master.opus" }],
+            },
+          }),
+        );
+      return Promise.reject(new Error("unexpected request"));
+    });
+    const result = await readerOf({ manifestVersion: 2 }).read();
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    const urls = signedFilesOf(result.manifest);
+    expect(urls).toHaveLength(1);
+    expect(new URL(urls[0]).pathname).toBe(
+      "/traycerai-dev-soundtrack/sets/team/piece/master.opus",
+    );
+    expect(new URL(urls[0]).searchParams.get("X-Goog-Signature")).toMatch(
+      /^[0-9a-f]+$/,
+    );
+  });
+
+  it("rejects a recording path escaping the set without exposing a URL", async () => {
+    const v2Url = MANIFEST_URL.replace("v1.json", "v2.json");
+    fetchMock.mockImplementation((input) => {
+      const url = String(input);
+      if (url === TOKEN_URL) return grantsToken(url);
+      if (url === v2Url)
+        return Promise.resolve(
+          Response.json({
+            version: 2,
+            tracks: [],
+            views: VIEWS,
+            stems: {
+              tracks: [],
+              recordings: [{ name: "master", file: "../outside.opus" }],
+            },
+          }),
+        );
+      return Promise.reject(new Error("unexpected request"));
+    });
+    await expect(readerOf({ manifestVersion: 2 }).read()).resolves.toEqual({
+      kind: "unavailable",
+    });
+    expect(warn).toHaveBeenCalled();
+    expect(
+      warn.mock.calls.every(([message]) => !message.includes("https://")),
+    ).toBe(true);
   });
 
   it("asks for a read-only storage token with no target audience", async () => {

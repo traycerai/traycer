@@ -14,6 +14,7 @@ import {
   epicCanvasKey,
   lastLocalHostIdKey,
   interviewDraftKey,
+  botBoxDraftsKey,
   surfaceHostSelectionKey,
   interviewDraftKeyPrefix,
   landingTerminalsKey,
@@ -200,6 +201,9 @@ describe("persist key builders — output-preserving against current source", ()
     expect(surfaceHostSelectionKey("a@b.com")).toBe(
       "traycer-gui-app:surface-host-selection:a@b.com",
     );
+    // Source: src/stores/bots/bot-drafts-store.ts (`botBoxDraftsKey`).
+    expect(botBoxDraftsKey(null)).toBe("traycer-gui-app:bot-box-drafts:anon");
+    expect(botBoxDraftsKey("u1")).toBe("traycer-gui-app:bot-box-drafts:u1");
     // Source: src/stores/epics/open-epic/store.ts (local
     // `persistKey(epicId, userId)` emits `…:open-epic:{userBucket}:{epicId}`).
     expect(openEpicKey(null, "e1")).toBe("traycer-gui-app:open-epic:anon:e1");

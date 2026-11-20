@@ -411,7 +411,15 @@ export type DocUnavailableCode =
   /** No such artifact at this epoch, or it is tombstoned. Terminal. */
   | "artifact-not-found"
   /** It exists and the body cannot currently be materialised. See `terminal`. */
-  | "body-unavailable";
+  | "body-unavailable"
+  /**
+   * The body moved off what this lane attached to, onto the artifact's
+   * revision chain. Always terminal, and the one terminal code the consumer
+   * answers by reattaching at once: the reattach is served the body where it
+   * lives now, and is never answered this code. An edit the lane carried was
+   * not applied.
+   */
+  | "body-moved";
 
 export interface DocUnavailableEvent {
   readonly kind: "doc-unavailable";

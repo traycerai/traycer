@@ -7,12 +7,14 @@
 import { vi, type Mock } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import type {
+  SandboxCatalogueReadinessRequest,
   SandboxCreateRequest,
   SandboxSummary,
   SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type {
+  SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
@@ -107,6 +109,12 @@ export class ScriptedAuth extends AuthService {
   constructor(answers: Script) {
     super({ runnerHost: createFakeRunnerHost({}) });
     this.answers = answers;
+  }
+
+  override getSandboxCatalogue(
+    _context: SandboxCatalogueReadinessRequest | null,
+  ): Promise<SandboxCatalogueFetchResult> {
+    return Promise.resolve({ kind: "ok", catalogue: { providers: [] } });
   }
 
   override createSandbox(

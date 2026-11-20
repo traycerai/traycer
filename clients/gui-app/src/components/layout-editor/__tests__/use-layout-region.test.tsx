@@ -2,6 +2,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
 import type { RegionId } from "@/lib/layout/region-id";
 import {
@@ -497,5 +498,34 @@ describe("the ghost of a hidden region", () => {
       useLayoutEditorStore.getState().setHovered("mic");
     });
     expect(reported(node)).toBe("true");
+  });
+});
+
+/**
+ * A read-only bot session (`ChatStatusReadOnlyContext`) must withhold naming
+ * and registration from every region this hook backs - the shared boundary
+ * every transcript region (timestamps, tool activity, thinking, the minimap)
+ * and the context chip go through, rather than each caller gating itself.
+ */
+describe("readOnly suppression (ChatStatusReadOnlyContext)", () => {
+  it("never names or registers the node while readOnly, even with a session live", () => {
+    const view = render(
+      <ChatStatusReadOnlyContext value>
+        <Region regionId="minimap" instanceId="tile-a" testId="minimap" />
+      </ChatStatusReadOnlyContext>,
+    );
+    const node = view.getByTestId("minimap");
+
+    openSession();
+    act(() => {
+      useLayoutEditorStore.getState().setHovered("minimap");
+    });
+
+    expect(node.hasAttribute("data-layout-region")).toBe(false);
+    expect(node.hasAttribute("data-layout-instance")).toBe(false);
+    expect(node.hasAttribute("data-hover")).toBe(false);
+    expect(
+      preferredRegionInstance(useLayoutEditorStore.getState(), "minimap"),
+    ).toBeNull();
   });
 });

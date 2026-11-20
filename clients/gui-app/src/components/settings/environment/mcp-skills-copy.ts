@@ -1,5 +1,9 @@
+import type {
+  ProviderNativeMutateErrorCode,
+  ProviderNativeMutateErrorCodeV15,
+} from "@traycer/protocol/host/provider-native-schemas";
 import { formatCount } from "@/lib/format-count";
-import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
+import { teamCustodySentence } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
  * The words of the MCP servers and Skills pages and of each provider's MCP
@@ -87,7 +91,7 @@ export const SKILL_POLICY_LABELS = {
 
 /** What each policy does, under the page's list. */
 export const SKILL_POLICIES_LINE =
-  "Auto-update: follows upstream, cannot be edited here. Evolve: you and your agents can change it, updates wait for you. Frozen: nothing changes it.";
+  "Auto-update: follows upstream, cannot be edited here. Evolve: you and your agents can change it. Upstream updates require your action. Frozen: nothing changes it.";
 
 export const SKILL_UPDATE_AVAILABLE = "Update available";
 export const SKILL_UPDATE_NOW_LABEL = "Update now";
@@ -291,23 +295,18 @@ export function skillsReadFailed(name: string): string {
   return `Couldn't read ${name}'s skills.`;
 }
 
-export function addServerReach(personal: boolean, name: string): string {
-  return personal
-    ? "It reaches every provider on every computer and sandbox running Personal."
-    : `It reaches every provider on every host running ${name}.`;
+export function addServerReach(): string {
+  return "It reaches every provider on every host running this environment.";
 }
 
-/** The Secret option's line: Pick needs `put@1.1`; a 1.0 host takes Add only. */
-export function secretOptionLine(canPick: boolean): string {
-  return canPick
-    ? "Pick or add a secret. It is sent only to this server's address."
-    : "Add a secret. It is sent only to this server's address.";
-}
+export const SECRET_OPTION_LINE =
+  "Pick or add a secret. It is sent only to this server's address.";
 
+/** Personal's computers receive it as a value; a team's sentence is the one every team value shares. */
 export function custodySentence(personal: boolean, name: string): string {
   return personal
-    ? SECRET_CUSTODY_SENTENCE
-    : `Stored encrypted in Traycer's cloud. ${name}'s sandboxes and connected services use it without seeing it; no computer receives the value.`;
+    ? "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it."
+    : teamCustodySentence(name);
 }
 
 /**
@@ -359,6 +358,46 @@ export function onHostScopePhrase(
 
 export function addToConfigurationLabel(name: string): string {
   return `Add to ${name}`;
+}
+
+export function addToConfigurationFailure(name: string): string {
+  return `Couldn't add it to ${name}.`;
+}
+
+type PromoteRefusalCode = Exclude<
+  ProviderNativeMutateErrorCodeV15,
+  ProviderNativeMutateErrorCode
+>;
+
+const PROMOTE_REFUSALS: Readonly<
+  Record<PromoteRefusalCode, (name: string) => string>
+> = {
+  needs_connection: (name) => `Connect to add this to ${name}.`,
+  upload_refused: addToConfigurationFailure,
+  needs_grant: (name) => `Adding this to ${name} needs your approval.`,
+  environment_not_served: (name) =>
+    `Add to ${name} is not available on this host.`,
+  not_global_scope: (name) =>
+    `Only entries in your global settings can be added to ${name}.`,
+  bound_to_this_computer: () =>
+    "This server's settings only work on this computer.",
+  invalid_entry: (name) => `This entry cannot be added to ${name}.`,
+};
+
+function isPromoteRefusalCode(
+  code: ProviderNativeMutateErrorCodeV15,
+): code is PromoteRefusalCode {
+  return Object.hasOwn(PROMOTE_REFUSALS, code);
+}
+
+/** The app's words for a coded refusal, the host's text for an uncoded one, else the failure line. */
+export function promoteRefusalText(
+  code: ProviderNativeMutateErrorCodeV15,
+  detail: string | null,
+  name: string,
+): string {
+  if (isPromoteRefusalCode(code)) return PROMOTE_REFUSALS[code](name);
+  return detail ?? addToConfigurationFailure(name);
 }
 
 export function emptyServersTabLine(name: string): string {

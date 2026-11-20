@@ -16,7 +16,7 @@ import {
 import { useSampleScene } from "@/components/sample-workspace/sample-scene-context";
 import { SAMPLE_RESOURCE_VALUES } from "@/components/sample-workspace/sample-workspace-scene";
 
-/** CPU at or above the shared threshold reads in the warning color. */
+/** Machine CPU share at or above the shared threshold reads in the warning color. */
 export function isCpuWarning(cpuPercent: number | null): boolean {
   return cpuPercent !== null && cpuPercent >= CPU_WARNING_PERCENT;
 }
@@ -93,6 +93,7 @@ export function useStatusBarResourceMetrics(input: {
         ...view,
         value: SAMPLE_RESOURCE_VALUES[view.metric],
         unavailableReason: null,
+        cpuCoresLabel: null,
       })),
       cpuPercent: null,
     };

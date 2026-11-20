@@ -147,6 +147,8 @@ export const hostNotificationChatStoppedPayloadSchema = lazySchema(() =>
       messageId: idSchema.optional(),
       eventId: idSchema.optional(),
       backgroundWorkRunning: z.boolean().optional(),
+      /** Present only with `backgroundWorkRunning` when only another agent's reply is pending. */
+      awaitingAgentReply: z.literal(true).optional(),
       automaticRecovery: z.literal(true).optional(),
       /** Present only on a completed turn the provider paused before verification. */
       unverified: z.literal(true).optional(),
@@ -178,6 +180,8 @@ export const hostNotificationEpicStoppedPayloadSchema = lazySchema(() =>
       providerId: z.string().optional(),
       occurrenceId: idSchema.optional(),
       backgroundWorkRunning: z.boolean().optional(),
+      /** Present only with `backgroundWorkRunning` when only another agent's reply is pending. */
+      awaitingAgentReply: z.literal(true).optional(),
       automaticRecovery: z.literal(true).optional(),
     })
     .catchall(z.unknown()),
@@ -185,14 +189,6 @@ export const hostNotificationEpicStoppedPayloadSchema = lazySchema(() =>
 export type HostNotificationEpicStoppedPayload = z.infer<
   typeof hostNotificationEpicStoppedPayloadSchema
 >;
-
-/**
- * `agent.stalled`'s `reason` for a turn that ran past the time its person set.
- * The row says a turn is still going, not how one ended, so it stays out of the
- * Error and Done glyphs on every plane; it reaches the person through the
- * notification center and the push.
- */
-export const HOST_NOTIFICATION_LONG_TURN_REASON = "long_turn";
 
 /**
  * `agent.stalled` payload. `agentName` carries the chat title. `reason` is
@@ -1127,6 +1123,32 @@ export type HostNotificationHooksRemovedPayload = z.infer<
   typeof hostNotificationHooksRemovedPayloadSchema
 >;
 
+export const hostNotificationReadonlyAccessRetiredPayloadSchema = lazySchema(
+  () =>
+    z.discriminatedUnion("scope", [
+      z
+        .object({
+          kind: z.literal("readonly_access_retired"),
+          scope: z.literal("task"),
+          taskId: idSchema,
+          taskTitle: z.string().max(200),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("readonly_access_retired"),
+          scope: z.literal("team"),
+          environmentId: idSchema,
+          teamName: z.string().min(1).max(200),
+          invitation: z.boolean(),
+        })
+        .strict(),
+    ]),
+);
+export type HostNotificationReadonlyAccessRetiredPayload = z.infer<
+  typeof hostNotificationReadonlyAccessRetiredPayloadSchema
+>;
+
 export const hostNotificationKnownPayloadSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     hostNotificationChatStoppedPayloadSchema,
@@ -1154,6 +1176,7 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationEnvironmentMoveStalledPayloadSchema,
     hostNotificationEnvironmentApplyFailedPayloadSchema,
     hostNotificationTeamRoleChangedPayloadSchema,
+    hostNotificationReadonlyAccessRetiredPayloadSchema,
     hostNotificationTeamHostReturnedPayloadSchema,
     hostNotificationSecretRemovedPayloadSchema,
     hostNotificationSandboxNoticePayloadSchema,
@@ -1253,6 +1276,8 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "environment_move_stalled";
     case "environment.apply.failed":
       return payloadKind === "environment_apply_failed";
+    case "access.readonly.retired":
+      return payloadKind === "readonly_access_retired";
     case "team.role.changed":
       return payloadKind === "team_role_changed";
     case "team.host.returned":

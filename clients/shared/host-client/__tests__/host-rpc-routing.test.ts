@@ -3,6 +3,7 @@ import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
+import { PROFILE_SYNC_LINK_RPC_METHODS } from "@traycer/protocol/host/profile-sync-link-contracts";
 import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
 import { releasedStreamMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-stream-method-names";
 import { POOL_HOST_ID } from "../host-directory";
@@ -11,6 +12,7 @@ import {
   HOST_UNARY_RPC_ROUTES,
   NO_POOL_HOST_RPC_TIER_PLAN,
   chatServingHostId,
+  isMachineHostDirectoryEntry,
   createHostRpcTierPlan,
   decideHostRpcDispatch,
   hostRpcRouteOf,
@@ -52,7 +54,6 @@ const CONFIGURATION_POOL_ONLY = [
   "environment.members.invite",
   "environment.members.noticeSeen",
   "environment.members.remove",
-  "environment.members.removePreview",
   "environment.members.seats",
   "environment.members.setRole",
   "environment.plans.list",
@@ -80,6 +81,7 @@ const EXPECTED_POOL_ONLY = [
   "environment.binding.read",
   "environment.communicationGraph.subscribe",
   "environment.list",
+  "epic.getChatTitle",
   "epic.listTasks",
   "environment.plainTerminals.subscribe",
   "host.notifications.cloudFeed.clear",
@@ -95,16 +97,51 @@ const EXPECTED_POOL_ONLY = [
   "organization.subscribe",
 ].sort();
 
+const EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS = [
+  "host.profileSync.apply",
+  "host.profileSync.fetchCredential",
+  "host.profileSync.offerCredential",
+  "providers.profileSync.acceptAccount",
+  "providers.profileSync.overview",
+  "providers.profileSync.setKeepInSync",
+  "providers.profileSync.syncNow",
+].sort();
+
 describe("host RPC routing table", () => {
-  it("routes every released unary and stream name and every registry key", () => {
+  it("does not route retired team provider profile calls", () => {
+    for (const method of [
+      "environment.providers.list",
+      "environment.providers.signOutProfile",
+      "environment.providers.removeProfile",
+      "environment.providers.renameProfile",
+    ]) {
+      expect(hostRpcRouteOf(method)).toBeNull();
+    }
+  });
+
+  it("routes every client method and leaves exactly the retained profile-sync methods unrouted", () => {
+    const protocolRetained = Object.keys(PROFILE_SYNC_LINK_RPC_METHODS).sort();
+    const clientUnary = Object.keys(hostRpcRegistry)
+      .filter((name) => !protocolRetained.includes(name))
+      .sort();
     const names = [
       ...releasedMethodNames,
       ...releasedStreamMethodNames,
-      ...Object.keys(hostRpcRegistry),
+      ...clientUnary,
       ...Object.keys(hostStreamRpcRegistry),
     ];
     const unrouted = names.filter((name) => hostRpcRouteOf(name) === null);
+    expect([...clientUnary, ...protocolRetained].sort()).toEqual(
+      Object.keys(hostRpcRegistry).sort(),
+    );
+    expect(protocolRetained).toEqual(
+      EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS,
+    );
+    expect(Object.keys(HOST_UNARY_RPC_ROUTES).sort()).toEqual(clientUnary);
     expect(unrouted).toEqual([]);
+    for (const method of protocolRetained) {
+      expect(hostRpcRouteOf(method)).toBeNull();
+    }
   });
 
   it("has no route for a name outside the registries", () => {
@@ -322,46 +359,61 @@ describe("chatServingHostId", () => {
     chatId: "chat-1",
   };
 
-  it("keeps the chat on its own host with no witness", () => {
-    expect(chatServingHostId(chat, teamSandboxEntry, null, POOL_PLAN)).toBe(
-      "chat-host",
-    );
+  it("keeps the chat on its own host when the witness is not asked", () => {
+    expect(chatServingHostId(chat, null, POOL_PLAN)).toBe("chat-host");
   });
 
   it("keeps the chat on its own host when the build has no pool", () => {
-    expect(
-      chatServingHostId(
-        chat,
-        teamSandboxEntry,
-        "at-rest",
-        NO_POOL_HOST_RPC_TIER_PLAN,
-      ),
-    ).toBe("chat-host");
-  });
-
-  it("never moves a personal host's chat, whatever the verdict", () => {
-    for (const host of [
-      localEntry,
-      personalRemoteEntry,
-      personalSandboxEntry,
-    ]) {
-      for (const verdict of ["live", "at-rest", "unknown"] as const) {
-        expect(chatServingHostId(chat, host, verdict, POOL_PLAN)).toBe(
-          "chat-host",
-        );
-      }
-    }
-  });
-
-  it("serves a team sandbox's chat from the sandbox while live and from the pool at rest or unknown", () => {
-    expect(chatServingHostId(chat, teamSandboxEntry, "live", POOL_PLAN)).toBe(
+    expect(chatServingHostId(chat, "at-rest", NO_POOL_HOST_RPC_TIER_PLAN)).toBe(
       "chat-host",
     );
+  });
+
+  it("serves the chat from its host while live and from the pool at rest or unknown", () => {
+    expect(chatServingHostId(chat, "live", POOL_PLAN)).toBe("chat-host");
+    expect(chatServingHostId(chat, "at-rest", POOL_PLAN)).toBe(POOL_HOST_ID);
+    expect(chatServingHostId(chat, "unknown", POOL_PLAN)).toBe(POOL_HOST_ID);
+  });
+});
+
+describe("isMachineHostDirectoryEntry", () => {
+  it("is a local or remote host that is not a sandbox, and never the pool", () => {
+    expect(isMachineHostDirectoryEntry(localEntry)).toBe(true);
+    expect(isMachineHostDirectoryEntry(personalRemoteEntry)).toBe(true);
+    expect(isMachineHostDirectoryEntry(personalSandboxEntry)).toBe(false);
+    expect(isMachineHostDirectoryEntry(teamSandboxEntry)).toBe(false);
+    expect(isMachineHostDirectoryEntry(poolEntry)).toBe(false);
+  });
+});
+
+describe("the bot shell output stream's route", () => {
+  const METHOD = "managedCommand.subscribeBotOutput";
+
+  it("is served by the host the tab is bound to, as the epic output stream is", () => {
+    expect(HOST_STREAM_RPC_ROUTES[METHOD]).toBe("target-host");
+    expect(HOST_STREAM_RPC_ROUTES[METHOD]).toBe(
+      HOST_STREAM_RPC_ROUTES["managedCommand.subscribeOutput"],
+    );
+  });
+
+  it("dispatches to the bound sandbox host, never to the pool, and refuses on the pool", () => {
     expect(
-      chatServingHostId(chat, teamSandboxEntry, "at-rest", POOL_PLAN),
-    ).toBe(POOL_HOST_ID);
+      decideHostRpcDispatch("target-host", teamSandboxEntry, POOL_PLAN, null),
+    ).toEqual({ kind: "dispatch", entry: teamSandboxEntry });
     expect(
-      chatServingHostId(chat, teamSandboxEntry, "unknown", POOL_PLAN),
-    ).toBe(POOL_HOST_ID);
+      decideHostRpcDispatch(
+        "target-host",
+        personalSandboxEntry,
+        POOL_PLAN,
+        null,
+      ),
+    ).toEqual({ kind: "dispatch", entry: personalSandboxEntry });
+    const decision = decideHostRpcDispatch(
+      "target-host",
+      poolEntry,
+      POOL_PLAN,
+      null,
+    );
+    expect(decision.kind).toBe("refuse");
   });
 });

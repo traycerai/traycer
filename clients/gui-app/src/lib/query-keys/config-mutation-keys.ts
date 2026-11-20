@@ -21,6 +21,7 @@ export const configMutationKeys = {
   envRename: () => ["config.env.rename"] as const,
   logLevelsSet: () => ["config.logLevels.set"] as const,
   browserSet: () => ["config.browser.set"] as const,
+  agentMemoriesSet: () => ["config.agentMemories.set"] as const,
   worktreesSet: () => ["config.worktrees.set"] as const,
   sessionNamesSet: () => ["config.sessionNames.set"] as const,
   // Host-scoped: the Model list rows read "a write is outstanding on this

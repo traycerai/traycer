@@ -22,6 +22,7 @@ import {
   MANAGED_COMMAND_OUTPUT_DND_TYPE,
   PANEL_NODE_FAMILY,
   SIDEBAR_NODE_DND_TYPE,
+  SIMULATOR_TILE_DND_TYPE,
   TERMINAL_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
   getArtifactTabDropIndexFromPoint,
@@ -39,6 +40,7 @@ import {
   MANUAL_TILE_OPEN,
   openTileWithNavigation,
 } from "@/lib/canvas/tile-open/open-tile";
+import { requestSimulatorConnect } from "@/lib/simulator-view/simulator-connect-requests";
 import { findOpenTileInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
@@ -49,6 +51,7 @@ import {
   type EpicNodeRef,
   type GitDiffTileRef,
   type ManagedCommandOutputTileRef,
+  type SimulatorTileRef,
 } from "@/stores/epics/canvas/types";
 import {
   expandJoinedPanelSections,
@@ -129,6 +132,7 @@ export function canDropOnHeaderStrip(
       | typeof SIDEBAR_NODE_DND_TYPE
       | typeof TERMINAL_TILE_DND_TYPE
       | typeof BROWSER_TILE_DND_TYPE
+      | typeof SIMULATOR_TILE_DND_TYPE
       | typeof GIT_DIFF_TILE_DND_TYPE
       | typeof WORKSPACE_FILE_DND_TYPE
       | typeof CHAT_ARTIFACT_DND_TYPE
@@ -158,6 +162,7 @@ export function sourceToTileRef(
   | GitDiffTileRef
   | ManagedCommandOutputTileRef
   | BrowserSessionTileRef
+  | SimulatorTileRef
   | null {
   if (source.kind === SIDEBAR_NODE_DND_TYPE) {
     const handle = getOpenEpicRegistry().peek(source.epicId);
@@ -176,6 +181,7 @@ export function sourceToTileRef(
   }
   if (source.kind === TERMINAL_TILE_DND_TYPE) return source.tile;
   if (source.kind === BROWSER_TILE_DND_TYPE) return source.tile;
+  if (source.kind === SIMULATOR_TILE_DND_TYPE) return source.tile;
   if (source.kind === GIT_DIFF_TILE_DND_TYPE) return source.tile;
   // The ref was minted at the menu row; the drop dedupes on its content id
   // (the command id), so an already-open output window moves rather than
@@ -483,7 +489,8 @@ function placeResolvedCanvasTile(
       | EpicNodeRef
       | GitDiffTileRef
       | ManagedCommandOutputTileRef
-      | BrowserSessionTileRef;
+      | BrowserSessionTileRef
+      | SimulatorTileRef;
     readonly target: EpicCanvasDropTargetData;
     readonly preview: NonNullable<EpicCanvasDropPreview>;
   },
@@ -626,7 +633,7 @@ export function commitResolvedCanvasDrop(
   }
   const tile = sourceToTileRef(drop.source);
   if (tile !== null) {
-    return placeResolvedCanvasTile(
+    const placed = placeResolvedCanvasTile(
       {
         epicId: drop.source.epicId,
         tile,
@@ -635,6 +642,8 @@ export function commitResolvedCanvasDrop(
       },
       navigateNested,
     );
+    if (placed) requestConnectForDroppedSimulator(drop.source);
+    return placed;
   }
   return false;
 }
@@ -677,7 +686,20 @@ export function commitHeaderStripDrop(
   const tabId = canvasStore.openTileInNewTab(source.epicId, tile, insertIndex);
   if (tabId === null) return null;
   copyEpicSidebarTabState(source.viewTabId, tabId);
+  requestConnectForDroppedSimulator(source);
   return { epicId: source.epicId, tabId };
+}
+
+/**
+ * A dropped simulator row said "watch this" as a row click does, so its tile
+ * connects without asking again. Filed once the drop has placed the tile: a
+ * refused drop must leave no request for a later tile to act on.
+ */
+function requestConnectForDroppedSimulator(
+  source: EpicCanvasDragSourceData,
+): void {
+  if (source.kind !== SIMULATOR_TILE_DND_TYPE) return;
+  requestSimulatorConnect(source.tile.id);
 }
 
 export interface SidebarReparentDropInput {

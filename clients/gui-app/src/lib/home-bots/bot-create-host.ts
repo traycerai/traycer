@@ -20,7 +20,8 @@ export type BotCreateHostChoice =
  * A host whose environment is still being read holds the walk at its place:
  * the answer is `checking` until it is known whether that host qualifies, so
  * a later host never wins only because it answered first. A host whose read
- * failed is passed over.
+ * failed is passed over, and so is one that runs its own settings: it runs
+ * no environment, so it never qualifies and has no binding to wait for.
  */
 export function chooseBotCreateHost(input: {
   readonly environmentId: string;
@@ -32,11 +33,16 @@ export function chooseBotCreateHost(input: {
   readonly bindings: ReadonlyMap<string, EnvironmentHostBinding>;
   /** Hosts whose environment read failed. */
   readonly failedHostIds: ReadonlyArray<string>;
+  /** Hosts that run their own settings. */
+  readonly ownSettingsHostIds: ReadonlyArray<string>;
   /** Hosts that advertise `bot.create`. */
   readonly creatingHostIds: ReadonlySet<string>;
 }): BotCreateHostChoice {
   const connectable = new Set(input.connectableHostIds);
-  const failed = new Set(input.failedHostIds);
+  const passedOver = new Set([
+    ...input.failedHostIds,
+    ...input.ownSettingsHostIds,
+  ]);
   const ordered: string[] = [];
   const push = (hostId: string | null): void => {
     if (hostId === null || !connectable.has(hostId)) return;
@@ -49,7 +55,7 @@ export function chooseBotCreateHost(input: {
   for (const hostId of ordered) {
     const binding = input.bindings.get(hostId);
     if (binding === undefined) {
-      if (failed.has(hostId)) continue;
+      if (passedOver.has(hostId)) continue;
       return { kind: "checking" };
     }
     if (

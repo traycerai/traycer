@@ -8,17 +8,12 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
-/** Phone sections retain scope; Overview's identity and settings lines own it. */
+/** The scope a phone's section page keeps visible after its pickers disappear. */
 export function SettingsPhoneScopeLine(): ReactNode {
   const section = useContext(SettingsSectionContext);
   const mobile = useIsMobileViewport();
   const group = SETTINGS_SECTIONS.find((entry) => entry.id === section)?.group;
-  if (
-    !mobile ||
-    section === "host" ||
-    (group !== "host" && group !== "personal")
-  )
-    return null;
+  if (!mobile || (group !== "host" && group !== "personal")) return null;
   return <PhoneScopeLine hostSection={group === "host"} />;
 }
 
@@ -28,7 +23,16 @@ function PhoneScopeLine(props: { readonly hostSection: boolean }): ReactNode {
     pick.kind === "team" ? pick.environmentId : "",
   );
   let environment: ReactNode = "Personal";
-  if (pick.kind === "local") {
+  if (pick.kind === "unresolved") {
+    environment = (
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+        tone="muted"
+      />
+    );
+  } else if (pick.kind === "local") {
     environment = pick.hostName;
   } else if (pick.kind === "team") {
     environment = teamLabel ?? (

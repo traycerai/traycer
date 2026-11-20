@@ -118,7 +118,7 @@ describe("what the page can see as changed", () => {
     ).toEqual([]);
     const eachOne: ReadonlyArray<Partial<LayoutArrangement>> = [
       { usageHost: "header" },
-      { minimapSide: "right" },
+      { minimapSide: "left" },
       { resourceSide: "left" },
       { mobileFooter: true },
       { hiddenProviders: [PROVIDER] },
@@ -313,5 +313,19 @@ describe("Reset layout (L-20)", () => {
 
     expect(layoutModified(withProfile)).toBe(false);
     expect(resetWouldChange(withProfile)).toBe(true);
+  });
+});
+
+describe("an override key that names no value", () => {
+  it("lists no change for a key named like an inherited member", () => {
+    const micPatch: NonNullable<LayoutSnapshot["overrides"]["mic"]> = {};
+    Reflect.set(micPatch, "constructor", "hidden");
+    const snapshot: LayoutSnapshot = {
+      basePreset: "default",
+      overrides: { mic: micPatch },
+      arrangement: DEFAULT_ARRANGEMENT,
+    };
+
+    expect(layoutChanges(snapshot).styles).toEqual([]);
   });
 });

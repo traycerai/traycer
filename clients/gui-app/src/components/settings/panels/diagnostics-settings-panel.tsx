@@ -54,7 +54,8 @@ import { cn } from "@/lib/utils";
 import { resolveDesktopSupportBridge } from "@/lib/windows/desktop-capabilities";
 import type { DesktopSupportBridge } from "@/lib/windows/types";
 
-const PANEL_DESCRIPTION = "Logs from this host, for support.";
+const PANEL_DESCRIPTION =
+  "Log verbosity and recent log output for the host selected above. Both levels default to Info - raise one to Debug when capturing a problem for support, then set it back. This app's own log and memory capture live under Application - Diagnostics.";
 /** The `cli`/`host` rows' method; the whole config family ships in one release. */
 const LOG_LEVELS_GATE_METHOD = "config.logLevels.get";
 /** Recent logs' method, asked separately so each region states its own truth. */

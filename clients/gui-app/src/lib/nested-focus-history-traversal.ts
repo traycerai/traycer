@@ -1,6 +1,9 @@
 import type { HistoryLocation, RouterHistory } from "@tanstack/react-router";
 import { parseEpicTabHref } from "@/lib/history-navigation";
-import { parseNestedFocusTargetFromHref } from "@/lib/epic-nested-focus-route";
+import {
+  hrefSearchParams,
+  parseNestedFocusTargetFromHref,
+} from "@/lib/epic-nested-focus-route";
 import {
   markExplicitNestedFocusIntent,
   markReturnedToNestedFocusRequest,
@@ -48,17 +51,6 @@ interface EpicTabFocusDestination {
   readonly epicId: string;
   readonly tabId: string;
   readonly decision: TraversedFocusDecision;
-}
-
-function hrefSearchParams(href: string): URLSearchParams {
-  const queryStart = href.indexOf("?");
-  if (queryStart === -1) return new URLSearchParams();
-  const hashStart = href.indexOf("#", queryStart);
-  return new URLSearchParams(
-    hashStart === -1
-      ? href.slice(queryStart + 1)
-      : href.slice(queryStart + 1, hashStart),
-  );
 }
 
 function readFocusDestination(href: string): EpicTabFocusDestination | null {

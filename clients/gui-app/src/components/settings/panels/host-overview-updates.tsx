@@ -81,7 +81,7 @@ const ANSWER_CARD_LOOK: Record<HostOverviewAnswerKind, AnswerCardLook | null> =
     stranded: {
       tone: "info",
       icon: GitBranch,
-      title: "Newer version on another release line",
+      title: "Release candidate on another release line",
     },
     "not-installable": {
       tone: "neutral",

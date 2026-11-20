@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import { isAdministrableRoute } from "@/components/settings/host-scope/host-scope-model";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -100,4 +101,25 @@ export function readConnectableHostsSnapshot():
     ),
   );
   return (hostId) => connectable.has(hostId);
+}
+
+/** A dialable personal machine, used only when Tracy's selected host cannot be dialed. */
+export function readConnectablePersonalHost(): string | null {
+  const binding = getHostBindingSnapshot();
+  if (binding === null) return null;
+  const directory = queryClient.getQueryState<readonly HostDirectoryEntry[]>(
+    uiQueryKeys.hostPicker(registerHostPickerDirectory(binding.directory)),
+  );
+  if (directory?.status !== "success") return null;
+  return (
+    (directory.data ?? EMPTY_ENTRIES).find((entry) => {
+      const personal =
+        entry.kind === "local" ||
+        (isRemoteHostDirectoryEntry(entry) && entry.sandbox === null);
+      return (
+        personal &&
+        isAdministrableRoute(entry, hasReadyRemoteSession(entry.hostId))
+      );
+    })?.hostId ?? null
+  );
 }

@@ -1,5 +1,6 @@
 import "../../../../__tests__/test-browser-apis";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { createMemoryHistory } from "@tanstack/react-router";
 import type { ComponentProps, ReactElement, ReactNode } from "react";
 import {
@@ -30,6 +31,7 @@ import type {
 } from "@/lib/browser-view/sessions/electron-tab-directory";
 import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import type {
   BrowserViewViewportPresetId,
   BrowserViewTileCommand,
@@ -43,6 +45,7 @@ import {
 } from "@/lib/focus/primary-focus-coordinator";
 
 const state = vi.hoisted(() => ({
+  hostLabel: null as string | null,
   visible: true,
   bridge: null as TestBridge | null,
   chromeInputs: [] as Array<Record<string, unknown>>,
@@ -78,6 +81,11 @@ const state = vi.hoisted(() => ({
   /** Every `useBrowserAnnotationSession` call, newest last. */
   annotationInputs: [] as Array<{ readonly browserView: unknown }>,
   persistViewportPreset: vi.fn<(preset: BrowserViewViewportPresetId) => void>(),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) =>
+    state.hostLabel === null ? null : { hostId, label: state.hostLabel },
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
@@ -376,7 +384,7 @@ function renderWithQueryClient(ui: ReactElement): RenderResult {
   });
   const wrapper = (props: { readonly children: ReactNode }): ReactElement => (
     <QueryClientProvider client={queryClient}>
-      {props.children}
+      <TooltipProvider>{props.children}</TooltipProvider>
     </QueryClientProvider>
   );
   return render(ui, { wrapper });
@@ -433,6 +441,7 @@ function queryTileGuestWrapper(): HTMLElement {
 
 describe("ElectronTabSurface", () => {
   beforeEach(() => {
+    state.hostLabel = "Studio Mac";
     state.visible = true;
     state.bridge = new TestBridge();
     state.chromeInputs = [];
@@ -732,6 +741,50 @@ describe("ElectronTabSurface", () => {
     });
     expect(screen.getByText("native guest crashed")).toBeTruthy();
   });
+
+  it.each<[string, string | null, string]>([
+    ["named computer", "Studio Mac", "Studio Mac"],
+    ["missing name", null, "the host"],
+    ["blank name", "   ", "the host"],
+    ["id-valued name", "host-1", "the host"],
+  ])(
+    "keeps the Host details tooltip readable for a %s",
+    async (_state, hostLabel, expected) => {
+      state.hostLabel = hostLabel;
+      mountGuestForTile();
+      const bridge = state.bridge;
+      if (bridge === null) throw new Error("bridge missing");
+      renderTile(
+        createBinding(() =>
+          Promise.resolve({ detach: () => Promise.resolve() }),
+        ),
+      );
+      await waitFor(() => expect(state.chromeInputs.length).toBeGreaterThan(0));
+
+      act(() => {
+        bridge.emitStatus({
+          hostId: "host-1",
+          sessionId: "session-1",
+          tabId: "tab-1",
+          registrationId: "registration-1",
+          url: "https://example.com/",
+          title: null,
+          status: "dead",
+          reason: "native guest crashed",
+          canGoBack: false,
+          canGoForward: false,
+          zoomPercent: 100,
+          navigationAttempt: 0,
+        });
+      });
+
+      const tooltip = tooltipTextNear(
+        screen.getByRole("button", { name: "Host details" }),
+      );
+      expect(tooltip).toContain(expected);
+      expect(tooltip).not.toContain("host-1");
+    },
+  );
 });
 
 /**

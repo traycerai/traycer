@@ -1,3 +1,19 @@
+import {
+  isRefusalOfAgentSessionCapability,
+  markRefusalOfAgentSessionCapability,
+  PROCESS_AGENT_ENVIRONMENT,
+  readAgentCommandCredential,
+  type AgentCommandCredential,
+} from "./agent-session-capability";
+import { localTeamAdmissionCliError } from "./local-open-auth";
+import { openCliHostSession } from "./cli-host-tokens";
+import {
+  hostDoorRefusalCliError,
+  hostTokenFailureCliError,
+  signedOutCliError,
+} from "./host-door-words";
+import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
+import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
 import type { ZodType } from "zod";
@@ -6,7 +22,12 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { getLatestContract } from "@traycer/protocol/framework/versioned-rpc";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
+import type { OpenFrameBearerSource } from "../../../shared/auth/bearer-source";
+import type { RefusalAwareAuthRevalidator } from "../../../shared/auth/bearer-revalidator";
+import {
+  isRefusalAfterRejectedSignIn,
+  markRefusalAfterRejectedSignIn,
+} from "./sign-in-rejection";
 import {
   createAuthAwareMessenger,
   type AuthRecoveryScope,
@@ -37,7 +58,10 @@ import {
   WsRpcClient,
 } from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
-import { isProfileLifecycleRejection } from "../../../shared/host-transport/profile-lifecycle-rejection";
+import {
+  isProfileLifecycleRejection,
+  isRemovedProfileRefusal,
+} from "../../../shared/host-transport/profile-lifecycle-rejection";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import {
@@ -45,10 +69,6 @@ import {
   publishedHostProcessGone,
   readHostPidMetadata,
 } from "../host/pid-metadata";
-import {
-  createCliCredentialsStore,
-  createStoreBackedRevalidator,
-} from "../store/credentials-store";
 import { resolveHostAuth, type HostAuth } from "./host-auth";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import {
@@ -69,12 +89,10 @@ export const FRAME_TIMEOUT_MS = 15_000;
  *
  * The protocol (open → openAck → request → response, manifest negotiation,
  * frame parsing, timeouts) is the shared `WsRpcClient` that the Desktop renderer
- * also uses - the CLI no longer hand-rolls it. The bearer comes from the stored
- * credentials (`resolveHostAuth`), seeded by `traycer login`; on a host
- * `UNAUTHORIZED` the shared auth-aware wrapper refreshes the bearer via the
- * store-backed revalidator - the refresh spend runs inside the shared credentials
- * file lock (`store.rotate`, §7) - rotates the lease, and retries once before the
- * error surfaces.
+ * also uses - the CLI no longer hand-rolls it. The host receives only this CLI's host-only token
+ * for it (`cli-host-tokens.ts`), read from disk; the stored sign-in (`resolveHostAuth`) is spent at
+ * authn alone. A host refusal the shared auth-aware wrapper reads by its reason: a credential
+ * reason gets one fresh token and one more send, never a third.
  */
 export async function callHostRpc<
   Method extends keyof HostRpcRegistry & string,
@@ -94,12 +112,7 @@ export async function callHostRpc<
       environment: config.environment,
       method,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
+    throw signedOutCliError();
   }
 
   // Resolve the endpoint once (throws when the host isn't running). Endpoint
@@ -146,12 +159,7 @@ export async function callHostRpcFastFail<
       environment: config.environment,
       method,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
+    throw signedOutCliError();
   }
 
   const endpoint = await resolveEndpoint();
@@ -246,12 +254,7 @@ export async function callHostRpcWithDispatch<
       environment: config.environment,
       method,
     });
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
+    throw signedOutCliError();
   }
   const endpoint = await resolveEndpoint();
   return callHostRpcAtResolvedEndpoint(
@@ -261,6 +264,97 @@ export async function callHostRpcWithDispatch<
     auth,
     dispatch,
   );
+}
+
+const FAIL_FAST_DISPATCH: HostRpcDispatch = {
+  ...PLAIN_DISPATCH,
+  failFast: true,
+};
+
+/**
+ * With a capability in the agent's environment the call presents it, reads neither
+ * the stored sign-in nor a host-only token, and recovers nothing; in a host session
+ * without one nothing is presented. Which methods it may call is the host's list.
+ */
+export async function callAgentHostRpcWithDispatch<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  return callHostRpcWithAgentCredential(
+    method,
+    params,
+    readAgentCommandCredential(PROCESS_AGENT_ENVIRONMENT),
+    dispatch,
+  );
+}
+
+/** Uses the credential captured by a monitor for all of its acknowledgements. */
+export async function callHostRpcWithAgentCredential<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  credential: AgentCommandCredential,
+  dispatch: HostRpcDispatch,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  if (credential.kind === "outside-agent-session")
+    return callHostRpcWithDispatch(method, params, dispatch);
+  if (credential.kind === "none") {
+    createCliLogger(config.environment).warn(
+      "Host RPC blocked: the agent session carries no capability",
+      { environment: config.environment, method },
+    );
+    throw signedOutCliError();
+  }
+  const endpoint = await resolveEndpoint();
+  const capability = credential.capability;
+  createCliLogger(config.environment).debug(
+    "Host RPC requested with the agent session capability",
+    {
+      environment: config.environment,
+      method,
+      retryPolicy: dispatch.failFast ? "fast-fail" : "default",
+    },
+  );
+  try {
+    return await requestWithHostToken(
+      method,
+      params,
+      endpoint,
+      capability.bearer,
+      capability.recovery,
+      dispatch.failFast
+        ? NO_RETRY_TRANSPORT_POLICY
+        : DEFAULT_TRANSPORT_RETRY_POLICY,
+      dispatch,
+      () => false,
+    );
+  } catch (err) {
+    const refusal = finalRefusalOf(err);
+    if (refusal instanceof HostRpcError) {
+      markRefusalOfAgentSessionCapability(refusal);
+    }
+    throw err;
+  }
+}
+
+export function callAgentHostRpc<Method extends keyof HostRpcRegistry & string>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  return callAgentHostRpcWithDispatch(method, params, PLAIN_DISPATCH);
+}
+
+export function callAgentHostRpcFastFail<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  return callAgentHostRpcWithDispatch(method, params, FAIL_FAST_DISPATCH);
 }
 
 /**
@@ -322,12 +416,7 @@ export async function callHostRpcAtEndpoint<
         hostId: endpoint.hostId,
       },
     );
-    throw cliError({
-      code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
-      message: "traycer: not signed in - run `traycer login` to authenticate.",
-      details: null,
-      exitCode: 1,
-    });
+    throw signedOutCliError();
   }
   return requestAtEndpoint(
     method,
@@ -347,36 +436,70 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-  const logger = createCliLogger(config.environment);
-  const lease = new MutableBearerLease(auth.token, auth.userId);
-  // On a host UNAUTHORIZED the auth-aware messenger drives the refresh through
-  // the locked `rotate` (§7): a short-lived store for this one call, disposed
-  // once the request settles so a `commit-failed` continuation timer never
-  // outlives the command.
-  const store = createCliCredentialsStore();
-  // `signal: null`: this revalidator lives for exactly one unary call, whose
-  // own transport timeout already bounds it.
-  const revalidator = createStoreBackedRevalidator({
-    store,
-    lease,
-    signal: null,
-  });
+  const opened = await openCliHostSession(
+    auth,
+    endpoint.hostId,
+    false,
+    dispatch.signal,
+  );
+  if (opened.kind === "failed") {
+    createCliLogger(config.environment).warn(
+      "Host RPC blocked: no host-only token",
+      {
+        environment: config.environment,
+        method,
+        hostId: endpoint.hostId,
+        mintOutcome: opened.failure.kind,
+      },
+    );
+    throw hostTokenFailureCliError(opened.failure);
+  }
+  const session = opened.session;
+  try {
+    return await requestWithHostToken(
+      method,
+      params,
+      endpoint,
+      session.bearer,
+      session.tokens.unaryRecovery(endpoint.hostId),
+      retryPolicy,
+      dispatch,
+      () => session.tokens.signInRejected(),
+    );
+  } finally {
+    session.dispose();
+  }
+}
 
+async function requestWithHostToken<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  params: RequestOfMethod<HostRpcRegistry, Method>,
+  endpoint: HostTransportEndpoint,
+  bearer: OpenFrameBearerSource,
+  recovery: RefusalAwareAuthRevalidator,
+  retryPolicy: TransportRetryPolicy,
+  dispatch: HostRpcDispatch,
+  signInRejected: () => boolean,
+): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+  const logger = createCliLogger(config.environment);
+  const client = new WsRpcClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => randomUUID(),
+    webSocketFactory: createWhatwgWebSocketFactory(),
+    dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+    frameTimeoutMs: FRAME_TIMEOUT_MS,
+    hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
+    // The CLI has no selection authority to feed: there is no window, no
+    // kernel, and nothing that could act on a failover verdict.
+    evidence: NO_TRANSPORT_EVIDENCE,
+    clientIdentity: CLI_CLIENT_IDENTITY,
+  });
   const messenger = createRetryingMessenger<HostRpcRegistry>(
     createAuthAwareMessenger<HostRpcRegistry>(
-      new WsRpcClient<HostRpcRegistry>({
-        registry: hostRpcRegistry,
-        requestId: () => randomUUID(),
-        webSocketFactory: createWhatwgWebSocketFactory(),
-        dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-        frameTimeoutMs: FRAME_TIMEOUT_MS,
-        hostAttestationWindowMs: attestationWindowForPolicy(retryPolicy),
-        // The CLI has no selection authority to feed: there is no window, no
-        // kernel, and nothing that could act on a failover verdict.
-        evidence: NO_TRANSPORT_EVIDENCE,
-        clientIdentity: CLI_CLIENT_IDENTITY,
-      }),
-      revalidator,
+      client,
+      recovery,
       dispatch.reauthenticate,
     ),
     retryPolicy,
@@ -390,7 +513,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   }
   const authority: HostRequestAuthority = {
     endpoint,
-    bearer: lease,
+    bearer,
     abortSignal: callLifetime.signal,
   };
   const options: HostRequestOptions = {
@@ -421,6 +544,10 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
     });
     return response;
   } catch (err) {
+    const refusal = finalRefusalOf(err);
+    if (signInRejected() && refusal instanceof HostRpcError) {
+      markRefusalAfterRejectedSignIn(refusal);
+    }
     const error = errorFromUnknown(err);
     logger.debug("Host RPC failed; propagating to command boundary", {
       environment: config.environment,
@@ -433,7 +560,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   } finally {
     dispatch.signal?.removeEventListener("abort", abortWithCaller);
     callLifetime.abort("cli-call-settled");
-    store.dispose();
+    client.releaseIdleLocalSessions();
   }
 }
 
@@ -460,8 +587,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -477,8 +603,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     );
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -490,8 +615,7 @@ export async function resolveEndpoint(): Promise<HostTransportEndpoint> {
     });
     throw cliError({
       code: CLI_ERROR_CODES.HOST_NOT_RUNNING,
-      message:
-        "traycer: host not running - pid metadata is absent, malformed, advertises an invalid local WebSocket endpoint, or names a process that is gone (exited, or a recycled pid that now belongs to an unrelated process).",
+      message: "The host is not running. Run `traycer host ensure`.",
       details: null,
       exitCode: 1,
     });
@@ -704,8 +828,8 @@ const EARLIER_ATTEMPT_MAY_HAVE_RUN =
  */
 export function hostRpcToCliError(err: unknown): unknown {
   // Classified by the refusal that ended a retry episode, not by its
-  // unknown-outcome wrapper: "sign in again" stays true about the retry
-  // whatever an earlier attempt did. The outcome stays unknown, and the
+  // unknown-outcome wrapper: what the final refusal says stays true about the
+  // retry whatever an earlier attempt did. The outcome stays unknown, and the
   // message says so.
   const refusal = finalRefusalOf(err);
   if (!(refusal instanceof HostRpcError)) return err;
@@ -728,6 +852,11 @@ export function hostRpcToCliError(err: unknown): unknown {
 
 /**
  * Maps a host wire error code to a stable CLI error code:
+ *   - a refusal by the host's door, after the call's one fresh token → the
+ *     door's own line (`hostDoorRefusalCliError`), decided by its reason
+ *     ahead of every code below: sign-in advice only for a machine signed out
+ *     in fact, the older-host line for a reasonless refusal of the token, and
+ *     otherwise the generic arm at the end.
  *   - authorization failure → `FORBIDDEN`: the host signals "no access" with a
  *     `FORBIDDEN` wire code - a cloud 403 is mapped to `FORBIDDEN` in the host's
  *     `cloudErrorFromResponse`, and a viewer/no-role caller hits
@@ -735,8 +864,8 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     an access denial that still arrives bucketed as `RPC_ERROR`. We do NOT pass
  *     the host's raw text through here: it can embed an internal user UUID and
  *     the internal term "task" (epic), neither actionable for a CLI user.
- *   - `UNAUTHORIZED` → `AUTH_REJECTED`: bearer rejected even after the
- *     auth-aware wrapper's refresh-and-retry.
+ *   - `UNAUTHORIZED` that is not the door's → `AUTH_REJECTED`, with the
+ *     host's own line.
  *   - `WORKTREE_MISSING` / `WORKSPACE_BINDING_REQUIRED` / `E_HOST_STORAGE_FULL`
  *     → the CLI code of the same name: the person's own folder, workspace
  *     choice or disk stops the request, and the host's message names the fix.
@@ -768,6 +897,24 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
+  // A capability cannot be repaired by the stored sign-in or a host-token mint.
+  const doorRefusal = isRefusalOfAgentSessionCapability(err)
+    ? null
+    : hostRefusalOf(err);
+  const doorError =
+    doorRefusal === null
+      ? null
+      : hostDoorRefusalCliError(
+          doorRefusal,
+          isRefusalAfterRejectedSignIn(err),
+          () => unexpectedHostCliError(err),
+        );
+  if (doorError !== null) return doorError;
+  const admissionError =
+    err.fatalDetails === null
+      ? null
+      : localTeamAdmissionCliError(err.fatalDetails);
+  if (admissionError !== null) return admissionError;
   // Ahead of the unreachable arm below, and the two must never share a code:
   // this is the failure the transport could not prove was pre-dispatch, so
   // the host may have run the call and answered into a connection that was
@@ -819,7 +966,23 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
-  if (err.code === "E_CLOUD_UNREACHABLE") {
+  const teamRefusal = TEAM_TRANSFER_REFUSALS.find(
+    ({ code }) => code === err.code,
+  );
+  if (teamRefusal !== undefined) {
+    return cliError({
+      code: teamRefusal.code,
+      message: teamRefusal.message,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  // The host's own egress budget refusing a cloud request is retryable like a
+  // cloud that gave no verdict, and the person's next step is the same.
+  if (
+    err.code === "E_CLOUD_UNREACHABLE" ||
+    err.code === "E_CLOUD_REQUEST_REFUSED"
+  ) {
     return cliError({
       code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
       message: `traycer: ${err.message}`,
@@ -888,11 +1051,14 @@ function mapHostRpcError(err: HostRpcError): CliError {
   // registered, still being set up, wrong provider) is the person's own
   // selection and expected. The host sends it as `RPC_ERROR` with a fixed
   // message, so it is recognized by message; if the host later sends the same
-  // refusal as `E_INVALID_ARGUMENT`, the output below does not change.
+  // refusal as `E_INVALID_ARGUMENT`, the output below does not change. An
+  // account a person removed is refused with the unknown-id sentence under
+  // `removed-by-person`, and prints exactly what an unknown id prints.
   if (
     err.code === "E_INVALID_ARGUMENT" ||
     err.code === "MESSAGE_TOO_LARGE" ||
-    isProfileLifecycleRejection(err.code, err.message)
+    isProfileLifecycleRejection(err.code, err.message) ||
+    isRemovedProfileRefusal(err.code, err.message)
   ) {
     return cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -947,6 +1113,11 @@ function mapHostRpcError(err: HostRpcError): CliError {
       exitCode: 1,
     });
   }
+  return unexpectedHostCliError(err);
+}
+
+/** The host's own line, for an error no arm above names. */
+function unexpectedHostCliError(err: HostRpcError): CliError {
   const code =
     err.code === "UNAUTHORIZED"
       ? CLI_ERROR_CODES.AUTH_REJECTED

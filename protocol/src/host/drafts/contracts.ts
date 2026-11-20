@@ -13,7 +13,9 @@ import {
   draftDocumentSchemaV10,
   draftsPutBlobRequestSchema,
   draftsPutBlobRequestSchemaV11,
+  draftsPutBlobRequestSchemaV12,
   draftsPutBlobResponseSchema,
+  draftsPutBlobResponseSchemaV12,
   draftsReadBlobRequestSchema,
   draftsReadBlobResponseSchema,
   draftsReadBlobResponseSchemaV11,
@@ -231,6 +233,35 @@ export const draftsPutBlobUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: draftsPutBlobV10.schemaVersion,
   to: draftsPutBlobV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `@1.2` adds non-image files: the request is a union on `kind`, whose image
+ * arm is the `@1.1` request with an OPTIONAL tag (absent means image), and a
+ * stored `file` answers with the path the host wrote it to. Both schemas are
+ * new instances; `@1.1`'s stay pinned above.
+ */
+export const draftsPutBlobV12 = defineRpcContract({
+  method: "drafts.putBlob",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: draftsPutBlobRequestSchemaV12,
+  responseSchema: draftsPutBlobResponseSchemaV12,
+});
+
+/**
+ * Identity both ways. A `@1.1` request is already a valid untagged image put,
+ * and a `@1.1` success is one that names no path. Like the `@1.1` upgrade, it
+ * does not re-check the image cap: an over-cap `@1.0` body still reaches the
+ * host store's own decoded cap.
+ */
+export const draftsPutBlobUpgradeV11ToV12 = defineUpgradePath<
+  typeof draftsPutBlobV11,
+  typeof draftsPutBlobV12
+>({
+  from: draftsPutBlobV11.schemaVersion,
+  to: draftsPutBlobV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

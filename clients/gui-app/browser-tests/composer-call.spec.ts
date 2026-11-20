@@ -6,6 +6,11 @@ declare global {
   interface Window {
     __composerCallProbe?: {
       readonly offer: () => void;
+      readonly sent: () => readonly {
+        readonly text: string;
+        readonly threadId: string | null;
+      }[];
+      readonly completeSend: () => void;
       readonly placeCall: () => void;
       readonly goLive: () => void;
       readonly showCaptions: () => void;
@@ -248,4 +253,95 @@ test("the captions hang above the box, inside the window", async ({ page }) => {
   const bar = await boxOf(page.getByTestId("bot-channel-composer-call-bar"));
   expect(bottomOf(linesBox)).toBeLessThanOrEqual(bar.y);
   expectInside(linesBox, await boxOf(page.locator(BOX)));
+});
+
+test.describe("mobile Send touch target", () => {
+  test.use({ hasTouch: true });
+  for (const { box, fontSize } of [
+    { box: "channel", fontSize: 15 },
+    { box: "thread", fontSize: 15 },
+    { box: "channel", fontSize: 10 },
+    { box: "thread", fontSize: 10 },
+  ]) {
+    test(`${box} at ${fontSize}px edge taps send once while Call and the draft stay separate`, async ({
+      page,
+    }) => {
+      await open(page, 390, `box=${box}`);
+      await page.evaluate((size) => {
+        document.documentElement.style.fontSize = `${size}px`;
+      }, fontSize);
+      const id = `bot-${box}-composer`;
+      const send = page.getByTestId(`${id}-send`);
+      const field = page
+        .getByTestId(`${id}-input`)
+        .locator("[data-composer-editor]");
+      await expect(send).toBeDisabled();
+      const idle = await boxOf(send);
+      expect(idle.width).toBeGreaterThanOrEqual(44);
+      expect(idle.height).toBeGreaterThanOrEqual(44);
+      await page.touchscreen.tap(idle.x + 2, idle.y + idle.height / 2);
+      await nextFrames(page, 2);
+      expect(
+        await page.evaluate(() => window.__composerCallProbe?.sent()),
+      ).toEqual([]);
+      await field.fill("Please check CI");
+      await expect(send).toBeEnabled();
+      const target = await boxOf(send);
+      const call = await boxOf(page.getByTestId(`${id}-call`));
+      expect(target.width).toBeGreaterThanOrEqual(44);
+      expect(target.height).toBeGreaterThanOrEqual(44);
+      expect(target.x - rightOf(call)).toBeGreaterThanOrEqual(fontSize / 2);
+      expectInside(target, await boxOf(page.getByTestId(id)));
+      const fieldBox = await boxOf(field);
+      expect(rightOf(fieldBox) <= call.x || bottomOf(fieldBox) <= call.y).toBe(
+        true,
+      );
+      const glyph = await boxOf(send.locator("svg"));
+      expect(glyph.width).toBe(fontSize);
+      await page.touchscreen.tap(target.x + 2, target.y + target.height / 2);
+      await expect
+        .poll(() =>
+          page.evaluate(() => window.__composerCallProbe?.sent().length),
+        )
+        .toBe(1);
+      await expect(send).toBeDisabled();
+      await field.fill("Keep this next draft");
+      const pending = await boxOf(send);
+      await page.touchscreen.tap(
+        rightOf(pending) - 2,
+        pending.y + pending.height / 2,
+      );
+      await nextFrames(page, 2);
+      expect(
+        await page.evaluate(() => window.__composerCallProbe?.sent().length),
+      ).toBe(1);
+      await page.evaluate(() => window.__composerCallProbe?.completeSend());
+      await expect(send).toBeEnabled();
+      await expect(field).toHaveText("Keep this next draft");
+      const second = await boxOf(send);
+      await page.touchscreen.tap(
+        rightOf(second) - 2,
+        second.y + second.height / 2,
+      );
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            window.__composerCallProbe
+              ?.sent()
+              .map(({ text, threadId }) => ({ text, threadId })),
+          ),
+        )
+        .toEqual([
+          {
+            text: "Please check CI",
+            threadId: box === "thread" ? "thread-1" : null,
+          },
+          {
+            text: "Keep this next draft",
+            threadId: box === "thread" ? "thread-1" : null,
+          },
+        ]);
+      await expectNoSidewaysScroll(page);
+    });
+  }
 });

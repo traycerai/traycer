@@ -126,7 +126,8 @@ export interface ChatTimelineInitialScrollAnchor {
  */
 interface ChatTimelineItemSizeInfo {
   readonly size: number;
-  readonly itemData: TranscriptListRow;
+  // A queued measurement may outlive the row removed from LegendList's data.
+  readonly itemData: TranscriptListRow | undefined;
 }
 
 /**
@@ -422,7 +423,7 @@ export const ChatTimeline = memo(function ChatTimeline({
       // that row is. A placeholder measures at whatever height the memory just
       // told it to stand at, so recording one would be the memory reading its
       // own estimate back in as evidence for that estimate.
-      if (rowHeightMemory !== null && info.itemData.kind === "hydrated") {
+      if (rowHeightMemory !== null && info.itemData?.kind === "hydrated") {
         // `rowId` is the ROW and the part is the list item: a long turn is
         // drawn as several items, and the placeholder that later stands in for
         // that ordinal stands in for all of them at once.

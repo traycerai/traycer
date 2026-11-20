@@ -1,3 +1,4 @@
+import type { MixCapture } from "../recording";
 import type { RandomSource } from "../scheduler";
 import type { OutputGain, OutputVoice, SoundtrackOutput } from "../output";
 import type { StemSource } from "../stems";
@@ -26,6 +27,11 @@ interface RampCall {
   readonly at: number;
 }
 type PortCall = PlayCall | CutCall | RampCall;
+
+/** The ports' capture, for a fixture that never records. */
+export function captureNothing(): Promise<MixCapture> {
+  return Promise.reject(new Error("This fixture records nothing"));
+}
 
 /** mulberry32: the same draws on every run; each call owns its own state. */
 export function mulberry32(seed: number): RandomSource {
@@ -120,6 +126,15 @@ class FakeGain implements OutputGain {
     this.output.pans.set(name, pan);
     this.children += 1;
     return new FakeGain(name, this.output);
+  }
+
+  playRecording(
+    buffer: AudioBuffer,
+    when: number,
+    _offset: number,
+    _ended: () => void,
+  ): OutputVoice {
+    return this.play(buffer, when, 0.01);
   }
 
   play(buffer: AudioBuffer, when: number, fadeInSeconds: number): OutputVoice {

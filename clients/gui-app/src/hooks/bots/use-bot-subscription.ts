@@ -19,7 +19,6 @@ import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { isReadCursorReadOf } from "@/hooks/bots/use-bot-read-cursor";
 import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
-import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { botThreadListParams } from "@/hooks/bots/use-bot-thread-list-query";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -92,6 +91,8 @@ export interface BotSubscriptionSnapshot {
  */
 export interface BotSubscriptionResult {
   readonly snapshot: BotSubscriptionSnapshot | null;
+  /** The current stream has delivered a snapshot since its last reconnect. */
+  readonly snapshotFresh: boolean;
   readonly deleted: boolean;
   readonly error: string | null;
   readonly isPending: boolean;
@@ -111,6 +112,13 @@ export interface BotSubscriptionResult {
  */
 type BotStreamEvent =
   | Extract<BotSubscribeServerFrame, { kind: "snapshot" | "deleted" }>
+  | {
+      readonly kind: "stale";
+      readonly baseline: Extract<
+        BotSubscribeServerFrame,
+        { kind: "snapshot" }
+      > | null;
+    }
   | { readonly kind: "closed"; readonly message: string };
 
 type SharedSubscription = SharedStreamSubscription<BotStreamEvent>;
@@ -122,9 +130,9 @@ interface ActiveSubscriptionArgs {
 
 /**
  * Module-level ref-counted sessions, keyed by the owning client instance +
- * host + bot: Home's row and an open bot tab on the same host share one
- * session, while the same bot subscribed through two hosts (a tab moved to
- * its bound host, Home on the app-wide one) keeps two.
+ * host + bot. Readers of one bot through one host's cached client share one
+ * session; the same bot read through two hosts keeps two, since each host
+ * answers for itself.
  */
 const subscriptions: SharedStreamSubscriptionRegistry<BotStreamEvent> =
   new Map();
@@ -136,33 +144,57 @@ function subscriptionKeyFor(
   return `${client.instanceId}|${args.hostId}|${args.botId}`;
 }
 
+/**
+ * A host re-sends a snapshot only for a change it made, and this write reached the
+ * server with no host in the path.
+ */
+export function applyBotSettingsToViews(
+  queryClient: QueryClient,
+  settings: Pick<
+    BotRecord,
+    "botId" | "harness" | "model" | "effort" | "profile" | "replyMode"
+  >,
+): void {
+  const { botId, ...fields } = settings;
+  const apply = (bot: BotRecord): BotRecord => ({ ...bot, ...fields });
+  for (const [key, shared] of subscriptions) {
+    if (!key.endsWith(`|${botId}`)) continue;
+    const last = shared.lastEvent;
+    if (last?.kind === "snapshot") {
+      shared.lastEvent = { ...last, bot: apply(last.bot) };
+    } else if (last?.kind === "stale" && last.baseline !== null) {
+      shared.lastEvent = {
+        ...last,
+        baseline: { ...last.baseline, bot: apply(last.baseline.bot) },
+      };
+    }
+  }
+  queryClient.setQueriesData<BotSubscriptionSnapshot | null>(
+    {
+      predicate: (query) =>
+        botQueryKeys.isSubscriptionOf(query.queryKey, botId),
+    },
+    (cached) =>
+      cached === null || cached === undefined
+        ? cached
+        : { ...cached, bot: apply(cached.bot) },
+  );
+}
+
 /** Test helper: tear every session down and empty the registry. */
 export function __resetBotSubscriptionsForTesting(): void {
   resetSharedStreamSubscriptions(subscriptions);
 }
 
 /**
- * Subscribes on the APP-WIDE stream client - the Home section's reading,
- * where the hosts of many bots are a detail and the serving host's
- * `boundHost.isThisHost` says which ones are bound here.
- */
-export function useBotSubscription(args: {
-  readonly hostId: string | null;
-  readonly botId: string;
-  readonly enabled: boolean;
-}): BotSubscriptionResult {
-  const client = useWsStreamClient();
-  return useBotSubscriptionForClient({ ...args, client });
-}
-
-/**
- * Subscribes through an explicit host's own stream client - the bot tab's
- * reading, bound to its host for life. The client is dialed for `hostId` the
- * way every per-tab stream is (`useHostStreamClientFor` with auth
- * revalidation), never read off the app-wide context.
+ * Subscribes through a host's own stream client, dialed for `hostId` the way
+ * every per-tab stream is (`useHostStreamClientFor` with auth revalidation).
+ * Every reader of a bot goes through here, Home's row included: the app-wide
+ * context's client is another object, and a reader on it would open a second
+ * stream for the same bot and host. A `null` host subscribes to nothing.
  */
 export function useBotSubscriptionForHost(args: {
-  readonly hostId: string;
+  readonly hostId: string | null;
   readonly botId: string;
   readonly enabled: boolean;
 }): BotSubscriptionResult {
@@ -247,6 +279,7 @@ export function useBotSubscriptionForClient(args: {
   const error = lastEvent?.kind === "closed" ? lastEvent.message : null;
   return {
     snapshot,
+    snapshotFresh: lastEvent?.kind === "snapshot",
     deleted,
     error,
     isPending: snapshot === null && !deleted && error === null,
@@ -280,6 +313,8 @@ function createSharedSubscription(
   });
 
   let sessionClosed = false;
+  let streamOpen = true;
+  let held = false;
   const shared: SharedSubscription = {
     refCount: 0,
     unsubscribeFromStream: () => {
@@ -307,6 +342,25 @@ function createSharedSubscription(
     notifyConsumers();
   };
 
+  const applyActivity = (
+    frame: Extract<BotSubscribeServerFrame, { kind: "activity" }>,
+  ): void => {
+    const last = shared.lastEvent;
+    let baseline = null;
+    if (last?.kind === "snapshot") baseline = last;
+    else if (last?.kind === "stale") baseline = last.baseline;
+    if (baseline === null || baseline.activity === null) return;
+    const activity = withActivityEntry(baseline.activity, frame);
+    const updated = { ...baseline, activity };
+    shared.lastEvent =
+      last?.kind === "stale" ? { ...last, baseline: updated } : updated;
+    notifyConsumers();
+    const key = botQueryKeys.subscription(args);
+    const cached =
+      queryClient.getQueryData<BotSubscriptionSnapshot | null>(key) ?? null;
+    if (cached !== null) queryClient.setQueryData(key, { ...cached, activity });
+  };
+
   session.onServerFrame((envelope) => {
     if (sessionClosed) return;
     const parsed = botSubscribeServerFrameSchema.safeParse(envelope);
@@ -318,20 +372,10 @@ function createSharedSubscription(
       return;
     }
     if (frame.kind === "activity") {
-      // One entry moved; the snapshot it patches came first on this session.
-      const last = shared.lastEvent;
-      if (last?.kind !== "snapshot" || last.activity === null) return;
-      const activity = withActivityEntry(last.activity, frame);
-      shared.lastEvent = { ...last, activity };
-      notifyConsumers();
-      const key = botQueryKeys.subscription(args);
-      const cached =
-        queryClient.getQueryData<BotSubscriptionSnapshot | null>(key) ?? null;
-      if (cached !== null)
-        queryClient.setQueryData(key, { ...cached, activity });
+      applyActivity(frame);
       return;
     }
-    shared.lastEvent = frame;
+    shared.lastEvent = streamOpen ? frame : { kind: "stale", baseline: frame };
     notifyConsumers();
     const key = botQueryKeys.subscription(args);
     const previous =
@@ -363,8 +407,25 @@ function createSharedSubscription(
     }
   });
 
-  session.onStatusChange((status, reason) => {
+  session.onStatusChange((status, reason, _retryCause, continuity) => {
     if (sessionClosed) return;
+    streamOpen = status === "open";
+    if (continuity === "held") held = true;
+    if (status !== "open" && shared.lastEvent?.kind === "snapshot") {
+      shared.lastEvent = { kind: "stale", baseline: shared.lastEvent };
+      notifyConsumers();
+    }
+    if (
+      status === "open" &&
+      continuity === "continued" &&
+      held &&
+      shared.lastEvent?.kind === "stale" &&
+      shared.lastEvent.baseline !== null
+    ) {
+      shared.lastEvent = shared.lastEvent.baseline;
+      notifyConsumers();
+    }
+    if (status === "open") held = false;
     if (status !== "closed") return;
     const message = describeStreamClose(reason);
     // A retryable close is the transport reconnecting; the next snapshot

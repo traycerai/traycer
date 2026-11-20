@@ -158,7 +158,7 @@ function ClearFileEditSnapshotsRow(props: {
         open={props.enabled ? confirmOpen : false}
         onOpenChange={setConfirmOpen}
         title={`Clear file edit snapshots on ${hostLabel}?`}
-        description={`Cleared snapshots on ${hostLabel} cannot be restored. Conversation history and checkpoint records stay visible, but Undo is disabled for past turns on that host.`}
+        description={`Cleared snapshots on ${hostLabel} cannot be restored. Conversation history and checkpoint records stay visible.`}
         cascadeSummary={null}
         actionLabel="Clear snapshots"
         isPending={clearSnapshotsMutation.isPending}

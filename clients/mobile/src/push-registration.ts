@@ -44,6 +44,7 @@ import type {
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
+import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
 import type {
   DevicePushEnvironment,
   DevicePushPlatform,
@@ -61,6 +62,11 @@ import type {
  */
 const SCHEDULED_REGISTRATION_DELAY_MS = 1_000;
 const PROVIDER_REGISTRATION_TIMEOUT_MS = 20_000;
+/**
+ * How long an expired-looking bearer is held back for the refresh that is
+ * about to replace it before it is sent anyway and authn decides.
+ */
+const EXPIRED_BEARER_GRACE_MS = 15_000;
 // Four routine refreshes/hour per device leave room in the account's 20/hour
 // budget for sign-ins and preference changes. The first resume always refreshes.
 const RESUME_REVALIDATION_INTERVAL_MS = 15 * 60_000;
@@ -208,6 +214,11 @@ export class MobilePushRegistration {
    * by authn for exactly the remove call it is retained for.
    */
   private bearerToken: string | null = null;
+  /** The expired-looking bearer held back, and when its grace ends (see `registerCurrentToken`). */
+  private expiredBearerHold: {
+    readonly bearer: string;
+    readonly graceEndsAt: number;
+  } | null = null;
   /**
    * `userId:deviceToken:<sorted muted set>` last accepted by the server (see
    * `registrationKey`), or `null` when that is not known. A routine bearer
@@ -418,7 +429,7 @@ export class MobilePushRegistration {
       mutedSeveritiesStorageKey(userId),
       JSON.stringify(normalizeMutedSeverities(set)),
     );
-    this.scheduleRegistration();
+    this.scheduleRegistration(SCHEDULED_REGISTRATION_DELAY_MS);
   }
 
   /**
@@ -548,6 +559,30 @@ export class MobilePushRegistration {
     const bearer = this.bearerToken;
     const userId = this.userId;
     if (token === null || bearer === null || userId === null) return;
+    // A cold start or a resume after a long background reads the stored pair
+    // before the auth service has refreshed it, and authn answers 401 to an
+    // access token past its `exp`. The refresh writes the store, and that
+    // change registers again with the new bearer, so a bearer that reads as
+    // expired waits once for it. The read is the device clock's: a phone set
+    // hours ahead sees every fresh token as expired, so after the grace the
+    // same bearer is sent and authn's answer decides.
+    const expiresAtMs = readAccessTokenExpiryMs(bearer);
+    if (expiresAtMs !== null && expiresAtMs <= Date.now()) {
+      const now = Date.now();
+      if (this.expiredBearerHold?.bearer !== bearer) {
+        this.expiredBearerHold = {
+          bearer,
+          graceEndsAt: now + EXPIRED_BEARER_GRACE_MS,
+        };
+      }
+      // Whatever re-armed the timer (a muted-set change, a failed send), the
+      // grace runs to its own end before this bearer goes out.
+      const remainingMs = this.expiredBearerHold.graceEndsAt - now;
+      if (remainingMs > 0) {
+        this.scheduleRegistration(remainingMs);
+        return;
+      }
+    }
     const mutedSeverities = readMutedSeverities(userId);
     const key = registrationKey(userId, token, mutedSeverities);
     if (this.lastRegisteredKey === key) return;
@@ -585,7 +620,7 @@ export class MobilePushRegistration {
           this.bearerToken !== bearer ||
           revision !== this.registrationRevision)
       ) {
-        this.scheduleRegistration();
+        this.scheduleRegistration(SCHEDULED_REGISTRATION_DELAY_MS);
       }
     }
     if (result.kind !== "ok") {
@@ -609,7 +644,7 @@ export class MobilePushRegistration {
     }
     const wantedKey = this.wantedRegistrationKey();
     if (wantedKey !== null && wantedKey !== this.lastRegisteredKey) {
-      this.scheduleRegistration();
+      this.scheduleRegistration(SCHEDULED_REGISTRATION_DELAY_MS);
     }
   }
 
@@ -635,12 +670,12 @@ export class MobilePushRegistration {
    * (Re)arms one trailing send through the late-grant path, which sends only
    * while signed in with permission granted.
    */
-  private scheduleRegistration(): void {
+  private scheduleRegistration(delayMs: number): void {
     this.cancelScheduledRegistration();
     this.scheduledRegistrationTimer = window.setTimeout(() => {
       this.scheduledRegistrationTimer = null;
       void this.registerIfGranted(false, false);
-    }, SCHEDULED_REGISTRATION_DELAY_MS);
+    }, delayMs);
   }
 
   private cancelScheduledRegistration(): void {
@@ -657,6 +692,7 @@ export class MobilePushRegistration {
     this.lastResumeRevalidationAt = null;
     this.setRegistrationState("pending");
     this.bearerToken = null;
+    this.expiredBearerHold = null;
     this.userId = null;
     this.lastRegisteredKey = null;
     // The stored set stays for this account's next sign-in, which sends it.

@@ -1,12 +1,37 @@
 import { createContext, type ReactNode } from "react";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
+import type { QuestionCardEntry } from "@/components/chat/question-card-view";
+import type { BotConversationQuestionAnswerEntry } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
+import type { BotTranscriptBaseline } from "@/stores/bots/bot-drafts-store";
+
+/**
+ * A member's answers to every open question of a card at once (T167), and
+ * the message's text as the bot's host writes it from them.
+ */
+export interface ChatBotQuestionAnswers {
+  readonly entries: ReadonlyArray<QuestionCardEntry>;
+  readonly text: string;
+}
+
+/** A card's answers as `bot.conversation.send@1.5` carries them. */
+export function answerEntries(
+  answers: ChatBotQuestionAnswers,
+): BotConversationQuestionAnswerEntry[] {
+  return answers.entries.map((entry) => ({
+    questionIndex: entry.questionIndex,
+    skipped: entry.skipped,
+    selected: [...entry.selected],
+    text: entry.text,
+  }));
+}
 
 /**
  * The thread a channel post opened (Tracy Bots), as the line under the post
  * shows it: how many replies, when the last one landed, whether it has a
  * reply the viewer has not read and how many, whether the bot is answering in
- * it now, and who is in it: the post's writer, and the bot once it has a reply.
+ * it now, and the authors of its stored replies where the host identifies them.
  */
 export interface ChatBotThreadLine {
   readonly participants: ReadonlyArray<StackedIdentity>;
@@ -119,10 +144,34 @@ export interface ChatBotQuestions {
     | ((questionMessageId: string, answer: QuestionCardAnswer) => Promise<void>)
     | null;
   /**
-   * Opens the question's discussion - its thread, or the thread it was asked
-   * in - with `draft` in the box, unsent; `null` where there is none.
+   * Sends the person's answers to every open question of the row
+   * `questionMessageId` as one message (T167): resolves once the host takes
+   * them, rejects when it does not, as `answer` does. `null` where the
+   * answers do not go together, and each question is answered on its own.
    */
-  readonly discuss: ((questionMessageId: string, draft: string) => void) | null;
+  readonly answerAll:
+    | ((
+        questionMessageId: string,
+        answers: ChatBotQuestionAnswers,
+      ) => Promise<void>)
+    | null;
+  /**
+   * The transcript's baseline. A card's answers whose send ended without
+   * saying whether they reached the host wait for a later one - a resync, or
+   * a new session's first snapshot - which shows them settled or still open.
+   * `null` where no transcript backs the card and nothing can send it.
+   */
+  readonly baseline: BotTranscriptBaseline | null;
+  /**
+   * The box a member's answers move into, unsent, once someone else settles
+   * their questions first (T186), by its key in `useBotDraftsStore`: the
+   * channel's conversation for a card asked at the channel's top level, the
+   * thread's post for one asked in a thread. Where an answer of the card does
+   * not reach the bot's host, this box says so under it. `null` where this
+   * card moves nothing and sends nothing: a card drawn again elsewhere, whose
+   * own surface moves its answers.
+   */
+  readonly box: string | null;
 }
 
 /**
@@ -171,9 +220,20 @@ export interface ChatBotPresentation {
   /**
    * Posts one of a bot reply's options as the person's next message: in the
    * thread, or a new post in the channel for a direct reply's; `null` where
-   * nothing can post it.
+   * nothing can post it. `messageId` names the reply that offered it; where
+   * the bot's host takes replies, the post replies to it (T357), and a row
+   * not stored yet (`null`) is answered by a post that replies to nothing.
    */
-  readonly chooseOption: ((choice: string) => void) | null;
+  readonly chooseOption:
+    | ((messageId: string | null, choice: string) => void)
+    | null;
+  /**
+   * Replies to a row where it stands (T166): the box of the row's own
+   * conversation, the channel's or the thread's, names the message, and its
+   * send links the two. `null` where nothing can carry a reply: the tab's
+   * host or the bot's does not take one, or the box edits a failed message.
+   */
+  readonly reply: ((target: BotReplyTarget) => void) | null;
   /**
    * The question card under a bot's row that asks; `null` draws the row as an
    * older client does, its text and its first question's options.
@@ -214,3 +274,43 @@ export interface ChatBotPresentation {
 
 export const ChatBotPresentationContext =
   createContext<ChatBotPresentation | null>(null);
+
+/**
+ * What a reply's badge (Tracy Bots T165) reads from the list it is drawn in:
+ * where the message it answers is, the row drawn directly above each row,
+ * and how to show a message. A bot's channel and thread lists provide it; a
+ * row drawn anywhere else draws no badge. Its own context rather than part
+ * of the presentation, so as the list's rows change only the rows that draw
+ * a badge read it again.
+ */
+export interface ChatBotReplies {
+  readonly botId: string;
+  readonly hostId: string;
+  /** The conversation the list draws, which holds every answered message but the post a thread opens on. */
+  readonly conversationId: string;
+  /** The bot's name, as the writer of one of its own rows. */
+  readonly botTitle: string;
+  /** A member's name, as the writer of their message; `null` for a writer that is no member. */
+  readonly memberName: (userId: string | null) => string;
+  /**
+   * The message id of the row drawn directly above `messageId`'s: in a
+   * thread, the post it opens on above its first reply. `null` above a
+   * channel's first row, below a row not loaded yet, and for a row not drawn.
+   */
+  readonly above: (messageId: string) => string | null;
+  /** Shows one of the list's messages, highlighted; `null` where nothing can. */
+  readonly open: ((messageId: string) => void) | null;
+  /** The post a thread opens on; `null` in a channel. */
+  readonly opening: ChatBotThreadOpening | null;
+}
+
+/** The post a thread opens on, at the top of the thread, apart from its replies. */
+export interface ChatBotThreadOpening {
+  readonly messageId: string;
+  /** The channel the post was written in. */
+  readonly conversationId: string;
+  /** Shows the post at the top of the thread, highlighted. */
+  readonly show: () => void;
+}
+
+export const ChatBotRepliesContext = createContext<ChatBotReplies | null>(null);

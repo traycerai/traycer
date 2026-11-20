@@ -317,7 +317,11 @@ export function TabStrip(props: TabStripProps) {
   );
 
   return (
-    <ChatIndicatorHostScopes scopes={indicatorScopes} chatEpicIds={chatEpicIds}>
+    <ChatIndicatorHostScopes
+      freshnessMode="base"
+      scopes={indicatorScopes}
+      chatEpicIds={chatEpicIds}
+    >
       <div
         ref={stripRef}
         data-testid="tab-strip"
@@ -1152,7 +1156,7 @@ function tabTooltipContent(
       <div className="truncate font-medium">{heading}</div>
       {context === null ? null : (
         <GitDiffTooltipSummaryRow
-          label="Workspace"
+          label="Folder"
           value={context.workspaceLabel}
           testId="git-diff-tooltip-workspace"
           wrap={false}

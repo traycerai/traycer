@@ -388,9 +388,15 @@ describe("Microphone's row (mobile absence, voice-off gating)", () => {
     return document.querySelector<HTMLElement>('[data-sortable-id="mic"]');
   }
 
+  let priorVoiceInputEnabled = useSettingsStore.getState().voiceInputEnabled;
+
+  beforeEach(() => {
+    priorVoiceInputEnabled = useSettingsStore.getState().voiceInputEnabled;
+  });
+
   afterEach(() => {
     setMobileApp(false);
-    useSettingsStore.setState({ voiceInputEnabled: true });
+    useSettingsStore.getState().setVoiceInputEnabled(priorVoiceInputEnabled);
   });
 
   it("is absent in the installed mobile app", () => {
@@ -404,6 +410,7 @@ describe("Microphone's row (mobile absence, voice-off gating)", () => {
   });
 
   it("draws its Shown / Hidden pair live while Voice input is on, with no reason", () => {
+    useSettingsStore.setState({ voiceInputEnabled: true });
     render(<ComposerSurface host="inspector" />);
 
     const options = within(micRow() ?? document.body).getAllByRole("radio");

@@ -1,10 +1,5 @@
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { renderWithQueryClient } from "@/components/composer/__tests__/composer-query-wrapper";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -37,14 +32,21 @@ vi.mock("@/components/settings/panels/sandbox-row-actions", () => ({
 vi.mock("@/components/settings/panels/use-open-automation-terminal", () => ({
   useOpenAutomationTerminal: () => ({ starting: false, run: vi.fn() }),
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-configurations", () => ({
-  useSandboxConfigurations: () => ({
-    configurations: [{ kind: "personal" }],
-    teamEnvironmentIds: new Set<string>(),
-    complete: true,
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-configurations",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-configurations")
+    >()),
+    useSandboxConfigurations: () => ({
+      configurations: [{ kind: "personal" }],
+      teamEnvironmentIds: new Set<string>(),
+      complete: true,
+      personalEnvironmentId: "env-personal",
+    }),
+    useSandboxWakeString: () => null,
   }),
-  useSandboxWakeString: () => null,
-}));
+);
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
   useSandboxList: () => ({
     data: { sandboxes: fixtures.rows },
@@ -101,8 +103,14 @@ vi.mock("@/lib/relative-time", () => ({
   useSampledNow: () => 1_791_100_000_000,
 }));
 vi.mock("@/stores/auth/auth-store", () => ({
-  useAuthStore: (selector: (state: { contextMetadata: null }) => unknown) =>
-    selector({ contextMetadata: null }),
+  useAuthStore: Object.assign(
+    (selector: (state: { contextMetadata: null }) => unknown) =>
+      selector({ contextMetadata: null }),
+    { subscribe: () => () => undefined },
+  ),
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({ data: undefined, isError: false }),
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ close: vi.fn() }),
@@ -116,6 +124,7 @@ function row(
   return sandboxSummaryFixture({
     id: `state-${state}`,
     displayName: state,
+    environmentId: "env-personal",
     state,
     lastTransitionAt: 1_791_000_000_000 + index,
     lastActivityAt: null,
@@ -128,7 +137,7 @@ describe("sandbox state words in the settings list", () => {
 
   it("renders every state word, keeps frozen beside its state, and filters by all twelve raw states", () => {
     fixtures.rows = HOST_SANDBOX_STATES.map(row);
-    render(<SandboxesSettingsPanel />);
+    renderWithQueryClient(<SandboxesSettingsPanel />);
 
     for (const state of HOST_SANDBOX_STATES) {
       const renderedRow = screen.getByText(state).closest("li");
@@ -181,7 +190,7 @@ describe("sandbox state words in the settings list", () => {
         lastTransitionAt: 1,
       }),
     ];
-    render(<SandboxesSettingsPanel />);
+    renderWithQueryClient(<SandboxesSettingsPanel />);
 
     expect(
       screen

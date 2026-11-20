@@ -1724,18 +1724,24 @@ export function chatLineCarriesUltracode(
   );
 }
 
-function stripUltracodeTuple(value: unknown): unknown {
-  if (!isRecord(value) || !("ultracode" in value)) return value;
-  const { ultracode: _ultracode, ...settings } = value;
+function stripRunSettingsField(
+  value: unknown,
+  field: "ultracode" | "profileBinding",
+): unknown {
+  if (!isRecord(value) || !(field in value)) return value;
+  const { [field]: _hidden, ...settings } = value;
   return settings;
 }
 
-function projectUltracodeQueue(value: unknown): unknown {
+function projectRunSettingsQueue(
+  value: unknown,
+  field: "ultracode" | "profileBinding",
+): unknown {
   if (!isRecord(value) || !Array.isArray(value.items)) return value;
   let changed = false;
   const items = value.items.map((item: unknown) => {
     if (!isRecord(item) || item.kind !== "prompt") return item;
-    const settings = stripUltracodeTuple(item.settings);
+    const settings = stripRunSettingsField(item.settings, field);
     if (settings === item.settings) return item;
     changed = true;
     return { ...item, settings };
@@ -1743,13 +1749,14 @@ function projectUltracodeQueue(value: unknown): unknown {
   return changed ? { ...value, items } : value;
 }
 
-function projectUltracodeTupleFields(
+function projectRunSettingsTupleFields(
   value: Record<string, unknown>,
   keys: ReadonlyArray<string>,
+  field: "ultracode" | "profileBinding",
 ): Record<string, unknown> {
   let projected = value;
   for (const key of keys) {
-    const settings = stripUltracodeTuple(value[key]);
+    const settings = stripRunSettingsField(value[key], field);
     if (settings !== value[key]) {
       projected = { ...projected, [key]: settings };
     }
@@ -1758,26 +1765,29 @@ function projectUltracodeTupleFields(
 }
 
 /** Only the declared tuple carriers, never arbitrary transcript/metadata trees. */
-function projectUltracodeContainers(
+function projectRunSettingsContainers(
   value: Record<string, unknown>,
+  field: "ultracode" | "profileBinding",
 ): Record<string, unknown> {
   let projected = value;
   if (isRecord(value.chat)) {
-    const chat = projectUltracodeTupleFields(value.chat, ["settings"]);
+    const chat = projectRunSettingsTupleFields(value.chat, ["settings"], field);
     if (chat !== value.chat) projected = { ...projected, chat };
   }
-  const queue = projectUltracodeQueue(value.queue);
+  const queue = projectRunSettingsQueue(value.queue, field);
   if (queue !== value.queue) projected = { ...projected, queue };
   if (isRecord(value.pendingFallback)) {
     const fallback = value.pendingFallback;
-    let pendingFallback = projectUltracodeTupleFields(fallback, [
-      "failedTuple",
-      "targetTuple",
-    ]);
+    let pendingFallback = projectRunSettingsTupleFields(
+      fallback,
+      ["failedTuple", "targetTuple"],
+      field,
+    );
     if (isRecord(fallback.impendingAction)) {
-      const impendingAction = projectUltracodeTupleFields(
+      const impendingAction = projectRunSettingsTupleFields(
         fallback.impendingAction,
         ["target"],
+        field,
       );
       if (impendingAction !== fallback.impendingAction) {
         pendingFallback = { ...pendingFallback, impendingAction };
@@ -1788,18 +1798,20 @@ function projectUltracodeContainers(
     }
   }
   if (isRecord(value.pendingReturn)) {
-    const pendingReturn = projectUltracodeTupleFields(value.pendingReturn, [
-      "preferredTuple",
-      "fallbackTuple",
-    ]);
+    const pendingReturn = projectRunSettingsTupleFields(
+      value.pendingReturn,
+      ["preferredTuple", "fallbackTuple"],
+      field,
+    );
     if (pendingReturn !== value.pendingReturn) {
       projected = { ...projected, pendingReturn };
     }
   }
   if (isRecord(value.lastFailedAttempt)) {
-    const lastFailedAttempt = projectUltracodeTupleFields(
+    const lastFailedAttempt = projectRunSettingsTupleFields(
       value.lastFailedAttempt,
       ["failedTuple"],
+      field,
     );
     if (lastFailedAttempt !== value.lastFailedAttempt) {
       projected = { ...projected, lastFailedAttempt };
@@ -1809,19 +1821,20 @@ function projectUltracodeContainers(
 }
 
 /** Older stream lines carry the tuple without the per-chat request. */
-function omitChatClientFrameUltracode(
+function omitChatClientFrameSettingsField(
   frame: ProjectedChatSubscribeClientFrame,
+  field: "ultracode" | "profileBinding",
 ): ProjectedChatSubscribeClientFrame {
   switch (frame.kind) {
     case "send":
     case "editUserMessage":
     case "queueSettingsUpdate":
     case "queueSettingsRestamp": {
-      const settings = stripUltracodeTuple(frame.settings);
+      const settings = stripRunSettingsField(frame.settings, field);
       return settings === frame.settings ? frame : { ...frame, settings };
     }
     case "queueSteerNow": {
-      const newSettings = stripUltracodeTuple(frame.newSettings);
+      const newSettings = stripRunSettingsField(frame.newSettings, field);
       return newSettings === frame.newSettings
         ? frame
         : { ...frame, newSettings };
@@ -1835,10 +1848,17 @@ export function projectChatClientFrameForVersion(
   frame: ChatSubscribeClientFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeClientFrame {
-  const projected = projectChatClientFrameBeforeUltracode(frame, negotiated);
+  let projected = projectChatClientFrameBeforeUltracode(frame, negotiated);
+  if (
+    negotiated === null ||
+    negotiated.major !== 1 ||
+    negotiated.minor < CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR
+  ) {
+    projected = omitChatClientFrameSettingsField(projected, "profileBinding");
+  }
   return chatLineCarriesUltracode(negotiated)
     ? projected
-    : omitChatClientFrameUltracode(projected);
+    : omitChatClientFrameSettingsField(projected, "ultracode");
 }
 
 /**
@@ -1892,26 +1912,44 @@ function supportsFeedbackDrafts(negotiated: SchemaVersion | null): boolean {
   );
 }
 
-function stripFeedbackDraftStamp(block: unknown): unknown {
-  if (!isRecord(block) || !("feedbackDraft" in block)) return block;
-  const { feedbackDraft: _feedbackDraft, ...rest } = block;
-  return rest;
-}
-
-function projectFeedbackDraftRow(row: unknown): unknown {
+function projectFeedbackDraftRow(row: unknown, keepStamp: boolean): unknown {
   if (!isRecord(row) || row.role !== "assistant" || !Array.isArray(row.blocks))
     return row;
   const original = row.blocks;
-  const blocks = original.map(stripFeedbackDraftStamp);
+  const blocks = original.map((block) => {
+    if (!isRecord(block)) return block;
+    if (!keepStamp && "feedbackDraft" in block) {
+      const {
+        feedbackDraft: _stamp,
+        feedbackDraftOrigin: _origin,
+        ...rest
+      } = block;
+      return rest;
+    }
+    if ("feedbackDraftOrigin" in block) {
+      const { feedbackDraftOrigin: _origin, ...rest } = block;
+      return rest;
+    }
+    return block;
+  });
+  if ("feedbackDraft" in row) {
+    const { feedbackDraft: _projection, ...rest } = row;
+    return { ...rest, blocks };
+  }
   return blocks.every((block, index) => block === original[index])
     ? row
     : { ...row, blocks };
 }
 
-function projectFeedbackDraftContainer(value: unknown): unknown {
+function projectFeedbackDraftContainer(
+  value: unknown,
+  keepStamp: boolean,
+): unknown {
   if (!isRecord(value) || !Array.isArray(value.messages)) return value;
   const original = value.messages;
-  const messages = original.map(projectFeedbackDraftRow);
+  const messages = original.map((row) =>
+    projectFeedbackDraftRow(row, keepStamp),
+  );
   return messages.every((message, index) => message === original[index])
     ? value
     : { ...value, messages };
@@ -1921,20 +1959,96 @@ function projectFeedbackDraftFrame(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
-  if (supportsFeedbackDrafts(negotiated)) return frame;
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor >= 45)
+    return frame;
+  const keepStamp = supportsFeedbackDrafts(negotiated);
   if (frame.kind === "range") {
-    const range = projectFeedbackDraftContainer(frame.range);
+    const range = projectFeedbackDraftContainer(frame.range, keepStamp);
     return range === frame.range ? frame : { ...frame, range };
   }
   if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
   const original = frame.snapshot;
-  const chat = projectFeedbackDraftContainer(original.chat);
-  const tail = projectFeedbackDraftContainer(original.tail);
+  const chat = projectFeedbackDraftContainer(original.chat, keepStamp);
+  const tail = projectFeedbackDraftContainer(original.tail, keepStamp);
   if (chat === original.chat && tail === original.tail) return frame;
   const snapshot = { ...original };
   if (chat !== original.chat) snapshot.chat = chat;
   if (tail !== original.tail) snapshot.tail = tail;
   return { ...frame, snapshot };
+}
+
+/** Dispatch provenance is served only on chat.subscribe@1.44 and newer. */
+const CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR = 44;
+
+function stripProviderSelectionFromEvent(value: unknown): unknown {
+  if (!isRecord(value) || !("providerSelection" in value)) return value;
+  const { providerSelection: _providerSelection, ...event } = value;
+  return event;
+}
+
+function stripProviderSelectionFromContainer(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.events)) return value;
+  const original = value.events;
+  const events = original.map(stripProviderSelectionFromEvent);
+  return events.every((event, index) => event === original[index])
+    ? value
+    : { ...value, events };
+}
+
+function projectProviderSelectionFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR
+  )
+    return frame;
+  if (frame.kind === "eventAppended") {
+    const event = stripProviderSelectionFromEvent(frame.event);
+    return event === frame.event ? frame : { ...frame, event };
+  }
+  if (frame.kind === "range") {
+    const range = stripProviderSelectionFromContainer(frame.range);
+    return range === frame.range ? frame : { ...frame, range };
+  }
+  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
+  const original = frame.snapshot;
+  const chat = stripProviderSelectionFromContainer(original.chat);
+  const tail = stripProviderSelectionFromContainer(original.tail);
+  if (chat === original.chat && tail === original.tail) return frame;
+  const snapshot = { ...original };
+  if (chat !== original.chat) snapshot.chat = chat;
+  if (tail !== original.tail) snapshot.tail = tail;
+  return { ...frame, snapshot };
+}
+
+const CHAT_SUBSCRIBE_ACCOUNT_WAIT_MINOR = 46;
+
+function projectAccountWaitFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_ACCOUNT_WAIT_MINOR
+  )
+    return frame;
+  if (frame.kind === "turnStateChanged" && "accountWait" in frame) {
+    const { accountWait: _accountWait, ...rest } = frame;
+    return rest;
+  }
+  if (
+    frame.kind === "snapshot" &&
+    isRecord(frame.snapshot) &&
+    "accountWait" in frame.snapshot
+  ) {
+    const { accountWait: _accountWait, ...snapshot } = frame.snapshot;
+    return { ...frame, snapshot };
+  }
+  return frame;
 }
 
 export function projectChatServerFrameForVersion(
@@ -1943,26 +2057,37 @@ export function projectChatServerFrameForVersion(
 ): ProjectedChatSubscribeServerFrame {
   const projected = projectChatServerFrameBeforeUltracode(
     projectDeliveryWorktreeIntent(
-      projectFeedbackDraftFrame(frame, negotiated),
+      projectFeedbackDraftFrame(
+        projectAccountWaitFrame(
+          projectProviderSelectionFrame(frame, negotiated),
+          negotiated,
+        ),
+        negotiated,
+      ),
       negotiated,
     ),
     negotiated,
   );
-  if (chatLineCarriesUltracode(negotiated)) return projected;
-  if (projected.kind === "snapshot" && isRecord(projected.snapshot)) {
-    const snapshot = projectUltracodeContainers(projected.snapshot);
-    return snapshot === projected.snapshot
-      ? projected
-      : { ...projected, snapshot };
-  }
+  const hiddenFields: Array<"ultracode" | "profileBinding"> = [];
   if (
-    projected.kind === "queueChanged" ||
-    projected.kind === "turnStateChanged"
-  ) {
-    const containers = projectUltracodeContainers(projected);
-    return containers === projected
-      ? projected
-      : { ...projected, ...containers };
+    negotiated === null ||
+    negotiated.major !== 1 ||
+    negotiated.minor < CHAT_SUBSCRIBE_PROVIDER_SELECTION_MINOR
+  )
+    hiddenFields.push("profileBinding");
+  if (!chatLineCarriesUltracode(negotiated)) hiddenFields.push("ultracode");
+  let result = projected;
+  for (const field of hiddenFields) {
+    if (result.kind === "snapshot" && isRecord(result.snapshot)) {
+      const snapshot = projectRunSettingsContainers(result.snapshot, field);
+      if (snapshot !== result.snapshot) result = { ...result, snapshot };
+    } else if (
+      result.kind === "queueChanged" ||
+      result.kind === "turnStateChanged"
+    ) {
+      const containers = projectRunSettingsContainers(result, field);
+      if (containers !== result) result = { ...result, ...containers };
+    }
   }
-  return projected;
+  return result;
 }

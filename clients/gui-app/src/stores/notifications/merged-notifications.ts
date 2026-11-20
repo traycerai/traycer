@@ -98,7 +98,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRowV17,
+  type HostNotificationsCloudFeedRowV18,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsEntityRef,
   type HostNotificationsSummary,
@@ -362,7 +362,7 @@ export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow
         ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRowV17 => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV18 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -582,7 +582,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRowV17 | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV18 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1744,7 +1744,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRowV17 =>
+              (row): row is HostNotificationsCloudFeedRowV18 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -2130,6 +2130,14 @@ function rowFromHostEntryForOrigin(
   };
 }
 
+/**
+ * Every app-local row is a failure: they are this renderer's own terminal,
+ * stream and host errors. Also read by the display path, which has only a
+ * relayed entry to go on.
+ */
+export const APP_LOCAL_NOTIFICATION_SEVERITY =
+  "failure" satisfies HostNotificationSeverity;
+
 export function rowFromAppLocalEntry(
   entry: AppLocalNotificationEntry,
 ): MergedNotificationRow {
@@ -2145,7 +2153,7 @@ export function rowFromAppLocalEntry(
     hostKind: null,
     appLocalKind: entry.kind,
     globalEntry: null,
-    severity: "failure",
+    severity: APP_LOCAL_NOTIFICATION_SEVERITY,
     outcome: null,
     resolvedAt: null,
     sourceRef: null,
@@ -2179,7 +2187,7 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRowV17,
+  row: HostNotificationsCloudFeedRowV18,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =
@@ -2366,6 +2374,7 @@ const ROW_COMPLETE_PAYLOAD_KINDS = [
   "environment_move_stalled",
   "environment_apply_failed",
   "team_role_changed",
+  "readonly_access_retired",
   "team_host_returned",
   "secret_removed",
   "sandbox_notice",

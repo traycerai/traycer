@@ -5,6 +5,7 @@ import {
 import { toast } from "sonner";
 import {
   ensureSandboxAwake,
+  SANDBOX_OUT_OF_CREDITS,
   type EnsureSandboxAwakeDeps,
   type SandboxDialFacts,
   type SandboxWakeBudget,
@@ -23,14 +24,14 @@ import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
   sandboxCreditShortLine,
+  teamPossessive,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
 /** How often the sandbox list is re-read while a wake is under way. */
 const WAKE_POLL_INTERVAL_MS = 2_000;
 /**
- * A resume is single-digit seconds and a cold start tens; past this it failed.
- * The budget covers the whole wake, the lifecycle verb's own request included.
+ * The minimum wait, also used for a server that predates row wake budgets.
  */
 const WAKE_TIMEOUT_MS = 120_000;
 
@@ -77,7 +78,11 @@ interface SandboxWakeRun {
  */
 type SandboxFactsRead =
   | { readonly kind: "unread" }
-  | { readonly kind: "listed"; readonly facts: SandboxDialFacts | null };
+  | {
+      readonly kind: "listed";
+      readonly facts: SandboxDialFacts | null;
+      readonly wakeBudgetMs: number;
+    };
 
 /**
  * The account a wake started under is no longer the one signed in. The wake
@@ -117,6 +122,7 @@ async function readSandboxFacts(
   const row = result.response.sandboxes.find((s) => s.hostId === hostId);
   return {
     kind: "listed",
+    wakeBudgetMs: Math.max(WAKE_TIMEOUT_MS, row?.wakeBudgetMs ?? 0),
     facts:
       row === undefined
         ? null
@@ -180,7 +186,7 @@ async function wakeSandboxHost(
     sleep,
     now: () => Date.now(),
     pollIntervalMs: WAKE_POLL_INTERVAL_MS,
-    timeoutMs: WAKE_TIMEOUT_MS,
+    timeoutMs: first.wakeBudgetMs,
     startBudget,
   });
 }
@@ -219,41 +225,36 @@ async function runSharedWake(
   return { outcome: await attempt.outcome, joined: false };
 }
 
+/** `null`: nothing is said as the person's own credits. */
 function toastWakeOutcome(
   outcome: SandboxWakeOutcome,
-  configuration: SandboxConfigurationCopy,
+  configuration: SandboxConfigurationCopy | null,
 ): void {
   switch (outcome.kind) {
     case "awake":
       return;
     case "refused":
-      // A team sandbox's wake is on its payer's bundle, not the viewer's
+      // A team sandbox's wake is on the team's bundle, not the viewer's
       // credits, so the personal "your credits ran out" would misdirect.
-      toast.warning("This sandbox is out of credits.", {
+      // Whose sandbox it is not known, the title says it alone.
+      if (configuration === null) {
+        toast.warning(SANDBOX_OUT_OF_CREDITS);
+        return;
+      }
+      toast.warning(SANDBOX_OUT_OF_CREDITS, {
         description:
           configuration.kind === "team"
-            ? "Its payer's bundle is out."
+            ? `${teamPossessive(configuration.teamName)} bundle is out.`
             : outcome.message,
       });
       return;
     case "credit-gate": {
-      // A refusal that named a team pot says which, as a row does; the
-      // person's own balance, or an older server's silence, keeps the
-      // add-credits line.
-      const { creditSource } = outcome;
-      toast.warning("Not enough credits to wake this sandbox", {
-        description:
-          creditSource === undefined ||
-          creditSource === null ||
-          creditSource === "personal"
-            ? addCreditsLine(outcome.shortfallMc)
-            : sandboxCreditShortLine(
-                configuration,
-                creditSource,
-                outcome.shortfallMc,
-                { waking: true, context: "sentence" },
-              ),
-      });
+      const description = creditGateDescription(outcome, configuration);
+      if (description === null) {
+        toast.warning(NOT_ENOUGH_CREDITS_TO_WAKE);
+        return;
+      }
+      toast.warning(NOT_ENOUGH_CREDITS_TO_WAKE, { description });
       return;
     }
     case "wake-not-available":
@@ -271,6 +272,34 @@ function toastWakeOutcome(
       toastWakeFailed();
       return;
   }
+}
+
+const NOT_ENOUGH_CREDITS_TO_WAKE = "Not enough credits to wake this sandbox";
+
+/**
+ * While ownership is unknown, nothing is told as the person's own. A refusal
+ * that named a team pot says which, as a row does. The person's own balance,
+ * or an older server's silence, keeps the add-credits line.
+ */
+function creditGateDescription(
+  outcome: Extract<SandboxWakeOutcome, { readonly kind: "credit-gate" }>,
+  configuration: SandboxConfigurationCopy | null,
+): string | null {
+  if (configuration === null) return null;
+  const { creditSource } = outcome;
+  if (
+    creditSource === undefined ||
+    creditSource === null ||
+    creditSource === "personal"
+  ) {
+    return addCreditsLine(outcome.shortfallMc);
+  }
+  return sandboxCreditShortLine(
+    configuration,
+    creditSource,
+    outcome.shortfallMc,
+    { waking: true, context: "sentence" },
+  );
 }
 
 function addCreditsLine(shortfallMc: number | null): string {
@@ -328,12 +357,17 @@ export function startSandboxWake(
     return Promise.resolve(null);
   }
   const entry = directory.findById(hostId);
-  const facts =
-    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry.sandbox : null;
-  const configuration: SandboxConfigurationCopy =
-    facts !== null && facts.ownerTeamName !== null
-      ? { kind: "team", teamName: facts.ownerTeamName }
-      : { kind: "personal" };
+  const remote =
+    entry !== null && isRemoteHostDirectoryEntry(entry) ? entry : null;
+  // A row with no owner (an authn before `owner`) or no row says nothing about whose it is.
+  let configuration: SandboxConfigurationCopy | null = null;
+  if (remote !== null && remote.sandbox !== null) {
+    if (remote.sandbox.ownerTeamName !== null) {
+      configuration = { kind: "team", teamName: remote.sandbox.ownerTeamName };
+    } else if (remote.owner?.kind === "user") {
+      configuration = { kind: "personal" };
+    }
+  }
   return runSandboxWake({ client, binding, hostId, configuration, gesture });
 }
 
@@ -341,7 +375,7 @@ function runSandboxWake(input: {
   readonly client: QueryClient;
   readonly binding: SandboxWakeBinding;
   readonly hostId: string;
-  readonly configuration: SandboxConfigurationCopy;
+  readonly configuration: SandboxConfigurationCopy | null;
   readonly gesture: SandboxVerbGesture | null;
 }): Promise<SandboxWakeOutcome | null> {
   const { client, binding, hostId, configuration, gesture } = input;

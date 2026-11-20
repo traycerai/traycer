@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import { Command } from "commander";
 import { buildProgram, extractActionPositionals } from "../index";
+import * as cgroupRelocationModule from "../host/cgroup-relocation";
 import * as hostInstallModule from "../commands/host-install";
 import * as hostUpdateModule from "../commands/host-update";
 
@@ -114,6 +115,14 @@ describe("traycer host install - --release / --from handling", () => {
   // tolerated - the assertions below check it was NOT called.
   let exitSpy: MockInstance;
   beforeEach(() => {
+    vi.spyOn(
+      cgroupRelocationModule,
+      "relocateOutOfHostCgroupIfNeeded",
+    ).mockResolvedValue({ kind: "not-needed" });
+    vi.spyOn(
+      cgroupRelocationModule,
+      "acknowledgeRelocationEntry",
+    ).mockImplementation(() => undefined);
     exitSpy = vi
       .spyOn(process, "exit")
       .mockImplementation((code: string | number | null | undefined): never => {
@@ -183,6 +192,7 @@ describe("traycer host install - --release / --from handling", () => {
     ]);
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][0]).toMatchObject({
+      team: null,
       versionRequest: "latest",
       fromPath: null,
     });

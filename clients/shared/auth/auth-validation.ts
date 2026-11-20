@@ -559,6 +559,7 @@ async function fetchUserRouteOnce(
             }
           : {}),
       },
+      redirect: "manual",
       signal,
     });
   } catch {
@@ -637,6 +638,7 @@ export async function refreshOnceAbortable(args: {
   readonly authnBaseUrl: string;
   readonly token: string;
   readonly refreshToken: string;
+  readonly rotationCode: string | null;
   readonly clientKind: "cli" | "desktop" | null;
   readonly signal: AbortSignal | null;
 }): Promise<AuthTokenRefreshResult> {
@@ -647,6 +649,7 @@ export async function refreshOnceAbortable(args: {
       args.token,
       args.refreshToken,
       args.clientKind,
+      args.rotationCode,
       abort.signal,
     );
   } finally {
@@ -761,6 +764,7 @@ async function refreshAuthTokenOnceViaHttp(
   token: string,
   refreshToken: string,
   clientKind: "cli" | "desktop" | null,
+  rotationCode: string | null,
   signal: AbortSignal,
 ): Promise<AuthTokenRefreshResult> {
   let response: Response;
@@ -776,12 +780,23 @@ async function refreshAuthTokenOnceViaHttp(
         body: JSON.stringify({
           refreshToken,
           ...(clientKind === null ? {} : { clientKind }),
+          ...(rotationCode === null ? {} : { rotationCode }),
         }),
+        // Never follow a redirect: the body carries the refresh token.
+        redirect: "manual",
         signal,
       }),
       signal,
     );
   } catch {
+    return { kind: "network-error" };
+  }
+
+  // A redirect is not authn's answer: nothing is refused and the credential stays.
+  if (
+    response.type === "opaqueredirect" ||
+    (response.status >= 300 && response.status < 400)
+  ) {
     return { kind: "network-error" };
   }
 
@@ -920,6 +935,8 @@ async function exchangeCodeForTokensWithSignal(
         },
         body: JSON.stringify({ code, code_verifier: codeVerifier }),
         signal,
+        // Never follow a redirect: the body carries the code and its verifier.
+        redirect: "manual",
       },
     );
   } catch {

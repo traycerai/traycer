@@ -30,8 +30,10 @@ function catalog(
       keepsUnavailablePick: false,
       harnesses,
       modelsHarnessId: "codex",
+      modelsProfileId: null,
       models: [],
       modelsLoaded: true,
+      modelsFailed: false,
       tuiOnly: false,
     },
   };
@@ -46,6 +48,7 @@ describe("stagedTerminalLaunchOnHost", () => {
         harnessRow("codex", { modes: ["gui", "tui"] }),
       ]),
       [providerRow("codex", null)],
+      [],
     );
 
     expect(launch).toEqual({
@@ -58,6 +61,25 @@ describe("stagedTerminalLaunchOnHost", () => {
     });
   });
 
+  it("keeps a removed profile id when the new host lists no row", () => {
+    const launch = stagedTerminalLaunchOnHost(
+      CAPTURED,
+      catalog([harnessRow("codex", { modes: ["gui", "tui"] })]),
+      [providerRow("codex", null)],
+      [
+        {
+          providerId: "codex",
+          profileId: "old-host-profile",
+          aliases: [],
+        },
+      ],
+    );
+    if (launch === null) {
+      throw new Error("expected the captured launch to resolve");
+    }
+    expect(launch.profileId).toBe("old-host-profile");
+  });
+
   it("launches nothing when the captured harness is unavailable there, though another one is ready", () => {
     expect(
       stagedTerminalLaunchOnHost(
@@ -66,6 +88,7 @@ describe("stagedTerminalLaunchOnHost", () => {
           harnessRow("codex", { available: false }),
           harnessRow("claude", { available: true }),
         ]),
+        [],
         [],
       ),
     ).toBeNull();
@@ -76,7 +99,7 @@ describe("stagedTerminalLaunchOnHost", () => {
     ["runs only in chat", [harnessRow("codex", { modes: ["gui"] })]],
   ])("launches nothing when the captured harness %s", (_label, harnesses) => {
     expect(
-      stagedTerminalLaunchOnHost(CAPTURED, catalog(harnesses), []),
+      stagedTerminalLaunchOnHost(CAPTURED, catalog(harnesses), [], []),
     ).toBeNull();
   });
 });

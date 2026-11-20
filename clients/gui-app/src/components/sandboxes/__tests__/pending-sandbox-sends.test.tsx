@@ -6,13 +6,15 @@ import {
   SANDBOX_HOST,
   TASK_PIN_HOST,
   SANDBOX_ID,
+  PERSONAL_ENVIRONMENT_ID,
   SEND_ID,
   SURFACE,
   OCCUPIED_NEW_CHAT_CONTENT,
   NO_AGENT_SENTENCE,
   type HostAnswers,
   mocks,
-  environmentListClientHosts,
+  environmentListAnswer,
+  sandboxListState,
   mirrorMountHosts,
   NEW_TARGET,
   RESUME_TARGET,
@@ -34,13 +36,12 @@ import {
   seed,
   RUNNER_HOST,
   mount,
-  mountInTileBoundTo,
+  mountInTileBoundToWithBillingRuntime,
   mountInChat,
+  mountInChatWithBillingRuntime,
   waitForCreateChats,
   createChatCalls,
   composerStages,
-  getSetupAction,
-  findSetupAction,
   expectOnlyTheRecordWritten,
   listAnswers,
   type Deferred,
@@ -62,6 +63,7 @@ import {
 } from "./pending-sandbox-send-fixture";
 
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { providerProfile } from "@/components/chat/fallback/__tests__/fallback-fixtures";
 
 import {
   createMessageSessionHarness,
@@ -70,6 +72,7 @@ import {
 
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 import {
   recordNegotiatedHostManifest,
@@ -137,6 +140,9 @@ import { openNewChatDraftRow } from "@/lib/drafts/draft-inventory-actions";
 
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { teamSubscription } from "@/lib/sandboxes/__tests__/auth-user-fixture";
 import type { PendingSandboxObservation } from "@/lib/sandboxes/pending-sandbox-observation";
 import {
   readStagedSandbox,
@@ -170,10 +176,12 @@ import {
   newConversationSurfaceKey,
   useSurfaceHostSelectionStore,
 } from "@/stores/host/surface-host-selection-store";
+import type { SandboxPageConfiguration } from "@/lib/sandboxes/sandbox-row-lines";
 
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { createRecordMapStorage } from "@/lib/persist/record-map-storage";
 import { recordMapStorageKey } from "@/lib/persist/keys";
+
 import {
   PendingSandboxSendsDriver,
   SandboxReadyLineForChat,
@@ -498,6 +506,66 @@ describe("the empty task canvas while its first sandbox send waits", () => {
 });
 
 describe("a send waiting for the requested agent on its sandbox", () => {
+  it("keeps the selected provider's folded account on a pending sandbox send", async () => {
+    const foldedProfileId = "folded-profile";
+    const canonicalProfileId = "codex-canonical";
+    const otherProfile: ProviderProfile = {
+      ...providerProfile({
+        profileId: "claude-canonical",
+        kind: "managed",
+        label: "Other provider",
+        authenticated: true,
+      }),
+      aliases: [foldedProfileId],
+    };
+    const selectedProfile: ProviderProfile = {
+      ...providerProfile({
+        profileId: canonicalProfileId,
+        kind: "managed",
+        label: "Selected account",
+        authenticated: true,
+      }),
+      aliases: [foldedProfileId],
+    };
+    const profilesForHost = (ready: boolean): HostAnswers => ({
+      harnesses: [harnessRow("codex", { available: ready })],
+      providers: [
+        {
+          ...providerRow("claude-code", { status: "installed" }),
+          profiles: [otherProfile],
+        },
+        {
+          ...providerRow(
+            "codex",
+            ready
+              ? { status: "installed" }
+              : { status: "downloading", percent: 40 },
+          ),
+          profiles: [selectedProfile],
+        },
+      ],
+    });
+    seed({
+      ...SEEDED,
+      send: { settings: { ...PICKED_SETTINGS, profileId: foldedProfileId } },
+    });
+    answerHost(SANDBOX_HOST, profilesForHost(false));
+    mount();
+    expect(createChatCalls()).toEqual([]);
+
+    answerHost(SANDBOX_HOST, profilesForHost(true));
+
+    await waitForCreateChats(1);
+    expect(createChatCalls()[0]).toMatchObject({
+      clientHostId: SANDBOX_HOST,
+      input: {
+        hostId: SANDBOX_HOST,
+        settings: { ...PICKED_SETTINGS, profileId: canonicalProfileId },
+        initialMessage: { content: MESSAGE_CONTENT },
+      },
+    });
+  });
+
   it.each(["chat", "fork"] as const)(
     "waits for Traycer's Managed 2 engine before a %s, then creates on that exact line",
     async (kind) => {
@@ -2205,6 +2273,7 @@ describe("a send recovered without its message going back to a task", () => {
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
       returnedSandbox: { target: NEW_TARGET, clientRequestId: null },
+      namedHostId: null,
       durability: "saved",
     });
     const composerSurface = composerSurfaceKey(null);
@@ -2346,6 +2415,7 @@ describe("a send whose sandbox rests while it waits for the agent", () => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
     });
   }
 
@@ -2523,6 +2593,7 @@ describe("a message for an existing chat whose sandbox rests", () => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
     });
   }
 
@@ -3785,9 +3856,6 @@ describe("a pending chat create", () => {
             failure: { kind: "settings", code: "SBX-0520" },
           });
         });
-        fireEvent.pointerDown(screen.getByRole("button", { name: "More" }), {
-          button: 0,
-        });
         expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
         expect(
           screen.queryByTestId("sandbox-setup-choose-another-host"),
@@ -4855,26 +4923,14 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
     const line = screen.getByTestId("sandbox-setup-line");
     expect(
       within(line).getByTestId("sandbox-setup-line-toggle").textContent,
-    ).not.toContain("SBX-0520");
-    const disclosure = within(line).getByTestId<HTMLDetailsElement>(
-      "sandbox-setup-support-reference",
-    );
-    expect(disclosure.open).toBe(false);
-
-    fireEvent.click(within(disclosure).getByText("Support reference"));
-
-    expect(disclosure.open).toBe(true);
-    expect(within(disclosure).getByText("SBX-0520")).toBeTruthy();
+    ).toContain("SBX-0520");
   });
 
   it("offers Repair setup, not Retry applying, for a guest that really failed, and runs only the guest repair", async () => {
     await mountStalled(false, true);
 
     const strip = screen.getByTestId("pending-sandbox-sends");
-    fireEvent.pointerDown(within(strip).getByRole("button", { name: "More" }), {
-      button: 0,
-    });
-    const repairSetup = await screen.findByRole("menuitem", {
+    const repairSetup = within(strip).getByRole("button", {
       name: /repair setup/i,
     });
     expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
@@ -4902,12 +4958,8 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
         );
       });
       expect(screen.queryByTestId("sandbox-setup-retry-applying")).toBeNull();
-      fireEvent.pointerDown(
-        within(strip).getByRole("button", { name: "More" }),
-        { button: 0 },
-      );
       expect(
-        screen.queryByRole("menuitem", { name: /repair setup/i }),
+        within(strip).queryByRole("button", { name: /repair setup/i }),
       ).toBeNull();
     },
   );
@@ -4928,6 +4980,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,
     });
   }
@@ -5009,18 +5062,33 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     // The line's own remedies mount under the sandbox's host, never crashing
     // on the strip's missing tab provider.
     expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
-    fireEvent.keyDown(within(line).getByTestId("sandbox-row-menu"), {
-      key: "Enter",
+    expect(within(line).getByRole("button", { name: "Details" })).toBeDefined();
+    fireEvent.click(
+      within(line).getByRole("button", { name: "Destroy build-box" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Destroy build-box?",
     });
-    expect(await screen.findByTestId("sandbox-row-menu-details")).toBeDefined();
-    expect(screen.getByTestId("sandbox-row-menu-destroy")).toBeDefined();
+    expect(
+      within(dialog).getByTestId("confirm-action").hasAttribute("disabled"),
+    ).toBe(true);
   });
 
-  it("binds the failed line's actions to the sandbox's host in a tile bound elsewhere, without opening a draft mirror for it", async () => {
+  it("draws the failed line in a tile bound elsewhere without opening a draft mirror for the sandbox's host", async () => {
     const TILE_HOST = "tile-host";
+    // Another person's send is not drawn, so the runtime signs in as the fixture user.
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: AUTHENTICATED_USER_FIXTURE_ID,
+        userName: "U",
+        email: "u@example.com",
+      },
+      { userId: AUTHENTICATED_USER_FIXTURE_ID, username: "U" },
+      [],
+    );
     seed({
       ...SEEDED,
-      send: SEND_BY_KIND.chat,
+      send: { ...SEND_BY_KIND.chat, userId: AUTHENTICATED_USER_FIXTURE_ID },
       phase: "creating",
       created: true,
     });
@@ -5033,8 +5101,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     answerSandboxRows([rowIn("awake")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     mirrorMountHosts.length = 0;
-    environmentListClientHosts.length = 0;
-    mountInTileBoundTo(TILE_HOST);
+    mountInTileBoundToWithBillingRuntime(TILE_HOST);
     await screen.findByTestId("sandbox-setup-line");
 
     answerSandboxRows([rowIn("failed")], FRESH + 1);
@@ -5042,11 +5109,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     const line = await screen.findByTestId("sandbox-stopped-line");
     expect(line.textContent).toContain("Couldn't start build-box");
     expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
-    // The actions' own host-scoped read went out on the sandbox's host client,
-    // not the tile's...
-    expect(environmentListClientHosts).toContain(SANDBOX_HOST);
-    expect(environmentListClientHosts).not.toContain(TILE_HOST);
-    // ...and no mirror of this tile's drafts was mounted for it.
+    // No mirror of this tile's drafts was mounted for the sandbox's host.
     expect(mirrorMountHosts).not.toContain(SANDBOX_HOST);
   });
 
@@ -5129,6 +5192,7 @@ describe("a rested send this window cannot give back", () => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,
     });
   }
@@ -5281,6 +5345,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,
     });
   }
@@ -5559,7 +5624,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     await mountHeld();
     const before = composerStages();
 
-    fireEvent.click(getSetupAction("sandbox-setup-cancel"));
+    fireEvent.click(screen.getByTestId("sandbox-setup-cancel"));
 
     await waitFor(() => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -5585,7 +5650,7 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     await mountHeld();
     const before = composerStages();
 
-    fireEvent.click(getSetupAction("sandbox-setup-cancel"));
+    fireEvent.click(screen.getByTestId("sandbox-setup-cancel"));
 
     await waitFor(() => {
       expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -5738,8 +5803,10 @@ describe("a send whose sandbox has no id yet", () => {
         });
       });
 
-      expect(await findSetupAction("sandbox-setup-cancel")).toBeDefined();
-      expect(getSetupAction("sandbox-setup-choose-another-host")).toBeDefined();
+      expect(await screen.findByTestId("sandbox-setup-cancel")).toBeDefined();
+      expect(
+        screen.getByTestId("sandbox-setup-choose-another-host"),
+      ).toBeDefined();
       expect(screen.queryByTestId("sandbox-setup-stop")).toBeNull();
       expect(mocks.stopSandbox).not.toHaveBeenCalled();
       expect(
@@ -5926,6 +5993,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
   const FRESH = Date.now() + 60_000;
   const KINDS = ["chat", "fork"] as const;
   type Kind = (typeof KINDS)[number];
+  const TEAM_CONFIGURATION: SandboxPageConfiguration = {
+    kind: "team",
+    teamId: "team-1",
+    teamName: "Acme",
+    environmentId: "env-acme",
+  };
   const RESTING = ["suspended", "stopped"] as const;
   const GONE = ["failed", "destroying", "destroyed", "gone"] as const;
   const byKind = <T,>(values: ReadonlyArray<T>) =>
@@ -5944,8 +6017,221 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
     });
   }
+
+  it.each([
+    {
+      role: "Editor",
+      configuration: TEAM_CONFIGURATION,
+      environmentRole: "editor",
+      environmentLoading: false,
+      environmentFailed: false,
+      expected: "Acme's credits ran out.",
+      remedy: "Details",
+    },
+    {
+      role: "Viewer",
+      configuration: TEAM_CONFIGURATION,
+      environmentRole: "viewer",
+      environmentLoading: false,
+      environmentFailed: false,
+      expected: "Acme's credits ran out.",
+      remedy: "Details",
+    },
+    {
+      role: "role loading",
+      configuration: TEAM_CONFIGURATION,
+      environmentRole: null,
+      environmentLoading: true,
+      environmentFailed: false,
+      expected: "Acme's credits ran out.",
+      remedy: "Details",
+    },
+    {
+      role: "environment list failed",
+      configuration: TEAM_CONFIGURATION,
+      environmentRole: null,
+      environmentLoading: false,
+      environmentFailed: true,
+      expected: "Acme's credits ran out.",
+      remedy: "Details",
+    },
+    {
+      role: "Admin",
+      configuration: TEAM_CONFIGURATION,
+      environmentRole: "admin",
+      environmentLoading: false,
+      environmentFailed: false,
+      expected: "Add credits to resume this sandbox.",
+      remedy: "Add credits",
+    },
+    {
+      role: "Personal",
+      configuration: { kind: "personal" },
+      environmentRole: null,
+      environmentLoading: false,
+      environmentFailed: false,
+      expected: "Add credits to resume this sandbox.",
+      remedy: "Add credits",
+    },
+  ] as const)(
+    "renders the pending message's credit line for a $role",
+    async ({
+      configuration,
+      environmentRole,
+      environmentLoading,
+      environmentFailed,
+      expected,
+      remedy,
+    }) => {
+      if (configuration.kind === "team") {
+        mocks.authUser = createAuthenticatedUserFixture({
+          teamSubscriptions: [
+            {
+              ...teamSubscription(0),
+              teamID: "team-1",
+              team: {
+                ...teamSubscription(0).team,
+                id: "team-1",
+                slug: "Acme",
+              },
+            },
+          ],
+        });
+      }
+      environmentListAnswer.role = environmentRole;
+      environmentListAnswer.loading = environmentLoading;
+      environmentListAnswer.failed = environmentFailed;
+      environmentListAnswer.personalEnvironmentId =
+        configuration.kind === "personal" ? PERSONAL_ENVIRONMENT_ID : null;
+      const input: PendingSandboxSendDispatch["input"] = {
+        epicId: "epic-1",
+        hostId: SANDBOX_HOST,
+        parentId: null,
+        chatId: "chat-credit-blocked",
+        workspaceMode: "folderless",
+        worktreeIntent: null,
+        settings: PICKED_SETTINGS,
+        title: "",
+        initialMessage: {
+          messageId: "message-credit-blocked",
+          clientActionId: "action-credit-blocked",
+          content: MESSAGE_CONTENT,
+          sender: { type: "user", userId: AUTHENTICATED_USER_FIXTURE_ID },
+          settings: PICKED_SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          sentFromHostId: null,
+        },
+      };
+      const delivery = {
+        chatId: input.chatId,
+        hostId: SANDBOX_HOST,
+        sandboxId: SANDBOX_ID,
+        readySeconds: 24,
+      };
+      const sandboxRow = sandboxSummaryFixture({
+        id: SANDBOX_ID,
+        hostId: SANDBOX_HOST,
+        state: "suspended",
+        frozen: true,
+        createdBy:
+          configuration.kind === "team"
+            ? { userId: AUTHENTICATED_USER_FIXTURE_ID, displayName: "Viewer" }
+            : null,
+        environmentId:
+          configuration.kind === "team"
+            ? configuration.environmentId
+            : PERSONAL_ENVIRONMENT_ID,
+      });
+      usePendingSandboxSendStore.getState().add(
+        pendingSend({
+          id: SEND_ID,
+          userId: AUTHENTICATED_USER_FIXTURE_ID,
+          request: { kind: "message", chatId: input.chatId },
+          // The claim has asked for an observation, so a row read after it
+          // counts; a claim that has not yet reads every row as unknown.
+          observationRequestedAt: 1_000,
+          dispatch: {
+            input,
+            status: "uncertain",
+            delivery,
+            blocker: "credits",
+          },
+        }),
+      );
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mountInChatWithBillingRuntime(input.chatId);
+      const dispatch = await screen.findByTestId("pending-sandbox-dispatch");
+      answerSandboxRows([sandboxRow], Date.now() + 60_000);
+      await waitFor(() => {
+        expect(within(dispatch).getByText(expected)).toBeTruthy();
+      });
+      expect(
+        within(dispatch).getByRole("button", { name: remedy }),
+      ).toBeTruthy();
+    },
+  );
+
+  it.each(["pending", "failed"] as const)(
+    "keeps an unknown-owner credits refusal actionable while the sandbox list is %s",
+    async (listState) => {
+      sandboxListState.pending = listState === "pending";
+      sandboxListState.failed = listState === "failed";
+      mocks.sandboxes = [];
+      const input: PendingSandboxSendDispatch["input"] = {
+        epicId: "epic-1",
+        hostId: SANDBOX_HOST,
+        parentId: null,
+        chatId: `chat-credit-list-${listState}`,
+        workspaceMode: "folderless",
+        worktreeIntent: null,
+        settings: PICKED_SETTINGS,
+        title: "",
+        initialMessage: {
+          messageId: `message-credit-list-${listState}`,
+          clientActionId: `action-credit-list-${listState}`,
+          content: MESSAGE_CONTENT,
+          sender: {
+            type: "user",
+            userId: AUTHENTICATED_USER_FIXTURE_ID,
+          },
+          settings: PICKED_SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          sentFromHostId: null,
+        },
+      };
+      usePendingSandboxSendStore.getState().add(
+        pendingSend({
+          id: SEND_ID,
+          userId: AUTHENTICATED_USER_FIXTURE_ID,
+          request: { kind: "message", chatId: input.chatId },
+          dispatch: {
+            input,
+            status: "uncertain",
+            delivery: {
+              chatId: input.chatId,
+              hostId: SANDBOX_HOST,
+              sandboxId: SANDBOX_ID,
+              readySeconds: 24,
+            },
+            blocker: "credits",
+          },
+        }),
+      );
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mountInChatWithBillingRuntime(input.chatId);
+
+      const dispatch = await screen.findByTestId("pending-sandbox-dispatch");
+      expect(
+        within(dispatch).queryByText("Add credits to resume this sandbox."),
+      ).toBeNull();
+      expect(
+        within(dispatch).getByRole("button", { name: "Details" }),
+      ).toBeTruthy();
+    },
+  );
 
   /** The same sandbox id, reported by a different host: not this claim's sandbox. */
   function rowOn(state: "awake" | "destroyed"): SandboxSummary {
@@ -6696,6 +6982,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
             id: SANDBOX_ID,
             hostId: SANDBOX_HOST,
             state: "awake",
+            environmentId: PERSONAL_ENVIRONMENT_ID,
             ...variant.row,
           }),
         ],
@@ -7023,7 +7310,7 @@ describe("a task deleted while its message waits on a sandbox", () => {
         failure: { kind: "settings", code: "SBX-0520" },
       });
     });
-    fireEvent.click(await findSetupAction("sandbox-setup-stop"));
+    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
     await waitFor(() => {
       expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
     });
@@ -7244,7 +7531,7 @@ describe("Stop while the sandbox boots", () => {
           .getState()
           .report(SURFACE, { step: "applying", stepAt: Date.now() });
       });
-      expect(await findSetupAction("sandbox-setup-stop")).toBeDefined();
+      expect(await screen.findByTestId("sandbox-setup-stop")).toBeDefined();
       expect(mocks.stopSandbox).not.toHaveBeenCalled();
     },
   );
@@ -7959,6 +8246,7 @@ describe("a task with no chat whose message came back to its own composer on a s
       id: SANDBOX_ID,
       hostId: SANDBOX_HOST,
       state,
+      environmentId: PERSONAL_ENVIRONMENT_ID,
       guestConfigured: true,
     });
   }

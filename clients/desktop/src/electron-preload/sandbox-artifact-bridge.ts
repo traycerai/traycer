@@ -13,8 +13,13 @@ import { subscribe } from "./subscribe";
 export function buildSandboxArtifactBridge(): SandboxArtifactBridge {
   return {
     policySource: "traycer-sandbox:",
+    // One site per artifact, so all of a canvas's boards share one renderer
+    // process; the page URL names the mount in its path. An id holding "--"
+    // would read back as `<artifact>--<mount>`, so it keeps a site per mount.
     artifactOrigin: ({ artifactId, mountId }) =>
-      `traycer-sandbox://artifact-${artifactId}--${mountId}`,
+      artifactId.includes("--")
+        ? `traycer-sandbox://artifact-${artifactId}--${mountId}`
+        : `traycer-sandbox://artifact-${artifactId}`,
     register: (mountId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.sandboxArtifactRegister,

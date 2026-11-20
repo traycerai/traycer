@@ -275,9 +275,7 @@ describe("useArtifactLinkOpener", () => {
     result.current.openLink(link, CLICK);
 
     expect(mocks.runPolicy).not.toHaveBeenCalled();
-    expect(mocks.toast).toHaveBeenCalledWith(
-      "Workspace links are still loading",
-    );
+    expect(mocks.toast).toHaveBeenCalledWith("Folder links are still loading");
 
     mocks.worktreeQuery.data = {
       rows: [{ runningDir: "/tab/repo", disabledReason: null }],

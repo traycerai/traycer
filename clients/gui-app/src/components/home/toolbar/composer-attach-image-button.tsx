@@ -1,12 +1,7 @@
-import {
-  useCallback,
-  useRef,
-  type ButtonHTMLAttributes,
-  type Ref,
-  type ChangeEvent,
-} from "react";
-import { ImagePlus } from "lucide-react";
+import { type ButtonHTMLAttributes, type Ref } from "react";
+import { Paperclip } from "lucide-react";
 import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
+import { useComposerAttachPicker } from "@/hooks/composer/use-composer-attach-picker";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRegionShown } from "@/lib/layout-overrides";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
@@ -14,16 +9,15 @@ import { useComposerTileId } from "@/components/home/composer/composer-tile-hook
 
 interface ComposerAttachImageButtonProps {
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
+  readonly onAttachFiles: (files: ReadonlyArray<File>) => void;
 }
 
 /**
- * The composer's "Attach image" control and the hidden file input it drives,
- * as one unit. Shared by the desktop toolbar's left group and the phone row.
+ * The composer's "Attach" control and the hidden file input it drives, as one
+ * unit. Shared by the desktop toolbar's left group and the phone row.
  *
- * The value reset happens twice on purpose - once before opening the picker and
- * once after reading the selection - so re-picking the same file still fires a
- * `change` event. Keeping both halves here means neither caller can copy one
- * and forget the other.
+ * The input takes ANY file: an `accept` filter is what made iOS grey out
+ * everything but photos under "Choose Files".
  *
  * Layout ▸ Composer can remove the control, and the whole unit goes with it -
  * the file input exists only to be driven by this button. Attaching itself is
@@ -33,8 +27,6 @@ interface ComposerAttachImageButtonProps {
 export function ComposerAttachImageButton(
   props: ComposerAttachImageButtonProps,
 ) {
-  const { onAttachImages } = props;
-  const inputRef = useRef<HTMLInputElement>(null);
   const tileId = useComposerTileId();
   const { ref: hotspotRef, ghost } = useLayoutRegion({
     regionId: "attachImage",
@@ -44,48 +36,24 @@ export function ComposerAttachImageButton(
   // button and its file input draw from props alone, so a preview starts
   // nothing.
   const shown = useRegionShown("attachImage") || ghost;
-
-  const handleOpenImagePicker = useCallback(() => {
-    const input = inputRef.current;
-    if (input === null) return;
-    input.value = "";
-    input.click();
-  }, []);
-
-  const handleImageChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(event.currentTarget.files ?? []);
-      event.currentTarget.value = "";
-      if (files.length === 0) return;
-      onAttachImages(files);
-    },
-    [onAttachImages],
-  );
+  const picker = useComposerAttachPicker({
+    accept: undefined,
+    onAttachImages: props.onAttachImages,
+    onAttachFiles: props.onAttachFiles,
+  });
 
   if (!shown) return null;
 
   return (
     <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        multiple
-        tabIndex={-1}
-        aria-hidden="true"
-        className="hidden"
-        onChange={handleImageChange}
-      />
+      {picker.input}
       <TooltipWrapper
-        label="Attach image"
+        label="Attach"
         side="top"
         sideOffset={undefined}
         align={undefined}
       >
-        <ComposerAttachImageTrigger
-          ref={hotspotRef}
-          onClick={handleOpenImagePicker}
-        />
+        <ComposerAttachImageTrigger ref={hotspotRef} onClick={picker.open} />
       </TooltipWrapper>
     </>
   );
@@ -97,8 +65,8 @@ export function ComposerAttachImageTrigger(
   },
 ) {
   return (
-    <ToolbarIconButton aria-label="Attach image" {...props}>
-      <ImagePlus className="size-4" />
+    <ToolbarIconButton aria-label="Attach" {...props}>
+      <Paperclip className="size-4" />
     </ToolbarIconButton>
   );
 }

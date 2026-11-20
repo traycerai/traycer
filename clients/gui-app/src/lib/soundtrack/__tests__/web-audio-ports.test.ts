@@ -5,9 +5,40 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "@/lib/logger";
+import type { MixTap } from "../mix-capture";
 import { MIX_TUNING } from "../mix-tuning";
+import type { MixCapture, RecordingQuality } from "../recording";
 import type { SoundtrackPorts } from "../session";
 import { openWebAudioPorts } from "../web-audio-ports";
+
+// What `captureMix` opens a capture with, which the real one would build nodes
+// from; only the arguments are read here.
+const capture = vi.hoisted(() => ({
+  opened:
+    vi.fn<
+      (
+        context: AudioContext,
+        tap: MixTap,
+        quality: RecordingQuality,
+      ) => Promise<MixCapture>
+    >(),
+}));
+vi.mock("../mix-capture", () => ({ openMixCapture: capture.opened }));
+
+const MIX_SAMPLE_RATE = 48_000;
+// Deliberately NOT `MIX_SAMPLE_RATE`: a context the real constructor call
+// never asked for a rate from would come back at this rate instead, so the
+// "opens at the recording's rate" test can actually fail if production stops
+// requesting it. If this matched `MIX_SAMPLE_RATE`, that test would pass
+// whether or not `openWebAudioPorts` ever passed a `sampleRate` option.
+const DEFAULT_FAKE_SAMPLE_RATE = 44_100;
+
+const NO_CAPTURE: MixCapture = {
+  sampleRate: 48_000,
+  audioOffsetSeconds: 0,
+  start: () => undefined,
+  stop: () => Promise.resolve({ frames: null, droppedFrames: null }),
+};
 
 // The wait past the fade that `web-audio-ports.ts` keeps before it suspends or
 // closes, for what is still on its way to the speakers. It is private there.
@@ -50,6 +81,7 @@ class FakeAudioContext {
   readonly currentTime = 0;
   state: "running" | "suspended" | "closed" = "running";
   readonly destination = {};
+  readonly sampleRate: number;
   /** In the order made: the pause's own gain is the first. */
   readonly gains: FakeGainNode[] = [];
   readonly suspend = vi.fn<() => Promise<void>>(() => {
@@ -65,7 +97,8 @@ class FakeAudioContext {
     return Promise.resolve();
   });
 
-  constructor() {
+  constructor(options: { readonly sampleRate: number } | undefined) {
+    this.sampleRate = options?.sampleRate ?? DEFAULT_FAKE_SAMPLE_RATE;
     FakeAudioContext.instances.push(this);
   }
 
@@ -101,6 +134,7 @@ beforeEach(() => {
   FakeAudioContext.instances.length = 0;
   vi.stubGlobal("AudioContext", FakeAudioContext);
   onRefused.mockClear();
+  capture.opened.mockReset();
 });
 
 afterEach(() => {
@@ -201,5 +235,23 @@ describe("openWebAudioPorts pause", () => {
     expect(onRefused).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+});
+
+describe("openWebAudioPorts captureMix", () => {
+  it("opens the context at the recording's rate, so a captured frame and an encoded sample are the same thing", () => {
+    const { context } = openPorts();
+    expect(context.sampleRate).toBe(MIX_SAMPLE_RATE);
+  });
+
+  it("opens a capture with the context and a tap, and nothing else", async () => {
+    capture.opened.mockResolvedValue(NO_CAPTURE);
+    const { ports, context } = openPorts();
+    await ports.captureMix("compressed");
+
+    expect(capture.opened).toHaveBeenCalledTimes(1);
+    const [calledContext, , quality] = capture.opened.mock.calls[0];
+    expect(calledContext).toBe(context);
+    expect(quality).toBe("compressed");
   });
 });

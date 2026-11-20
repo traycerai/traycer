@@ -37,6 +37,7 @@ const CATEGORY_BY_HOST_KIND: Readonly<
   Partial<Record<HostNotificationKind, NotificationCategory>>
 > = {
   "team.role.changed": "collaboration",
+  "access.readonly.retired": "collaboration",
 };
 
 /**

@@ -137,7 +137,7 @@ export function useWorkspaceFolderActionsForClient(
             title: "Could not add folders",
             message: null,
             code: null,
-            source: "Workspace folders",
+            source: "Folders",
           },
         );
       },
@@ -171,7 +171,7 @@ export function useWorkspaceFolderActionsForClient(
             title: "Could not remove repository from Epic",
             message: null,
             code: null,
-            source: "Workspace folders",
+            source: "Folders",
           },
         );
       },
@@ -199,7 +199,7 @@ export function useWorkspaceFolderActionsForClient(
           title: "Could not add folders",
           message: "No host was selected.",
           code: null,
-          source: "Workspace folders",
+          source: "Folders",
         });
         return null;
       }
@@ -224,7 +224,7 @@ export function useWorkspaceFolderActionsForClient(
             title: "Could not add folders",
             message: "The active host changed while choosing folders.",
             code: null,
-            source: "Workspace folders",
+            source: "Folders",
           },
         );
         return null;
@@ -261,7 +261,7 @@ export function useWorkspaceFolderActionsForClient(
             title: "Could not add folders",
             message: "The active host changed while adding folders.",
             code: null,
-            source: "Workspace folders",
+            source: "Folders",
           },
         );
         return null;

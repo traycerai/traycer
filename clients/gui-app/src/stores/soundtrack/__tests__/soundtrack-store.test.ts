@@ -18,6 +18,7 @@ import type { SoundtrackManifest } from "@/lib/soundtrack/manifest";
 import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 import { CROSSFADE_SECONDS } from "@/lib/soundtrack/player";
 import type { SoundtrackPorts } from "@/lib/soundtrack/session";
+import { SoundtrackLogRelay } from "@/lib/soundtrack/session-log";
 import type { MixSignals } from "@/lib/soundtrack/signals";
 import type { VariableTrack } from "@/lib/soundtrack/variable-sound";
 import {
@@ -25,6 +26,7 @@ import {
   resetFakePorts,
 } from "@/lib/soundtrack/__tests__/fake-ports";
 import {
+  captureNothing,
   FakeOutput,
   FakeStems,
   isRamp,
@@ -125,6 +127,8 @@ function harness(manifest: SoundtrackManifest, random: () => number) {
       setVolume,
       duck,
       close,
+      log: new SoundtrackLogRelay(),
+      captureMix: captureNothing,
       pause: () => {
         output.stopClock();
       },
@@ -139,6 +143,8 @@ function harness(manifest: SoundtrackManifest, random: () => number) {
     readManifest: () => manifest,
     openPorts,
     random,
+    recordingChannel: () => null,
+    openMediaSession: () => null,
   });
   return { store, openPorts, opened };
 }
@@ -510,6 +516,8 @@ describe("soundtrack store: reading the manifest and the volume", () => {
       readManifest,
       openPorts: openFakePorts,
       random: mulberry32(1),
+      recordingChannel: () => null,
+      openMediaSession: () => null,
     });
     return {
       store,

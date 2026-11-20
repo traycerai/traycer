@@ -1,4 +1,5 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -506,6 +507,9 @@ class MockStreamSession implements IStreamSession {
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     this.requestReconnectCount += 1;
   }
@@ -551,6 +555,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,
@@ -792,6 +797,22 @@ function fatalClose(code: string): StreamCloseReason {
       reason: `test close: ${code}`,
       incompatibleMethods: null,
       upgradeGuidance: null,
+    },
+  };
+}
+
+function fatalCloseWithDoorReason(
+  code: string,
+  doorReason: string | null,
+): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    details: {
+      code,
+      reason: `test close: ${code}`,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      ...(doorReason === null ? {} : { doorReason }),
     },
   };
 }
@@ -1618,7 +1639,7 @@ describe("<NotificationsSessionProvider />", () => {
           .sessionFor("agent.activity.subscribe")
           .emitClosed(fatalClose("UNAUTHORIZED"));
       });
-      expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+      expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(0);
       act(() => {
         vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
       });
@@ -1642,6 +1663,51 @@ describe("<NotificationsSessionProvider />", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each([
+    { method: "agent.activity.subscribe", doorReason: "enrolment_broken" },
+    { method: "agent.activity.subscribe", doorReason: "host_claimed" },
+    { method: "agent.activity.subscribe", doorReason: null },
+    { method: "notifications.subscribe", doorReason: "enrolment_broken" },
+    { method: "notifications.subscribe", doorReason: "host_claimed" },
+    { method: "notifications.subscribe", doorReason: null },
+    {
+      method: "host.notifications.feed.subscribe",
+      doorReason: "enrolment_broken",
+    },
+    { method: "host.notifications.feed.subscribe", doorReason: "host_claimed" },
+    { method: "host.notifications.feed.subscribe", doorReason: null },
+  ] as const)(
+    "does not start sign-in recovery for host-token $method close ($doorReason)",
+    async ({ method, doorReason }) => {
+      const { streamClient } = await renderHostNotificationsProvider();
+      act(() => {
+        streamClient
+          .sessionFor(method)
+          .emitClosed(fatalCloseWithDoorReason("UNAUTHORIZED", doorReason));
+      });
+      expect(mockAuth.revalidateCurrentContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["enrolment_broken", "host_claimed", null] as const)(
+    "does not start sign-in recovery for the no-pool cloud feed (%s)",
+    async (doorReason) => {
+      streamState.cloudFeedSupport = "supported";
+      const { streamClient } = await renderHostNotificationsProvider();
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toContain(
+          "host.notifications.cloudFeed.subscribe",
+        );
+      });
+      act(() => {
+        streamClient
+          .sessionFor("host.notifications.cloudFeed.subscribe")
+          .emitClosed(fatalCloseWithDoorReason("UNAUTHORIZED", doorReason));
+      });
+      expect(mockAuth.revalidateCurrentContext).not.toHaveBeenCalled();
+    },
+  );
 
   it("turns only post-baseline cloud snapshot arrivals into notification displays", async () => {
     const queryClient = new QueryClient();
@@ -2120,6 +2186,7 @@ describe("<NotificationsSessionProvider />", () => {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,

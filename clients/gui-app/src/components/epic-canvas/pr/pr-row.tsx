@@ -20,6 +20,7 @@ import type { PrLightItem, PrState } from "@traycer/protocol/host/pr-schemas";
 import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
 import { PrRowOwnerHover } from "@/components/epic-canvas/pr/pr-owner-hover";
 import { PrRowHoverCardContext } from "@/components/epic-canvas/pr/pr-owner-hover-context";
+import { PrSearchTermsContext } from "@/components/epic-canvas/pr/pr-search-context";
 import { Badge } from "@/components/ui/badge";
 import { DropLine } from "@/components/ui/drop-line";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -37,6 +38,7 @@ import {
   prChecksSummary,
   prRowIdentityLabel,
   prRowTitleText,
+  prSearchSegments,
   type PrChecksDotTone,
   type PrChecksSummary,
 } from "@/lib/pr/pr-list-projection";
@@ -277,6 +279,7 @@ export function PrRow(props: {
  */
 function PrRowTitle(props: { readonly title: string }): ReactNode {
   const hoverCardShowsTitle = use(PrRowHoverCardContext);
+  const searchTerms = use(PrSearchTermsContext);
   return (
     <TooltipWrapper
       // `null` makes `TooltipWrapper` a transparent Slot - see its own note.
@@ -289,7 +292,19 @@ function PrRowTitle(props: { readonly title: string }): ReactNode {
         className="min-w-0 truncate text-ui-sm font-medium text-foreground"
         data-testid="pr-row-title"
       >
-        {props.title}
+        {prSearchSegments(props.title, searchTerms).map((segment) =>
+          segment.match ? (
+            <mark
+              key={segment.start}
+              className="rounded-sm bg-warning/25 text-foreground"
+              data-testid="pr-row-title-match"
+            >
+              {segment.text}
+            </mark>
+          ) : (
+            <span key={segment.start}>{segment.text}</span>
+          ),
+        )}
       </p>
     </TooltipWrapper>
   );

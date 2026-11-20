@@ -46,12 +46,11 @@ export const WORKSPACE_COMPOSER_READY: WorkspaceComposerAvailability = {
   disabledHint: null,
 };
 
-export const NO_WORKSPACE_FOLDER_HINT =
-  "Link at least one workspace folder to start.";
+export const NO_WORKSPACE_FOLDER_HINT = "Link at least one folder to start.";
 export const NO_BOUND_WORKSPACE_FOLDER_HINT =
-  "Link at least one workspace folder to continue.";
+  "Link at least one folder to continue.";
 export const UNRESOLVED_WORKSPACE_FOLDER_HINT =
-  "Locate the selected workspace folder on this host to continue.";
+  "Locate the selected folder on this host to continue.";
 export const CHECKING_WORKSPACE_FOLDER_HINT = "Checking folders on this host.";
 export const WORKSPACE_FOLDER_CHECK_FAILED_HINT =
   "Couldn't check folders on this host. Return to the app to retry.";
@@ -59,7 +58,7 @@ export const WORKSPACE_FOLDER_CHECK_FAILED_HINT =
 /**
  * The disabled-send hint shown when one or more bound folders are missing on
  * disk. Names the offending folders and points at both recoveries (restore on
- * disk, or re-pick in the workspace picker). Phrasing is kept in step with the
+ * disk, or re-pick in the folder picker). Phrasing is kept in step with the
  * host's `worktreeMissingMessage` so the composer hint, the recovery toast,
  * and the on-send reject read consistently. The disable lifts automatically
  * once the on-focus `worktree.getBinding` re-check finds the folder restored.
@@ -79,8 +78,8 @@ export function worktreeMissingComposerHint(
     .map((workspacePath) => describeMissingBoundFolder(workspacePath, binding))
     .join(", ");
   return missingWorkspacePaths.length === 1
-    ? `A bound folder is missing on disk: ${list}. Restore it, or pick another folder in the workspace picker, to send.`
-    : `Bound folders are missing on disk: ${list}. Restore them, or pick others in the workspace picker, to send.`;
+    ? `A bound folder is missing on disk: ${list}. Restore it, or pick another folder in the folder picker, to send.`
+    : `Bound folders are missing on disk: ${list}. Restore them, or pick others in the folder picker, to send.`;
 }
 
 function describeMissingBoundFolder(

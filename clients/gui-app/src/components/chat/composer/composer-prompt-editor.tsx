@@ -25,6 +25,10 @@ import {
   type ComposerEditorIncarnation,
 } from "@/lib/composer/composer-editor-incarnation";
 import type { MentionAttachment } from "@/lib/composer/types";
+import type {
+  ComposerFileAttachmentAttrs,
+  FileNodeSettlement,
+} from "@/lib/composer/file-attachments";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import {
@@ -32,7 +36,6 @@ import {
   registerComposerFocus,
 } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
-import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { usePaneFocusProbe } from "@/components/epic-tabs/pane-visibility-context";
 
@@ -51,7 +54,9 @@ import {
 } from "./editor/extensions/slash-command-extension";
 import {
   insertPathSpansCommand,
+  appendImageAttachmentsCommand,
   insertImageAttachmentsCommand,
+  type ImageAttachmentPlace,
   type PathInsertionCommit,
 } from "@/hooks/composer/use-composer-paste";
 import type {
@@ -166,8 +171,13 @@ export interface ComposerPromptEditorHandle {
     content: JsonContent,
     selection: { readonly from: number; readonly to: number } | null,
   ) => void;
+  /**
+   * Inserts image attachments at the caret, or at the end of the document
+   * with the selection left where it is (`at`).
+   */
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
+    at: ImageAttachmentPlace,
   ) => void;
   /** Insert an existing @-mention attachment at the preserved caret. */
   readonly insertMentionAttachment: (mention: MentionAttachment) => boolean;
@@ -178,6 +188,23 @@ export interface ComposerPromptEditorHandle {
    */
   readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly removeImageAttachmentById: (id: string) => void;
+  /**
+   * Insert one pending file node at the caret. `false` when the editor is gone,
+   * so the caller uploads nothing. The node's later life (stored, or removed on
+   * a failed upload) is its node view's, not the handle's.
+   */
+  readonly insertFileAttachment: (
+    attrs: ComposerFileAttachmentAttrs,
+  ) => boolean;
+  /**
+   * Apply an upload's outcome to the file node `id` in the live document.
+   * `false` when the editor is not ready or holds no such node; the caller then
+   * settles the persisted draft instead.
+   */
+  readonly settleFileAttachment: (
+    id: string,
+    settlement: FileNodeSettlement,
+  ) => boolean;
   /**
    * Flip a pending base64 image node (located by `id`) to its stored content
    * hash IN PLACE, preserving its document position. A landing paste inserts
@@ -703,25 +730,13 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [applyContent],
   );
 
-  const handleDrop = useCallback<DragEventHandler<HTMLElement>>(
-    (event) => {
-      if (editor !== null && hasClaimableFileTransfer(event.dataTransfer)) {
-        const dropPos = editor.view.posAtCoords({
-          left: event.clientX,
-          top: event.clientY,
-        });
-        if (dropPos !== null) {
-          editor.commands.setTextSelection(dropPos.pos);
-        }
-      }
-      onDrop(event);
-    },
-    [editor, onDrop],
-  );
-
   const insertImageAttachments = useCallback(
-    (attrs: ReadonlyArray<ImageAttachmentAttrs>) => {
+    (attrs: ReadonlyArray<ImageAttachmentAttrs>, at: ImageAttachmentPlace) => {
       if (editor === null) return;
+      if (at === "end") {
+        appendImageAttachmentsCommand(editor, attrs);
+        return;
+      }
       insertImageAttachmentsCommand(
         editor,
         attrs,
@@ -772,6 +787,22 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     (id: string) => {
       if (editor === null) return;
       editor.commands.removeImageAttachmentById(id);
+    },
+    [editor],
+  );
+
+  const insertFileAttachment = useCallback(
+    (attrs: ComposerFileAttachmentAttrs): boolean => {
+      if (editor === null || editor.isDestroyed) return false;
+      return editor.chain().focus().insertFileAttachment(attrs).run();
+    },
+    [editor],
+  );
+
+  const settleFileAttachment = useCallback(
+    (id: string, settlement: FileNodeSettlement): boolean => {
+      if (editor === null || editor.isDestroyed) return false;
+      return editor.commands.settleFileAttachmentById(id, settlement);
     },
     [editor],
   );
@@ -856,6 +887,8 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       insertMentionAttachment,
       beginPathInsertion,
       removeImageAttachmentById,
+      insertFileAttachment,
+      settleFileAttachment,
       rewriteImageAttachmentHashById,
       insertDictatedText,
       dismissActiveSuggestion,
@@ -873,11 +906,13 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       insertImageAttachments,
       insertMentionAttachment,
       insertDictatedText,
+      insertFileAttachment,
       isEmpty,
       isReady,
       removeImageAttachmentById,
       rewriteImageAttachmentHashById,
       setContent,
+      settleFileAttachment,
       syncContent,
     ],
   );
@@ -890,7 +925,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       className="relative flex-1"
       onPaste={onPaste}
       onDragOver={onDragOver}
-      onDrop={handleDrop}
+      onDrop={onDrop}
       onKeyDown={onKeyDown}
       onFocus={onFocus}
       onBlur={onBlur}

@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import {
   useQueryClient,
   type QueryKey,
-  type UseMutationResult,
   type UseQueryResult,
+  type UseMutationResult,
+  type MutateOptions,
 } from "@tanstack/react-query";
 import type {
   BotReadCursorAdvanceRequest,
@@ -21,6 +22,8 @@ import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
 import { channelBold } from "@/lib/bots/bot-read-cursor";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
+
+import { currentBotLifetime, useBotLifetime } from "@/lib/bots/bot-lifetime";
 
 const READ_METHOD = "bot.readCursor.read" as const;
 
@@ -67,54 +70,183 @@ export function isReadCursorReadOf(queryKey: QueryKey, botId: string): boolean {
   );
 }
 
+/** A batch may supply its own requester/component retirement signal. */
+export type BotReadCursorAdvanceVariables =
+  | BotReadCursorAdvanceRequest
+  | (BotReadCursorAdvanceRequest & { readonly signal: AbortSignal | null });
+interface CapturedAdvance {
+  readonly request: BotReadCursorAdvanceRequest;
+  readonly signal: AbortSignal;
+  readonly publicVariables: BotReadCursorAdvanceVariables;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly clientIsCurrent: () => boolean;
+  readonly dispose: () => void;
+  readonly viewer: string;
+  readonly lifetime: number;
+}
+function advanceIsCurrent(variables: CapturedAdvance): boolean {
+  return (
+    variables.lifetime === currentBotLifetime() &&
+    !variables.signal.aborted &&
+    variables.clientIsCurrent()
+  );
+}
+
 /**
- * Moves the person's cursor on one conversation forward. Every cached read
- * of the bot takes the cursor the cloud kept, so the bold clears at once,
- * and a read in flight is cancelled first, so its older answer cannot land
- * over it; the cloud never moves a cursor back, and neither does the cache.
+ * Cursor writes and cache updates belong to the viewer who initiated them.
+ * Earned reads survive navigation, including while queued before dispatch.
+ * The lifetime is an account epoch, not a fence for deleted bots; a cursor
+ * write does not recreate its target. Any future mark-unread or rewind must
+ * be ordered against already-sent forward advances.
  */
 export function useBotReadCursorAdvanceMutation(
   client: HostClient<HostRpcRegistry> | null,
 ): UseMutationResult<
   BotReadCursorAdvanceResponse,
   HostRpcError,
-  BotReadCursorAdvanceRequest
+  BotReadCursorAdvanceVariables
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.readCursor.advance">({
-    client,
+  const viewer = useCloudChatViewerId();
+  const lifetime = useBotLifetime();
+  const currentClient = useRef({ client });
+  useLayoutEffect(() => {
+    if (currentClient.current.client !== client)
+      currentClient.current = { client };
+  }, [client]);
+  const mutation = useHostMutation<
+    HostRpcRegistry,
+    "bot.readCursor.advance",
+    unknown,
+    CapturedAdvance
+  >({
+    client: (variables) => variables.client,
     method: "bot.readCursor.advance",
-    mapVariables: (variables) => variables,
+    mapVariables: (variables) => variables.request,
+    signalFor: (variables) => {
+      if (!advanceIsCurrent(variables))
+        throw new DOMException("Read action retired", "AbortError");
+      return variables.signal;
+    },
     options: {
       mutationKey: botMutationKeys.advanceReadCursor(),
+      onSettled: (_data, _error, variables) => variables.dispose(),
       onSuccess: async ({ cursor }, variables) => {
+        if (!advanceIsCurrent(variables)) return;
+        const { request } = variables;
         const filter = {
           predicate: (query: { readonly queryKey: QueryKey }) =>
-            isReadCursorReadOf(query.queryKey, variables.botId),
+            isReadCursorReadOf(query.queryKey, request.botId) &&
+            query.queryKey.at(-1) === variables.viewer,
         };
-        // A read already in flight may have been answered before this
-        // advance landed, and would put the cursor back where it was.
         await queryClient.cancelQueries(filter);
+        if (!advanceIsCurrent(variables)) return;
         queryClient.setQueriesData<BotReadCursorReadResponse>(
           filter,
           (cached) => {
             if (cached === undefined) return cached;
-            const held = Object.hasOwn(cached.cursors, variables.conversationId)
-              ? cached.cursors[variables.conversationId]
+            const held = Object.hasOwn(cached.cursors, request.conversationId)
+              ? cached.cursors[request.conversationId]
               : null;
             if (held !== null && held.seq >= cursor.seq) return cached;
             return {
               ...cached,
-              cursors: {
-                ...cached.cursors,
-                [variables.conversationId]: cursor,
-              },
+              cursors: { ...cached.cursors, [request.conversationId]: cursor },
             };
           },
         );
       },
     },
   });
+  const capture = useCallback(
+    (variables: BotReadCursorAdvanceVariables): CapturedAdvance => {
+      // Keep earned reads alive after navigation, but retire them immediately
+      // when this requester changes authority, before the auth store updates.
+      const scope = currentClient.current;
+      const authority = new AbortController();
+      const unsubscribe = client?.onChange((event) => {
+        if (event.reason === "auth-changed") authority.abort();
+      });
+      const supplied = "signal" in variables ? variables.signal : null;
+      // The mobile WebView floor predates AbortSignal.any.
+      const forwardAbort = (): void => authority.abort(supplied?.reason);
+      if (supplied?.aborted) forwardAbort();
+      else supplied?.addEventListener("abort", forwardAbort, { once: true });
+      return {
+        request: {
+          botId: variables.botId,
+          conversationId: variables.conversationId,
+          messageId: variables.messageId,
+          seq: variables.seq,
+        },
+        publicVariables: variables,
+        client,
+        clientIsCurrent: () =>
+          currentClient.current === scope && scope.client === client,
+        dispose: () => {
+          unsubscribe?.();
+          supplied?.removeEventListener("abort", forwardAbort);
+        },
+        signal: authority.signal,
+        viewer,
+        lifetime,
+      };
+    },
+    [client, viewer, lifetime],
+  );
+  const { mutate, mutateAsync } = mutation;
+  const publicMutate = useCallback(
+    (
+      variables: BotReadCursorAdvanceVariables,
+      options: AdvanceOptions | undefined,
+    ) => mutate(capture(variables), capturedOptions(options)),
+    [capture, mutate],
+  );
+  const publicMutateAsync = useCallback(
+    (
+      variables: BotReadCursorAdvanceVariables,
+      options: AdvanceOptions | undefined,
+    ) => mutateAsync(capture(variables), capturedOptions(options)),
+    [capture, mutateAsync],
+  );
+  const methods = { mutate: publicMutate, mutateAsync: publicMutateAsync };
+  if (mutation.isIdle) return { ...mutation, ...methods, variables: undefined };
+  return {
+    ...mutation,
+    ...methods,
+    variables: mutation.variables.publicVariables,
+  };
+}
+
+type AdvanceOptions = MutateOptions<
+  BotReadCursorAdvanceResponse,
+  HostRpcError,
+  BotReadCursorAdvanceVariables
+>;
+
+/** Per-call callbacks see the caller's variables, never the private authority capture. */
+function capturedOptions(
+  options: AdvanceOptions | undefined,
+):
+  | MutateOptions<BotReadCursorAdvanceResponse, HostRpcError, CapturedAdvance>
+  | undefined {
+  if (options === undefined) return undefined;
+  return {
+    onSuccess: (data, variables, result, context) =>
+      options.onSuccess?.(data, variables.publicVariables, result, context),
+    onError: (error, variables, result, context) =>
+      options.onError?.(error, variables.publicVariables, result, context),
+    onSettled: (...args) => {
+      const [data, error, variables, result, context] = args;
+      options.onSettled?.(
+        data,
+        error,
+        variables.publicVariables,
+        result,
+        context,
+      );
+    },
+  };
 }
 
 /** Whether the tab's host reads and advances the person's read cursors. */

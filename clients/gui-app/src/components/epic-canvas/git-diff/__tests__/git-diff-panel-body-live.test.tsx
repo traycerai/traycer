@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -453,6 +454,7 @@ function streamClientFixture(): WsStreamClient<HostStreamRpcRegistry> {
     hostId: null,
     endpoint: () => null,
     bearer: () => null,
+    userId: AUTHENTICATED_USER_FIXTURE_ID,
     auth: null,
     clock: null,
     hostCredentialMint: null,
@@ -719,10 +721,9 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     renderPanel(rootSelected);
     openSwitcher();
 
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Search workspaces" }),
-      { target: { value: "/repo/traycer" } },
-    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Search folders" }), {
+      target: { value: "/repo/traycer" },
+    });
 
     expect(
       screen.getByTestId("git-diff-repo-switcher-root-traycer-internal"),
@@ -977,10 +978,10 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
         useGitPanelStore.getState().stateByEpicId[EPIC_ID].selectedRepo,
       ).toBeNull(),
     );
-    // A broken worktree is a degrade, not "no workspaces" - the panel must not
-    // reuse the empty "add workspaces" nudge, and must not hang on the skeleton.
+    // A broken worktree is a degrade, not "no folders" - the panel must not
+    // reuse the empty "add folders" nudge, and must not hang on the skeleton.
     expect(screen.getByTestId("git-roots-unavailable")).toBeDefined();
-    expect(screen.queryByText("No git workspaces available")).toBeNull();
+    expect(screen.queryByText("No git folders available")).toBeNull();
     expect(screen.queryByTestId("diff-loading-skeleton")).toBeNull();
     // The picker SURVIVES the degrade. It used to be asserted absent here,
     // which codified the dead end: every degraded state is reached by a host
@@ -1120,7 +1121,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
   // Rows the host marks `isGitResolvePending` (its cold view still resolving)
   // are pending, not dead: the panel keeps its loading skeleton - the host
   // sweep's `worktree.changed` push settles it - instead of the "No git
-  // workspaces available" dead end.
+  // folders available" dead end.
   it("keeps the loading skeleton while every row's git facts are unverified", () => {
     testState.rows = [
       row({
@@ -1136,7 +1137,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     renderPanel(rootSelected);
 
     expect(screen.getByTestId("diff-loading-skeleton")).toBeDefined();
-    expect(screen.queryByText("No git workspaces available")).toBeNull();
+    expect(screen.queryByText("No git folders available")).toBeNull();
   });
 
   it("keeps the dead empty state when every non-git row is a resolved fact", () => {
@@ -1150,7 +1151,10 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     ];
     renderPanel(rootSelected);
 
-    expect(screen.getByText("No git workspaces available")).toBeDefined();
+    expect(screen.getByText("No git folders available")).toBeDefined();
+    expect(
+      screen.getByText("Add folders to the agent to get started"),
+    ).toBeDefined();
     expect(screen.queryByTestId("diff-loading-skeleton")).toBeNull();
   });
 
@@ -1492,15 +1496,15 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
       ).toBeDefined();
     });
 
-    it("names the unreachable host instead of nudging the user to add workspaces", () => {
+    it("names the unreachable host instead of nudging the user to add folders", () => {
       renderPinnedToUnreachableHost();
 
       expect(screen.getByTestId("git-host-unreachable")).toBeDefined();
       expect(screen.getByText("Can't reach Host Two")).toBeDefined();
-      // "Add workspaces to the agent to get started" names a remedy on a
+      // "Add folders to the agent to get started" names a remedy on a
       // machine that never answered, and cannot be told apart from a host that
       // answered with nothing.
-      expect(screen.queryByText("No git workspaces available")).toBeNull();
+      expect(screen.queryByText("No git folders available")).toBeNull();
     });
 
     it("re-dials on Retry, since nothing else will", () => {
@@ -1648,7 +1652,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
         screen.getByTestId("git-bindings-unreadable-message").textContent,
       ).toBe("worktree.listBindingsForEpic: not authorized");
       expect(screen.queryByTestId("git-host-unreachable")).toBeNull();
-      expect(screen.queryByText("No git workspaces available")).toBeNull();
+      expect(screen.queryByText("No git folders available")).toBeNull();
     });
 
     it("keeps the host picker reachable on an answered refusal too", () => {

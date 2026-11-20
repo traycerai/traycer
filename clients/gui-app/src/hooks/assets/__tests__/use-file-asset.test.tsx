@@ -1,4 +1,5 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect, useRef, type ReactNode } from "react";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -59,11 +60,14 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => tabHostIdRef.value,
 }));
 
+const EMPTY_HOST_DIRECTORY = vi.hoisted(() => ({
+  onChange: () => ({ dispose() {} }),
+  findById: () => null,
+}));
+
 vi.mock("@/lib/host", () => ({
-  useHostDirectory: () => ({
-    onChange: () => ({ dispose() {} }),
-    findById: () => null,
-  }),
+  useHostDirectory: () => EMPTY_HOST_DIRECTORY,
+  useHostBinding: () => ({ directory: EMPTY_HOST_DIRECTORY }),
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
@@ -145,6 +149,9 @@ class MockStreamSession implements IStreamSession {
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {}
 
   close(): void {
@@ -184,6 +191,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       hostId: null,
       endpoint: () => null,
       bearer: () => null,
+      userId: AUTHENTICATED_USER_FIXTURE_ID,
       auth: null,
       clock: null,
       hostCredentialMint: null,

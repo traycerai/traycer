@@ -125,6 +125,45 @@ describe("composer run settings store", () => {
     ).toEqual(REGULAR_RUN_SETTINGS);
   });
 
+  it("stores a global settings update when only its carried profile binding changes", () => {
+    const first: ChatRunSettings = {
+      ...REGULAR_RUN_SETTINGS,
+      profileId: "work",
+      profileBinding: {
+        kind: "key",
+        key: {
+          providerId: "codex",
+          accountId: "first-synthetic-key",
+          organizationId: null,
+        },
+      },
+    };
+    const next: ChatRunSettings = {
+      ...first,
+      profileBinding: {
+        kind: "key",
+        key: {
+          providerId: "codex",
+          accountId: "second-synthetic-key",
+          organizationId: null,
+        },
+      },
+    };
+
+    useComposerRunSettingsStore
+      .getState()
+      .setGlobalRunSettings(HOST_A, first, 10);
+    useComposerRunSettingsStore
+      .getState()
+      .setGlobalRunSettings(HOST_A, next, 20);
+
+    expect(
+      useComposerRunSettingsStore.getState().globalLastRunSettingsByHostId[
+        HOST_A
+      ],
+    ).toEqual(next);
+  });
+
   it("setEpicRunSettings does not alter global settings", () => {
     useComposerRunSettingsStore
       .getState()

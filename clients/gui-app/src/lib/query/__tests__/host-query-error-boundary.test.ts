@@ -3,10 +3,13 @@ import {
   HostRequestControlFlowError,
   type HostRequestControlFlowReason,
 } from "@traycer-clients/shared/host-client/host-request-coordinator";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { describe, expect, it } from "vitest";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   HostControlFlowCancelledError,
   hostControlFlowReasonOf,
+  withHostMutationErrorBoundary,
   withHostQueryErrorBoundary,
 } from "@/lib/query/host-query-error-boundary";
 
@@ -31,6 +34,41 @@ async function rejectionOf(run: () => Promise<unknown>): Promise<unknown> {
 }
 
 describe("withHostQueryErrorBoundary - coordinator control flow", () => {
+  it("turns a local below-minimum failure into a silent, reverting cancellation", async () => {
+    const belowMinimum = new HostBelowMinimumError({
+      requestId: "floor-query",
+      method: "environment.status",
+    });
+    const error = await rejectionOf(() => Promise.reject(belowMinimum));
+
+    expect(error).toBeInstanceOf(CancelledError);
+    expect(error).not.toBeInstanceOf(HostControlFlowCancelledError);
+    if (!(error instanceof CancelledError)) {
+      throw new Error("expected a CancelledError");
+    }
+    expect(error.revert).toBe(true);
+    expect(error.silent).toBe(true);
+  });
+
+  it("preserves the local below-minimum HostRpcError at the mutation boundary", async () => {
+    const belowMinimum = new HostBelowMinimumError({
+      requestId: "floor-mutation",
+      method: "terminal.create",
+    });
+    const error = await withHostMutationErrorBoundary("terminal.create", () =>
+      Promise.reject(belowMinimum),
+    ).then(
+      () => {
+        throw new Error("expected the mutation boundary to reject");
+      },
+      (rejection: unknown) => rejection,
+    );
+
+    expect(error).toBe(belowMinimum);
+    expect(error).toBeInstanceOf(HostRpcError);
+    expect(error).not.toBeInstanceOf(CancelledError);
+  });
+
   it.each(REASONS)(
     "rethrows a %s rejection as a TanStack cancellation that keeps the reason",
     async (reason) => {

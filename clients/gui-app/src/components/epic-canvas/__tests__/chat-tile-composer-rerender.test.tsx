@@ -224,6 +224,7 @@ const COMPOSER: ChatLowerComposerState = {
   nodeId: "chat-1",
   isActive: true,
   mentionRoots: [],
+  runWorkingDirectory: null,
   fallbackToGlobalMentionRoots: true,
   currentEpicId: "epic-1",
   onSubmitMessage: () => false,
@@ -236,6 +237,7 @@ const COMPOSER: ChatLowerComposerState = {
     </>
   ),
   workspaceAvailability: WORKSPACE_COMPOSER_READY,
+  onClone: () => undefined,
   onContinueOnTeamHosts: () => undefined,
   suggestedPrompt: undefined,
 };

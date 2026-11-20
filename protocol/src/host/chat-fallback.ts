@@ -885,8 +885,8 @@ export type FallbackModelTargetV10 = z.infer<
  * Frozen `chat.fallback.listTargets@1.0` response, as the 1.5.0 tags shipped
  * it. Both run-settings slots (`failedTuple` and each model row's `target`)
  * bound the live tuple until the first harness id after 1.5.0; v2.0 carries
- * it now. The profile rows and the skip record carry no harness id and are
- * shared with the live response by reference.
+ * it now. Profile rows and the skip record retain their published shapes too:
+ * freeze a shared leaf here before extending it on the current line.
  */
 export const chatFallbackListTargetsResponseSchemaV10 = lazySchema(() =>
   z.object({

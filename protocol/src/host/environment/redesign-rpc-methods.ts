@@ -30,8 +30,12 @@ import {
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
   environmentPlansListV10,
+  environmentPlansListV11,
+  environmentPlansListUpgradeV10ToV11,
   environmentPlansUnlinkPreviewV10,
   environmentPlansUnlinkV10,
+  environmentPlansUnlinkV11,
+  environmentPlansUnlinkUpgradeV10ToV11,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import {
   environmentReviewHeldApplyRequestSchema,
@@ -48,18 +52,28 @@ import {
   environmentMembersRemoveV10,
   environmentMembersSeatsV10,
   environmentMembersSetRoleV10,
+  environmentPreviewLocalFactsV10,
 } from "@traycer/protocol/host/environment/contracts";
 import {
   environmentMoveAcceptV10,
   environmentMovePlanUpgradeV10ToV11,
+  environmentMoveOutcomeV10,
   environmentMovePlanUpgradeV11ToV12,
+  environmentMovePlanUpgradeV12ToV20,
   environmentMovePlanV10,
   environmentMovePlanV11,
   environmentMovePlanV12,
+  environmentMovePlanV20,
+  environmentMoveStageV10,
+  environmentMoveStartV10,
   environmentMoveStopPreviewUpgradeV10ToV11,
+  environmentMoveStopPreviewUpgradeV11ToV12,
   environmentMoveStopPreviewV10,
   environmentMoveStopPreviewV11,
+  environmentMoveStopPreviewV12,
+  environmentMoveStopUpgradeV10ToV11,
   environmentMoveStopV10,
+  environmentMoveStopV11,
 } from "@traycer/protocol/host/environment/move-contracts";
 
 /**
@@ -129,6 +143,16 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMovePlanV20,
+          upgradeFromPreviousVersion: environmentMovePlanUpgradeV12ToV20,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
   },
   "environment.move.accept": {
     degrade: { kind: "unsupported" },
@@ -143,10 +167,49 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       downgradePathsFromLatest: {},
     },
   },
+  "environment.move.stage": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMoveStageV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.move.start": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMoveStartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "environment.move.outcome": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentMoveOutcomeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "environment.move.stopPreview": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: environmentMoveStopPreviewV10,
@@ -156,6 +219,10 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
           contract: environmentMoveStopPreviewV11,
           upgradeFromPreviousVersion: environmentMoveStopPreviewUpgradeV10ToV11,
         },
+        2: {
+          contract: environmentMoveStopPreviewV12,
+          upgradeFromPreviousVersion: environmentMoveStopPreviewUpgradeV11ToV12,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -163,11 +230,15 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.move.stop": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentMoveStopV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentMoveStopV11,
+          upgradeFromPreviousVersion: environmentMoveStopUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -482,6 +553,19 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
       downgradePathsFromLatest: {},
     },
   },
+  "environment.previewLocalFacts": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentPreviewLocalFactsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "environment.members.seats": {
     degrade: { kind: "unsupported" },
     1: {
@@ -563,11 +647,15 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.plans.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentPlansListV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentPlansListV11,
+          upgradeFromPreviousVersion: environmentPlansListUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -589,11 +677,15 @@ export const ENVIRONMENT_REDESIGN_RPC_METHODS = {
   "environment.plans.unlink": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: environmentPlansUnlinkV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: environmentPlansUnlinkV11,
+          upgradeFromPreviousVersion: environmentPlansUnlinkUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

@@ -10,6 +10,7 @@ import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-term
 interface ChatComposerToolbarSlotProps {
   readonly store: ComposerToolbarStore;
   readonly onAttachImages: (files: ReadonlyArray<File>) => void;
+  readonly onAttachFiles: (files: ReadonlyArray<File>) => void;
   readonly canSubmit: boolean;
   readonly attachmentPending: boolean;
   readonly onSubmit: () => void;
@@ -20,7 +21,7 @@ interface ChatComposerToolbarSlotProps {
   readonly dictation: ComposerDictationControl | null;
   readonly dictationPreparing: DictationPreparingStatus | null;
   readonly settingsLocked: boolean;
-  /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
+  /** The host "Add a profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly createProfileHostId: string | null;
   readonly runTargetHostId: string | null;
@@ -64,6 +65,7 @@ function ChatComposerToolbarSlotImpl(props: ChatComposerToolbarSlotProps) {
     <ComposerToolbar
       store={props.store}
       onAttachImages={props.onAttachImages}
+      onAttachFiles={props.onAttachFiles}
       canSubmit={props.canSubmit}
       attachmentPending={props.attachmentPending}
       onSubmit={props.onSubmit}

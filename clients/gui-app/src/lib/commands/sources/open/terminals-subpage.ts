@@ -115,8 +115,8 @@ function terminalWorkspaceCheckingHint(
   return {
     id: `open:terminals:new:${row.hostId}:${encodeURIComponent(row.runningDir)}:checking`,
     label: row.runningDir,
-    description: "Checking workspace…",
-    statusBadge: "Checking workspace…",
+    description: "Checking folder…",
+    statusBadge: "Checking folder…",
     disabled: true,
     keywords: [row.runningDir, "new", "terminal", "workspace", "checking"],
     group: "open",
@@ -135,7 +135,7 @@ function terminalWorkspaceDisabledHint(
   return {
     id: `open:terminals:new:${row.hostId}:${encodeURIComponent(row.runningDir)}:disabled`,
     label: row.runningDir,
-    description: `Workspace unavailable: ${reason}`,
+    description: `Folder unavailable: ${reason}`,
     statusBadge: `Unavailable: ${reason}`,
     disabled: true,
     keywords: [row.runningDir, "new", "terminal", "workspace", reason],
@@ -236,10 +236,10 @@ function terminalWorkspaceStatusHint(
   const isLoading = status === "loading";
   return {
     id: `open:terminals:new:host:${hostId}:${status}`,
-    label: isLoading ? "Loading workspaces…" : "Couldn't load workspaces",
+    label: isLoading ? "Loading folders…" : "Couldn't load folders",
     description: isLoading
-      ? "Fetching workspaces for this host"
-      : "Retry the workspace availability check",
+      ? "Fetching folders for this host"
+      : "Retry the folder availability check",
     statusBadge: isLoading ? "Loading" : "Unavailable",
     disabled: true,
     keywords: ["workspace", status],
@@ -288,7 +288,7 @@ function terminalWorkspaceQueryItems(
       ...openerActionLeaf({
         // Recovery is not a terminal-open command for analytics.
         id: `workspace-check:terminal:${hostId}:retry`,
-        label: "Retry workspace check",
+        label: "Retry folder check",
         keywords: ["workspace", "terminal", "retry"],
         run: query.retry,
       }),
@@ -383,7 +383,7 @@ function useNewTerminalWorkspaceItems(
   useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
   const directory = useHostDirectoryList();
   // Every picker's host rule (`hostOptionPickerGroup`): personal hosts, the
-  // user's sandboxes and each team's sandboxes; never Automations, an agent's
+  // user's sandboxes and each team's computers and sandboxes; never Automations, an agent's
   // burst sandbox or a sandbox whose control-plane row has not answered.
   const hostOptions = useHostOptions().hosts;
   const offeredHosts = useMemo(() => {
@@ -392,7 +392,10 @@ function useNewTerminalWorkspaceItems(
       [
         ...groups.personal,
         ...groups.sandboxes,
-        ...groups.teams.flatMap((team) => team.sandboxes),
+        ...groups.teams.flatMap((team) => [
+          ...team.computers,
+          ...team.sandboxes,
+        ]),
       ].map((host) => [host.hostId, host]),
     );
   }, [hostOptions]);
@@ -454,7 +457,7 @@ function useNewTerminalWorkspaceItems(
 
 const NEW_TERMINAL_WORKSPACE_SUBPAGE: CommandSubpage = {
   id: "open:terminals:new:workspace",
-  title: "Create terminal in workspace",
+  title: "Create terminal in folder",
   useItems: useNewTerminalWorkspaceItems,
 };
 

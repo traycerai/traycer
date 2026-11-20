@@ -3,6 +3,7 @@ import { Cpu } from "lucide-react";
 import type { ResourceOwnerKindWireV14 } from "@traycer/protocol/host/resources/subscribe";
 import {
   useEpicResourceUsage,
+  useEpicAppResourceUsage,
   useOwnerResourceUsage,
 } from "@/stores/resources/resources-registry";
 import {
@@ -10,6 +11,11 @@ import {
   formatMemoryBytes,
   formatProcessCount,
 } from "@/lib/resources/format-resource-usage";
+import type { AppResourceUsage } from "@/stores/resources/resources-store";
+import {
+  hostCpuSharePercent,
+  hostCpuCoresLabel,
+} from "@/lib/resources/headline-resource-summary";
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import { cn } from "@/lib/utils";
 import { useEpicResourcesLease } from "@/hooks/resources/use-epic-resources-lease";
@@ -57,6 +63,7 @@ function ResourceChipSeparator() {
 }
 
 interface ResourceUsageChipProps {
+  readonly app: Pick<AppResourceUsage, "hostCpuCount"> | null;
   readonly cpuPercent: number;
   readonly rssBytes: number | null;
   readonly pssBytes: number | null;
@@ -76,7 +83,13 @@ interface ResourceUsageChipProps {
  */
 export function ResourceUsageChip(props: ResourceUsageChipProps) {
   if (props.metrics.length === 0) return null;
-  const cpu = formatCpuPercent(props.cpuPercent);
+  const share = hostCpuSharePercent(props.cpuPercent, props.app);
+  const cores = hostCpuCoresLabel(props.cpuPercent, props.app);
+  const cpu = share === null ? UNAVAILABLE_DASH : formatCpuPercent(share);
+  const cpuDescription =
+    share === null
+      ? "CPU unavailable: This host doesn't report how many processors it has, so there is no total to take a CPU share of."
+      : `${cpu} CPU (${cores})`;
   // One row is its own scope, so the popover's complete-scope rule reduces to
   // "PSS when this row has one". The metric is named in the VISIBLE text, not
   // only in the accessible one: two chips on screen otherwise show numbers
@@ -98,7 +111,7 @@ export function ResourceUsageChip(props: ResourceUsageChipProps) {
   const processes = `${processCount} ${pluralize(props.processCount, "proc", "procs")}`;
   const memoryDescription =
     memoryBytes === null ? "memory unavailable" : memory;
-  const description = `${props.label}: ${cpu} CPU, ${memoryDescription}, ${processCount} ${processWord}`;
+  const description = `${props.label}: ${cpuDescription}, ${memoryDescription}, ${processCount} ${processWord}`;
   const readings: Record<NavigatorResourceMetric, string> = {
     cpu,
     memory,
@@ -148,9 +161,11 @@ export function OwnerResourceChip(props: OwnerResourceChipProps) {
     props.ownerId,
     props.hostId,
   );
+  const app = useEpicAppResourceUsage(props.epicId);
   if (usage === null) return null;
   return (
     <ResourceUsageChip
+      app={app}
       cpuPercent={usage.cpuPercent}
       rssBytes={usage.rssBytes}
       pssBytes={usage.pssBytes}
@@ -202,9 +217,11 @@ export interface EpicResourceChipProps {
  */
 export function EpicResourceChip(props: EpicResourceChipProps) {
   const usage = useEpicResourceUsage(props.epicId);
+  const app = useEpicAppResourceUsage(props.epicId);
   if (usage === null) return null;
   return (
     <ResourceUsageChip
+      app={app}
       cpuPercent={usage.cpuPercent}
       rssBytes={usage.rssBytes}
       pssBytes={usage.pssBytes}

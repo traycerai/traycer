@@ -1,3 +1,4 @@
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -295,6 +296,7 @@ describe("<ChatForkDialog /> host/workspace picker scope", () => {
         tabId="tab-test"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
 
     // #1227 made the scope dialog-local (`selected`): the picker owns its
@@ -319,6 +321,7 @@ describe("<ChatForkDialog /> host/workspace picker scope", () => {
         tabId="tab-test"
         onOpenChange={() => undefined}
       />,
+      { wrapper: WithTestQueryClient },
     );
     expect(dialogMocks.capturedHostScope?.kind).toBe("selected");
 

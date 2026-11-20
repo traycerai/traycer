@@ -90,7 +90,7 @@ export function TeamModelRouting(): ReactNode {
       title="Model routing"
       description={
         personal
-          ? "Applies to your agents on every computer and sandbox running these settings."
+          ? "Applies to your agents on every computer and sandbox running Personal."
           : "How agents recover when an account or model cannot continue."
       }
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
@@ -317,7 +317,7 @@ function TeamRoutingEditor(props: {
           profileStepHint={
             props.snapshot.profiles.filter((profile) => profile.enabled)
               .length < 2
-              ? "Link another plan to switch accounts."
+              ? "No other accounts to switch to yet."
               : null
           }
           tierStepHint={null}
@@ -424,6 +424,7 @@ function TeamRoutingReadOnly(props: {
     <section className="flex flex-col gap-3 text-ui-sm">
       <FallbackPolicySummary
         policy={props.policy}
+        tierLabels={null}
         accounts={
           <p>
             Accounts:{" "}

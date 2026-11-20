@@ -26,6 +26,7 @@ import {
   type HoverCardOpenReason,
   type HoverCardSemantics,
 } from "@/components/ui/hover-card";
+import { desktopHistoryLayerBlocksNavigation } from "@/components/layout/shell/desktop-history-gesture-ownership";
 import { MenuOpenMarker, useAnyMenuOpen } from "@/components/ui/open-menus";
 import {
   ContextMenu,
@@ -481,6 +482,15 @@ describe("HoverCard", () => {
     settle(OPEN_DELAY_MS);
 
     expect(screen.getByRole("dialog", { name: "File path" })).toBeTruthy();
+  });
+
+  it("leaves the back/forward swipe available while a dialog-role card is open", () => {
+    const trigger = renderCard({});
+    hoverIn(trigger);
+    settle(OPEN_DELAY_MS);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    expect(desktopHistoryLayerBlocksNavigation()).toBe(false);
   });
 
   describe("(k) shut while any menu is open anywhere", () => {

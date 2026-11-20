@@ -1,10 +1,10 @@
 /**
- * A chat whose sandbox rests can still be typed into: the message waits for the
- * sandbox's own wake. Only the composer's send opens up; the viewer's read-only
- * surface and the stream-bound actions are unchanged.
+ * A resting sandbox can accept the owner's message for its own wake; viewers
+ * stay read-only.
  */
 import {
   cleanup,
+  fireEvent,
   render as testingRender,
   screen,
 } from "@testing-library/react";
@@ -166,6 +166,7 @@ function props(
       nodeId: "chat-1",
       isActive: true,
       mentionRoots: [],
+      runWorkingDirectory: null,
       fallbackToGlobalMentionRoots: true,
       currentEpicId: "epic-1",
       onSubmitMessage: () => false,
@@ -173,6 +174,7 @@ function props(
       onSettingsChange: null,
       workspaceControls: <div data-testid="host-workspace-selector" />,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      onClone: () => undefined,
       onContinueOnTeamHosts: () => undefined,
       suggestedPrompt: undefined,
     },
@@ -220,7 +222,6 @@ const RESTING: RestingChatSandbox = {
     displayName: "e2e-sbx-rest",
   }),
   configuration: { kind: "personal" },
-  wakeChangesPayer: false,
 };
 
 function lastComposer() {
@@ -261,22 +262,34 @@ describe("the composer of a chat on a resting sandbox", () => {
   });
 
   it.each([false, true])(
-    "keeps a resting copy's send enabled without live workspace controls (viewer: %s)",
+    "keeps only a resting-copy owner sendable without live workspace controls (viewer: %s)",
     (isViewer) => {
+      const onClone = vi.fn();
+      const interactionProps = props(
+        {
+          isViewer,
+          isCopy: true,
+          canAct: false,
+          readOnlyNotice: null,
+          restingSandbox: RESTING,
+        },
+        null,
+      );
       render(
         <ChatLowerInteractionSurfaces
-          {...props(
-            {
-              isViewer,
-              isCopy: true,
-              canAct: false,
-              readOnlyNotice: null,
-              restingSandbox: RESTING,
-            },
-            null,
-          )}
+          {...interactionProps}
+          composer={{ ...interactionProps.composer, onClone }}
         />,
       );
+
+      if (isViewer) {
+        expect(screen.queryByTestId("composer-stub")).toBeNull();
+        expect(composerProps).toEqual([]);
+        expect(screen.getByText("Read-only viewer.")).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: "Clone agent" }));
+        expect(onClone).toHaveBeenCalledTimes(1);
+        return;
+      }
 
       expect(screen.getByTestId("composer-stub")).toBeTruthy();
       expect(lastComposer()).toMatchObject({

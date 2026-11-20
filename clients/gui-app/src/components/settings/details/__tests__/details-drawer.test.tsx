@@ -40,13 +40,13 @@ import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHistoryResponse } from "@traycer/protocol/host/environment/configuration-contracts";
-import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
 import type {
   EnvironmentSecretRemovalV12,
   EnvironmentSecretsListResponseV12,
   EnvironmentSecretsVersionsResponseV11,
 } from "@traycer/protocol/host/environment-schemas";
 import { SettingsDetailsDialog } from "@/components/settings/details/settings-details-button";
+import { expectFocusRingInset } from "@/components/ui/__tests__/dialog-scroll-layout-assertions";
 import type { DetailsSubject } from "@/lib/settings-details-entry";
 import {
   mountTeamPage,
@@ -56,13 +56,8 @@ import {
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import {
-  recordNegotiatedHostManifest,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { sandboxQueryKeys } from "@/lib/query-keys";
-import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 import {
   RETIRED_PROVIDER_VARIABLES,
@@ -321,22 +316,91 @@ describe("the drawer's reader scopes", () => {
 
     cleanup();
     openDrawer(harness, { kind: "setup_script", key: "macos" }, "Setup");
-    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    const recoveryList = retry.closest("ul");
+    if (recoveryList === null) throw new Error("expected the recovery list");
+    expectFocusRingInset(recoveryList, ["-m-1", "p-1"]);
+    await user.click(retry);
     expect(hoisted.recover.mock.calls).toEqual([
       [{ kind: "retry", hostId: "host-a" }],
     ]);
   });
 
-  it("sends the subject, or null for the chip, to environment.history", async () => {
+  it("sends the subject, or null when it names no key, to environment.history", async () => {
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.history": () => history({}),
     });
-    openDrawer(harness, { kind: "chip", key: "secrets" }, "Settings delivery");
+    openDrawer(harness, { kind: "host_settings", key: "" }, "Settings");
     await screen.findByRole("tab", { name: "Status" });
 
     expect(harness.paramsOf("environment.history")).toEqual([
       { environmentId: "env-a", subject: null },
     ]);
+  });
+});
+
+describe("the all-secrets drawer", () => {
+  it("counts and lists only sandboxes using the cached host kinds", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          hostStates: [
+            {
+              ...brokenHost,
+              hostId: "computer-1",
+              hostName: "dev-box",
+              state: "applied",
+              reason: null,
+            },
+            {
+              ...brokenHost,
+              hostId: "sandbox-1",
+              hostName: "worker",
+              state: "applied",
+              reason: null,
+            },
+          ],
+        }),
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+    });
+    harness.queryClient.setQueryData(
+      [
+        ...hostQueryKeys.method(null, "environment.host.list", {
+          environmentId: "env-a",
+        }),
+        "user-me",
+      ],
+      {
+        hosts: [
+          { hostId: "computer-1", kind: "personal", hostLabel: "dev-box" },
+          { hostId: "sandbox-1", kind: "sandbox", hostLabel: "worker" },
+        ],
+      },
+    );
+    openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
+
+    expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
+    expect(screen.getByText("worker")).toBeTruthy();
+    expect(screen.queryByText("dev-box")).toBeNull();
+  });
+
+  it("shows no summary or host rows before the host list is cached", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          hostStates: [{ ...brokenHost, state: "applied", reason: null }],
+        }),
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+    });
+    openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
+
+    await screen.findByRole("tab", { name: "Status" });
+    expect(
+      screen.queryByText(
+        /Applied on|Not applied on|Applying on|Not on any host/,
+      ),
+    ).toBeNull();
+    expect(screen.queryByText("dev-box")).toBeNull();
   });
 });
 
@@ -414,7 +478,7 @@ describe("the subject's own controls", () => {
 });
 
 describe("Export diagnostics", () => {
-  it("keeps an export failure's own message, not the details-load line", async () => {
+  it("shows the connection refusal when the export reread cannot reach authn", async () => {
     let reads = 0;
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.history": () => {
@@ -431,7 +495,7 @@ describe("Export diagnostics", () => {
     await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Couldn't reach the history.");
+    expect(alert.textContent).toContain("Connect to manage settings.");
     expect(alert.textContent).not.toContain("Couldn't load details.");
   });
 
@@ -647,8 +711,8 @@ describe("the Secrets header's Details", () => {
     });
     openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
 
-    // No host has reported yet, so the page's Now says so.
-    expect(await screen.findByText("Not on any host")).toBeTruthy();
+    await screen.findByRole("tab", { name: "Status" });
+    expect(screen.queryByText("Not on any host")).toBeNull();
     const items = screen.getAllByRole("listitem").map((row) => row.textContent);
     expect(items).toEqual([
       expect.stringContaining("STRIPE_KEY"),
@@ -667,16 +731,37 @@ describe("the Secrets header's Details", () => {
       false,
     ]);
     expect(screen.queryByText("OLD_DESTROYED")).toBeNull();
-    const call = harness.messenger.calls.find(
-      (entry) => entry.method === "environment.secrets.list",
-    );
-    expect(call?.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.list",
-      version: { major: 1, minor: 1 },
-    });
+    expect(
+      harness.cloudRequests
+        .filter(
+          (request) =>
+            request.method === "GET" &&
+            new URL(request.url).pathname ===
+              "/api/v3/environments/env-a/secrets",
+        )
+        .map((request) => new URL(request.url).searchParams.get("include")),
+    ).toEqual(["cleanup_failure"]);
   });
 
-  it("opens one removed secret's own details and retries its unfinished cleanup", async () => {
+  it("shows only sandbox status for one removed secret and retries its cleanup", async () => {
+    const targets = [
+      {
+        target: "host" as const,
+        hostId: "sandbox-a",
+        hostName: "worker",
+        state: "requested" as const,
+        at: AT,
+        failedAt: AT,
+      },
+      {
+        target: "broker_current" as const,
+        hostId: null,
+        hostName: null,
+        state: "requested" as const,
+        at: AT,
+        failedAt: null,
+      },
+    ];
     const versions: EnvironmentSecretsVersionsResponseV11 = {
       versions: [
         {
@@ -691,29 +776,32 @@ describe("the Secrets header's Details", () => {
       ],
       removal: removal({
         outcome: "cleanup_requested",
-        targets: [
-          {
-            target: "host",
-            hostId: "host-a",
-            hostName: "dev-box",
-            state: "confirmed",
-            at: AT,
-            failedAt: null,
-          },
-          {
-            target: "broker_current",
-            hostId: null,
-            hostName: null,
-            state: "requested",
-            at: AT,
-            failedAt: null,
-          },
-        ],
+        targets,
       }),
     };
     const harness = mountTeamPage(poolSource("editor"), {
-      "environment.history": () => history({}),
-      "environment.secrets.list": () => secretsList,
+      "environment.history": () =>
+        history({
+          hostStates: [
+            {
+              ...brokenHost,
+              hostId: "sandbox-a",
+              hostName: "worker",
+              state: "not_applied",
+              reason: "permission_denied",
+            },
+          ],
+        }),
+      "environment.secrets.list": () => ({
+        ...secretsList,
+        removed: [
+          {
+            id: "sec-cleanup",
+            name: "CLEANUP_KEY",
+            removal: removal({ outcome: "cleanup_requested", targets }),
+          },
+        ],
+      }),
       "environment.secrets.versions": () => versions,
       "environment.secrets.destroy": () => ({ outcome: "revoked" as const }),
     });
@@ -724,19 +812,32 @@ describe("the Secrets header's Details", () => {
       within(row as HTMLElement).getByRole("button", { name: "Details" }),
     );
 
-    expect(await screen.findByText(/Cleanup requested/)).toBeTruthy();
+    expect(
+      await screen.findByText(/worker couldn't delete its copy/),
+    ).toBeTruthy();
     expect(screen.getByText("Version 2")).toBeTruthy();
-    expect(screen.getByText("Removed from 1 host")).toBeTruthy();
+    expect(screen.getByText("Removed from 0 hosts")).toBeTruthy();
+    expect(screen.getByText("worker")).toBeTruthy();
+    expect(screen.queryByText("dev-box")).toBeNull();
+    expect(screen.queryByText("laptop")).toBeNull();
+    expect(harness.paramsOf("environment.history")).toContainEqual({
+      environmentId: "env-a",
+      subject: { kind: "secret", key: "sec-cleanup" },
+    });
     expect(harness.paramsOf("environment.secrets.versions")).toEqual([
       { environmentId: "env-a", secretId: "sec-cleanup" },
     ]);
-    const call = harness.messenger.calls.find(
-      (entry) => entry.method === "environment.secrets.versions",
-    );
-    expect(call?.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.versions",
-      version: { major: 1, minor: 1 },
-    });
+    expect(
+      harness.cloudRequests
+        .filter(
+          (request) =>
+            request.method === "GET" &&
+            new URL(request.url).pathname.endsWith(
+              "/secrets/sec-cleanup/versions",
+            ),
+        )
+        .map((request) => new URL(request.url).pathname),
+    ).toEqual(["/api/v3/environments/env-a/secrets/sec-cleanup/versions"]);
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => {
@@ -744,6 +845,46 @@ describe("the Secrets header's Details", () => {
         { environmentId: "env-a", secretId: "sec-cleanup", versionId: "ver-2" },
       ]);
     });
+  });
+
+  it("shows the summary and no host row for a secret with no sandbox status", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({ hostStates: [] }),
+      "environment.secrets.list": () => ({
+        secrets: [],
+        removed: [
+          {
+            id: "sec-cleanup",
+            name: "CLEANUP_KEY",
+            removal: removal({ outcome: "cleanup_requested" }),
+          },
+        ],
+      }),
+      "environment.secrets.versions": () => ({
+        versions: [
+          {
+            versionId: "ver-2",
+            ordinal: 2,
+            createdAt: AT,
+            supersededAt: null,
+            destroyedAt: null,
+            current: true,
+            rotationState: null,
+          },
+        ],
+        removal: null,
+      }),
+    });
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
+    const row = (await screen.findByText("CLEANUP_KEY")).closest("li");
+    await user.click(
+      within(row as HTMLElement).getByRole("button", { name: "Details" }),
+    );
+
+    expect(await screen.findByText(/Cleanup requested/)).toBeTruthy();
+    expect(screen.getByText("Removed from 0 hosts")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Open / })).toBeNull();
   });
 
   it("retries a removal still under way by removing its current version again", async () => {
@@ -833,7 +974,7 @@ describe("a history-reported unused setting", () => {
 
   it("names a known harness key by its product, never by the raw key", async () => {
     const harness = mountUnused("claude:ANTHROPIC_API_KEY");
-    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+    openDrawer(harness, { kind: "host_settings", key: "" }, "Settings");
 
     const row = await screen.findByText(/not used on sandboxes/);
     expect(row.textContent).toBe("Claude Code key · not used on sandboxes");
@@ -842,7 +983,7 @@ describe("a history-reported unused setting", () => {
 
   it("keeps an already-friendly label as it is", async () => {
     const harness = mountUnused("Claude Code key");
-    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+    openDrawer(harness, { kind: "host_settings", key: "" }, "Settings");
 
     const row = await screen.findByText(/not used on sandboxes/);
     expect(row.textContent).toBe("Claude Code key · not used on sandboxes");
@@ -850,7 +991,7 @@ describe("a history-reported unused setting", () => {
 
   it("uses a generic label for an unknown harness instead of exposing its key", async () => {
     const harness = mountUnused("future_harness:PRIVATE_KEY");
-    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+    openDrawer(harness, { kind: "host_settings", key: "" }, "Settings");
 
     const row = await screen.findByText(/not used on sandboxes/);
     expect(row.textContent).toBe("Agent key · not used on sandboxes");
@@ -859,7 +1000,7 @@ describe("a history-reported unused setting", () => {
 
   it("falls back to a generic key label when the host names no setting, never printing null", async () => {
     const harness = mountUnused(null);
-    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+    openDrawer(harness, { kind: "host_settings", key: "" }, "Settings");
 
     const row = await screen.findByText(/not used on sandboxes/);
     expect(row.textContent).toBe("Agent key · not used on sandboxes");
@@ -869,7 +1010,7 @@ describe("a history-reported unused setting", () => {
   it("keeps the raw key in the diagnostics export for support", async () => {
     const harness = mountUnused("claude:ANTHROPIC_API_KEY");
     const user = userEvent.setup();
-    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
+    openDrawer(harness, { kind: "host_settings", key: "" }, "Settings");
     await screen.findByText(/not used on sandboxes/);
 
     await user.click(
@@ -888,222 +1029,6 @@ describe("a history-reported unused setting", () => {
         ],
       },
     });
-  });
-});
-
-describe("a sandbox's unused settings", () => {
-  const HOST_ID = mockLocalHostEntry.hostId;
-  const sandboxHost = {
-    hostId: HOST_ID,
-    hostName: "stale-name",
-    state: "applied",
-    reason: null,
-    at: AT,
-    lastReportedAt: AT,
-  };
-  const status = environmentStatusResponseSchemaV11.parse({
-    principal: { kind: "personal" },
-    reachability: "connected",
-    bindingGeneration: 1,
-    desiredRevision: 5,
-    receivedRevision: 5,
-    appliedRevision: 5,
-    receiptAgeMs: 0,
-    remoteAccess: "on",
-    pendingUploads: [],
-    setup: null,
-    items: [
-      {
-        kind: "env_override",
-        key: "claude:ANTHROPIC_API_KEY",
-        os: "any",
-        desiredRevision: 3,
-        status: "not_used",
-        code: "ok",
-        args: { exitStatus: null, stage: null, durationMs: null, kind: null },
-        brokerEnforced: null,
-        minimumHostVersion: null,
-        appliedAs: null,
-      },
-    ],
-  });
-
-  function mountChip(
-    guestConfigured: boolean | null,
-    delivered: typeof status,
-  ): TeamPageHarness {
-    const harness = mountTeamPage(poolSource("admin"), {
-      "environment.history": () => history({ hostStates: [sandboxHost] }),
-      "environment.status": () => delivered,
-    });
-    harness.queryClient.setQueryDefaults(sandboxQueryKeys.listAll(), {
-      gcTime: Number.POSITIVE_INFINITY,
-    });
-    harness.queryClient.setQueryData(sandboxQueryKeys.list({}, "user-me"), {
-      sandboxes: [
-        sandboxSummaryFixture({
-          hostId: HOST_ID,
-          displayName: "Build box",
-          state: "awake",
-          guestConfigured,
-        }),
-      ],
-    });
-    return harness;
-  }
-
-  it("lists each unused key as a named row under the sandbox, never printing the variable or a reason", async () => {
-    const harness = mountChip(null, status);
-    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
-
-    const row = await screen.findByText(/key · not used on sandboxes/);
-    expect(row.textContent).toMatch(
-      /^Claude Code key · not used on sandboxes$/,
-    );
-    expect(screen.getAllByText(/Build box/).length).toBeGreaterThan(0);
-    expect(document.body.textContent).not.toMatch(
-      /ANTHROPIC_API_KEY|permission_denied/,
-    );
-    expect(harness.paramsOf("environment.status")).toHaveLength(1);
-  });
-
-  describe("the recovery for a sandbox whose settings did not apply", () => {
-    function advertiseRepair(minor: number): void {
-      recordNegotiatedHostManifest(HOST_ID, {
-        "host.sandbox.repairGuestConfiguration": { major: 1, minor },
-      });
-    }
-
-    // The guest is fine; only a settings item failed to apply.
-    const environmentFailed = environmentStatusResponseSchemaV11.parse({
-      ...status,
-      items: [
-        {
-          ...status.items[0],
-          key: "VAR",
-          kind: "variable",
-          status: "failed",
-          code: "permission_denied",
-        },
-      ],
-    });
-
-    async function openDelivery(
-      guestConfigured: boolean | null,
-      delivered: typeof status,
-    ) {
-      const harness = mountChip(guestConfigured, delivered);
-      openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
-      await screen.findByText("Build box", { exact: true });
-    }
-
-    it("offers Repair setup, not Retry applying, for a guest that really failed on a 1.0 host", async () => {
-      advertiseRepair(0);
-      await openDelivery(false, status);
-
-      expect(
-        await screen.findByRole("button", { name: "Repair setup" }),
-      ).toBeTruthy();
-      expect(
-        screen.queryByRole("button", { name: "Retry applying" }),
-      ).toBeNull();
-    });
-
-    it("offers Retry applying for a guest that really failed on a host with the combined retry", async () => {
-      advertiseRepair(1);
-      await openDelivery(false, status);
-
-      expect(
-        await screen.findByRole("button", { name: "Retry applying" }),
-      ).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
-    });
-
-    it("offers nothing on a host whose repair version is unknown", async () => {
-      await openDelivery(false, status);
-
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
-      expect(
-        screen.queryByRole("button", { name: "Retry applying" }),
-      ).toBeNull();
-    });
-
-    it("never offers Repair setup when only an environment item failed and the guest is configured", async () => {
-      advertiseRepair(0);
-      await openDelivery(true, environmentFailed);
-      // The row did read as not applied, so the missing button is the rule's.
-      expect(
-        (await screen.findAllByText(/Not applied/)).length,
-      ).toBeGreaterThan(0);
-
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
-    });
-
-    it("never offers Repair setup when only an environment item failed and the guest is unknown", async () => {
-      advertiseRepair(0);
-      await openDelivery(null, environmentFailed);
-      // The row did read as not applied, so the missing button is the rule's.
-      expect(
-        (await screen.findAllByText(/Not applied/)).length,
-      ).toBeGreaterThan(0);
-
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
-    });
-
-    it("never offers Repair setup for a guest whose state is unknown", async () => {
-      advertiseRepair(0);
-      await openDelivery(null, status);
-
-      expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
-    });
-  });
-
-  it("shows only the drawer's no-access state once history is refused, even with the sandbox cached", async () => {
-    const harness = mountTeamPage(poolSource("viewer"), {
-      "environment.history": () => {
-        throw new Error("Forbidden: no longer a member");
-      },
-      "environment.status": () => status,
-    });
-    harness.queryClient.setQueryDefaults(sandboxQueryKeys.listAll(), {
-      gcTime: Number.POSITIVE_INFINITY,
-    });
-    harness.queryClient.setQueryData(sandboxQueryKeys.list({}, "user-me"), {
-      sandboxes: [
-        sandboxSummaryFixture({
-          hostId: HOST_ID,
-          displayName: "Build box",
-          state: "awake",
-          guestConfigured: false,
-          failureCode: "envelope-delivery:x",
-        }),
-      ],
-    });
-    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
-
-    expect((await screen.findByRole("alert")).textContent).toBe(
-      "Couldn't load details.Retry",
-    );
-    expect(document.body.textContent).not.toMatch(
-      /Build box|Claude Code|ANTHROPIC_API_KEY|SBX-|envelope-delivery|not used/,
-    );
-    expect(harness.paramsOf("environment.status")).toEqual([]);
-  });
-
-  it("keeps the raw item key in the diagnostics export only", async () => {
-    const harness = mountChip(null, status);
-    const user = userEvent.setup();
-    openDrawer(harness, { kind: "chip", key: "" }, "Settings delivery");
-    await screen.findByText(/not used on sandboxes/);
-
-    await user.click(
-      await screen.findByRole("tab", { name: "Export diagnostics" }),
-    );
-    await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
-    const exported = await savedExport();
-
-    expect(JSON.stringify(exported)).toContain("claude:ANTHROPIC_API_KEY");
-    expect(JSON.stringify(exported)).toContain("not_used");
   });
 });
 

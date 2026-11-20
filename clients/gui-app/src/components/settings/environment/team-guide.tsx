@@ -151,7 +151,6 @@ function TeamGuideEditor(props: {
   return (
     <>
       <AgentSelectionGuideEditorSurface
-        purpose="The guide agents read when they pick a coding agent, model and effort for work they hand off."
         titleId="team-guide-heading"
         value={value}
         onValueChange={setValue}

@@ -8,6 +8,10 @@
  * `useBotActivity`, and the virtualised transcript is a stub that exposes the
  * option pick each surface hands it.
  */
+import {
+  botMentionHostClientMock,
+  emptyBotMentionHostListsMock,
+} from "@/components/bots/__tests__/bot-mention-host-test-support";
 import type { ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -24,12 +28,20 @@ import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-exp
 import type { BotTranscriptSurface } from "@/components/bots/bot-chat-transcript";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BotActivity } from "@/hooks/bots/use-bot-activity";
+import { BOT_CONVERSATION_REPLY_VERSION } from "@/hooks/bots/use-bot-send-version";
+import { runTimersUntilQuiet } from "@/components/chat/composer/__tests__/editor-timer-support";
+import {
+  negotiateBotSend,
+  resetBotFailedRequestSupport,
+} from "@/components/bots/__tests__/bot-failed-request-test-support";
 
 /** One `bot.conversation.send` the view started, settled by the case. */
 interface SendCall {
   readonly variables: BotConversationSendRequest;
   readonly succeed: () => void;
   readonly fail: () => void;
+  /** The host refuses with `code`. */
+  readonly failWith: (code: "RPC_ERROR" | "E_BOT_REPLIES_UNSUPPORTED") => void;
   /** Resolves once the send's outcome was handed to the sender. */
   readonly settled: Promise<void>;
 }
@@ -48,6 +60,15 @@ const mocks = vi.hoisted(() => ({
     activity: null as BotActivity | null,
   },
 }));
+
+vi.mock(
+  "@/hooks/host/use-host-client-for-host-id",
+  () => botMentionHostClientMock,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-host-lists-query",
+  () => emptyBotMentionHostListsMock,
+);
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => null,
@@ -102,6 +123,21 @@ vi.mock("@/hooks/bots/use-bot-mutations", async () => {
           setVariables(variables);
           setPending(true);
           const settled = Promise.withResolvers<void>();
+          const failWith = (
+            code: "RPC_ERROR" | "E_BOT_REPLIES_UNSUPPORTED",
+          ): void => {
+            setPending(false);
+            callbacks.onError(
+              new HostRpcError({
+                code,
+                message: "host refused the message",
+                requestId: "req-1",
+                method: "bot.conversation.send",
+                fatalDetails: null,
+              }),
+            );
+            settled.resolve();
+          };
           mocks.sends.push({
             variables,
             succeed: () => {
@@ -114,19 +150,8 @@ vi.mock("@/hooks/bots/use-bot-mutations", async () => {
               });
               settled.resolve();
             },
-            fail: () => {
-              setPending(false);
-              callbacks.onError(
-                new HostRpcError({
-                  code: "RPC_ERROR",
-                  message: "host refused the message",
-                  requestId: "req-1",
-                  method: "bot.conversation.send",
-                  fatalDetails: null,
-                }),
-              );
-              settled.resolve();
-            },
+            fail: () => failWith("RPC_ERROR"),
+            failWith,
             settled: settled.promise,
           });
         },
@@ -161,11 +186,13 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => mocks.state.activity,
 }));
+vi.mock("@/components/bots/bot-transcript-image-scope", () => ({
+  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
+}));
 vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/components/bots/bot-chat-transcript")
   >()),
-  BotTranscriptImageScope: (props: { children: ReactNode }) => props.children,
   BotChatTranscript: (props: { surface: BotTranscriptSurface | null }) => {
     const { surface } = props;
     if (surface === null || surface.chooseOption === null) return null;
@@ -176,13 +203,13 @@ vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
 /** The option "Ship it" the surface offers, once per surface. */
 function ChoiceStub(props: {
   readonly kind: BotTranscriptSurface["kind"];
-  readonly pick: (choice: string) => void;
+  readonly pick: (messageId: string | null, choice: string) => void;
 }): ReactNode {
   return (
     <button
       type="button"
       data-testid={`stub-choose-${props.kind}`}
-      onClick={() => props.pick("Ship it")}
+      onClick={() => props.pick("answer-1", "Ship it")}
     />
   );
 }
@@ -255,7 +282,6 @@ function mount(openThread: BotOpenThread | null): void {
               appConversationChatId={CHANNEL_ID}
               trunkChatId="trunk-chat"
               onOpenTurn={vi.fn()}
-              onOpenSession={vi.fn()}
               landOn={null}
               openMemory={null}
               onOpenMemory={vi.fn()}
@@ -417,6 +443,51 @@ describe("<BotChannelView tiles={null} /> an option pick the host refuses", () =
 
     expect(mocks.sends).toHaveLength(2);
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a linked option pick the host refuses", () => {
+  it("is sent as a reply to the offering message, says the refusal in the dock, and starts no send of its own", async () => {
+    negotiateBotSend(HOST_ID, BOT_CONVERSATION_REPLY_VERSION);
+    try {
+      const user = userEvent.setup({ delay: null });
+      mount(null);
+
+      await user.click(screen.getByTestId("stub-choose-channel"));
+      expect(lastSend().variables).toEqual({
+        botId: BOT_ID,
+        conversationId: CHANNEL_ID,
+        text: "Ship it",
+        threadId: null,
+        announcementId: null,
+        redeliver: null,
+        supersedes: null,
+        answer: null,
+        replyTo: "answer-1",
+      });
+      // The clock is faked from here, so whatever the refusal schedules runs on
+      // it, until nothing is left.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const refused = lastSend();
+      await act(async () => {
+        refused.failWith("E_BOT_REPLIES_UNSUPPORTED");
+        await refused.settled;
+      });
+      await runTimersUntilQuiet();
+
+      expect(
+        screen.getByTestId("bot-channel-composer-send-failed").textContent,
+      ).toBe(SEND_FAILED);
+      expect(mocks.toastFromHostError).not.toHaveBeenCalled();
+      expect(mocks.sends).toHaveLength(1);
+      vi.useRealTimers();
+      await user.click(screen.getByTestId("stub-choose-channel"));
+      expect(mocks.sends).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+      cleanup();
+      resetBotFailedRequestSupport();
+    }
   });
 });
 

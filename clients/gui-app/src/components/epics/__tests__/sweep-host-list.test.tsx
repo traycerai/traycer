@@ -48,6 +48,7 @@ function sandboxOption(
     sandbox: {
       ...sandbox,
       summary: sandboxSummaryFixture({ hostId, burst: false }),
+      ownerKind: "unknown",
       teamOwned: false,
     },
   });

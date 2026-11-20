@@ -1,10 +1,11 @@
 import {
-  useId,
+  useContext,
   useState,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
 } from "react";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { Eye, EyeOff, Layers, Mic, PanelTop } from "lucide-react";
 import { toast } from "sonner";
@@ -40,7 +41,6 @@ import { useRegionValues } from "@/lib/layout-overrides";
 import { openLayoutEditor } from "@/lib/layout/editor-session";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { opensNestedContextMenu } from "@/lib/dom/nested-context-menu";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   regionValuesHidden,
@@ -335,13 +335,10 @@ export function LayoutRegionContextMenuWithItems(props: {
   readonly extraItems: ReactNode | null;
   readonly children: ReactNode;
 }): ReactNode {
-  // The menu can open over a title-bar drag region (the vertical strip's top
-  // block and spacer, the header row); the drag regions stand down while it
-  // is open so its items and an outside click land in the renderer.
-  const [open, setOpen] = useState(false);
-  useTitleBarDragSuppression(`region-menu:${useId()}`, open);
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  if (readOnly) return props.children;
   return (
-    <ContextMenu onOpenChange={setOpen}>
+    <ContextMenu>
       {/* `display: contents` generates no box, so the chrome this wraps keeps
           its own place in its parent's flex or grid row; the span is only
           somewhere for Radix to hang the trigger's handlers, which the real
@@ -403,6 +400,8 @@ export function LayoutClusterContextMenu(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const [regionId, setRegionId] = useState<RegionId | null>(null);
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  if (readOnly) return props.children;
   return (
     <ContextMenu>
       <ContextMenuTrigger

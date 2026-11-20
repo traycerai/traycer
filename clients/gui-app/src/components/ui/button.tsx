@@ -178,6 +178,10 @@ const buttonVariants = cva(
         "icon-xs":
           "size-6 rounded-sm in-data-[slot=button-group]:rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-7 rounded-sm in-data-[slot=button-group]:rounded-md",
+        // Keep the compact glyph while giving mobile and coarse-pointer
+        // actions a full 44px interactive target.
+        "icon-sm-touch":
+          "size-7 rounded-sm max-md:min-h-[44px] max-md:min-w-[44px] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px] in-data-[slot=button-group]:rounded-md",
         "icon-lg": "size-9",
         // `icon-sm`'s glyph in a box a finger can find: the phone header's
         // hamburger, where a near miss used to land on the title beside it.

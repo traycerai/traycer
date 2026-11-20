@@ -1,4 +1,8 @@
 import type { ReactNode } from "react";
+import {
+  HOST_FROZEN_WORD,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
 import { SandboxOperationFailure } from "@/components/hosts/sandbox-operation-failure";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -10,20 +14,14 @@ import type {
   RestingChatSandbox,
 } from "@/lib/sandboxes/chat-sandbox-state";
 import { useSampledNow } from "@/lib/relative-time";
-import {
-  costLine,
-  RESTING_STORAGE_CLAUSE,
-  SHARED_USE_CLAUSE,
-} from "@/lib/sandboxes/sandbox-strings";
+import { costLine } from "@/lib/sandboxes/sandbox-strings";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
-import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import {
-  formatSandboxDate,
   sandboxFrozenCause,
+  sandboxFrozenClock,
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * The resolver's footer line under a chat: a resting sandbox whose
@@ -50,9 +48,6 @@ export function ChatSandboxFooter(props: {
     <p className="shrink-0 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
       {sandbox.displayName} {wake}
       {price}
-      {state.wakeChangesPayer
-        ? ` ${RESTING_STORAGE_CLAUSE} ${SHARED_USE_CLAUSE}`
-        : ""}
     </p>
   );
 }
@@ -61,7 +56,6 @@ function FrozenSandboxFooter(props: {
   readonly state: RestingChatSandbox;
 }): ReactNode {
   const { sandbox, configuration } = props.state;
-  const viewer = useAuthStore((state) => state.profile?.userId ?? null);
   const verb = useSandboxVerb(sandbox.id);
   const operation = useSandboxOperation(sandbox.id);
   const pending = operation?.kind === "pending";
@@ -77,14 +71,14 @@ function FrozenSandboxFooter(props: {
     ...configuration,
     environmentId: sandbox.environmentId,
   };
-  const removal =
-    sandbox.frozenAt === null
-      ? null
-      : `Will be removed on ${formatSandboxDate(frozenDestroyAt(sandbox.frozenAt), true)}`;
+  const removal = sandboxFrozenClock(sandbox.frozenAt);
   return (
     <div className="flex min-w-0 shrink-0 flex-col items-start gap-2 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
+      <p className="min-w-0 w-full wrap-anywhere font-medium">
+        {hostSandboxStateWord(sandbox.state)} · {HOST_FROZEN_WORD}
+      </p>
       <p className="min-w-0 w-full wrap-anywhere">
-        {sandboxFrozenCause(sandbox, pageConfiguration, viewer)}
+        {sandboxFrozenCause(pageConfiguration)}
       </p>
       {removal === null ? null : (
         <p className="min-w-0 w-full wrap-anywhere">{removal}</p>

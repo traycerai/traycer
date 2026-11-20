@@ -1,10 +1,15 @@
 import "../../../../../__tests__/test-browser-apis";
 import { useRef } from "react";
 
-import type { HistoryItem } from "@/components/home/data/home-page.data";
+import type {
+  HistoryItem,
+  HistorySortOption,
+} from "@/components/home/data/home-page.data";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
+import type { NotificationBellState } from "@/stores/notifications/merged-notifications";
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -14,7 +19,7 @@ const NOW_MS = Date.UTC(2026, 6, 30, 12, 0, 0);
 
 const testState: {
   items: ReadonlyArray<HistoryItem>;
-  signOut: () => Promise<void>;
+  signOut: () => Promise<boolean>;
   openSettings: () => void;
   isPending: boolean;
   historyQueryMounts: number;
@@ -35,9 +40,13 @@ const testState: {
   backfillTasks: ReadonlyMap<string, ListTaskLight>;
   /** The id lists the activity projection asked that batch about. */
   backfillIdCalls: ReadonlyArray<string>[];
+  /** The sort `useHistoryQuery` reports as in effect; undefined echoes the search's. */
+  effectiveSort: HistorySortOption | undefined;
+  /** What the header's bell shows, which the Notifications row mirrors. */
+  bellState: NotificationBellState;
 } = {
   items: [],
-  signOut: () => Promise.resolve(),
+  signOut: () => Promise.resolve(true),
   openSettings: () => undefined,
   isPending: false,
   historyQueryMounts: 0,
@@ -49,6 +58,8 @@ const testState: {
   workingEpicIds: new Set<string>(),
   backfillTasks: new Map<string, ListTaskLight>(),
   backfillIdCalls: [],
+  effectiveSort: undefined,
+  bellState: { kind: "clear" },
 };
 
 const UNREAD_DONE: SurfaceNotificationIndicators["epics"][string] = {
@@ -87,7 +98,7 @@ const trackMock = vi.hoisted(() => vi.fn());
 
 const refetch = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => {
+  useHistoryQuery: (params: UseHistoryQueryParams) => {
     const hasMountedQuery = useRef(false);
     if (!hasMountedQuery.current) {
       hasMountedQuery.current = true;
@@ -99,6 +110,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
         totalCount: testState.items.length,
         hostRequiresCloudToList: testState.hostRequiresCloudToList,
       },
+      sort: testState.effectiveSort ?? params.search.sort,
+      createdSortAvailable: true,
       isPending: testState.isPending,
       cloudPagePending: testState.cloudPagePending,
       isFetching: false,
@@ -157,11 +170,19 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => null,
 }));
-// The Notifications row's count and open path read the notification center's
+// The Notifications row's mark and open path read the notification center's
 // host state, which needs a host runtime this suite does not mount.
-vi.mock("@/stores/notifications/merged-notifications", () => ({
-  useMergedNotificationUnreadCount: () => 0,
-}));
+vi.mock(
+  "@/stores/notifications/merged-notifications",
+  async (importOriginal) => ({
+    notificationBellAccessibleLabel: (
+      await importOriginal<
+        typeof import("@/stores/notifications/merged-notifications")
+      >()
+    ).notificationBellAccessibleLabel,
+    useNotificationBellState: () => testState.bellState,
+  }),
+);
 vi.mock("@/hooks/notifications/use-open-mobile-notification-center", () => ({
   useOpenMobileNotificationCenter: () => rowSpies.openNotifications,
 }));
@@ -195,6 +216,7 @@ vi.mock("@/components/layout/tabs/use-tracy-entry-signals", () => ({
 const rowSpies = vi.hoisted(() => ({
   openHistory: vi.fn(),
   openNotifications: vi.fn(),
+  activateTabIntent: vi.fn<(navigate: unknown, intent: unknown) => void>(),
 }));
 
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
@@ -208,9 +230,11 @@ vi.mock("@/lib/commands/actions/new-epic", () => ({
   openNewEpicDraft: () => ({ kind: "draft" }),
 }));
 
-vi.mock("@/lib/tab-navigation", () => ({
+vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
   draftTabIntent: (value: unknown) => value,
   navigateToTabIntent: () => undefined,
+  activateTabIntent: rowSpies.activateTabIntent,
 }));
 
 import {
@@ -220,6 +244,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { domMax, LazyMotion } from "motion/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -267,6 +292,7 @@ function historyItem(overrides: {
     taskType: "epic",
     title: overrides.title,
     initialUserPrompt: "",
+    createdAtMs: overrides.updatedAtMs,
     updatedAtMs: overrides.updatedAtMs,
     recentAtMs: overrides.recentAtMs,
     updatedLabel: "about 1 month ago",
@@ -393,8 +419,10 @@ describe("MobileNavDrawer", () => {
     testState.workingEpicIds = new Set<string>();
     testState.backfillTasks = new Map<string, ListTaskLight>();
     testState.backfillIdCalls = [];
+    testState.effectiveSort = undefined;
+    testState.bellState = { kind: "clear" };
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
-    testState.signOut = () => Promise.resolve();
+    testState.signOut = () => Promise.resolve(true);
     testState.openSettings = () => undefined;
     testState.isPending = false;
     testState.historyQueryMounts = 0;
@@ -415,6 +443,7 @@ describe("MobileNavDrawer", () => {
     useDesktopDialogStore.getState().close();
     rowSpies.openHistory.mockClear();
     rowSpies.openNotifications.mockClear();
+    rowSpies.activateTabIntent.mockClear();
     queryClient.clear();
   });
   afterEach(() => {
@@ -480,6 +509,50 @@ describe("MobileNavDrawer", () => {
 
       expect(rowSpies.openNotifications).toHaveBeenCalledTimes(1);
       expect(useMobileNavStore.getState().open).toBe(false);
+    });
+
+    it("counts what needs attention on the Notifications row, as the bell does", async () => {
+      testState.bellState = { kind: "attention", count: 3 };
+      renderDrawer();
+
+      const row = await screen.findByRole("button", {
+        name: "Notifications, 3 notifications need attention",
+      });
+      const count = within(row).getByTestId(
+        "mobile-nav-notifications-attention-count",
+      );
+      expect(count.textContent).toBe("3");
+      // Neutral, as the strip's row draws its count: not an error's red.
+      expect(count.getAttribute("data-variant")).toBe("muted");
+      expect(
+        within(row).queryByTestId("mobile-nav-notifications-quiet-dot"),
+      ).toBeNull();
+    });
+
+    it("draws a dot and no count on the Notifications row for unread activity alone", async () => {
+      testState.bellState = { kind: "quietDot" };
+      renderDrawer();
+
+      const row = await screen.findByRole("button", {
+        name: "Notifications, unread activity",
+      });
+      expect(
+        within(row).getByTestId("mobile-nav-notifications-quiet-dot"),
+      ).toBeTruthy();
+      expect(
+        within(row).queryByTestId("mobile-nav-notifications-attention-count"),
+      ).toBeNull();
+    });
+
+    it("draws no mark on the Notifications row while the status is unavailable, as the phone's bell draws none", async () => {
+      testState.bellState = { kind: "unknown" };
+      renderDrawer();
+
+      const row = await screen.findByRole("button", {
+        name: "Notifications, status unavailable",
+      });
+      expect(row.textContent).toBe("Notifications");
+      expect(row.querySelectorAll("[aria-hidden]:not(svg)")).toHaveLength(0);
     });
 
     it("opens History from the All tasks row and closes the drawer", async () => {
@@ -1151,7 +1224,7 @@ describe("MobileNavDrawer", () => {
       let signedOut = 0;
       testState.signOut = () => {
         signedOut += 1;
-        return Promise.resolve();
+        return Promise.resolve(true);
       };
       renderDrawer();
       fireEvent.click(await screen.findByTestId("mobile-nav-sign-out"));
@@ -1162,9 +1235,11 @@ describe("MobileNavDrawer", () => {
       expect(useMobileNavStore.getState().open).toBe(true);
 
       fireEvent.click(await screen.findByTestId("confirm-action"));
-
-      expect(signedOut).toBe(1);
+      await waitFor(() =>
+        expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull(),
+      );
       expect(useMobileNavStore.getState().open).toBe(false);
+      expect(signedOut).toBe(1);
     });
 
     it("clears its open flag when a form change unmounts it", async () => {
@@ -1190,7 +1265,7 @@ describe("MobileNavDrawer", () => {
       let signedOut = 0;
       testState.signOut = () => {
         signedOut += 1;
-        return Promise.resolve();
+        return Promise.resolve(true);
       };
       renderDrawer();
       fireEvent.click(await screen.findByTestId("mobile-nav-sign-out"));
@@ -1361,6 +1436,57 @@ describe("MobileNavDrawer", () => {
       expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
     });
 
+    describe("a saved created-desc sort", () => {
+      const runningMissingFromPage = () => {
+        testState.items = [
+          historyItem({
+            id: "a",
+            title: "stale",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+        ];
+        testState.workingEpicIds = new Set(["z"]);
+        testState.backfillTasks = new Map([
+          [
+            "z",
+            backfillTask({
+              id: "z",
+              title: "running",
+              updatedAtMs: NOW_MS - 90 * DAY_MS,
+            }),
+          ],
+        ]);
+        testState.activity = { z: "turn" };
+        useHistorySearchStore.setState({
+          search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+            sort: "created-desc",
+            sortExplicit: true,
+          }),
+        });
+      };
+
+      it("backfills a running task like Most recent when an older host reads it as recent", async () => {
+        runningMissingFromPage();
+        testState.effectiveSort = "recent";
+        renderDrawer();
+        const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+        expect(rows.length).toBe(2);
+        expect(rows[0]?.textContent).toContain("running");
+        expect(testState.backfillIdCalls.at(-1)).toContain("z");
+      });
+
+      it("does not backfill a running task while the host orders by creation", async () => {
+        runningMissingFromPage();
+        testState.effectiveSort = "created-desc";
+        renderDrawer();
+        const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+        expect(rows.length).toBe(1);
+        expect(testState.backfillIdCalls.at(-1)).not.toContain("z");
+      });
+    });
+
     it("leaves the order alone while a search is active", async () => {
       // A query's ranking IS the answer the user asked for; re-sorting it
       // around what happens to be running would discard that answer.
@@ -1414,6 +1540,22 @@ describe("MobileNavDrawer", () => {
       // The shared verbose label stays on the item for the landing list / tray;
       // this surface must not render it.
       expect(rows[1]?.textContent).not.toContain("about 1 month ago");
+    });
+
+    it("opens a row's task as a manual list open, with no way back to Tracy", async () => {
+      testState.items = [
+        historyItem({ id: "a", title: "hello", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      fireEvent.click(rows[0]);
+
+      expect(rowSpies.activateTabIntent.mock.calls.at(0)?.[1]).toMatchObject({
+        kind: "open-epic",
+        epicId: "a",
+        tracyOrigin: null,
+      });
     });
 
     it("finishes an active first-task guide when a row opens a task", async () => {

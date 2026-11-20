@@ -4,6 +4,7 @@ import { useHostClient, useHostDirectory } from "@/lib/host";
 import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { writeGitListChangedFilesResponse } from "@/lib/git/write-list-changed-files-response";
+import { appLogger, describeLogErrorSummary } from "@/lib/logger";
 
 /**
  * Single-shot prefetch for git.listChangedFiles per (hostId, runningDir, ignoreWhitespace).
@@ -22,6 +23,11 @@ import { writeGitListChangedFilesResponse } from "@/lib/git/write-list-changed-f
  * directory, mirroring `useGitListChangedFilesWithSubmodules`. A host with no
  * reachable client is skipped - the same as a disabled query - rather than
  * silently falling back to the app-wide active host.
+ *
+ * The prefetch is best-effort and its callers fire it without awaiting, so a
+ * host refusal (a worktree folder that is gone answers "not a git repository";
+ * a Windows spawn failure answers `spawn E2BIG`) is logged and dropped here.
+ * The rows' own queries surface the same failure where a person can see it.
  */
 export function useGitPrefetchWorktreeStatus() {
   const globalClient = useHostClient();
@@ -55,12 +61,23 @@ export function useGitPrefetchWorktreeStatus() {
       // Parent-only: the badge/default-pick prefetch must never trigger the
       // host's per-submodule git-status fan-out (bounded lazy fan-out - only
       // the active root's nested snapshot asks for submodules).
-      const result = await client.request("git.listChangedFiles", {
-        hostId: args.hostId,
-        runningDir: args.runningDir,
-        ignoreWhitespace: args.ignoreWhitespace,
-        includeSubmodules: false,
-      });
+      const result = await client
+        .request("git.listChangedFiles", {
+          hostId: args.hostId,
+          runningDir: args.runningDir,
+          ignoreWhitespace: args.ignoreWhitespace,
+          includeSubmodules: false,
+        })
+        .catch((error: unknown) => {
+          appLogger.debug("[git] worktree status prefetch refused", {
+            hostId: args.hostId,
+            error: describeLogErrorSummary(error),
+          });
+          return null;
+        });
+      if (result === null) {
+        return;
+      }
 
       writeGitListChangedFilesResponse(
         queryClient,

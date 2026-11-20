@@ -8,7 +8,6 @@
  */
 import type { ReactNode } from "react";
 import { vi, type Mock } from "vitest";
-import type { TeamHostInstallTokenResult } from "@traycer-clients/shared/host-client/team-host";
 import type {
   SandboxCatalogueFetchResult,
   TraycerModelsFetchResult,
@@ -18,16 +17,21 @@ import type {
   FakeSandboxAuth,
   FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
-import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotAppearance,
+  BotOpenResponse,
+} from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { EnvironmentEffectiveRole } from "@traycer/protocol/host/environment/contracts";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 
 export type OpenResult =
   | { readonly kind: "answer"; readonly response: BotOpenResponse }
-  | { readonly kind: "error"; readonly message: string };
+  | { readonly kind: "error"; readonly message: string }
+  | { readonly kind: "failure"; readonly error: Error };
 
 export type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
 
@@ -37,9 +41,6 @@ export type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
  */
 export interface TeamCloudBinding extends FakeSandboxBinding {
   readonly auth: FakeSandboxAuth & {
-    readonly mintTeamHostInstallToken: Mock<
-      (environmentId: string) => Promise<TeamHostInstallTokenResult>
-    >;
     readonly getTraycerModels: Mock<() => Promise<TraycerModelsFetchResult>>;
     readonly getSandboxCatalogue: Mock<
       () => Promise<SandboxCatalogueFetchResult>
@@ -85,8 +86,10 @@ export const mocks = {
       const result = mocks.state.openResult;
       if (result === null) return;
       if (result.kind === "answer") options.onSuccess(result.response);
+      else if (result.kind === "failure") options.onError(result.error);
       else options.onError({ message: result.message });
     },
+    isPending: false,
   },
   /** The bots the tab subscribed to, in order. */
   subscribed: [] as string[],
@@ -131,8 +134,12 @@ export const mocks = {
     listedBotIds: undefined as string[] | undefined,
     /** Titles the list gives its bots; a bot not named is titled by its id. */
     listTitles: new Map<string, string>(),
+    /** The appearance the list gives a bot; a bot not named has none. */
+    listAppearance: new Map<string, BotAppearance>(),
     mainBotIds: null as Record<string, string> | null,
     support: null as boolean | null,
+    /** Whether the host advertises `bot.thread.list`; `"inherit"` follows `support`, `null` is unknown. */
+    threadListSupport: "inherit" as boolean | null | "inherit",
     /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
     onboardingSupport: true,
     /** The line the host negotiated for `bot.onboarding.read`. */
@@ -158,7 +165,7 @@ export const mocks = {
       isFetchedAfterMount: true,
       isFetching: false,
     },
-    membersSupport: null as boolean | null,
+    membersReadAvailable: true,
     openResult: null as OpenResult | null,
     threads: [] as BotThreadSummary[],
     // Whether a bot.thread.list answer is held: true serves `threads` as that
@@ -172,6 +179,8 @@ export const mocks = {
       environmentId: string;
       label: string;
       ownerKind: "organization" | "user";
+      providerHandle: string | null;
+      effectiveRole?: EnvironmentEffectiveRole;
     }>,
   },
 };
@@ -179,8 +188,12 @@ export const mocks = {
 export const hostSupportsMethodMock = {
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });
-    if (method === "environment.members") return mocks.state.membersSupport;
     if (method === "bot.onboarding.read") return mocks.state.onboardingSupport;
+    if (
+      method === "bot.thread.list" &&
+      mocks.state.threadListSupport !== "inherit"
+    )
+      return mocks.state.threadListSupport;
     return mocks.state.support;
   },
   useHostMethodSchemaVersion: () => mocks.state.onboardingVersion,
@@ -194,6 +207,8 @@ export const hostSupportsMethodMock = {
 // the titles of the stream's tasks, and Home's task list.
 const taskContextsRead = () => ({
   tasksById: mocks.taskContexts,
+  resolutionsById: new Map(),
+  pendingTaskIds: new Set<string>(),
   isPending: mocks.taskReads.contextsPending,
   error: null,
 });
@@ -304,6 +319,7 @@ export const hostQueriesMock = {
 export const hostEnvironmentBindingsMock = {
   useHostEnvironmentBindings: () => ({
     byHostId: {},
+    ownSettingsHostIds: [],
     failedHostIds: [],
     retryFailed: () => undefined,
   }),
@@ -313,17 +329,17 @@ export const hostEnvironmentBindingsMock = {
 // one teammate it knows by name.
 export const environmentMembersMock = {
   useEnvironmentMemberDirectory: (
-    _client: unknown,
     environmentId: string | null,
     enabled: boolean,
   ) => {
     mocks.membersQueries.push({ environmentId, enabled });
+    const readable = enabled && mocks.state.membersReadAvailable;
     return {
       resolve: (userId: string) =>
-        enabled && userId === "user-teammate"
+        readable && userId === "user-teammate"
           ? { displayName: "Tess Teammate", avatarUrl: null }
           : null,
-      members: enabled
+      members: readable
         ? [
             {
               userId: "user-teammate",
@@ -349,6 +365,8 @@ export const botSubscriptionMock = {
     mocks.subscribed.push(input.botId);
     return {
       snapshot: mocks.state.snapshot,
+      // A held snapshot is one the live stream delivered.
+      snapshotFresh: mocks.state.snapshot !== null,
       deleted: mocks.state.deleted,
       error: mocks.state.error,
       isPending: mocks.state.snapshot === null,
@@ -364,12 +382,18 @@ export const connectableHostIdsMock = {
 // The directory still holds host labels: if the tab ever read it to say where
 // the bot runs, a label would reach the screen and the no-machine checks below
 // would catch it.
+const DIRECTORY_HOSTS = [
+  { hostId: "host-tab", label: "Laptop" },
+  { hostId: "host-bound", label: "Studio Mac" },
+];
+
 export const hostDirectoryListMock = {
-  useHostDirectoryList: () => ({
-    data: [
-      { hostId: "host-tab", label: "Laptop" },
-      { hostId: "host-bound", label: "Studio Mac" },
-    ],
+  useHostDirectoryList: () => ({ data: DIRECTORY_HOSTS }),
+  // The mention menu's host entries read the same list, answered.
+  useHostDirectoryListQuery: () => ({
+    data: DIRECTORY_HOSTS,
+    isPending: false,
+    isError: false,
   }),
 };
 
@@ -417,6 +441,9 @@ export const botListQueryMock = {
                 title: mocks.state.listTitles.get(botId) ?? botId,
                 environmentId: "env-team",
                 archivedAt: null,
+                ...(mocks.state.listAppearance.has(botId)
+                  ? { appearance: mocks.state.listAppearance.get(botId) }
+                  : {}),
               })),
               mainBotIds: mocks.state.mainBotIds,
             },

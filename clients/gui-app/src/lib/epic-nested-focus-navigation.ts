@@ -41,9 +41,8 @@ export type PrepareNestedFocusTarget = () => NestedFocusTarget | null;
  *
  * A default would have to be `"user"`, since that is the common case - which is
  * exactly backwards, because the automatic callers are the ones nobody
- * remembers. Two separate defects were already shipped that way, each an
- * automatic caller inheriting a human's authority. Making it required turns
- * "who asked?" into a question the compiler puts to every call site.
+ * remembers, and each would inherit a human's authority. Making it required
+ * turns "who asked?" into a question the compiler puts to every call site.
  *
  * Classify the INVOCATION, not the closure. One `onClose` callback can be
  * wired to a Close button and to an exit effect at once, and the same bound

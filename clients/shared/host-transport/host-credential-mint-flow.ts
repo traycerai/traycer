@@ -12,7 +12,7 @@ export interface HostCredentialMintRequest {
    * refresh family is dead; the distinction is kept for logging, since neither
    * case involves the user.
    */
-  readonly reason: Exclude<HostCredentialState, "active">;
+  readonly reason: Exclude<HostCredentialState, "active" | "team-unavailable">;
 }
 
 /**

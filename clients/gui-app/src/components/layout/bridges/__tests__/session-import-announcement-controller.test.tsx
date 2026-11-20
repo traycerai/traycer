@@ -39,6 +39,11 @@ vi.mock("@/hooks/session-import/use-session-import-available", () => ({
   useSessionImportAvailable: () => sessionImportAvailableMock.value,
 }));
 
+const moveAskHoldMock = vi.hoisted(() => ({ value: false }));
+vi.mock("@/components/settings/move/use-move-ask-holds-announcements", () => ({
+  useMoveAskHoldsAnnouncements: () => moveAskHoldMock.value,
+}));
+
 // The controller only asks whether a stream client is live; the dialog it
 // opens is stubbed below, so nothing else in the tree reads the transport.
 const streamLiveMock = vi.hoisted(() => ({ value: true }));
@@ -148,6 +153,7 @@ describe("<SessionImportAnnouncementController />", () => {
     sessionImportAvailableMock.value = true;
     streamLiveMock.value = true;
     scanSupportMock.value = "supported";
+    moveAskHoldMock.value = false;
     toastMock.mockClear();
     toastMock.dismiss.mockClear();
     resetStores();
@@ -214,6 +220,36 @@ describe("<SessionImportAnnouncementController />", () => {
     });
 
     expect(toastMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not claim while the move ask holds, then shows and claims on release", () => {
+    moveAskHoldMock.value = true;
+    const { rerender } = render(<SessionImportAnnouncementController />);
+
+    expect(toastMock).not.toHaveBeenCalled();
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["session-import"],
+    ).toBeUndefined();
+
+    moveAskHoldMock.value = false;
+    rerender(<SessionImportAnnouncementController />);
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    expect(
+      useFeatureAnnouncementsStore.getState().consumed["session-import"],
+    ).toBeDefined();
+  });
+
+  it("keeps a shown announcement up when the move ask begins", () => {
+    const { rerender } = render(<SessionImportAnnouncementController />);
+
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    moveAskHoldMock.value = true;
+    rerender(<SessionImportAnnouncementController />);
+
+    expect(toastMock.dismiss).not.toHaveBeenCalledWith(
+      "traycer-session-import-announcement",
+    );
   });
 
   it("holds while the first-task guide is active, then shows when it ends", () => {

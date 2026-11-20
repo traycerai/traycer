@@ -20,6 +20,7 @@ import {
   TEARDOWN_GRACE_MS,
   type SandboxAppRequestHandler,
   type SandboxHostContext,
+  type SandboxArtifactLink,
   type SandboxScrollDirection,
   type SandboxServedPages,
   type SandboxShortcutPress,
@@ -56,6 +57,7 @@ interface Harness {
   readonly onShortcut: Mock<(press: SandboxShortcutPress) => void>;
   readonly onScrollGesture: Mock<(direction: SandboxScrollDirection) => void>;
   readonly onWheel: Mock<(wheel: SandboxWheel) => void>;
+  readonly onArtifactLink: Mock<(link: SandboxArtifactLink) => void>;
   /** Everything posted with this method. */
   readonly all: (method: string) => Sent[];
   /** The response posted for a request id. */
@@ -83,6 +85,7 @@ function createHarness(options: {
   const onShortcut = vi.fn<(press: SandboxShortcutPress) => void>();
   const onScrollGesture = vi.fn<(direction: SandboxScrollDirection) => void>();
   const onWheel = vi.fn<(wheel: SandboxWheel) => void>();
+  const onArtifactLink = vi.fn<(link: SandboxArtifactLink) => void>();
   const host = new SandboxBridgeHost({
     document: {
       kind: "loader",
@@ -120,6 +123,7 @@ function createHarness(options: {
       onRequestTeardown,
       onScrollGesture,
       onWheel,
+      onArtifactLink,
     },
     appRequests: options.appRequests,
   });
@@ -135,6 +139,7 @@ function createHarness(options: {
     onShortcut,
     onScrollGesture,
     onWheel,
+    onArtifactLink,
     all: (method) => sent.filter((message) => message.method === method),
     responseTo: (id) => sent.find((message) => message.id === id),
   };
@@ -528,11 +533,50 @@ describe("page requests", () => {
     harness.host.receive(wheel(2, -3, 1));
     harness.host.receive(wheel(0, 1, 2));
     harness.host.receive(wheel(0, 1e9, 0));
+    // Nothing sent about the swipe: the page claims no cancel and all the room.
+    const unclaimed = { cancelable: false, ownsBack: true, ownsForward: true };
     expect(harness.onWheel.mock.calls).toEqual([
-      [{ deltaX: 0, deltaY: 40 }],
-      [{ deltaX: 32, deltaY: -48 }],
-      [{ deltaX: 0, deltaY: 320 }],
-      [{ deltaX: 0, deltaY: 4000 }],
+      [{ deltaX: 0, deltaY: 40, ...unclaimed }],
+      [{ deltaX: 32, deltaY: -48, ...unclaimed }],
+      [{ deltaX: 0, deltaY: 320, ...unclaimed }],
+      [{ deltaX: 0, deltaY: 4000, ...unclaimed }],
+    ]);
+  });
+
+  it("relays what a page says about the swipe verbatim, and reads anything else as the safe default", () => {
+    const harness = ready(null, OPENS);
+    const swipeFacts = (facts: Record<string, unknown>): Sent =>
+      notification("traycer/notifications/wheel", {
+        deltaX: 10,
+        deltaY: 0,
+        deltaMode: 0,
+        ...facts,
+      });
+    harness.host.receive(
+      swipeFacts({ cancelable: true, ownsBack: false, ownsForward: false }),
+    );
+    harness.host.receive(
+      swipeFacts({ cancelable: "yes", ownsBack: 0, ownsForward: null }),
+    );
+    expect(harness.onWheel.mock.calls).toEqual([
+      [
+        {
+          deltaX: 10,
+          deltaY: 0,
+          cancelable: true,
+          ownsBack: false,
+          ownsForward: false,
+        },
+      ],
+      [
+        {
+          deltaX: 10,
+          deltaY: 0,
+          cancelable: false,
+          ownsBack: true,
+          ownsForward: true,
+        },
+      ],
     ]);
   });
 
@@ -1040,6 +1084,7 @@ function createServedHarness(options: {
   const onShortcut = vi.fn<(press: SandboxShortcutPress) => void>();
   const onScrollGesture = vi.fn<(direction: SandboxScrollDirection) => void>();
   const onWheel = vi.fn<(wheel: SandboxWheel) => void>();
+  const onArtifactLink = vi.fn<(link: SandboxArtifactLink) => void>();
   const host = new SandboxBridgeHost({
     document: {
       kind: "served",
@@ -1065,6 +1110,7 @@ function createServedHarness(options: {
       onRequestTeardown,
       onScrollGesture,
       onWheel,
+      onArtifactLink,
     },
     appRequests: options.appRequests,
   });
@@ -1080,6 +1126,7 @@ function createServedHarness(options: {
     onShortcut,
     onScrollGesture,
     onWheel,
+    onArtifactLink,
     all: (method) => sent.filter((message) => message.method === method),
     responseTo: (id) => sent.find((message) => message.id === id),
   };
@@ -1440,5 +1487,21 @@ describe("served document: a folder of pages", () => {
 
     expect(harness.host.status).toBe("crashed");
     expect(harness.statuses).toContain("crashed");
+  });
+});
+
+describe("artifact links from an MCP App document", () => {
+  it("drops an artifact-link report, even from the proven page with its nonce", () => {
+    const harness = ready(null, OPENS);
+
+    harness.host.receive(
+      notification("traycer/notifications/artifact-link", {
+        nonce: NONCE,
+        href: "../sibling/index.html",
+        page: "traycer-artifact://artifact-a1--m1/a/b/index.html",
+      }),
+    );
+
+    expect(harness.onArtifactLink).not.toHaveBeenCalled();
   });
 });

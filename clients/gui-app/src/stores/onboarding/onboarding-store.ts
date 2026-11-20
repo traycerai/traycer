@@ -49,6 +49,14 @@ export const isLastOnboardingStep = (
 interface OnboardingState {
   readonly setupReminderDismissed: boolean;
   readonly dismissSetupReminder: () => void;
+  /**
+   * The Start page's invitation to move this computer to Personal has been
+   * answered (its action, Later or ×). Its own flag rather than
+   * `setupReminderDismissed`, which most people who used the app before the
+   * invitation existed answered long ago: they are still asked once.
+   */
+  readonly moveInvitationAnswered: boolean;
+  readonly answerMoveInvitation: () => void;
   readonly setupProgress: Record<SetupGuideId, number>;
   readonly completeSetup: (id: SetupGuideId) => void;
   readonly completedAt: number | null;
@@ -109,6 +117,7 @@ function persistedCompletedAt(persistedState: unknown): number | null {
 interface OnboardingPersistedState {
   readonly completedAt: number | null;
   readonly setupReminderDismissed: boolean;
+  readonly moveInvitationAnswered: boolean;
   readonly setupProgress: Record<SetupGuideId, number>;
 }
 
@@ -126,6 +135,11 @@ function readOnboardingPersistedState(
       .object({ setupReminderDismissed: z.boolean().catch(false) })
       .catch({ setupReminderDismissed: false })
       .parse(persistedState).setupReminderDismissed,
+    // Absent before the invitation had its own flag: not answered yet.
+    moveInvitationAnswered: z
+      .object({ moveInvitationAnswered: z.boolean().catch(false) })
+      .catch({ moveInvitationAnswered: false })
+      .parse(persistedState).moveInvitationAnswered,
     setupProgress: setupProgressSchema
       .catch(emptySetupProgress)
       .parse(
@@ -167,6 +181,8 @@ export const useOnboardingStore = create<OnboardingState>()(
     (set, get) => ({
       setupReminderDismissed: false,
       dismissSetupReminder: () => set({ setupReminderDismissed: true }),
+      moveInvitationAnswered: false,
+      answerMoveInvitation: () => set({ moveInvitationAnswered: true }),
       setupProgress: emptySetupProgress,
       completeSetup: (id) =>
         set({
@@ -200,6 +216,7 @@ export const useOnboardingStore = create<OnboardingState>()(
           completedAt: null,
           step: 0,
           setupReminderDismissed: false,
+          moveInvitationAnswered: false,
           setupProgress: emptySetupProgress,
         }),
     }),
@@ -217,6 +234,7 @@ export const useOnboardingStore = create<OnboardingState>()(
       partialize: (state) => ({
         completedAt: state.completedAt,
         setupReminderDismissed: state.setupReminderDismissed,
+        moveInvitationAnswered: state.moveInvitationAnswered,
         setupProgress: state.setupProgress,
       }),
     },

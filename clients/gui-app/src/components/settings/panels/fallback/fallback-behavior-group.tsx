@@ -3,6 +3,7 @@ import type { FallbackPolicy } from "@traycer/protocol/host/fallback-policy";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { withStoredNumber } from "@/components/settings/panels/fallback/fallback-behavior-range";
+import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
@@ -95,8 +96,6 @@ export function FallbackBehaviorGroup(
   props: FallbackBehaviorGroupProps,
 ): ReactNode {
   const { policy, onChange } = props;
-  const graceDescriptionId = useId();
-  const maxWaitDescriptionId = useId();
   return (
     <SettingsGroup
       group={FALLBACK.definitions.behavior}
@@ -107,18 +106,9 @@ export function FallbackBehaviorGroup(
     >
       <SettingsRow
         row={FALLBACK.definitions.graceWindow}
-        status={
-          <details className="text-ui-xs text-muted-foreground">
-            <summary className="cursor-pointer">Help</summary>
-            <p id={graceDescriptionId}>
-              {FALLBACK.definitions.graceWindow.description}
-            </p>
-          </details>
-        }
         control={
           <NumberSelect
             ariaLabel="Time to cancel a switch"
-            descriptionId={graceDescriptionId}
             options={withStoredNumber(
               GRACE_WINDOW_SECONDS,
               policy.graceWindowSeconds,
@@ -133,18 +123,9 @@ export function FallbackBehaviorGroup(
       />
       <SettingsRow
         row={FALLBACK.definitions.maxWait}
-        status={
-          <details className="text-ui-xs text-muted-foreground">
-            <summary className="cursor-pointer">Help</summary>
-            <p id={maxWaitDescriptionId}>
-              {FALLBACK.definitions.maxWait.description}
-            </p>
-          </details>
-        }
         control={
           <NumberSelect
             ariaLabel="Longest wait for a usage limit to reset"
-            descriptionId={maxWaitDescriptionId}
             options={withStoredNumber(MAX_WAIT_MINUTES, policy.maxWaitMinutes)}
             value={policy.maxWaitMinutes}
             format={waitLabel}
@@ -168,8 +149,9 @@ interface ReturnToPreferredRowProps {
 /**
  * A radio group rather than a select, unlike the two rows above it.
  *
- * All choices stay visible. Help holds the session and queued-message
- * consequences, linked to the group and the automatic-return option.
+ * All choices and their consequences stay visible before a choice is made.
+ * The group describes the session cost; automatic return also moves queued
+ * messages, so that consequence belongs to its option.
  */
 function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
   const { policy, onChange } = props;
@@ -192,25 +174,15 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
         <div id={headingId} className="font-medium text-foreground">
           When the original provider&apos;s limit resets
         </div>
-        <details className="text-ui-xs text-muted-foreground">
-          <summary className="cursor-pointer">Help</summary>{" "}
-          <p
-            id={descriptionId}
-            className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground"
-          >
-            Switching back also starts a new agent session using this
-            chat&apos;s history.
-          </p>
-          {Object.entries(RETURN_TO_PREFERRED_COPY).map(([value, copy]) =>
-            copy.description === null ? null : (
-              <p key={value} id={`fallback-return-${value}-description`}>
-                {copy.description}
-              </p>
-            ),
-          )}
-        </details>
+        <p
+          id={descriptionId}
+          className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground"
+        >
+          Switching back also starts a new agent session using this chat&apos;s
+          history.
+        </p>
       </div>
-      <div className={cn("ml-auto", SETTINGS_ROW_STACK.control)}>
+      <div className={cn("ml-auto max-w-full", SETTINGS_ROW_STACK.control)}>
         {/* The radio group carries the SETTING's name and its caveat. Without
             these two the group had no name at all: each radio said "Ask me" or
             "Stay where it switched to" with nothing to say what question it was
@@ -231,8 +203,6 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
               <RadioGroupItem
                 value={value}
                 id={`fallback-return-${value}`}
-                // The option keeps its accessible description when the
-                // consequence paragraph is folded into Help.
                 aria-describedby={
                   copy.description === null
                     ? undefined
@@ -240,10 +210,18 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
                 }
                 className="mt-0.5"
               />
-              <div className="space-y-0.5">
+              <div className="min-w-0 space-y-0.5">
                 <Label htmlFor={`fallback-return-${value}`} variant="option">
                   {copy.label}
                 </Label>
+                {copy.description === null ? null : (
+                  <p
+                    id={`fallback-return-${value}-description`}
+                    className="text-ui-sm text-muted-foreground"
+                  >
+                    {copy.description}
+                  </p>
+                )}
               </div>
             </div>
           ))}
@@ -267,12 +245,12 @@ function returnToPreferredValue(
 
 function NumberSelect(props: {
   readonly ariaLabel: string;
-  readonly descriptionId: string;
   readonly options: readonly number[];
   readonly value: number;
   readonly format: (value: number) => string;
   readonly onValueChange: (value: number) => void;
 }): ReactNode {
+  const describedById = useSettingsRowDescriptionId();
   return (
     <Select
       value={String(props.value)}
@@ -284,7 +262,7 @@ function NumberSelect(props: {
     >
       <SelectTrigger
         aria-label={props.ariaLabel}
-        aria-describedby={props.descriptionId}
+        aria-describedby={describedById}
         className={TRIGGER_CLASS}
         size="sm"
       >

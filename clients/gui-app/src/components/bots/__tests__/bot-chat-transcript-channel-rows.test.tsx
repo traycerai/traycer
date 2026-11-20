@@ -6,7 +6,7 @@
  * projected row through the real `<ChatMessage>`.
  */
 import { StrictMode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
@@ -54,6 +54,10 @@ type TranscriptState = Pick<
 
 const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
+  /** What the host's locate answers for a message the session has not loaded. */
+  locateAnswer: { status: "waiting" } as {
+    readonly status: "waiting" | "missing";
+  },
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
@@ -77,7 +81,7 @@ vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
   useBotTurnLocateQuery: () => ({ data: undefined }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRowAnswer: () => ({ status: "waiting" }),
+  useChatLocateRowAnswer: () => mocks.locateAnswer,
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders } =
@@ -125,6 +129,14 @@ import {
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
 import { PersonAvatar } from "@/components/bots/bot-avatars";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { memberPost } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  expectPlainLineOutsideQuote,
+  PLAIN_LINE,
+  QUOTE_LINE,
+} from "@/components/bots/__tests__/bot-channel-rows-test-support";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -264,6 +276,7 @@ function mountTranscript(
           botId={BOT_ID}
           chatId={CHAT_ID}
           hostId="host-1"
+          boundHostId={null}
           title="Release Bot"
           instanceId="bot-thread:test"
           surface={surface}
@@ -271,6 +284,7 @@ function mountTranscript(
           showConnecting
           header={null}
           landOn={null}
+          flow={null}
         />
       </QueryClientProvider>
     </StrictMode>,
@@ -284,6 +298,7 @@ function scrollStub(): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks();
   members = UNRESOLVED_BOT_MEMBERS;
+  mocks.locateAnswer = { status: "waiting" };
 });
 
 afterEach(() => {
@@ -309,7 +324,7 @@ describe("<BotChatTranscript /> in the channel", () => {
 
   function channelSurface(
     openAnnouncementThread: ((announcementId: string) => void) | null,
-    chooseOption: ((choice: string) => void) | null,
+    chooseOption: ((messageId: string | null, choice: string) => void) | null,
   ): BotTranscriptSurface {
     return {
       kind: "channel",
@@ -318,8 +333,10 @@ describe("<BotChatTranscript /> in the channel", () => {
       openAnnouncementThread,
       threadAnchorKinds: [],
       chooseOption,
+      reply: null,
       answerQuestion: null,
-      discussQuestion: null,
+      answerQuestions: null,
+      questionBox: null,
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
@@ -337,7 +354,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, null);
@@ -389,7 +406,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
   }
 
   function channel(
-    chooseOption: ((choice: string) => void) | null,
+    chooseOption: ((messageId: string | null, choice: string) => void) | null,
     threadLine: (postMessageId: string) => ChatBotThreadLine | null,
   ): BotTranscriptSurface {
     return {
@@ -399,8 +416,10 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       openAnnouncementThread: vi.fn(),
       threadAnchorKinds: [],
       chooseOption,
+      reply: null,
       answerQuestion: null,
-      discussQuestion: null,
+      answerQuestions: null,
+      questionBox: null,
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
@@ -411,7 +430,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
 
   it("draws a direct reply as its own row, with nothing of the post it answers above it", () => {
     mountTranscript(
-      [directPost(DIRECT_REQUEST), otherUserMessage(), directReply(null)],
+      [directPost(DIRECT_REQUEST), directReply(null)],
       channel(null, () => null),
     );
 
@@ -430,14 +449,14 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       [directPost(DIRECT_REQUEST)],
       channel(null, () => null),
     );
-    const rowSwatch = within(
+    const rowFill = within(
       scrollStub().querySelector<HTMLElement>(
         '[data-testid="bot-member-row"]',
       ) ?? document.body,
     )
       .getByTestId("person-avatar")
       .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
-      ?.style.getPropertyValue("--swatch");
+      ?.style.getPropertyValue("--avatar-fill");
     cleanup();
 
     // The thread line's stack and the thread's anchor draw the member by id.
@@ -452,9 +471,51 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     const byId = screen
       .getByTestId("person-avatar")
       .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
-      ?.style.getPropertyValue("--swatch");
-    expect(rowSwatch).toBeTruthy();
-    expect(rowSwatch).toBe(byId);
+      ?.style.getPropertyValue("--avatar-fill");
+    expect(rowFill).toBeTruthy();
+    expect(rowFill).toBe(byId);
+  });
+
+  it("keeps a plain line typed under a quote out of the quote, as the post is stored in two paragraphs", () => {
+    mountTranscript(
+      [
+        memberPost({
+          messageId: POST_ID,
+          requestId: "req-1",
+          lines: [QUOTE_LINE, PLAIN_LINE],
+          timestamp: 1_000,
+          resolvedBy: null,
+        }),
+      ],
+      channel(null, () => null),
+    );
+
+    expectPlainLineOutsideQuote(
+      within(scrollStub()).getByTestId("bot-member-row"),
+    );
+  });
+
+  it("draws a post stored in two paragraphs as two paragraphs", () => {
+    mountTranscript(
+      [
+        memberPost({
+          messageId: POST_ID,
+          requestId: "req-1",
+          lines: ["First paragraph.", "Second paragraph."],
+          timestamp: 1_000,
+          resolvedBy: null,
+        }),
+      ],
+      channel(null, () => null),
+    );
+
+    const row = within(scrollStub()).getByTestId("bot-member-row");
+    expect(
+      Array.from(
+        row.querySelectorAll("p"),
+        (paragraph) => paragraph.textContent,
+      ),
+    ).toEqual(["First paragraph.", "Second paragraph."]);
   });
 
   it("draws no link to a direct post's answer two rows below it, and keeps the post's thread line", () => {
@@ -489,9 +550,10 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     expect(screen.queryByTestId("conversation-request")).toBeNull();
   });
 
-  it("posts the option a person clicks under a direct reply through the channel surface", async () => {
+  it("posts the option a person clicks under a direct reply through the channel surface, naming the reply's own message", async () => {
     const user = userEvent.setup();
-    const chooseOption = vi.fn<(choice: string) => void>();
+    const chooseOption =
+      vi.fn<(messageId: string | null, choice: string) => void>();
     mountTranscript(
       [directPost(DIRECT_REQUEST), directReply(["Staging", "Production"])],
       channel(chooseOption, () => null),
@@ -500,6 +562,254 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     await user.click(screen.getByRole("button", { name: "Production" }));
 
     expect(chooseOption).toHaveBeenCalledTimes(1);
-    expect(chooseOption).toHaveBeenCalledWith("Production");
+    expect(chooseOption).toHaveBeenCalledWith(REPLY_ID, "Production");
+  });
+
+  it("badges a reply with its post's writer and first line when another row sits between them", () => {
+    members = (userId) =>
+      userId === "owner-1"
+        ? { displayName: "Olive Owner", avatarUrl: null }
+        : null;
+    mountTranscript(
+      [directPost(DIRECT_REQUEST), otherUserMessage(), directReply(null)],
+      channel(null, () => null),
+    );
+
+    const replyRow = within(scrollStub()).getByTestId("bot-reply-row");
+    expect(
+      within(replyRow).getByRole("button", {
+        name: "Replying to Olive Owner: Please review",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("badges a member's message with the message it replies to, though that message is the row directly above", () => {
+    mountTranscript(
+      [
+        reply(),
+        {
+          ...otherUserMessage(),
+          messageId: "chosen-1",
+          timestamp: 3_000,
+          repliesTo: REPLY_ID,
+        },
+      ],
+      channel(null, () => null),
+    );
+
+    const memberRow = within(scrollStub()).getByTestId("bot-member-row");
+    expect(
+      within(memberRow).getByRole("button", {
+        name: "Replying to Release Bot: Here is my review",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("holds the badge's line while the post the reply names is fetched", () => {
+    mountTranscript(
+      [otherUserMessage(), { ...reply(), repliesTo: "older-1" }],
+      channel(null, () => null),
+    );
+
+    expect(
+      screen.getByRole("status", { name: "Loading message" }),
+    ).toBeTruthy();
+  });
+
+  it("says Message unavailable, with no writer, when the post the reply names cannot be read", () => {
+    mocks.locateAnswer = { status: "missing" };
+    mountTranscript(
+      [otherUserMessage(), { ...reply(), repliesTo: "gone-1" }],
+      channel(null, () => null),
+    );
+
+    const badge = screen.getByTestId("bot-reply-badge-unavailable");
+    expect(badge.textContent).toBe("Message unavailable");
+    expect(
+      screen.queryByRole("button", { name: /Message unavailable/ }),
+    ).toBeNull();
+  });
+});
+
+describe("<BotChatTranscript /> a member's answers to a bot's question card", () => {
+  const CARD_ID = "card-1";
+
+  function card(text: string): Extract<Message, { role: "assistant" }> {
+    return {
+      ...assistantMessage({
+        messageId: CARD_ID,
+        turnId: null,
+        timestamp: 2_000,
+        text,
+      }),
+      announcement: { kind: "proposal", link: null },
+    };
+  }
+
+  function answers(count: number): Extract<Message, { role: "user" }> {
+    return {
+      ...otherUserMessage(),
+      messageId: "answers-1",
+      questionAnswers: {
+        questionMessageId: CARD_ID,
+        answers: Array.from({ length: count }, (_, questionIndex) => ({
+          questionIndex,
+          question: `Question ${String(questionIndex + 1)}?`,
+          answer: "Staging",
+          skipped: false,
+        })),
+      },
+    };
+  }
+
+  it.each([
+    [
+      "ends in a colon",
+      "Three things before I start:\nMore below",
+      3,
+      "Three things before I start: 3 questions",
+    ],
+    ["ends a sentence", "Ready to deploy?", 1, "Ready to deploy? 1 question"],
+    ["has no text", "", 2, "2 questions"],
+  ])(
+    "badges the answers, though the card is the row above, with the count after a card line that %s",
+    (_case, cardText, count, line) => {
+      mountTranscript([card(cardText), answers(count)], {
+        kind: "channel",
+        threadLine: () => null,
+        openThread: null,
+        openAnnouncementThread: null,
+        threadAnchorKinds: [],
+        chooseOption: null,
+        reply: null,
+        answerQuestion: null,
+        answerQuestions: null,
+        questionBox: null,
+        failedRequest: () => null,
+        openTurn: null,
+        sessionChatId: null,
+        intro: { botTitle: "Release Bot", directive: null },
+        history: null,
+      });
+
+      expect(
+        screen.getByRole("button", {
+          name: `Replying to Release Bot: ${line}`,
+        }),
+      ).toBeTruthy();
+    },
+  );
+});
+
+describe("<BotChatTranscript /> the pictures on members' rows", () => {
+  const VIEWER_PICTURE = "https://example.com/viewer.png";
+  const TEAMMATE_PICTURE = "https://example.com/teammate.png";
+
+  function postBy(
+    messageId: string,
+    userId: string,
+  ): Extract<Message, { role: "user" }> {
+    return {
+      ...otherUserMessage(),
+      messageId,
+      sender: { type: "user", userId },
+    };
+  }
+
+  function signIn(userId: string, avatarUrl: string | null): void {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId,
+        userName: "Olive Owner",
+        email: "owner@example.com",
+        avatarUrl,
+      },
+      { userId, username: "Olive Owner" },
+      [],
+    );
+  }
+
+  function pictureOn(messageId: string): string | null {
+    const row = scrollStub().querySelector<HTMLElement>(
+      `[data-row-id="${messageId}"]`,
+    );
+    if (row === null) throw new Error(`no row ${messageId}`);
+    return (
+      within(row).getByTestId("person-avatar").querySelector("img")?.src ?? null
+    );
+  }
+
+  function channel(): BotTranscriptSurface {
+    return {
+      kind: "channel",
+      threadLine: () => null,
+      openThread: null,
+      openAnnouncementThread: null,
+      threadAnchorKinds: [],
+      chooseOption: null,
+      reply: null,
+      answerQuestion: null,
+      answerQuestions: null,
+      questionBox: null,
+      failedRequest: () => null,
+      openTurn: null,
+      sessionChatId: null,
+      intro: { botTitle: "Tracy", directive: null },
+      history: null,
+    };
+  }
+
+  beforeEach(() => {
+    stubImmediateImage();
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().setSignedOut();
+    vi.unstubAllGlobals();
+  });
+
+  it("draws the viewer's own picture on their post in a personal channel, whose environment lists no members", () => {
+    signIn("owner-1", VIEWER_PICTURE);
+
+    mountTranscript([postBy("mine", "owner-1")], channel());
+
+    expect(pictureOn("mine")).toBe(VIEWER_PICTURE);
+  });
+
+  it("keeps another person's post as the directory draws it, a picture where it has one and initials where it has none", () => {
+    signIn("owner-1", VIEWER_PICTURE);
+    members = (userId) =>
+      userId === "teammate-1"
+        ? { displayName: "Tess Teammate", avatarUrl: TEAMMATE_PICTURE }
+        : null;
+
+    mountTranscript(
+      [postBy("theirs", "teammate-1"), postBy("unknown", "stranger-1")],
+      channel(),
+    );
+
+    expect(pictureOn("theirs")).toBe(TEAMMATE_PICTURE);
+    expect(pictureOn("unknown")).toBeNull();
+  });
+
+  it("stops drawing a viewer's picture on their posts once another account signs in, and after a sign-out", () => {
+    signIn("owner-1", VIEWER_PICTURE);
+    mountTranscript([postBy("mine", "owner-1")], channel());
+    expect(pictureOn("mine")).toBe(VIEWER_PICTURE);
+
+    act(() => {
+      signIn("someone-else", "https://example.com/other.png");
+    });
+    expect(pictureOn("mine")).toBeNull();
+
+    act(() => {
+      signIn("owner-1", VIEWER_PICTURE);
+    });
+    expect(pictureOn("mine")).toBe(VIEWER_PICTURE);
+
+    act(() => {
+      useAuthStore.getState().setSignedOut();
+    });
+    expect(pictureOn("mine")).toBeNull();
   });
 });
