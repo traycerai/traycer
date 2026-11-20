@@ -1,4 +1,3 @@
-import type { MemberCredentialHandoff } from "@traycer/protocol/host-transport/mux";
 import type { HostTransportEndpoint } from "./host-messenger";
 import {
   LocalOpenAuth,
@@ -35,9 +34,10 @@ import {
   type OpenFrameBearerSource,
 } from "@traycer-clients/shared/auth/bearer-source";
 import { readAccessTokenExpiryMs } from "@traycer-clients/shared/auth/jwt-exp";
-import type {
-  RevalidateOutcome,
-  StreamAuthRevalidator,
+import {
+  revalidateStream,
+  type RevalidateOutcome,
+  type StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
   clockSkewStreamReason,
@@ -56,7 +56,6 @@ import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
-  STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
   STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
@@ -97,6 +96,8 @@ import type { IntervalHandle, TimerHandle } from "./timer-handle";
 import type { ReconnectAllOptions } from "./host-stream-client";
 import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
 import { backoffFor } from "./backoff";
+import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 
 /**
  * Options for constructing the shared `/stream` transport.
@@ -106,11 +107,6 @@ import { backoffFor } from "./backoff";
  * about the values it wants. The ping loop is gated to ~25s per the tech
  * plan's decision #14; `pongTimeoutMs` is the "N missed pongs" cutoff.
  */
-export interface LocalMemberProvision {
-  readonly mint: (hostId: string) => Promise<MemberCredentialHandoff | null>;
-  readonly onSent: (credential: MemberCredentialHandoff) => void;
-}
-
 export interface WsStreamClientOptions<
   Registry extends VersionedStreamRpcRegistry,
 > {
@@ -141,7 +137,7 @@ export interface WsStreamClientOptions<
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly localOpenAuth?: LocalOpenAuth;
-  readonly localMemberProvision?: LocalMemberProvision;
+  readonly door?: SessionDoorObserver;
   /**
    * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
    * asserted to the host on every `open` frame and updated in place through
@@ -614,7 +610,7 @@ export class WsStreamClient<
       endpoint: this.options.endpoint,
       bearer: this.bearer,
       localOpenAuth: this.options.localOpenAuth,
-      localMemberProvision: this.options.localMemberProvision,
+      door: this.options.door,
       cloudAuthorized: this.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
@@ -1083,7 +1079,10 @@ export class WsStreamClient<
     try {
       outcome = await mint({ hostId, reason: state });
     } catch (cause) {
-      console.warn(
+      console.warn("[stream] host-credential mint flow threw", {
+        kind: "error",
+      });
+      console.debug(
         `[stream] host-credential mint flow threw (client=${this.instanceId}, host=${hostId})`,
         cause,
       );
@@ -1644,7 +1643,7 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
   readonly localOpenAuth: LocalOpenAuth | undefined;
-  readonly localMemberProvision: LocalMemberProvision | undefined;
+  readonly door: SessionDoorObserver | undefined;
   /** See `WsStreamClientOptions.cloudAuthorized`. */
   readonly cloudAuthorized: (() => boolean) | undefined;
   readonly auth: StreamAuthRevalidator | null;
@@ -2385,6 +2384,7 @@ class StreamSession<
           upgradeGuidance: null,
         },
         token,
+        null,
       );
       return;
     }
@@ -2411,41 +2411,39 @@ class StreamSession<
     const pending = new AbortController();
     this.grantMintAbort = pending;
     try {
-      if (this.config.localMemberProvision === undefined) {
-        const readiness = await auth.ensureMemberReady(
-          selected,
-          bearer,
-          pending.signal,
-        );
-        if (
-          this.disposed ||
-          pending.signal.aborted ||
-          this.grantMintAbort !== pending
-        )
-          return;
-        if (readiness.kind === "reprobe") {
+      const readiness = await auth.ensureMemberReady(
+        selected,
+        bearer,
+        pending.signal,
+      );
+      if (
+        this.disposed ||
+        pending.signal.aborted ||
+        this.grantMintAbort !== pending
+      )
+        return;
+      if (readiness.kind === "reprobe") {
+        this.grantMintAbort = null;
+        if (this.grantReprobed) this.goTerminal(readiness.fatal);
+        else {
+          this.grantReprobed = true;
+          this.connect();
+        }
+        return;
+      }
+      if (readiness.kind !== "ready") {
+        if (!auth.requiresSessionGrant(selected.hostId)) {
           this.grantMintAbort = null;
-          if (this.grantReprobed) this.goTerminal(readiness.fatal);
-          else {
-            this.grantReprobed = true;
-            this.connect();
-          }
+          this.connect();
           return;
         }
-        if (readiness.kind !== "ready") {
-          if (!auth.requiresSessionGrant(selected.hostId)) {
-            this.grantMintAbort = null;
-            this.connect();
-            return;
-          }
-          this.grantMintAbort = null;
-          if (readiness.kind === "refused") this.goTerminal(readiness.fatal);
-          else
-            this.dropAndReconnect(
-              readiness.retryCause ?? teamMembershipUnavailable(),
-            );
-          return;
-        }
+        this.grantMintAbort = null;
+        if (readiness.kind === "refused") this.goTerminal(readiness.fatal);
+        else
+          this.dropAndReconnect(
+            readiness.retryCause ?? teamMembershipUnavailable(),
+          );
+        return;
       }
       const provision = await auth.mint(
         selected.hostId,
@@ -2606,7 +2604,6 @@ class StreamSession<
     this.credentialSocketSequence = this.config.nextCredentialSocketSequence();
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
-      capabilities: [STREAM_CAPABILITY_TEAM_CREDENTIAL_STATE],
       token,
       manifest,
       clientIdentity: this.config.clientIdentity,
@@ -2668,7 +2665,7 @@ class StreamSession<
 
     const kind = parsed["kind"];
     if (kind === "openAck") {
-      this.handleOpenAckFrame(parsed, false);
+      this.handleOpenAckFrame(parsed);
       return;
     }
     if (kind === "fatalError") {
@@ -2787,46 +2784,7 @@ class StreamSession<
     this.emitServerFrame(envelope, data);
   }
 
-  private async provisionMemberBeforeSubscribe(
-    parsed: object,
-    socket: StreamWebSocketLike,
-    hostId: string,
-    provision: LocalMemberProvision,
-  ): Promise<void> {
-    let credential: MemberCredentialHandoff | null;
-    try {
-      credential = await provision.mint(hostId);
-    } catch {
-      credential = null;
-    }
-    if (
-      this.disposed ||
-      this.activeSocket !== socket ||
-      this.phase !== "awaitingOpenAck"
-    )
-      return;
-    if (credential === null) {
-      this.teardownSocket(1000, "member-provision-unavailable");
-      this.dropAndReconnect(teamMembershipUnavailable());
-      return;
-    }
-    if (
-      !this.sendControlText(socket, {
-        kind: "hostCredentialProvision",
-        ...credential,
-      })
-    ) {
-      this.onSendFailure(socket);
-      return;
-    }
-    provision.onSent(credential);
-    this.handleOpenAckFrame(parsed, true);
-  }
-
-  private handleOpenAckFrame(
-    parsed: object,
-    memberProvisionSent: boolean,
-  ): void {
+  private handleOpenAckFrame(parsed: object): void {
     if (this.phase !== "awaitingOpenAck") {
       this.teardownSocket(4003, "unexpected-openAck");
       this.onTransportDrop();
@@ -2849,37 +2807,13 @@ class StreamSession<
       STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
     );
     const hostCredentialState = ackParse.data.hostCredentialState;
-    if (
-      this.usesSessionGrant &&
-      this.config.localMemberProvision !== undefined &&
-      !memberProvisionSent
-    ) {
-      if (
-        !this.supportsHostCredentialProvision ||
-        this.openFrameHostId === null ||
-        this.activeSocket === null
-      ) {
-        this.teardownSocket(1000, "member-provision-unavailable");
-        this.dropAndReconnect(teamMembershipUnavailable());
-        return;
-      }
-      // Keep the original OPEN_ACK deadline armed while minting. No data
-      // method may start until the actual member frame is written first.
-      void this.provisionMemberBeforeSubscribe(
-        parsed,
-        this.activeSocket,
-        this.openFrameHostId,
-        this.config.localMemberProvision,
-      );
-      return;
-    }
     if (this.openAckTimer !== null) {
       clearTimeout(this.openAckTimer);
       this.openAckTimer = null;
     }
+    this.config.door?.admitted();
     if (
       this.usesSessionGrant &&
-      this.config.localMemberProvision === undefined &&
       this.openFrameHostId !== null &&
       this.openFrameBearer !== null
     ) {
@@ -3118,7 +3052,10 @@ class StreamSession<
     try {
       observe(hostId, state, this.credentialSocketSequence);
     } catch (cause) {
-      console.warn(
+      console.warn("[stream] host-credential state observer threw", {
+        kind: "error",
+      });
+      console.debug(
         `[stream] host-credential state observer threw (method=${this.config.method}, host=${hostId})`,
         cause,
       );
@@ -3191,6 +3128,7 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
+    this.config.door?.refused(details);
     const localAuth = this.config.localOpenAuth;
     if (localAuth !== undefined && this.openFrameHostId !== null) {
       if (this.openFrameBearer !== null) {
@@ -3271,14 +3209,15 @@ class StreamSession<
       this.dropAndReconnect(details);
       return;
     }
-    // `UNAUTHORIZED` is recoverable when an auth revalidator is wired: the
-    // host rejected our bearer (e.g. it expired during an overnight sleep),
+    // A credential refusal is recoverable when an auth revalidator is wired:
+    // the host rejected our token (e.g. it expired during an overnight sleep),
     // but a single-flight revalidation may rotate a fresh one that the next
-    // dial carries. Every other fatalError (e.g. `INCOMPATIBLE` or a stream
-    // domain code such as `CHAT_INVALID`), and the no-revalidator case, stays
-    // terminal exactly as before.
+    // dial carries. `isCredentialRefusal` decides by the `doorReason`, or by
+    // `UNAUTHORIZED` from a host that sends none. Every other fatalError (e.g.
+    // `INCOMPATIBLE` or a stream domain code such as `CHAT_INVALID`), and the
+    // no-revalidator case, stays terminal exactly as before.
     if (
-      details.code === "UNAUTHORIZED" &&
+      isCredentialRefusal(details) &&
       !this.usesSessionGrant &&
       this.config.auth !== null
     ) {
@@ -3320,15 +3259,16 @@ class StreamSession<
     // there is a next attempt at all.
     this.resetForReconnect(null);
 
-    void this.revalidateThenReconnect(auth, details, rejectedToken);
+    void this.revalidateThenReconnect(auth, details, rejectedToken, details);
   }
 
   private async revalidateThenReconnect(
     auth: StreamAuthRevalidator,
     details: FatalErrorDetails,
     rejectedToken: string | null,
+    refusal: FatalErrorDetails | null,
   ): Promise<void> {
-    const outcome = await this.revalidateWithinBudget(auth);
+    const outcome = await this.revalidateWithinBudget(auth, refusal);
     if (this.disposed) {
       return;
     }
@@ -3435,6 +3375,7 @@ class StreamSession<
    */
   private async revalidateWithinBudget(
     auth: StreamAuthRevalidator,
+    refusal: FatalErrorDetails | null,
   ): Promise<RevalidateOutcome> {
     let timer: TimerHandle | null = null;
     const budget = new Promise<RevalidateOutcome>((resolve) => {
@@ -3446,7 +3387,7 @@ class StreamSession<
     // budget timer, and surface as an unhandled rejection instead of the
     // "network-error" this method promises for a thrown revalidation.
     const revalidation = Promise.resolve()
-      .then(() => auth.revalidateForReconnect())
+      .then(() => revalidateStream(auth, refusal))
       .catch((): RevalidateOutcome => "network-error");
     try {
       return await Promise.race([revalidation, budget]);

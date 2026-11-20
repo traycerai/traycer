@@ -1,4 +1,6 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   ChevronRight,
   EllipsisVertical,
@@ -6,7 +8,6 @@ import {
   MessagesSquare,
   Plus,
 } from "lucide-react";
-import { BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { LiveBotAvatar, NamedBotAvatar } from "@/components/bots/bot-avatars";
@@ -23,7 +24,6 @@ import {
   type NewBotTarget,
 } from "@/components/bots/new-bot-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -43,6 +43,7 @@ import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-s
 import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
@@ -53,7 +54,6 @@ import { useBotFollowedThreads } from "@/hooks/bots/use-bot-followed-threads";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
 import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
-import { openBotSearch } from "@/stores/bots/bot-search-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
@@ -116,7 +116,7 @@ export function BotChannelSidebar(props: {
 }): ReactNode {
   const { activeBotId, hostId, threadsView, onChannelOpened } = props;
   const client = useTabHostClient();
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   useRereadEnvironmentListOnFocus(true);
   const bots = useBotListQuery(client, true);
   const connectable = useConnectableHostIds();
@@ -199,47 +199,43 @@ export function BotChannelSidebar(props: {
       data-testid="bot-channel-sidebar"
       className="flex min-h-0 flex-col gap-3 overflow-y-auto px-2 py-3"
     >
-      <SearchAllBotsBox
-        hostId={hostId}
-        bots={botList}
-        activeBotId={activeBotId}
-        onOpened={onChannelOpened}
-      />
       {threadsView === null ? null : (
         <ThreadsRow hostId={hostId} bots={botList} view={threadsView} />
       )}
-      <SortableColumnList
-        ids={model.groups.map((group) => group.environmentId)}
-        onReorder={(order) => setSectionOrder(order, answeredModel)}
-        renderLifted={(environmentId) => (
-          <SectionLiftedHeader
-            label={
-              model.groups.find(
-                (group) => group.environmentId === environmentId,
-              )?.label ?? environmentId
-            }
-          />
-        )}
-      >
-        {model.groups.map((group) => (
-          <SidebarSection
-            key={group.environmentId}
-            answeredModel={answeredModel}
-            group={group}
-            activeBotId={currentBotId}
-            unreadByBotId={unreadByBotId}
-            canSetMainBot={canSetMainBot}
-            setup={
-              teamSetups.setups.find(
-                (setup) => setup.environmentId === group.environmentId,
-              ) ?? null
-            }
-            hostId={hostId}
-            onOpenChannel={openChannel}
-            onNewBot={setNewBot}
-          />
-        ))}
-      </SortableColumnList>
+      <UnlessBotListFailed bots={bots}>
+        <SortableColumnList
+          ids={model.groups.map((group) => group.environmentId)}
+          onReorder={(order) => setSectionOrder(order, answeredModel)}
+          renderLifted={(environmentId) => (
+            <SectionLiftedHeader
+              label={
+                model.groups.find(
+                  (group) => group.environmentId === environmentId,
+                )?.label ?? environmentId
+              }
+            />
+          )}
+        >
+          {model.groups.map((group) => (
+            <SidebarSection
+              key={group.environmentId}
+              answeredModel={answeredModel}
+              group={group}
+              activeBotId={currentBotId}
+              unreadByBotId={unreadByBotId}
+              canSetMainBot={canSetMainBot}
+              setup={
+                teamSetups.setups.find(
+                  (setup) => setup.environmentId === group.environmentId,
+                ) ?? null
+              }
+              hostId={hostId}
+              onOpenChannel={openChannel}
+              onNewBot={setNewBot}
+            />
+          ))}
+        </SortableColumnList>
+      </UnlessBotListFailed>
       {noTeam ? <CreateTeamRow /> : null}
       <NewBotDialog
         target={newBot}
@@ -252,38 +248,21 @@ export function BotChannelSidebar(props: {
 }
 
 /**
- * Search across every bot, at the top of the column where Slack's box is:
- * pressing it, or typing, opens the results beside the channel in view and
- * carries the typing there. No channel to open them beside, or a host without
- * the search, offers none.
+ * The sections, or the bot list's failure with Retry while it has loaded
+ * nothing: with no bots, the sections would read as having none, and offer
+ * to make one.
  */
-function SearchAllBotsBox(props: {
-  readonly hostId: string;
-  readonly bots: ReadonlyArray<BotRecord>;
-  readonly activeBotId: string | null;
-  /** The results opened; the picker's menu closes on it. */
-  readonly onOpened: () => void;
+function UnlessBotListFailed(props: {
+  readonly bots: UseQueryResult<unknown, HostRpcError>;
+  readonly children: ReactNode;
 }): ReactNode {
-  const { activeBotId, onOpened } = props;
-  const supported =
-    useHostMethodSupport(props.hostId, "bot.conversation.search") === true;
-  const listed = props.bots.some((bot) => bot.botId === activeBotId);
-  if (!supported || activeBotId === null || !listed) return null;
-  const open = (query: string | null): void => {
-    openBotSearch(activeBotId, { kind: "all" }, query);
-    onOpened();
-  };
+  const { bots } = props;
+  if (!bots.isError || bots.data !== undefined) return props.children;
   return (
-    <Input
-      type="text"
-      size="xs"
-      aria-label="Search all bots"
-      placeholder="Search all bots"
-      data-testid="bot-column-search"
-      maxLength={BOT_CONVERSATION_SEARCH_MAX_QUERY_CHARS}
-      value=""
-      onClick={() => open(null)}
-      onChange={(event) => open(event.target.value)}
+    <BotReadFailure
+      message="Couldn't load your bots."
+      onRetry={() => void bots.refetch()}
+      testId="bot-channel-sidebar-error"
     />
   );
 }
@@ -728,7 +707,7 @@ function ChannelRow(props: {
         active
           ? "bg-accent text-accent-foreground"
           : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
-        bold && !active && "font-semibold text-foreground",
+        bold && "font-semibold text-foreground",
       )}
     >
       <LiveBotAvatar botId={bot.botId} hostId={hostId} size="sm" />

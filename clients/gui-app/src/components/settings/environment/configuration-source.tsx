@@ -1,9 +1,10 @@
 import { createContext, useContext } from "react";
-import {
-  grantedEnvironmentRole,
-  type EnvironmentDescriptorV11,
-  type GrantedEnvironmentRole,
+import type {
+  EnvironmentDescriptorV11,
+  GrantedEnvironmentRole,
 } from "@traycer/protocol/host/environment/contracts";
+
+export type ConfigurationRole = GrantedEnvironmentRole | "viewer";
 
 export type ConfigurationSource =
   | { readonly kind: "host" }
@@ -18,12 +19,18 @@ export type ConfigurationSource =
       readonly environmentId: string;
       readonly roomId: string;
       readonly providerHandle: string | null;
-      /** `null` for a role that authorizes nothing - an older inventory's
-       *  unknown role, or a retired one. */
-      readonly effectiveRole: GrantedEnvironmentRole | null;
-      /** The serving computer can read configuration without changing it. */
+      /** Read through `mayChangeConfiguration`, never against `null`: a Viewer is not absent. */
+      readonly effectiveRole: ConfigurationRole | null;
       readonly transportReadOnly?: boolean;
     };
+
+/** Never changed while the window's host is a team's computer: Personal talks only to Personal. */
+export function personalReadOnlyOnTeamComputer(
+  configuration: "personal" | "team",
+  windowHostIsTeamComputer: boolean,
+): boolean {
+  return configuration === "personal" && windowHostIsTeamComputer;
+}
 
 const HOST_SOURCE: ConfigurationSource = { kind: "host" };
 
@@ -51,28 +58,46 @@ export function useConfigurationIsPersonal(): boolean {
   return source.kind === "pool" && source.configuration === "personal";
 }
 
+/** A role this app does not know changes nothing. */
+export function mayChangeConfiguration(
+  role: ConfigurationRole | null,
+): boolean {
+  return role === "owner" || role === "admin" || role === "editor";
+}
+
 export function useCanEditConfiguration(): boolean {
   const source = useConfigurationSource();
   return (
     source.kind === "host" ||
-    (!source.transportReadOnly && source.effectiveRole !== null)
+    (!source.transportReadOnly && mayChangeConfiguration(source.effectiveRole))
   );
 }
 
-export function useCanAdministerConfiguration(): boolean {
-  const source = useConfigurationSource();
+/** Team account edits use the person's session, independent of the serving computer. */
+export function canManageTeamProviderAccounts(
+  source: ConfigurationSource,
+): boolean {
   return (
-    source.kind === "host" ||
-    (!source.transportReadOnly &&
-      (source.effectiveRole === "owner" || source.effectiveRole === "admin"))
+    source.kind === "pool" &&
+    source.configuration === "team" &&
+    (source.effectiveRole === "owner" ||
+      source.effectiveRole === "admin" ||
+      source.effectiveRole === "editor")
   );
 }
 
-/** An older inventory cannot authorize edits to a team, and answers `null`. */
 export function configurationRoleOf(
   descriptor: EnvironmentDescriptorV11,
-): GrantedEnvironmentRole | null {
+): ConfigurationRole | null {
   if (descriptor.ownerKind === "user") return "owner";
-  const role = grantedEnvironmentRole(descriptor.effectiveRole);
-  return role === "admin" || role === "editor" ? role : null;
+  switch (descriptor.effectiveRole) {
+    case "admin":
+      return "admin";
+    case "editor":
+      return "editor";
+    case "viewer":
+      return "viewer";
+    default:
+      return null;
+  }
 }

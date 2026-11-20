@@ -24,7 +24,47 @@ import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 
-type PlaybackPlacement = "task" | "surface" | "settings-modal";
+/**
+ * Where the group is drawn. `task` shares the task's status row. `title-strip`
+ * and `settings-modal` sit inside a title strip the surface already has,
+ * which names itself the `title-strip` container so the group gives way as
+ * that strip narrows: the track first, then previous and next. There the
+ * track is its title alone, one line, so the group is never taller than the
+ * strip's own buttons. `surface` is a row of its own.
+ */
+type PlaybackPlacement = "task" | "title-strip" | "surface" | "settings-modal";
+
+const GROUP_CLASS: Record<PlaybackPlacement, string> = {
+  task: "max-w-1/2",
+  "title-strip": "shrink-0 max-md:hidden",
+  "settings-modal": "shrink-0 max-md:hidden",
+  surface: "@container h-10 w-full shrink-0 justify-end px-3 max-md:hidden",
+};
+
+const TRACK_CLASS: Record<PlaybackPlacement, string | null> = {
+  task: "@max-[46rem]:sr-only",
+  "title-strip": "@max-[40rem]/title-strip:sr-only",
+  "settings-modal": "@max-[40rem]/title-strip:sr-only",
+  surface: null,
+};
+
+const KIND_CLASS: Record<PlaybackPlacement, string> = {
+  task: "block truncate",
+  "title-strip": "sr-only",
+  "settings-modal": "sr-only",
+  surface: "block truncate",
+};
+
+// 34rem of status-row content is that row at its fullest: the pill's longest
+// label and every other item beside these. The row keeps one shape whatever
+// the pill is saying, so the buttons leave below that and do not come and go
+// with it.
+const SKIP_CLASS: Record<PlaybackPlacement, string | null> = {
+  task: "@max-[34rem]:hidden",
+  "title-strip": "@max-[24rem]/title-strip:hidden",
+  "settings-modal": "@max-[24rem]/title-strip:hidden",
+  surface: null,
+};
 
 /** Window-wide playback actions, wherever the current page presents them. */
 export function SoundtrackPlaybackControls(props: {
@@ -62,7 +102,7 @@ function SoundtrackPlaybackControlsBody(props: {
 function PlaybackControlsContent(props: {
   readonly placement: PlaybackPlacement;
 }): ReactNode {
-  const task = props.placement === "task";
+  const { placement } = props;
   const paused = useSettingsStore((state) => state.soundtrackPaused);
   const trackId = useId();
   const track = useSoundtrackStore((state) => state.soundingTrack);
@@ -78,9 +118,7 @@ function PlaybackControlsContent(props: {
       aria-label="Music playback"
       className={cn(
         "flex min-w-0 items-center gap-1.5",
-        task
-          ? "max-w-1/2"
-          : "@container h-10 w-full shrink-0 justify-end px-3 max-md:hidden",
+        GROUP_CLASS[placement],
       )}
     >
       {trackDescription === null ? null : (
@@ -89,7 +127,7 @@ function PlaybackControlsContent(props: {
           data-testid="epic-playback-track"
           className={cn(
             "w-40 min-w-0 shrink text-xs leading-tight text-muted-foreground",
-            task && "@max-[46rem]:sr-only",
+            TRACK_CLASS[placement],
           )}
         >
           <SoundtrackTitle
@@ -98,7 +136,7 @@ function PlaybackControlsContent(props: {
             paused={paused}
           />
           <span className="sr-only"> · </span>
-          <span className="block truncate">{trackKind}</span>
+          <span className={KIND_CLASS[placement]}>{trackKind}</span>
         </span>
       )}
       <PlaybackButton
@@ -108,7 +146,7 @@ function PlaybackControlsContent(props: {
         testId="epic-playback-previous"
         icon={SkipBack}
         onClick={previousTrack}
-        leavesShortRow={task}
+        shortRowClassName={SKIP_CLASS[placement]}
       />
       <PlaybackButton
         trackDescription={trackDescription}
@@ -119,7 +157,9 @@ function PlaybackControlsContent(props: {
         onClick={paused ? playMusic : pauseMusic}
         // Play is the way back to the music, so it stays for as long as there is
         // a row.
-        leavesShortRow={task ? !paused : false}
+        shortRowClassName={
+          placement === "task" && !paused ? SKIP_CLASS.task : null
+        }
       />
       <PlaybackButton
         trackDescription={trackDescription}
@@ -128,7 +168,7 @@ function PlaybackControlsContent(props: {
         testId="epic-playback-next"
         icon={SkipForward}
         onClick={nextTrack}
-        leavesShortRow={task}
+        shortRowClassName={SKIP_CLASS[placement]}
       />
     </div>
   );
@@ -141,9 +181,10 @@ function PlaybackButton(props: {
   readonly testId: string;
   readonly icon: LucideIcon;
   readonly onClick: () => void;
-  readonly leavesShortRow: boolean;
+  /** Hides the button once its row is too short for it; `null` keeps it. */
+  readonly shortRowClassName: string | null;
 }): ReactNode {
-  const { label, testId, icon: Icon, onClick, leavesShortRow } = props;
+  const { label, testId, icon: Icon, onClick } = props;
   return (
     <TooltipWrapper
       label={
@@ -163,11 +204,7 @@ function PlaybackButton(props: {
         aria-describedby={props.describedBy}
         data-testid={testId}
         onClick={onClick}
-        // 34rem of content is the row at its fullest: the pill's longest label
-        // and every other item beside these. The row keeps one shape whatever the
-        // pill is saying, so the buttons leave below that and do not come and go
-        // with it.
-        className={cn(leavesShortRow && "@max-[34rem]:hidden")}
+        className={props.shortRowClassName ?? undefined}
       >
         <Icon className="size-3.5" />
       </Button>

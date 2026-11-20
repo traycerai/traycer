@@ -1,9 +1,9 @@
-import type { UseQueryResult } from "@tanstack/react-query";
+import type { QueryKey, UseQueryResult } from "@tanstack/react-query";
 import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { hostQueryEntryKey, useHostQuery } from "@/hooks/host/use-host-query";
 
 const EMPTY_PARAMS = {};
 
@@ -23,5 +23,22 @@ export function useBotListQuery(
     method: "bot.list",
     params: EMPTY_PARAMS,
     options: { enabled, refetchOnWindowFocus: true },
+  });
+}
+
+/**
+ * The entry {@link useBotListQuery} reads when `hostId`'s requester carries
+ * it, for a caller outside a render that reads what the list last answered.
+ */
+export function botListEntryKey(
+  hostId: string,
+  effectiveHostId: string | null,
+): QueryKey {
+  return hostQueryEntryKey<HostRpcRegistry, "bot.list">({
+    hostId,
+    effectiveHostId,
+    method: "bot.list",
+    params: EMPTY_PARAMS,
+    cacheKeyIdentity: undefined,
   });
 }

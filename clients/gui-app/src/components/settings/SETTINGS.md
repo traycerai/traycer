@@ -35,7 +35,6 @@ SettingsLayout
         ├── LayoutSettingsPanel
         ├── OpeningBehaviorPanel
         ├── ProvidersSettingsPanel
-        ├── NotificationsSettingsPanel
         ├── AgentsSettingsPanel
         ├── FallbackSettingsPanel
         ├── KeybindingsSettingsPanel
@@ -77,7 +76,7 @@ content, not by taste.
 
 - **Stacked groups** (`settings-group.tsx`) is the default: named groups of
   rows down one scroll, everything on the page visible at once. General,
-  Browser, Sounds, Opening behavior and most others.
+  Browser, Alerts, Opening behavior and most others.
 - **The rail** (`settings-master-detail.tsx`) is for a page that is a
   collection of like things (Providers) or too long to scan in one scroll
   (Layout, Appearance). It shows one area at a time, so it costs a click per
@@ -134,19 +133,6 @@ The store is persisted at version 2.
 The migration settles a checklist nobody has touched for anyone who finished the tour before the checklist shipped: every guide is marked complete and the reminder is dismissed, because they have been using the app already and three open cards would be a nag rather than a checklist.
 Someone part-way through a guide keeps their progress, and a user who has not finished the tour is left alone.
 
-**Set up Personal** (`components/onboarding/set-up-personal-group.tsx`, its
-rules in `set-up-personal.ts`) is not drawn on any page. It is three optional
-steps, each a sentence about what it does for the person and an Open button to
-its page - link a plan or
-add an API key (Providers), add a secret your agents will need (Secrets),
-choose how agents are picked (Agent selection) - under "Optional. An agent can
-run as soon as one provider is set up." with its own "n of 3 done". Each step
-is checked off by what the person's settings already hold, read through the
-window's own host (`providers.list`: a stored API key or a signed-in linked
-plan, never this computer's own sign-in; `environment.secrets.list`: a
-secret not revoked; `environment.status`: an agent selection item), so a step
-done in the dashboard is checked here too.
-
 The composer's account picker says what the Terminal account is the first
 time it names one ("This computer's own sign-in, which stays on this
 computer. Sign in on Providers to use one everywhere.",
@@ -176,7 +162,8 @@ desktop in its own flag (`moveInvitationAnswered`), not the reminder's, so
 someone who dismissed the reminder long ago is still asked once; it settles
 the reminder too. Afterwards the checklist's move card is the only place the
 move waits. A computer that runs a team's settings, or has moved, is never
-asked (`useThisComputersMove` answers `team` or `moved`). One ask at a time:
+asked (`useThisComputersMove` answers `team` or `moved`); a computer whose
+move waits for consent is asked again whatever its planes read. One ask at a time:
 while the invitation is owed, or the move sheet is open, the session-import
 and login-import announcements are held, unclaimed, and show once it is
 answered (`useMoveAskHoldsAnnouncements`); otherwise following the invitation
@@ -248,10 +235,12 @@ predicates; it never imports the assembled index or the search consumer.
   `null` for a rendered card, `"Providers"` for that page's region groups.
 - **Availability composes for containment only.** A row's effective
   `availableWhen` is its own AND its group's. The merged groups (General ▸
-  Agents, Browser ▸ Agents, Alerts ▸ Notifications) are drawn in every shell,
-  so each gated row in them carries its own predicate (Agent roles, OS
-  notifications, Push notifications). A contribution target is not a
-  container: contributing never changes the target's availability.
+  Agents, Browser ▸ Agents) are drawn in every shell, so each gated row in
+  them carries its own predicate (Agent roles). Alerts ▸ System is drawn only
+  where one of its rows is (`isAlertsSystemGroupAvailable`), and each row
+  still carries its own predicate (OS notifications, Push notifications). A
+  contribution target is not a container: contributing never changes the
+  target's availability.
 - **`status` replaces the static description.** `SettingsRow` takes
   an optional `status?: ReactNode`, selected by `!== undefined` — omitted and
   `undefined` are the same, never truthiness, never `status ?? description`,
@@ -287,8 +276,8 @@ predicates; it never imports the assembled index or the search consumer.
 - Shared rendering components take definitions through typed props:
   `LogDetailGroup` takes its page's `group` (anchored on App Diagnostics,
   folded into the page on host Diagnostics), each `LogLevelControl` carries
-  its `row`, and the chime / severity / link-kind rows are keyed members of
-  their owning collection.
+  its `row`, and the Alerts kind rows and the link-kind rows are keyed
+  members of their owning collection.
 - `MOD_ENTER_LABEL` lives in `general-settings.definitions.ts`: the steering
   row's label and description are built from it there, and the panel imports
   it for the switch's accessible name, so the result and the row print the
@@ -482,12 +471,11 @@ different answers:
   is registered with `hostScope: "connecting"`, so the executor has proved the
   anchor lands while the host has no usable client.
 - **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
-  host runtime and a successful first read of the browser bridge; host
-  Notifications' two groups, which the page's scope gate conceals while the
-  host connects or is unreachable and drops for a vanished host; and every
-  Fallback group, behind the same kind of scope gate and rendered only once
-  the host answers the policy read) — not entries either: they contribute to
-  the General, host Notifications and Fallback page entries.
+  host runtime and a successful first read of the browser bridge; and every
+  Fallback group, behind a scope gate that conceals it while the host
+  connects or is unreachable and drops it for a vanished host, rendered only
+  once the host answers the policy read) — not entries either: they
+  contribute to the General and Fallback page entries.
 
 Bespoke pages are indexed at page/region level for the same reason: their
 content exists only once a host answers an RPC.
@@ -704,10 +692,9 @@ Supporting pieces, all viewport-agnostic where possible:
   Rows that are two columns from their own markup rather than through
   `SettingsRow` - the Shell panel's program and startup-flags rows,
   Diagnostics' memory and log-detail rows, the host identity/updates rows, the
-  worktree branch-prefix row, the Skills header and the notification-hook rows
-  - apply it directly. Without a floor the control keeps its intrinsic width
-    and the label takes what is left, which on a phone is a sliver: a two-word
-    label breaks one word per line.
+  worktree branch-prefix row and the Skills header - apply it directly. Without a floor the control keeps its intrinsic width
+  and the label takes what is left, which on a phone is a sliver: a two-word
+  label breaks one word per line.
 - `settings-row.tsx` uses `flex-wrap` + a label `basis` so small controls
   (switches) stay inline while wide controls wrap below the label on narrow
   containers; `SETTINGS_ROW_STACK` raises that floor below `md` so the split
@@ -888,7 +875,7 @@ computer is selected; without a pool they retain the surface host. Capability
 checks use the requester serving each method. Saves quote the displayed
 revision; conflicts reread the row and show who changed it. Approval policy
 reads its item and writes through the dedicated policy method. Editors can change configuration;
-plan linking and approval/browser policy changes require an admin. Viewers get
+approval/browser policy changes require an admin. Viewers get
 read-only values, with secret names and read-access Details entries only.
 
 Secrets and plan sign-in requests carry the source environment id and require
@@ -917,9 +904,9 @@ Providers, on cloud-backed Personal or a team, lists every provider in the
 rail from `lg` up. Below `lg` that rail is one full-width `SettingsMasterSelect`
 labelled **Provider**. The header does not link to Secrets, and the pane has
 no keys list. Tabs are **Plans & limits**, **Env**, **MCP**, **Skills**, and
-**Pack version** when the provider has pack ids. Plans is one **Linked plan**
-picker, plus **Link a plan** and **Unlink** when the viewer can administer, and
-**No plans linked.** when none are. Profiles is one **Profile** picker under
+**Pack version** when the provider has pack ids. A rate-limit card with no
+linked plan shows no empty-state sentence. Profiles is one **Profile** picker
+under
 **Profiles**; the selected profile's account name stays under it, and Use is a
 switch when the person can edit, otherwise On or Off as text. The executable
 path and version stay inside the rate-limit card. A rail subtitle reads **key**
@@ -937,10 +924,11 @@ computer it sits under the host picker; if it follows you it sits under
 Personal; if it is about your account rather than your settings it sits under
 Account; the rest is the app itself.
 
-- **Application** - General, Appearance, Browser, Opening behavior, Sounds,
-  Alerts, Keybindings, Layout, Diagnostics.
-- **Account** - Sessions, Link mobile app, Usage, Credits, Notifications,
-  and Delete account on mobile. Read through the window's own host, never
+- **Application** - General, Appearance, Browser, Opening behavior, Sounds
+  (only in a build with a soundtrack), Alerts, Keybindings, Layout,
+  Diagnostics.
+- **Account** - Sessions, Link mobile app, Usage, Credits, and Delete
+  account on mobile. Read through the window's own host, never
   through the picker. The list is headed **Signed-in sessions**, with "Browser,
   desktop, CLI, extension, and host access for this account." A row's heading
   is **This session** or **Session**. The client kind is an outline badge
@@ -1023,6 +1011,10 @@ Model routing, Variables and shells, Agent selection, Permissions and
 Notifications left the Host group; only their group did. Browser agent access
 moved out of Browser into its own section, `browser-agent-access`, and then
 into Permissions; agent definitions became the Agents page's Definitions tab.
+Notifications (`notifications`) is retired with notification hooks, the last
+thing it held: its route, a remembered section and a host's "hooks removed"
+row all open Alerts (`RETIRED_SECTION_REPLACEMENTS`), and it has no search
+entries. The hooks' wire methods stay registered for released peers.
 
 Sandboxes (`sandboxes`) names the environment once in its header. Editors see
 the shape, idle and removal controls with **Save defaults** on arrival; viewers
@@ -1030,16 +1022,14 @@ see read-only defaults. Viewers see the named editors and admins, with loading,
 failure and retry states, plus **Members**. The list heading is **Your
 sandboxes**, or **{team}'s sandboxes**. The line under it is the count and
 today's cost (UTC day), or the filter summary while a filter applies. Each row
-gives the full name its own wrapping line, then starter, keeper and, while a
-team row is awake and has a payer, **Paid by you** or **Paid by {name}**. The
+gives the full name its own wrapping line, then starter and keeper. The
 next line is **{Linux|Windows} · {n} vCPU · {memory}**, then **{rate} an hour
-while awake** when a price is known, **waking it makes you the payer** on a
-resting team row whose payer is someone else, and **created by {agent}** or
+while awake** when a price is known, and **created by {agent}** or
 **created by {agent} for {task}** on an agent sandbox. A resting clock appends
-**storage uses your credits** on Personal, or **storage uses your {team}
-credits** / **storage uses {name}'s {team} credits** on a team when a wake
-payer exists. **Resuming changes the payer to you.** is its own line before
-the actions when that team row is resting and the payer is not the viewer.
+**storage uses your credits** on Personal, or **storage uses {team}'s
+credits** on a team: the team's credits pay for a team sandbox whoever wakes
+it. A frozen team row says **{team}'s credits ran out.**, and its primary is
+**Add credits** for the team's Admin and **Resume** for everyone else.
 **Give it another {period}** is offered on a resting row inside its warning
 lead and precedes the primary action. **Details** stays inline. Setup failures
 show **Retry applying** (or **Repair setup** on an older host), applicable
@@ -1047,14 +1037,15 @@ show **Retry applying** (or **Repair setup** on an older host), applicable
 **Details** once; remaining secondary actions stay in **More**. Rows show
 starter and keeper, agent/task purpose, session counts and names, and setup
 evidence with support references. **Details** retains lifecycle status, settings
-diagnostics, history and export. Keep states the actual wake payer once. A size option carries its hourly rate
+diagnostics, history and export. Keep states who pays while it is awake (you,
+or the team) once. A size option carries its hourly rate
 (`from` unless the catalogue prices that shape exactly), and the sheet states
 the suspended and stopped rates beside the selection. The defaults shape
 control is the operating system, the resources, that rate, and how waking
 behaves (**Suspend keeps memory**, or **Suspend keeps the disk; processes
 restart on resume**). The out-of-credits chat
 footer keeps the lifecycle state beside **Out of credits**, then the list's
-payer sentence and a dated **Will be removed on** line above **Resume** or **Add
+whose-credits sentence and a dated **Will be removed on** line above **Resume** or **Add
 credits**. Blocking lifecycle overlays on other tiles hide the underlying body
 without unmounting it, so its status and buttons do not show through and
 terminal history returns on wake. Their frozen state also keeps the lifecycle
@@ -1091,7 +1082,7 @@ working.** on this computer, or **The fork uses the latest usable cloud backup
 available when you click Fork. Work still in progress may not be included. The
 original agent continues working.** on another computer. A fork from one turn
 has no snapshot sentence. Code identifiers remain workspace-based. Invitation review,
-Invite, Link a plan and Add an MCP server name the team or environment once in
+Invite and Add an MCP server name the team or environment once in
 the heading; subsequent copy uses the team or this environment and keeps every
 grant, seat and sharing consequence. The first tab a member opens on a team
 host is three paragraphs at rest: agents here run as the host and can read what
@@ -1208,9 +1199,7 @@ environment (`hooks/environment/use-addressed-environment.ts`): a team's id on
 its pages, Personal's own id on the Personal pick (from `environment.list`,
 `ownerKind: "user"`, the resolver Details shares), and the host's own only on a
 Local pick, so a host that has not moved its settings still reads Personal's. A
-read waits for Personal's id. A provider's sign-in (`providers.link`,
-`providers.linkComplete`) names the same environment, and its Continue waits for
-Personal's id. Each row reads "STRIPE_KEY · Set · sent to api.stripe.com · added
+read waits for Personal's id. Each row reads "STRIPE_KEY · Set · sent to api.stripe.com · added
 by you 24 Oct" ("replaced by you" after a replacement, from the current version)
 with **Replace**, **Remove** and **Details**; Details holds **Verify**
 (`environment.secrets.verify` by id), the rotation, **Versions** (Undo, Restore
@@ -1219,8 +1208,8 @@ read by `secretChangeRefusalLine`) and the recovery order for a leaked secret,
 open beside the versions: "If this secret leaked", four steps, and "If Traycer
 can't be reached, finish or stop running agent turns and shells before stopping
 the sandbox to end its sessions." Empty, it reads
-"Values and logins your agents use. On your computers they are set as values; on
-sandboxes agents use them without seeing them." with Add a secret, and the page
+"Values and logins your agents use on sandboxes." with Add
+a secret, and the page
 has no subtitle, which would say it twice. A failed read shows only "Couldn't
 read Personal's secrets." with Retry, never the empty state. A team's empty
 state reads "Values and logins Acme's agents use, on its sandboxes without being
@@ -1233,9 +1222,12 @@ cleanup is pending, it publishes a revision-only delta to retry failed host work
 immediately; a completed cleanup publishes nothing. The delta also retries the
 environment's other failed items, just as any configuration change does. It
 never rewrites a declaration, so a replacement secret using the same name
-survives. The page's own `Details` sits beside its chip: its Now reads "Applied
-on 2 hosts" (or "Not applied on dev-box", "Applying on dev-box…"), and a removal
-under way reads "Cleanup requested · waiting for dev-box · Retry". A Details
+survives. The page's own `Details` sits in its header: its Now reads "Applied
+on 2 hosts" (or "Not applied on dev-box", "Applying on dev-box…"), counting and
+listing only the hosts the page's cached `environment.host.list` calls a
+sandbox; while that list is not loaded or its read failed, the drawer shows no
+count and no host rows, only its secrets. A removal under way reads "Cleanup
+requested · waiting for dev-box · Retry". A Details
 that cannot load reads "Couldn't load details." with Retry. **Add a secret**
 offers API key and database login, with "Provider keys are set on each
 provider's page, under Providers." where Providers opens that page
@@ -1246,11 +1238,9 @@ e.g. api.stripe.com. Separate several with commas."; the mode is "Agents use it
 without seeing it (recommended)" or "Agents can read it", the second with its
 warning. A kind none of whose protocols is brokered is greyed with the
 catalogue's own line. The form and Save's confirmation carry "Stored encrypted
-in Traycer's cloud. Computers running Personal receive the value, readable by
-their tools and agents; sandboxes use it without seeing it." and How Traycer
-handles this, and nothing else before Save. A value a Variables or
-provider-variable row refused opens it with the name and value filled in
-(`prefill`). The typed value is sent by a direct `client.request`, never through
+in Traycer's cloud. Sandboxes use it without seeing it." and How Traycer
+handles this, and nothing else before Save. A team's provider key opens it
+with the key's name filled in (`prefill`). The typed value is sent by a direct `client.request`, never through
 a query or mutation, so it reaches no cache, and closing the dialog drops it. A
 refusal shows the host's words (`Connect to manage secrets.` with no session on
 this computer) or the `secretChangeRefusalLine` for a create refusal's code;
@@ -1258,19 +1248,14 @@ this computer) or the `secretChangeRefusalLine` for a create refusal's code;
 address, then save again." On a team's host the page is the team line, no list;
 on a host whose version predates the page, "Update this host to use your secrets
 here." **Replace** (`environment.secrets.replaceValue`, compare-and-set on the
-version the list showed; a stale answer asks to look again) adds "Tools already
-running keep the old value until they restart.", and the row then reads the
-rotation (`environment.secrets.rotation`, polled every 3 s only while it moves):
-"New value accepted, closing old sessions." until every worker class and host
-has proved the old value out of use, then "New value enforced." with each one's
-proof (`lib/sandboxes/secret-rotation-line.ts`, shared with the sandbox card's
-per-grant line). **Remove** confirms with "Added by you on 24 Oct. Version 1. On
-dev-box and laptop. Tools already running keep it until they restart."
-(`secretRemovePreview`), each of the first three clauses only when it is known.
-On Personal the hosts are the computers running Personal, as the page chip
-counts and names them (`useHostsRunningPersonal`, `namedHosts`: "<A> and <B>",
-"<A>, <B> and 1 more", "<n> computers"), and the clause is left out when none
-does; a team's computers and every sandbox hold no copy. A secret MCP servers
+version the list showed; a stale answer asks to look again) carries the same
+custody sentence, and the row then reads the rotation
+(`environment.secrets.rotation`, polled every 3 s only while it moves): "New
+value accepted, closing old sessions." until every worker class has proved the
+old value out of use, then "New value enforced." with each one's proof; a host
+owes no acknowledgement and is not listed (`lib/sandboxes/secret-rotation-line.ts`, shared with the sandbox card's
+per-grant line). **Remove** confirms with "Added by you on 24 Oct. Version 1."
+(`secretRemovePreview`), each clause only when it is known. A secret MCP servers
 use (`environment.configuration.mcpServers.list`, each server's
 `credential.secretId`, read once Remove opens, never on a Local row) leads the
 preview with "Used by github. Removing it leaves github without a credential; if
@@ -1301,37 +1286,38 @@ planes read, and the retrospective sheet lists what is still on it without
 `N commands from {host} are on hold until you choose · Review them` line
 (`1 command … is on hold until you choose · Review it`) opens the same sheet
 for that host's held rows, where Approve and Discard answer one row through
-`environment.review.heldApply`. Stop using Personal opens the preview
+the app's own call to authn on the person's sign-in. Stop using Personal opens the preview
 (`environment.move.stopPreview`) and confirm (`environment.move.stop`) after
 every needs-choice row has Keep locally, Remove from this computer, or
 Resolve.
 
+**Team ▸ Review** (`move/team-environment-review-session.tsx`).
+The named team's page lists held changes for the page's item kinds; Secrets
+can open the complete review. Review addresses that environment on the
+person's sign-in, even with no computer connected. Admins and Editors may
+Approve or Discard; Viewers may read, and an unknown or failed role grants no
+verbs. Apply sends the hold and displayed live revisions; Discard sends the
+hold revision. The list displays both the proposed and current validated,
+masked value, and a removal when the current item is absent. A conflict
+requires a successful reread and a fresh explicit press before applying the
+newer revision. No shown value is sent back as a write. Personal's host-owned
+evidence, historical upload sheet and actions are unchanged. Skills, the guide
+and shared notes have no review workflow. Mount, window focus and this app's
+own settlement refresh review; no new poll or proposal push is promised.
+
 **Personal ▸ Notices and "needs you"** (`personal/personal-page-notices.tsx`).
-Under a Personal page's status line, for the item
-kinds the page edits: each convergence notice from `environment.notices`
+In a Personal page's header, for the item kinds the
+page edits: each convergence notice from `environment.notices`
 ("LOG_LEVEL from dev-box now applies everywhere.", or "from the dashboard")
 with Undo (`environment.undo`, with the grant) while `undoAvailable`, and each
 "needs you" row from `environment.review` ("LOG_LEVEL is waiting for you:
 runs a command / was changed without your confirmation.") with Review, which
-opens Secrets. A value typed there that looks like a key (`classifyCredential`) is
-refused in its row with "This looks like a key. Add it as a secret.", whose
-link opens Add a secret with the name and value filled in; nothing is stored
-as a variable. A provider's own key variable typed on its Env tab
-(`envNamePlaceholder`, for every provider whose key has a tab) is refused
-instead with "This is Kiro's key. Set it on Kiro's Account." The key's home is
-Account whenever the provider takes a key (`providerKeyTab`), including when
-Profiles & Limits is also shown. The link opens that tab; the typed value is
-cleared and nothing is saved. A provider without a key tab, such as Claude
-Code, keeps the first line. A name one
-of Personal's secrets is set under (`environment.secrets.list@1.2` rows'
-`variables`) reads "ENV_E2E_SERVICE_TOKEN · from the secret
-ENV_E2E_SERVICE_TOKEN · Secrets" on Variables, with no value and nothing to
-edit there. A provider's Env has no such name: nothing binds a secret to a
-name in one provider's env. A value
-already saved that looks like a key shows as dots with Remove, never in a
-field, on every Variables and Env list (Personal, a team, a Local row), with
-the same line beneath where the page has one; its link carries the saved
-value on, and nothing is cleared until the person acts. On the host a variable or
+opens Secrets. A variable is saved as typed, whatever its name or value, on
+Variables and on a provider's Env tab, on every host a sandbox included,
+whether or not a secret declares the same name. A value
+already saved that looks like a key (`classifyCredential`) shows as dots with
+Remove, never in a field, on every Variables and Env list (Personal, a team, a
+Local row). On the host a variable or
 provider-variable notice came from, "Keep dev-box's value on dev-box" writes
 the value that host has now as its own (`config.env.localOverride.set`, the
 value read as the page reads it: `config.env.list` or `providers.list`) and
@@ -1339,7 +1325,7 @@ then undoes the change everywhere; an undo that is refused leaves the kept
 value, equal to the current one, and the row says why. A Variables or
 provider-variable row this host keeps its own value for shows the shared
 value with "dev-box uses: error · Use everywhere" beneath (dots for a value
-that looks like a key, with no Use everywhere), and its Set and Remove change
+that looks like a key), and its Set and Remove change
 the shared value only. Use everywhere saves the host's value as the shared one
 and then clears the host's own (`config.env.localOverride.clear`); the host's
 own value is otherwise changed under Access and setup ▸ This host's own
@@ -1955,14 +1941,16 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
 - `Sounds` (`panels/app-notifications-settings-panel.tsx`,
-  `/settings/app-notifications`): **Chimes**
-  (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
-  of alert, untitled because the page is already named for it; and, in a build
-  with something to play, **Soundtrack**
-  (`panels/soundtrack-settings-section.tsx`): **Music**, the soundtrack's only
-  on and off switch (the palette's Soundtrack action flips the same setting);
-  **Playback controls**, drawn only while Music is on and off by default, which
-  puts previous, pause and next in a task's status row
+  `/settings/app-notifications`): **Soundtrack**
+  (`panels/soundtrack-settings-section.tsx`) and nothing else, so the page is
+  offered only in a build with something to play (`isSoundtrackRowAvailable`;
+  `visibleSettingsSections` withholds the section otherwise, and the mobile
+  app never offers it). Where it is withheld, its route and a remembered
+  section open Alerts (`RETIRED_SECTION_REPLACEMENTS`), where its chimes went;
+  the id is not retired. **Music** is the soundtrack's only on and off switch
+  (the palette's Soundtrack action flips the same setting); **Playback
+  controls**, drawn only while Music is on and off by default, puts previous,
+  pause and next in a task's status row
   (`epic-canvas/panels/epic-playback-controls.tsx`), the only place the window's
   chrome carries the soundtrack; then its volume and what it follows, which stay
   editable while it is off. Pause is a setting (`soundtrackPaused`), so it holds
@@ -1976,17 +1964,37 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   it off. The switch is disabled until this window holds a session, which a
   launch that kept the pause does not until Play, and the line under it counts
   the audio time, holding through a pause, then names the saved session with
-  **Show in folder**. The id still says notifications: the OS and push rows moved
-  to Alerts, and ids do not change.
-- `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
-  group, **Notifications** (anchor `alerts-notifications`), where the alerts
-  themselves are configured. **OS notifications** on a desktop with the
-  system-settings bridge (`system-notification-settings-section.tsx`),
-  **Push notifications** and its four severity switches in the phone app
-  (`push-permission-section.tsx`; no "on this device" qualifier, since
-  "device" is the UI word for a host), and **Notification events**, a
-  pointer to the selected host's Notifications page, in every shell. It was
-  the Sounds page's second group; it moved because push is not a sound.
+  **Show in folder**. The id still says notifications: the chimes, and the OS
+  and push rows before them, moved to Alerts, and ids do not change.
+- `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): what
+  interrupts the person on THIS device. One table
+  (`alerts-notification-kinds-section.tsx`, anchor `alerts-notifications`),
+  a row per kind - Needs action, Failure, Done, Info, each with its own
+  anchor - and columns Kind / Notify / Chime. **Notify** is
+  `notificationNotify` in the settings store, kept by this app and never by a
+  host (on by default except Info). It governs the in-app toast, the OS
+  notification request and the chime together: the display path asks
+  `NotificationDisplayTarget.notifies` before any of them
+  (`lib/notifications/notification-display.ts`, fed by
+  `useNotificationNotifies`), and a kind that is off is settled there with its
+  display receipt taken, so turning it on later never replays it. It never
+  touches the row: the bell still lists it and the unread count and tab
+  markers still count it. An app-local row reaches another window only
+  through the desktop's foreground relay, so a refused one is still sent,
+  marked `inboxOnly`: main relays it to a focused window, raises no OS
+  notification with none focused, and the receiving window merges the row
+  without a toast or chime. **Chime** is the per-kind picker that was on
+  Sounds (`notification-chime-select.tsx`), same stored value
+  (`notificationChimeSounds`). In the phone app the switch column is **Push**:
+  the per-phone push mute (`usePushSeveritySwitches`), and there is no
+  separate in-app switch - the same muted set also gates the toast while the
+  app is in front, except while push is not on or the set has not loaded, when
+  every kind shows. Then **System** (`alerts-system`), drawn only where it has
+  a row: **OS notifications** on a desktop with the system-settings bridge
+  (`system-notification-settings-section.tsx`), **Push notifications** in the
+  phone app (`push-permission-section.tsx`; no "on this device" qualifier,
+  since "device" is the UI word for a host). On the phone System comes first,
+  because its row says whether the Push switches can move.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
   `/settings/opening-behavior`): link routing (Open links and per-link-type
   choices), general tile placement and per-type overrides
@@ -4393,47 +4401,6 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       credential does not change which CLIs are installed, and re-probing every
       harness is the fan-out `useRefreshHarnessCatalog` keeps behind an explicit
       user action.
-- `Notifications` Two `SettingsGroup` cards. A design pass
-  (`settings-related-panels-core-flows` artifact) replaced the old one-column
-  severity×channel matrix with a compact policy card, and gave the hooks
-  manager below it the remaining height.
-  - **`"In-app notifications"`** (the `· Current host` qualifier is gone - the
-    sidebar names the host now, and the old suffix qualified the one fact the
-    screen refused to resolve): three rows, one per severity
-    - `Needs action`, `Failure`, `Done` (`info` has no row) - each a single
-      `Switch` gating durable host-row creation before anything reaches the bell
-      feed, unread count, tab indicators, or notification hooks. Collaboration
-      and app-local notifications stay independent. Backed by
-      `host.notifications.getConfig` / `setConfig` through host-scoped TanStack
-      Query hooks. The wire contract still carries a full severity×channel
-      matrix (including an `email`/SMTP channel that is never surfaced here,
-      round-tripped untouched via a `leaveUnchanged` password sentinel) - this
-      panel only renders and toggles the `renderer` channel; a real multi-
-      channel UI is deliberately deferred, not an oversight (the artifact notes
-      a channel-by-severity matrix "is reserved for a future surface with
-      multiple user-configurable channels").
-  - **`"Notification hooks"`** (`notification-hooks-section.tsx`): a toolbar
-    (hook count, a copy-config-path chip, Refresh, Add hook) over a row list
-    that owns the remaining height (`fillHeight` on the shell +
-    `min-h-0 flex-1` down the tree - only the row list scrolls, the toolbar
-    stays pinned). The config-path chip consumes the toolbar width left after
-    the count and actions, truncating only when that real remaining width is
-    exhausted. The no-hooks state fills and centers within the list viewport.
-    Each row shows name, a Script/HTTP type badge, destination,
-    severity filter (or "Every severity"), latest test result, an inline
-    enabled `Switch`, and inline **Test / Edit / Delete** buttons (not a row
-    action menu) - Delete confirms via `ConfirmDestructiveDialog`. Edit/Add
-    open the pre-existing hook editor dialog (`notification-hook-editor-
-dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
-    States: a loading spinner; a neutral "unavailable, reconnect" message when
-    the host is unreachable; the query's own error message; an empty state
-    with its own "Add hook" plus the toolbar's; and, when the hooks file
-    itself fails to parse, the row list is replaced by the parse error with
-    editing disabled while the config-path copy chip stays available (the
-    invalid file is never overwritten). A running test spins only on the
-    tested row, but the Test button on every OTHER row is also disabled while
-    any one test is in flight (the mutation is global, not per-row) - worth
-    knowing if this ever reads as a bug report.
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
   and who reviews the rest; on Personal its subtitle reads "What your agents
@@ -6014,7 +5981,25 @@ wrap`). Each row names the account its first usable match runs on, the
         Options "When the disk is getting full" (no window), "After 7 days",
         "After 14 days", "After 30 days", "After 90 days". Disabled while
         Chats is off, since the window cleans only chats.
-    - **Archived chats**, a card of one row:
+    - **Archived chats**, a card of one row, two on a team:
+      - On a team only, first: **Archive idle agents automatically**
+        (`environment/team-chat-auto-archive-row.tsx`, definition
+        `STORAGE.chatAutoArchive`): "Tidy up chats
+        agents started once they go quiet." The team's own setting, read and saved by the app on
+        the person's sign-in (`GET` / `PUT
+/api/traycer/chat-auto-archive/teams/:teamId` on traycer-server,
+        through the runner host's `getTeamChatAutoArchive` /
+        `setTeamChatAutoArchive` and `hooks/chat-auto-archive/
+use-team-chat-auto-archive.ts`). The same controls as the account
+        row under General ▸ Agents (`ChatAutoArchiveRowView`), with the
+        include line reading "Include chats members started" / "Terminal
+        agent chats count as started by a member", and the threshold bounded
+        to 1 second to 365 days, so no value outside the route is sent. A
+        team that never saved one shows it off. Anyone the configuration
+        gate does not let change it (`mayChangeConfiguration`) sees the value
+        with the controls greyed out. A failed read adds "Couldn't read this
+        setting." under the description, naming no host, since no computer is
+        in the path; a failed save shows the account row's save toast.
       - **When**, a select: "Counted from the chat's last activity." Options
         "Never", "After 4 hours", "After 1 day", "After 7 days", "After 30
         days". It is independent of Chats, so the switch never disables it.
@@ -6084,10 +6069,11 @@ wrap`). Each row names the account its first usable match runs on, the
     through). It is keyed by the viewer, like the auto-archive row, so a
     pending save never outlives an account switch.
   - Neither item changes anything a host reports (`UNREPORTED_ITEM_KINDS`),
-    so the page carries no status chip, like Sandboxes. Search folds every
-    group and row into the Storage page entry (`contributesTo: "page"`): they
-    are gated on the host, which no search shell can decide, so none is an
-    anchored entry and none has a search fixture. The "When" rows share that
+    so neither counts toward a computer's settings card, like Sandboxes. Search
+    folds every group and row into the Storage page entry
+    (`contributesTo: "page"`): they are gated on the host, which no search
+    shell can decide, so none is an anchored entry and none has a search
+    fixture. The "When" rows share that
     one entry, whose page shows them all, and their keywords keep "idle",
     "archived" and "snapshots" apart.
 - `Keybindings` Keyboard shortcut customization.
@@ -6664,7 +6650,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
   formerly did and appears exactly once. CLI-floor remedies remain in Updates.
 
   Exceptions sit below the state: offline, update required, settings failure,
-  out of credits with the payer and removal date, withdrawal and update progress.
+  out of credits with whose credits ran out and the removal date, withdrawal and update progress.
   The Environment row is omitted when the host is not usable, there is no
   client, the status read is unsupported or failed, or the binding read is
   unsupported or failed. When it shows, the label is **Environment** and
@@ -6686,7 +6672,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
   host's Installation opens with a titled **Sandbox** group (size, region
   when known, the other rate — awake rate while resting, storage rate
   otherwise — idle policy including what a suspend keeps, last active,
-  and, on a team sandbox, created by and wake payer, plus the team pod's
+  and, on a team sandbox, created by, plus the team pod's
   room line). Secrets holds the grants, readiness and network events, and
   **Manage** opens that environment's Secrets page. Costs holds the awake
   rate and the storage rate, and, for a personal sandbox, today's charge
@@ -6767,15 +6753,19 @@ set-state-in-effect` forbids the effect form, and an effect would also
        devices and agents signed in to your account can reach this
        computer."), Off ("Other devices and agents can't reach this computer.
        Your settings still reach it."), and Turning off ("Other devices and
-       agents are being disconnected.") with a spinner. `host.remoteAccess.set
-{enabled: false}` answers `turning_off` until the host has closed its
-       sessions, and the section keeps saying so until the host's status
-       reports `off` (`shownRemoteAccess`), even when a status read still says
-       `on`. On a team's computer the wording names team members and agents.
+       agents are being disconnected.") with a spinner. Turn on (and the
+       question's On) is the app's own call to authn on the person's sign-in
+       (`PUT /api/v3/hosts/:hostId/remote-access`), then one
+       `host.status.refresh` to that computer, whose failure is silent; the
+       section then reads `environment.status`. Turn off is
+       `host.remoteAccess.set@2.0` to that computer; once it is taken, the
+       section says Turning off until the host's status reports `off`
+       (`shownRemoteAccess`), even when a status read still says `on`. On a team's computer the wording names team members and agents.
        Its switch is outside the otherwise read-only team sections and is
        offered only when the bound team's current role is admin or editor,
        using the host's binding and the environment list, not the selected
-       settings page. An unknown or failed role read offers no switch. A
+       settings page. A Viewer, an unknown role or a failed role read offers
+       no switch. A
        refused change is shown inline and does not mark the question answered
        or change the displayed state.
     4. **Terminal account**, one row per provider with an ambient profile,
@@ -6783,9 +6773,8 @@ set-state-in-effect` forbids the effect form, and an effect would also
        its switch named
        "<Provider> terminal account" for screen readers,
        under "This computer's own sign-in, which stays on this computer. Sign
-       in on Providers to use one everywhere." (a team host: "This host's own
-       sign-in, which stays on this host. An admin can link a plan on
-       <Team>'s Providers to use one everywhere."), with a switch over
+       in on Providers to use one everywhere." for this computer, or the named
+       computer form otherwise, on both personal and team computers, with a switch over
        `providers.setProfileEnabled` (`profileId: "ambient"`). No rename: no
        wire method renames a profile.
     5. **This host's own values** (`environment.localOverrides`): each value

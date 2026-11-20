@@ -98,6 +98,7 @@ const HASH_ONLY_CONTENT: JsonContent = {
 };
 
 vi.mock("@/lib/composer/landing-image-store", () => ({
+  onLandingImagesDeleted: vi.fn(),
   getImageBytes: (hash: string) =>
     Promise.resolve(hash === SHA256 ? IMAGE_BYTES : undefined),
   putImageBytesAtHash: () => Promise.resolve(true),

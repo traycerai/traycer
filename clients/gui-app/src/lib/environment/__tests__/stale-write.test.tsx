@@ -86,9 +86,9 @@ afterEach(() => {
 });
 
 describe("staleWriteMessage", () => {
-  it("says the dashboard changed the setting", () => {
+  it("says the setting changed just now when no computer made the change", () => {
     expect(staleWriteMessage(DASHBOARD)).toBe(
-      "This setting was changed in the dashboard just now.",
+      "This setting was changed just now.",
     );
   });
 
@@ -154,7 +154,7 @@ describe("a stale save in the host error toast", () => {
   it("does the same on the background-mutation policy", () => {
     toastFromHostErrorWithDetail(staleError(DASHBOARD), "Couldn't save.");
     expect(toast.info).toHaveBeenCalledWith(
-      "This setting was changed in the dashboard just now.",
+      "This setting was changed just now.",
       { id: "environment-write-stale" },
     );
     expect(toast.error).not.toHaveBeenCalled();

@@ -1,8 +1,10 @@
 import type {
+  ReviewHeldEntry,
+  UndoOutcome,
+} from "@traycer-clients/shared/environment/environment-review";
+import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
   EnvironmentStatusResponse,
-  EnvironmentWriteOutcome,
   LocalOverride,
   LocalOverrideTarget,
   RemoteAccessState,
@@ -47,17 +49,18 @@ export function remoteAccessText(
     : REMOTE_ACCESS_TEXT[state];
 }
 
+/** The host refuses a role with `FORBIDDEN`, authn with a 403 (`E_ROLE_FORBIDDEN`). */
 export function remoteAccessFailureText(code: string): string {
-  return code === "FORBIDDEN"
+  return code === "FORBIDDEN" || code === "E_ROLE_FORBIDDEN"
     ? "You don't have permission to change remote access on this computer."
     : "Couldn't change remote access. Try again.";
 }
 
 /**
- * The state the section shows. Off answers `turning_off` until the host has
- * closed every session, and the status read can still say `on` for a poll or
- * two after that answer, so an Off the person pressed shows "turning off"
- * until the host itself reports `off`. Any other answer is the status's.
+ * The state the section shows. The status read can still say `on` for a poll
+ * or two after the host took an Off, so an Off the person pressed
+ * (`lastAnswer` `turning_off`) shows "turning off" until the host itself
+ * reports `off`. Otherwise the status's.
  */
 export function shownRemoteAccess(
   status: RemoteAccessState,
@@ -194,11 +197,6 @@ export function terminalAccountSentence(hostName: string | null): string {
     : `${hostName}'s own sign-in, which stays on ${hostName}. Sign in on Providers to use one everywhere.`;
 }
 
-/** A team host's Terminal account line: only an admin links a team's plan. */
-export function teamTerminalAccountSentence(teamName: string): string {
-  return `This host's own sign-in, which stays on this host. An admin can link a plan on ${teamName}'s Providers to use one everywhere.`;
-}
-
 /** A kept value's name: the variable, or `<NAME> (<Provider>)` for an override. */
 export function localOverrideLabel(override: LocalOverride): string {
   const { target } = override;
@@ -220,16 +218,13 @@ export function sameOverrideTarget(
 
 // ── Notices ──────────────────────────────────────────────────────────────────
 
-/** Where a change came from, as a person names it. */
-function changedFromText(notice: EnvironmentNotice): string {
-  const { from } = notice;
-  if (from.kind === "dashboard") return "the dashboard";
-  return from.hostLabel ?? "another host";
-}
-
-/** "DATABASE_URL from dev-box now applies everywhere." */
+/** A change no computer made came from a person's session, so it names no place. */
 export function noticeText(notice: EnvironmentNotice): string {
-  return `${itemLabel(notice)} from ${changedFromText(notice)} now applies everywhere.`;
+  const { from } = notice;
+  if (from.kind === "dashboard") {
+    return `${itemLabel(notice)} now applies everywhere.`;
+  }
+  return `${itemLabel(notice)} from ${from.hostLabel ?? "another host"} now applies everywhere.`;
 }
 
 /**
@@ -270,7 +265,7 @@ export function keepLocalText(hostName: string): string {
  * `kept` is the Keep action's Undo: the value stays on this host either way.
  */
 export function undoRefusalText(
-  outcome: EnvironmentWriteOutcome,
+  outcome: UndoOutcome,
   label: string,
   kept: { readonly hostName: string } | null,
 ): string | null {
@@ -281,10 +276,6 @@ export function undoRefusalText(
   switch (outcome.outcome) {
     case "saved":
       return null;
-    case "pending":
-      return kept === null
-        ? "Undo applies when this host reconnects."
-        : `Kept on ${kept.hostName}. The change everywhere is undone when this host reconnects.`;
     case "stale":
       return `${prefix}: ${label} was changed again since.`;
     case "needs_grant":
@@ -299,31 +290,14 @@ export function keptUndoFailedText(hostName: string): string {
 
 // ── Needs you ────────────────────────────────────────────────────────────────
 
-const REVIEW_REASONS: Readonly<Partial<Record<string, string>>> = {
-  executable_entry: "runs a command",
-  needs_grant: "was changed without your confirmation",
-};
-
 /**
- * "DATABASE_URL is waiting for you: was changed without your confirmation.";
- * a held command reads `heldCommandText`.
+ * A hold's row: "env-e2e-memory (MCP server) runs npx -y @mcp/memory and is on
+ * hold until you choose", or without a command "env-e2e-memory (MCP server)
+ * is on hold until you choose"; every other kind by its own line
+ * (`heldCommandLine`). authn's holds carry no reason, so every hold reads
+ * this way, whatever its kind.
  */
-export function reviewText(entry: EnvironmentReviewEntry): string {
-  if (entry.reason === "executable_entry") return heldCommandText(entry);
-  const reason = REVIEW_REASONS[entry.reason];
-  return reason === undefined
-    ? `${itemLabel(entry)} is waiting for you.`
-    : `${itemLabel(entry)} is waiting for you: ${reason}.`;
-}
-
-/**
- * "env-e2e-memory (MCP server) runs npx -y @mcp/memory and is on hold until
- * you choose", "notify (hook) runs notify.sh on stop and is on hold until you
- * choose", or without a command "env-e2e-memory (MCP server) is on hold until
- * you choose"; every other kind by its own line (`heldCommandLine`). Its
- * row's `Review` opens the retrospective sheet.
- */
-function heldCommandText(entry: EnvironmentReviewEntry): string {
+export function reviewText(entry: ReviewHeldEntry): string {
   const line = heldCommandLine(entry);
   return `${line.name} ${line.clause}${line.acts ? " and" : ""} is on hold until you choose`;
 }

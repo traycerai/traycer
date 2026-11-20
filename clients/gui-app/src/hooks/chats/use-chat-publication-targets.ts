@@ -50,7 +50,7 @@ export function hostSupportsPublicationRedirectRevision(
 ): boolean | null {
   if (hostId === null || getNegotiatedHostMethods(hostId) === null) return null;
   const version = readHostMethodSchemaVersion(hostId, "epic.listChatRecords");
-  return version !== null && version.major === 1 && version.minor >= 5;
+  return version !== null && version.major === 1 && version.minor >= 6;
 }
 
 /**

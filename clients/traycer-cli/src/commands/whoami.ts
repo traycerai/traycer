@@ -3,6 +3,7 @@ import {
   validateStoredCredentials,
 } from "../auth/validate";
 import { config } from "../config";
+import { AUTHN_UNREACHABLE_MESSAGE } from "../internal/host-door-words";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { readCredentials, type StoredCredentials } from "../store/credentials";
@@ -47,7 +48,7 @@ export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
       code: CLI_ERROR_CODES.AUTH_NETWORK,
       message:
         result.effect === "none"
-          ? "Could not reach the authn service; check your network."
+          ? AUTHN_UNREACHABLE_MESSAGE
           : "Could not reach the authn service while refreshing the stored credentials; the refresh may or may not have gone through, so the stored credentials may now be stale. Check your network, and run `traycer login` if the next command fails to authenticate.",
       // The error path carries the effect too: a network failure can land
       // AFTER a spend, and this envelope is the only thing the caller gets.

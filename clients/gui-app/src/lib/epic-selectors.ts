@@ -2850,6 +2850,20 @@ export function useArtifactById(id: string | null): ArtifactProjection | null {
 }
 
 /**
+ * Whether an artifact is one loose file and not a folder. A loose HTML page
+ * carries the same kind as an HTML folder, so its change is that one file's
+ * own and never a folder of files. False outside an open epic.
+ */
+export function useIsLooseFileArtifact(id: string): boolean {
+  return useMaybeEpicStore(
+    (s) =>
+      Object.hasOwn(s.artifacts.byId, id) &&
+      s.artifacts.byId[id].layout === "file",
+    false,
+  );
+}
+
+/**
  * Reactive tombstone lookup for a deleted artifact. Returns the projected
  * `deletedArtifacts` entry, or null when the id is not (yet) a tombstone. The
  * chat's `artifact_operation` delete card subscribes here so it resolves the

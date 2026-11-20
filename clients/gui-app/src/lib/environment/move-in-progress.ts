@@ -1,10 +1,20 @@
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 
-/** Why a move stopped, by `setup.state`: it ran out of time, or it failed. */
-export const MOVE_STOPPED_REASONS: Readonly<Partial<Record<string, string>>> = {
+const MOVE_STOPPED_REASONS: Readonly<Partial<Record<string, string>>> = {
   stalled: "it timed out",
   failed: "it couldn't finish",
 };
+
+/**
+ * Why a move stopped, by `setup.state`: it ran out of time, or it failed.
+ * `setup.state` is an open string, so a name an object inherits
+ * (`constructor`) is no reason: that move is still under way.
+ */
+export function moveStoppedReason(state: string): string | null {
+  return Object.hasOwn(MOVE_STOPPED_REASONS, state)
+    ? (MOVE_STOPPED_REASONS[state] ?? null)
+    : null;
+}
 
 /**
  * Where this computer's move into Personal stands, read from `setup` alone.
@@ -36,12 +46,31 @@ export function moveIsPastTheAccept(
   );
 }
 
+/** Accepted, and stalled or failed: it waits for its Retry. */
+export function moveHasStopped(status: EnvironmentStatusResponseV11): boolean {
+  const setup = status.setup;
+  return (
+    setup !== null &&
+    moveIsPastTheAccept(status) &&
+    moveStoppedReason(setup.state) !== null
+  );
+}
+
+/** Waiting for the person's `Move to Personal`. */
+export function moveAwaitsConsent(
+  status: EnvironmentStatusResponseV11,
+): boolean {
+  const setup = status.setup;
+  return (
+    setup !== null &&
+    setup.stage === "moving_settings" &&
+    setup.state === "awaiting_consent"
+  );
+}
+
 /** Accepted, and neither finished nor stopped: items are moving right now. */
 export function moveIsRunning(status: EnvironmentStatusResponseV11): boolean {
   const setup = status.setup;
   if (setup === null) return false;
-  return (
-    moveIsPastTheAccept(status) &&
-    MOVE_STOPPED_REASONS[setup.state] === undefined
-  );
+  return moveIsPastTheAccept(status) && moveStoppedReason(setup.state) === null;
 }

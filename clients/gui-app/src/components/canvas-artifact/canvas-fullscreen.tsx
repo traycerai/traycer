@@ -20,6 +20,7 @@ import {
   WINDOW_LEADING_INSET_CLASS,
   WINDOW_TRAILING_INSET_CLASS,
 } from "@/components/layout/header/title-bar-drag";
+import { ownValue } from "@/lib/own-value";
 import { cn } from "@/lib/utils";
 import {
   adjacentFullscreenBoard,
@@ -65,8 +66,8 @@ export function CanvasFullscreen({
       (direction === -1 ? nextButton : previousButton).current?.focus();
   }, [path]);
   if (path === null) return null;
-  const board = snapshot.boards[path];
-  const error = errors[path] ?? null;
+  const board = ownValue(snapshot.boards, path);
+  const error = ownValue(errors, path) ?? null;
   const previous = adjacentFullscreenBoard(snapshot, path, -1);
   const next = adjacentFullscreenBoard(snapshot, path, 1);
   const step = (direction: -1 | 1): void => {
@@ -120,7 +121,7 @@ export function CanvasFullscreen({
             className="min-w-0"
             aria-label="Choose board"
           >
-            <span className="truncate">{board.title || path}</span>
+            <span className="truncate">{board?.title || path}</span>
             <ChevronDown />
           </Button>
         </DropdownMenuTrigger>

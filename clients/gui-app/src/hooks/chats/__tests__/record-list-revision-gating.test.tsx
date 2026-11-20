@@ -1,6 +1,6 @@
 /**
  * The revision-GATING dispatch contract for the two record-list polls
- * (`epic.listChatRecords@1.5` / `epic.listTuiAgents@1.3`): what goes out as
+ * (`epic.listChatRecords@1.6` / `epic.listTuiAgents@1.3`): what goes out as
  * `knownRevision`, when it moves, and when it resets to `null`.
  *
  * Mirrors `record-reads-per-session-generation.test.tsx`'s harness shape -
@@ -409,7 +409,7 @@ function createFixture(queuedBridge: boolean): Fixture {
   const handle = newSession(queuedBridge);
   sessionHandle = handle;
   recordNegotiatedHostManifest(HOST_ID, {
-    "epic.listChatRecords": { major: 1, minor: 5 },
+    "epic.listChatRecords": { major: 1, minor: 6 },
   });
   return {
     client,

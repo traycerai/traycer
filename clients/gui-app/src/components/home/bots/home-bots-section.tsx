@@ -65,7 +65,7 @@ export function HomeBotsSection(): ReactNode {
   const client = useHostClient();
   const support = useHostMethodSupport(hostId, "bot.list");
   const enabled = support === true;
-  const environments = useEnvironmentListQuery(client, enabled);
+  const environments = useEnvironmentListQuery(enabled);
   useRereadEnvironmentListOnFocus(enabled);
   const bots = useBotListQuery(client, enabled);
   // A teammate's change to the list refetches it without waiting for focus.
@@ -73,7 +73,6 @@ export function HomeBotsSection(): ReactNode {
   const directory = useHostDirectoryList();
   const connectable = useConnectableHostIds();
   const bindings = useHostEnvironmentBindings(connectable.hostIds, enabled);
-  const hostListSupport = useHostMethodSupport(hostId, "environment.host.list");
   const headingId = useId();
 
   const registeredHosts = useRegisteredHosts();
@@ -110,11 +109,7 @@ export function HomeBotsSection(): ReactNode {
         .map((environment) => environment.environmentId),
     [environmentList],
   );
-  const environmentHosts = useEnvironmentHostLists(
-    client,
-    teamEnvironmentIds,
-    enabled && hostListSupport === true,
-  );
+  const environmentHosts = useEnvironmentHostLists(teamEnvironmentIds, enabled);
   const environmentHostIds = useMemo(() => {
     const byEnvironmentId = new Map<string, ReadonlySet<string>>();
     // A failed list stays out of the map, read as unanswered: the rows say
@@ -206,8 +201,6 @@ export function HomeBotsSection(): ReactNode {
             }
             connectableHostIds={connectable.hostIds}
             environmentBindings={bindings}
-            client={client}
-            hostId={hostId}
             setup={
               teamSetups.setups.find(
                 (setup) => setup.environmentId === group.environmentId,

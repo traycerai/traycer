@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import type { ReactNode } from "react";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   Outlet,
   RouterProvider,
@@ -148,7 +149,11 @@ async function mountRetained(payload: NotificationPayload): Promise<{
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   await act(async () => {
-    render(<RouterProvider router={router} />);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
     await router.load();
   });
   const markAsRead = vi.fn<(row: MergedNotificationRow | string) => void>();

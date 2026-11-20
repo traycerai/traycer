@@ -133,7 +133,6 @@
                       "settings/appearance",
                       "settings/browser",
                       "settings/opening-behavior",
-                      "settings/sounds",
                       "settings/alerts",
                       "settings/keybindings",
                       "settings/diagnostics",
@@ -157,7 +156,6 @@
                         ]
                       },
                       "settings/worktrees",
-                      "settings/notifications",
                       "settings/permissions",
                       "settings/agents",
                       "settings/model-routing",
@@ -220,6 +218,14 @@
     ]
   },
   "redirects": [
+    {
+      "source": "/settings/notifications",
+      "destination": "/settings/alerts"
+    },
+    {
+      "source": "/settings/sounds",
+      "destination": "/settings/alerts"
+    },
     {
       "source": "/panels/chats",
       "destination": "/panels/agents"

@@ -446,6 +446,13 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   // host; this is the other half - a review PARKED from a previous session
   // must not paint over a dialog that has since lost its host, which is a
   // destructive confirmation naming a machine it is no longer pointed at.
+  const censusReproving = useCensusReproving({
+    selectionKey,
+    hostId,
+    isPending,
+    isError,
+    refreshing: refresh.refreshing,
+  });
   const reviewable =
     step === "review" && reviewSnapshot !== null && hostId !== null;
   const renderBody = (host: SweepHostChoiceView | null): ReactNode =>
@@ -553,11 +560,11 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             unavailableHostId={hostChoice.unavailableHostId}
             // Review has no chip at all - it renders the frozen host read-only
             // and Back is the route to change it - so the review case is
-            // structural rather than a disabled control. What is left is the
-            // census being unsettled underneath a chip that IS on screen.
+            // structural rather than a disabled control. What is left is a
+            // census ON SCREEN being re-proved underneath the chip.
             // Background sweeps already carry their original hostId; switching
             // the census cannot redirect them, and their rows stay locked.
-            disabled={refresh.refreshing}
+            disabled={censusReproving}
             hasSelectionOverrides={checkOverrides.size > 0}
             onSwitch={hostChoice.onSwitch}
             render={renderBody}
@@ -566,6 +573,38 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * Whether a refresh is RE-PROVING a census this session has already seen
+ * settle - the one state the host chip locks for.
+ *
+ * A first load has no proven census to discard, so it never locks the chip,
+ * including one seeded from cached rows: those carry a host id while their
+ * first proof is still fetching, so `hostId` alone cannot tell the two apart.
+ */
+function useCensusReproving(input: {
+  readonly selectionKey: string | null;
+  readonly hostId: string | null;
+  readonly isPending: boolean;
+  readonly isError: boolean;
+  readonly refreshing: boolean;
+}): boolean {
+  const [settledSessionKey, setSettledSessionKey] = useState<string | null>(
+    null,
+  );
+  const settled =
+    input.selectionKey !== null && settledSessionKey === input.selectionKey;
+  if (
+    !settled &&
+    input.selectionKey !== null &&
+    input.hostId !== null &&
+    !input.isPending &&
+    !input.isError
+  ) {
+    setSettledSessionKey(input.selectionKey);
+  }
+  return settled && input.refreshing;
 }
 
 /**

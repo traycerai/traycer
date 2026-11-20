@@ -14,3 +14,10 @@ b57b45ea2f27489bec709f1dd4a3ca08009a9adb:clients/gui-app/src/components/settings
 31a1c4933f80367f97da990662190a7964ea801b:clients/gui-app/src/components/settings/panels/__tests__/env-override-editor-phone.test.tsx:generic-api-key:27
 bab52d1636e044b0f11cdbe3f46779aa5f0c7032:clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers.test.tsx:generic-api-key:125
 bab52d1636e044b0f11cdbe3f46779aa5f0c7032:clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers.test.tsx:generic-api-key:139
+b07f76ad2f448057054f6da186c1ba74ecbf0f92:clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers.test.tsx:generic-api-key:125
+b07f76ad2f448057054f6da186c1ba74ecbf0f92:clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers.test.tsx:generic-api-key:139
+13b689b06ae69d9b72a40cc2ee80c05d89369d2c:clients/gui-app/src/components/settings/secrets/__tests__/secrets-page-own-environment-authn.test.tsx:generic-api-key:98
+0c03cea5253c0c03eb21b76c88df35e8b6bcc2f4:clients/gui-app/src/components/home/bots/__tests__/create-bot-form.test.tsx:generic-api-key:902
+0c03cea5253c0c03eb21b76c88df35e8b6bcc2f4:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:5652
+0c03cea5253c0c03eb21b76c88df35e8b6bcc2f4:clients/gui-app/src/components/settings/panels/__tests__/providers-settings-panel.test.tsx:generic-api-key:5760
+0c03cea5253c0c03eb21b76c88df35e8b6bcc2f4:clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question.test.tsx:generic-api-key:148

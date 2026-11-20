@@ -1,10 +1,9 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
+import type { EnvironmentCloudSend } from "@/lib/environment/environment-cloud-calls";
 
 export interface DetailsSubject {
   readonly environmentId: string;
-  /** Built-ins: secret, member, plan, host_settings, move, chip and sandbox.
+  /** Built-ins: secret, member, plan, host_settings, move and sandbox.
    * Open to additional providers without changing the drawer contract.
    */
   readonly kind: string;
@@ -20,16 +19,10 @@ export interface DetailsSubject {
 
 export type DetailsReaderScope = "full" | "own" | "status_only";
 
-export type DetailsRecovery =
-  | {
-      readonly kind: "repair" | "install" | "retry" | "overview";
-      readonly hostId: string;
-    }
-  | {
-      readonly kind: "apply";
-      readonly hostId: string;
-      readonly guestSetupFailed: boolean | null;
-    };
+export interface DetailsRecovery {
+  readonly kind: "repair" | "install" | "retry" | "overview";
+  readonly hostId: string;
+}
 
 /** Metadata only: never add values, tokens, credentials or arbitrary payloads.
  * Host names and actor labels must already be authorized by the provider.
@@ -118,8 +111,8 @@ export interface DetailsEntry {
 }
 
 export interface DetailsProviderContext {
-  readonly hostId: string | null;
-  readonly client: HostClient<HostRpcRegistry>;
+  /** Every read it makes goes on the sign-in current when this provider began. */
+  readonly environmentCloud: EnvironmentCloudSend;
   readonly queryClient: QueryClient;
 }
 

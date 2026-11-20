@@ -4,6 +4,7 @@ import {
   latestCheckpointPerTurn,
   turnCheckpointManifestSchema,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+import { distinctArtifactCount } from "@/lib/chat/artifact-folder-bundles";
 import {
   holdsEveryRecordFrom,
   type TranscriptWindow,
@@ -81,12 +82,11 @@ function scopedLatestCheckpointEvents(
 /**
  * Count of distinct undoable artifacts that a revert from `fromMessageId` (its
  * turn + every turn after) would touch - drives the "Also revert N artifacts"
- * opt-out in the revert-on-edit dialog. Deduped by FILE PATH (the artifact's
- * stable `index.md`), matching how the revert collapses entries per path
- * (`restoreCumulative` → `earliestEntriesByPath`) - so the shown count equals
- * what is actually reverted, even if an artifact's id was unresolved in one turn
- * and resolved in a later one. Scoping mirrors `hasUndoableFileEditsFromMessage`,
- * each turn's last checkpoint included.
+ * opt-out in the revert-on-edit dialog. Deduped by ARTIFACT ID, since every
+ * changed file of an html or canvas artifact carries its artifact's tag and
+ * the same artifact recurs across turns; an entry whose id was unresolved when
+ * it was captured counts by its file path. Scoping mirrors
+ * `hasUndoableFileEditsFromMessage`, each turn's last checkpoint included.
  */
 export function scopedArtifactCountFromMessage(
   messages: ReadonlyArray<OpenMessage>,
@@ -103,18 +103,14 @@ export function scopedArtifactCountFromMessage(
       .filter((message): message is OpenUserMessage => message.role === "user")
       .map((message) => message.messageId),
   );
-  const seen = new Set<string>();
-  scopedLatestCheckpointEvents(events, includedMessageIds)
-    .flatMap((event) => {
-      const parsed = turnCheckpointManifestSchema.safeParse(event.metadata);
-      return parsed.success ? parsed.data.entries : [];
-    })
-    .filter(
-      (entry) =>
-        entry.artifact && entry.undoable && !isNoOpCheckpointEntry(entry),
-    )
-    .forEach((entry) => seen.add(entry.filePath));
-  return seen.size;
+  return distinctArtifactCount(
+    scopedLatestCheckpointEvents(events, includedMessageIds)
+      .flatMap((event) => {
+        const parsed = turnCheckpointManifestSchema.safeParse(event.metadata);
+        return parsed.success ? parsed.data.entries : [];
+      })
+      .filter((entry) => entry.undoable && !isNoOpCheckpointEntry(entry)),
+  );
 }
 
 /**

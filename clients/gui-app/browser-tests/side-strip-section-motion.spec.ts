@@ -173,6 +173,301 @@ test("does not hold a row that was only clicked, once the pointer has left", asy
   await expect.poll(() => laneOf(watcher)).toBe("to-review");
 });
 
+test("keeps a task opened from To review there once it is read, until another task is opened", async ({
+  page,
+}) => {
+  await openStrip(page);
+  const release = row(page, "release");
+  const at = await centreOf(release);
+  await page.mouse.click(at.x, at.y);
+  await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+
+  await moveTask(page, "release", "idle");
+
+  // Read, so its row no longer says "Done", and still where it was clicked.
+  await expect(release.getByTestId("side-tab-section-detail")).toHaveCount(0);
+  expect(await laneOf(release)).toBe("to-review");
+
+  await page.evaluate('window.__sideTabStripProbe.activate("fixture-watcher")');
+
+  await expect.poll(() => laneOf(release)).toBe("idle");
+});
+
+test("keeps an answered task in Needs you while it is the current one, out of that section's count", async ({
+  page,
+}) => {
+  await openStrip(page);
+  const onboarding = row(page, "onboarding");
+  const needsYou = page.getByTestId("side-strip-section-needs-you");
+  await expect(needsYou).toHaveText("Needs you2");
+  const at = await centreOf(onboarding);
+  await page.mouse.click(at.x, at.y);
+  await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+
+  await moveTask(page, "onboarding", "working");
+
+  // Answered, so one task fewer waits on the person, and its row has not moved.
+  await expect(needsYou).toHaveText("Needs you1");
+  expect(await laneOf(onboarding)).toBe("needs-you");
+
+  await page.evaluate('window.__sideTabStripProbe.activate("fixture-watcher")');
+
+  await expect.poll(() => laneOf(onboarding)).toBe("working");
+});
+
+test("keeps a task opened from To review there while it starts working, until another task is opened", async ({
+  page,
+}) => {
+  await openStrip(page);
+  const release = row(page, "release");
+  const at = await centreOf(release);
+  await page.mouse.click(at.x, at.y);
+  await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+
+  await moveTask(page, "release", "working");
+
+  await expect(release.getByTestId("side-tab-section-detail")).toHaveCount(0);
+  expect(await laneOf(release)).toBe("to-review");
+
+  await page.evaluate('window.__sideTabStripProbe.activate("fixture-watcher")');
+
+  await expect.poll(() => laneOf(release)).toBe("working");
+});
+
+/**
+ * Opens Release checklist from To review, then reads it into Idle: its row is
+ * held in To review, above Watcher fix, with the pointer outside the list.
+ */
+async function holdReleaseAboveWatcher(page: Page): Promise<void> {
+  await openStrip(page);
+  const at = await centreOf(row(page, "release"));
+  await page.mouse.click(at.x, at.y);
+  await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+  await moveTask(page, "release", "idle");
+  expect(await laneOf(row(page, "release"))).toBe("to-review");
+}
+
+/** Clicks Watcher fix with the pointer inside the list, and waits for it to be the current row. */
+async function openWatcherWithPointerInList(page: Page): Promise<void> {
+  const watcher = row(page, "watcher");
+  const at = await centreOf(watcher);
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.click(at.x, at.y);
+  await expect(watcher).toHaveAttribute("data-active", "true");
+  await expect(row(page, "release")).toHaveAttribute("data-active", "false");
+}
+
+test.describe("when another task is opened with the pointer in the list", () => {
+  test("keeps the previous row in its section and the clicked row where it was", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    const before = await boxOf(row(page, "watcher"));
+
+    await openWatcherWithPointerInList(page);
+    await nextFrames(page, 3);
+
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+    expect((await boxOf(row(page, "watcher"))).y).toBe(before.y);
+  });
+
+  test("keeps a waiting row drawn in a folded section, and the clicked row where it was", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await page.getByTestId("side-strip-section-to-review").click();
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    await expect(row(page, "migration")).toHaveCount(0);
+    const before = await boxOf(row(page, "watcher"));
+
+    await openWatcherWithPointerInList(page);
+    await nextFrames(page, 3);
+
+    await expect(row(page, "release")).toBeVisible();
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+    expect((await boxOf(row(page, "watcher"))).y).toBe(before.y);
+  });
+
+  test("keeps a waiting row that holds keyboard focus drawn in a folded section after the pointer leaves the list", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await page.getByTestId("side-strip-section-to-review").click();
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    await expect(row(page, "migration")).toHaveCount(0);
+    const release = row(page, "release");
+    await release.evaluate((node) => {
+      node.blur();
+    });
+    await page.keyboard.press("Insert");
+    await release.focus();
+    expect(
+      await release.evaluate((node) => node.matches(":focus-visible")),
+    ).toBe(true);
+    await expect(release).toBeVisible();
+
+    const at = await centreOf(row(page, "watcher"));
+    await page.mouse.move(at.x, at.y);
+    await page.evaluate(
+      'window.__sideTabStripProbe.activate("fixture-watcher")',
+    );
+    await expect(row(page, "watcher")).toHaveAttribute("data-active", "true");
+    await expect(release).toBeFocused();
+    await expect(release).toBeVisible();
+    expect(await laneOf(release)).toBe("to-review");
+
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    await nextFrames(page, 3);
+
+    await expect(release).toBeVisible();
+    expect(await laneOf(release)).toBe("to-review");
+    await expect(release).toBeFocused();
+
+    await release.evaluate((node) => {
+      node.blur();
+    });
+
+    await expect.poll(() => laneOf(release)).toBe("idle");
+  });
+
+  test("keeps a waiting row under the pointer drawn in a folded section when the window loses focus", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await page.getByTestId("side-strip-section-to-review").click();
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    await expect(row(page, "migration")).toHaveCount(0);
+    const release = row(page, "release");
+    const at = await centreOf(release);
+    await page.mouse.move(at.x, at.y);
+
+    await page.evaluate(
+      'window.__sideTabStripProbe.activate("fixture-watcher")',
+    );
+    await expect(row(page, "watcher")).toHaveAttribute("data-active", "true");
+    await expect(release).toBeVisible();
+    expect(await laneOf(release)).toBe("to-review");
+
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await nextFrames(page, 3);
+
+    await expect(release).toBeVisible();
+    expect(await laneOf(release)).toBe("to-review");
+
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+
+    await expect.poll(() => laneOf(release)).toBe("idle");
+  });
+
+  test("moves the previous row to its section once the pointer leaves the list", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await openWatcherWithPointerInList(page);
+    await nextFrames(page, 3);
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+
+    await expect.poll(() => laneOf(row(page, "release"))).toBe("idle");
+  });
+
+  test("moves the previous row to its section when the window loses focus, the pointer still in the list", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await openWatcherWithPointerInList(page);
+    await nextFrames(page, 3);
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+
+    await expect.poll(() => laneOf(row(page, "release"))).toBe("idle");
+  });
+
+  test("moves the previous row to its section when the page becomes hidden, the pointer still in the list", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await openWatcherWithPointerInList(page);
+    await nextFrames(page, 3);
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+
+    await page.evaluate(() => {
+      // A headless page is never hidden: report it hidden, as a browser does.
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await expect.poll(() => laneOf(row(page, "release"))).toBe("idle");
+  });
+
+  test("keeps the previous row in its section when focus leaves the list and the pointer does not", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await openWatcherWithPointerInList(page);
+    await nextFrames(page, 3);
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+
+    await row(page, "watcher").evaluate((node) => {
+      node.blur();
+    });
+    await expect(row(page, "watcher")).not.toBeFocused();
+    await nextFrames(page, 3);
+
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+  });
+
+  test("keeps the previous row's section when its task is opened again while it waits", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await openWatcherWithPointerInList(page);
+    await nextFrames(page, 3);
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+
+    await page.evaluate(
+      'window.__sideTabStripProbe.activate("fixture-release")',
+    );
+    await expect(row(page, "release")).toHaveAttribute("data-active", "true");
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    await nextFrames(page, 3);
+
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+  });
+});
+
+test("moves the previous row to its section at once when another task is opened with the pointer outside the list", async ({
+  page,
+}) => {
+  await holdReleaseAboveWatcher(page);
+
+  await page.evaluate('window.__sideTabStripProbe.activate("fixture-watcher")');
+
+  await expect(row(page, "watcher")).toHaveAttribute("data-active", "true");
+  expect(await laneOf(row(page, "release"))).toBe("idle");
+});
+
+test.describe("on a touch screen", () => {
+  test.use({ hasTouch: true });
+
+  test("moves the previous row to its section right after a tap on another row", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    const at = await centreOf(row(page, "watcher"));
+
+    await page.touchscreen.tap(at.x, at.y);
+
+    await expect(row(page, "watcher")).toHaveAttribute("data-active", "true");
+    expect(await laneOf(row(page, "release"))).toBe("idle");
+  });
+});
+
 test.describe("over a list that overflows", () => {
   test.use({ viewport: { width: 900, height: 700 } });
 
@@ -185,6 +480,31 @@ test.describe("over a list that overflows", () => {
     }, top);
     await nextFrames(page, 3);
   };
+
+  test("counts a held, answered current row out of Needs you, so the chip is gone once its header scrolls away", async ({
+    page,
+  }) => {
+    await openStrip(page);
+    await moveTask(page, "staging", "idle");
+    const onboarding = row(page, "onboarding");
+    const at = await centreOf(onboarding);
+    await page.mouse.click(at.x, at.y);
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    // Onboarding is still waiting, so the chip is drawn once the header is
+    // out of view: the absence below is not vacuous.
+    await scrollTo(page, 1000);
+    await expect(chip(page)).toBeVisible();
+    await scrollTo(page, 0);
+
+    await moveTask(page, "onboarding", "working");
+
+    await expect(page.getByTestId("side-strip-section-needs-you")).toHaveText(
+      "Needs you0",
+    );
+    expect(await laneOf(onboarding)).toBe("needs-you");
+    await scrollTo(page, 1000);
+    await expect(chip(page)).toHaveCount(0);
+  });
 
   test("shows the chip only while the Needs you header is out of view", async ({
     page,

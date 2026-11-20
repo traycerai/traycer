@@ -1,4 +1,4 @@
-import type { UseMutationResult } from "@tanstack/react-query";
+import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -6,6 +6,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useQueryClient } from "@tanstack/react-query";
+import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
 import {
   providerProfileSchema,
   PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
@@ -13,7 +14,16 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host";
-import { useHostMutationWithResponseTimeout } from "@/hooks/host/use-host-query";
+import {
+  hostClientUnavailableError,
+  withHostMutationLifecycleBoundary,
+} from "@/hooks/host/use-host-query";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import {
+  useProviderSignInRecording,
+  type SignInRequestRecorder,
+} from "@/hooks/providers/use-provider-sign-in-recording";
+import type { SignInRecording } from "@traycer-clients/shared/host-client/provider-sign-in-request";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
@@ -30,6 +40,16 @@ type AwaitLoginResponse = ResponseOfMethod<
 >;
 type AwaitLoginContext = { readonly hostId: string | null };
 
+export type SignInRecordingEnd = Extract<
+  SignInRecording,
+  { readonly kind: "ended" }
+>["reason"];
+
+/** Never on the wire. `signInRecordingEnded` is null when nothing was recorded or the recording went through. */
+export type AwaitLoginAnswer = AwaitLoginResponse & {
+  readonly signInRecordingEnded: SignInRecordingEnd | null;
+};
+
 /**
  * One wait for a login: the wire request, and the caller's way to stop
  * waiting for it.
@@ -43,10 +63,15 @@ type AwaitLoginContext = { readonly hostId: string | null };
  * that window would take that request's "not signed in" for its own answer.
  * Aborting `signal` detaches this wait, so the next one is asked afresh.
  * `undefined` for a caller that only ever waits to the end.
+ *
+ * `readsProfileOutcome` is true only for a caller that reads the answer's
+ * `profileOutcome`: it alone has the list read again for an answer with no
+ * state that names a profile.
  */
 export type AwaitLoginVariables = {
   readonly request: AwaitLoginRequest;
   readonly signal: AbortSignal | undefined;
+  readonly readsProfileOutcome: boolean;
 };
 
 // The provider state a login echo carries. Named rather than inlined so the
@@ -57,6 +82,11 @@ type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
  * Drops `loginCapability` from a mutation state echo so an overlay cannot
  * narrow the cached capability. See the call site for why this one field is
  * different from every other field on the echo.
+ *
+ * The echo's rows are the frozen profile shape, so a cached row keeps every
+ * field the echo does not carry (the list's own projection fields, and any
+ * a later list answer adds) and takes the echo's value for every field it
+ * does, except `enabled` and `launchCommand`, which only the list decides.
  */
 function withoutLoginCapability(
   state: AwaitLoginProviderState,
@@ -73,12 +103,74 @@ function withoutLoginCapability(
       return cached === undefined
         ? parsed
         : {
+            ...cached,
             ...parsed,
             enabled: cached.enabled,
             launchCommand: cached.launchCommand,
           };
     }),
   };
+}
+
+/** A final `profileOutcome` is the answer whatever else it carries. */
+function signInRequestToRecord(
+  data: AwaitLoginResponse,
+): ProviderLoginSignInRequest | null {
+  if ((data.profileOutcome ?? null) !== null) return null;
+  return data.signInRequest ?? null;
+}
+
+async function awaitWithRecording(
+  client: HostClient<HostRpcRegistry>,
+  variables: AwaitLoginVariables,
+  recordSignInRequest: SignInRequestRecorder,
+  targeted: boolean,
+): Promise<AwaitLoginAnswer> {
+  const ask = (request: AwaitLoginRequest): Promise<AwaitLoginResponse> =>
+    variables.signal === undefined && !targeted
+      ? client.requestWithResponseTimeout(
+          "providers.awaitLogin",
+          request,
+          PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+        )
+      : client.requestWithOptions("providers.awaitLogin", request, {
+          responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+          idempotencyKey: null,
+          requiredHostMethodVersion: targeted
+            ? {
+                method: "providers.awaitLogin",
+                version: { major: 2, minor: 4 },
+              }
+            : null,
+          signal: variables.signal,
+        });
+  const answer = await ask(variables.request);
+  const signInRequest = signInRequestToRecord(answer);
+  if (signInRequest === null) return { ...answer, signInRecordingEnded: null };
+  const recording = await recordSignInRequest(
+    signInRequest,
+    variables.signal ?? new AbortController().signal,
+  );
+  if (recording.kind === "ended") {
+    return { ...answer, signInRecordingEnded: recording.reason };
+  }
+  const next = await ask({
+    ...variables.request,
+    recordedOperationId: recording.recordedOperationId,
+  });
+  // Asked again for the id just recorded: the computer ignored it, so the
+  // step ends here rather than recording or asking once more.
+  const askedAgain =
+    signInRequestToRecord(next)?.operationId === recording.recordedOperationId;
+  return {
+    ...next,
+    signInRecordingEnded: askedAgain ? "already-recorded" : null,
+  };
+}
+
+function awaitAnswerNamesProfile(data: AwaitLoginResponse): boolean {
+  const kind = data.profileOutcome?.kind;
+  return kind === "signed-in" || kind === "already-signed-in";
 }
 
 /**
@@ -92,10 +184,12 @@ function withoutLoginCapability(
  * cache, so the re-auth gate flips (and unmounts the banner) without a second
  * probe. A `null` state means nothing about the provider changed - nothing was
  * in flight to await, or the host could not install an approved sign-in - and
- * leaves the cache untouched.
+ * leaves the cache untouched, except that for a caller that reads outcomes
+ * (`readsProfileOutcome`) an answer whose `profileOutcome` names a profile has
+ * the list read again.
  */
 export function useProvidersAwaitLogin(): UseMutationResult<
-  AwaitLoginResponse,
+  AwaitLoginAnswer,
   HostRpcError,
   AwaitLoginVariables,
   AwaitLoginContext
@@ -113,7 +207,7 @@ export function useProvidersAwaitLogin(): UseMutationResult<
  * `HostRuntimeContext`, not a tab-bound host.
  */
 export function useHostScopedProvidersAwaitLogin(): UseMutationResult<
-  AwaitLoginResponse,
+  AwaitLoginAnswer,
   HostRpcError,
   AwaitLoginVariables,
   AwaitLoginContext
@@ -127,7 +221,7 @@ export function useHostScopedProvidersAwaitLogin(): UseMutationResult<
 
 /** Client-scoped variant, keyed by a caller-supplied cache host id - lets a
  *  caller outside `HostRuntimeContext` (e.g. the picker's tab-scoped
- *  "Create new profile" flow) target an explicit host instead of the
+ *  "Add a profile" flow) target an explicit host instead of the
  *  app-wide default. `getCacheHostId` is a separate parameter (not derived
  *  from `client.getActiveHostId()`) so the cache write lands under the
  *  caller's KNOWN host id even while `client` itself is still resolving
@@ -136,39 +230,83 @@ export function useProvidersAwaitLoginForClient(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly getCacheHostId: () => string | null;
 }): UseMutationResult<
-  AwaitLoginResponse,
+  AwaitLoginAnswer,
+  HostRpcError,
+  AwaitLoginVariables,
+  AwaitLoginContext
+> {
+  return useProvidersDestinationAwaitLoginForClient(args, false);
+}
+
+export function useProvidersDestinationAwaitLoginForClient(
+  args: {
+    readonly client: HostClient<HostRpcRegistry> | null;
+    readonly getCacheHostId: () => string | null;
+  },
+  targeted: boolean,
+): UseMutationResult<
+  AwaitLoginAnswer,
   HostRpcError,
   AwaitLoginVariables,
   AwaitLoginContext
 > {
   const queryClient = useQueryClient();
-  return useHostMutationWithResponseTimeout<
-    HostRpcRegistry,
-    "providers.awaitLogin",
-    AwaitLoginContext,
-    AwaitLoginVariables
+  const recordSignInRequest = useProviderSignInRecording();
+  const client = args.client;
+  return useMutation<
+    AwaitLoginAnswer,
+    HostRpcError,
+    AwaitLoginVariables,
+    AwaitLoginContext
   >({
-    client: args.client,
-    method: "providers.awaitLogin",
-    mapVariables: (variables) => variables.request,
-    signalFor: (variables) => variables.signal,
     // Long-poll: the host holds the response until the OAuth child
     // terminates (bounded by its own 3-minute login timeout). The default
     // ~30 s frame timeout would abandon a healthy sign-in as soon as the
     // user takes longer than that in the browser.
-    responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
-    options: {
+    mutationFn: (variables) =>
+      withHostQueryErrorBoundary("providers.awaitLogin", async () => {
+        if (client === null) {
+          return Promise.reject<AwaitLoginAnswer>(
+            hostClientUnavailableError("providers.awaitLogin"),
+          );
+        }
+        return awaitWithRecording(
+          client,
+          variables,
+          recordSignInRequest,
+          targeted,
+        );
+      }),
+    ...withHostMutationLifecycleBoundary<
+      AwaitLoginAnswer,
+      AwaitLoginVariables,
+      AwaitLoginContext
+    >("providers.awaitLogin", {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),
-      onSuccess: async (data: AwaitLoginResponse, _variables, context) => {
+      onSuccess: async (data: AwaitLoginAnswer, variables, context) => {
+        if (targeted || context.hostId === null) return;
         const next = data.state;
-        if (next === null || context.hostId === null) return;
+        if (next === null) {
+          // This re-read is the one the caller's lookup uses, and it finishes before the caller's handler.
+          if (!variables.readsProfileOutcome || !awaitAnswerNamesProfile(data))
+            return;
+          await queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              context.hostId,
+              "providers.list",
+            ),
+          });
+          return;
+        }
         await commitAuthoritativeProvidersList({
           queryClient,
           hostId: context.hostId,
           update: (prev) => {
             if (prev === undefined) return prev;
+            // Every envelope key the echo does not replace is kept as cached.
             return {
+              ...prev,
               providers: prev.providers.map((p) =>
                 p.providerId === next.providerId
                   ? // Overlay the echo onto the cached entry rather than
@@ -232,6 +370,6 @@ export function useProvidersAwaitLoginForClient(args: {
         if (variables.signal?.aborted === true) return;
         toastFromHostError(error, "Couldn't confirm sign-in.");
       },
-    },
+    }),
   });
 }

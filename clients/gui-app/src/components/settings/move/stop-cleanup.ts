@@ -4,6 +4,7 @@ import {
   FAILURE_REASONS,
   itemLabel,
 } from "@/components/settings/personal/personal-page-status";
+import { ownValue } from "@/lib/own-value";
 
 /**
  * What a stop still owes on this computer. Once sharing has stopped, the
@@ -37,7 +38,7 @@ export function stopCleanup(
     } else if (item.status === "failed") {
       // Destructured: see `failedText` in `personal-page-status.ts`.
       const { code } = item;
-      const reason = FAILURE_REASONS[code];
+      const reason = ownValue(FAILURE_REASONS, code);
       failedLines.push({
         id,
         text:

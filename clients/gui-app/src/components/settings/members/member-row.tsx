@@ -1,27 +1,22 @@
 import type { ReactNode } from "react";
 import {
-  CANCEL_LABEL,
   GAINED_EDITING_TAG,
   MEMBER_UNLOADED,
   REMOVE_LABEL,
   RETRY_LABEL,
   REVOKE_LABEL,
   ROLE_LABELS,
-  roleLabelOf,
   memberDetailLine,
   memberDisplayName,
   memberRoleAriaLabel,
   memberRowTitle,
-  PENDING_REMOVAL_LABEL,
 } from "@/components/settings/members/copy";
 import type {
   MembersListMember,
-  PendingRoleCheck,
   TeamRole,
 } from "@/components/settings/members/types";
 import { isTeamRole } from "@/components/settings/members/types";
 import { EnumSelect } from "@/components/settings/settings-enum-select";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -31,15 +26,6 @@ export function MemberRow(props: {
   readonly isLastAdmin: boolean;
   readonly viewerIsAdmin: boolean;
   readonly gainedEditing: boolean;
-  /**
-   * A role change picked here whose check has not answered yet. The confirm it
-   * opens waits for that answer, so until the dialog is up this row is the
-   * only place the pick exists: it says what is being checked and offers the
-   * way out, which the select cannot be, since it is controlled on the role
-   * the member holds and fires nothing when that role is picked again.
-   */
-  readonly checkingRole: PendingRoleCheck | null;
-  readonly onCancelRoleChange: () => void;
   readonly details: ReactNode;
   readonly onRoleChange: (role: TeamRole) => void;
   readonly onRemove: () => void;
@@ -49,11 +35,8 @@ export function MemberRow(props: {
   const name = memberDisplayName(props.member);
   const title = memberRowTitle(props.member, props.isSelf);
   const pending = props.member.inviteState === "pending";
-  const beingRemoved = props.member.removalState !== "none";
-  const showRemove = props.viewerIsAdmin && !props.isLastAdmin && !beingRemoved;
-  // A seat with no authority has no role to move: the picker has nothing to
-  // show it as, and what an admin does with such a row is remove it.
-  const showRoleSelect = showRemove && props.member.effectiveRole !== null;
+  const showRoleSelect = props.viewerIsAdmin && !props.isLastAdmin;
+  const showRemove = showRoleSelect;
   const actionLabel = pending ? REVOKE_LABEL : REMOVE_LABEL;
   const detail = memberDetailLine(props.member, {
     isSelf: props.isSelf,
@@ -67,7 +50,6 @@ export function MemberRow(props: {
       data-testid="members-row"
       data-member-id={props.member.userId}
       data-invite-state={props.member.inviteState ?? "accepted"}
-      data-removal-state={props.member.removalState}
     >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-1.5">
@@ -92,9 +74,6 @@ export function MemberRow(props: {
           {props.gainedEditing ? (
             <Badge variant="muted">{GAINED_EDITING_TAG}</Badge>
           ) : null}
-          {props.member.removalState === "pending" ? (
-            <Badge variant="muted">{PENDING_REMOVAL_LABEL}</Badge>
-          ) : null}
         </div>
         {detail.length === 0 ? null : (
           <p
@@ -118,38 +97,7 @@ export function MemberRow(props: {
           />
         ) : (
           <span className="text-ui-sm text-muted-foreground">
-            {roleLabelOf(props.member.effectiveRole)}
-          </span>
-        )}
-        {props.checkingRole === null ? null : (
-          // Announced, like every other status line in these pages: the dots
-          // are decorative, so without a role a screen-reader user picks a
-          // role, hears nothing, is never told a check is running or that the
-          // Cancel beside it exists, and then meets a dialog with the wait
-          // unexplained. The text does not change while this is mounted, so
-          // there is nothing to re-announce.
-          <span
-            className="flex items-center gap-1.5 text-ui-sm text-muted-foreground"
-            role="status"
-            data-testid="members-role-checking"
-          >
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-              tone="muted"
-            />
-            {props.checkingRole.running}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={props.onCancelRoleChange}
-              aria-label={props.checkingRole.cancelLabel}
-              data-testid="members-role-checking-cancel"
-            >
-              {CANCEL_LABEL}
-            </Button>
+            {ROLE_LABELS[props.member.effectiveRole]}
           </span>
         )}
         {showRemove ? (

@@ -1,9 +1,19 @@
 import type { HostOwnershipResult } from "../host-client/host-ownership";
-import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
+import type { EnvironmentTransport } from "../environment/environment-cloud";
+import type { AutoPolicySaveResult } from "../host-client/auto-policy-save";
 import type {
-  TeamComputersResult,
-  SetEnvironmentBotHostResult,
-} from "../host-client/team-computers";
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "../host-client/task-environment-attachment";
+import type { EnvironmentDirectoryResult } from "../host-client/environment-directory";
+import type { HostTokenSource } from "../auth/host-token-source";
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "../host-client/team-chat-auto-archive";
+import type { DiskPressure } from "@traycer/protocol/config/credentials-mutation";
+import type { TeamComputersResult } from "../host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "../host-client/team-computer-install";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import type { SandboxArtifactBridge } from "./sandbox-artifacts";
@@ -67,13 +77,23 @@ import type {
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "../host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import type {
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
   SecretRequestDecideFetchResult,
 } from "../host-client/sandbox-secrets";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
-import type { ExecutableWriteGrantFetchResult } from "../host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
@@ -258,6 +278,12 @@ export interface IRunnerHost {
    * for which one is reached and when).
    */
   readonly authnBaseUrl: string;
+
+  /**
+   * Each request sent once, never following a redirect. The shell owns it: a phone's
+   * patched `fetch` ignores `redirect`.
+   */
+  readonly environmentTransport: EnvironmentTransport;
 
   /**
    * Browser-safe WebSocket attach endpoint for the Remote Host Support relay
@@ -457,12 +483,6 @@ export interface IRunnerHost {
     bearer: string,
     environmentId: string,
   ): Promise<TeamComputersResult>;
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult>;
   mintTeamComputerInstallToken(
     bearerToken: string,
     environmentId: string,
@@ -506,6 +526,18 @@ export interface IRunnerHost {
    * failures collapse into the discriminated results.
    */
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  /** Read from traycer-server so the list needs no computer awake. Never throws. */
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
+  /** Never throws. */
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult>;
+  /** Never throws. */
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
@@ -611,6 +643,22 @@ export interface IRunnerHost {
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
   /**
+   * No host in the path. Never throws. Never
+   * throw.
+   */
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
+  /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See
    * `host-client/sandbox-secrets.ts`.
@@ -628,6 +676,10 @@ export interface IRunnerHost {
     bearerToken: string,
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult>;
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult>;
   getEnvironmentProviders(
     bearerToken: string,
     environmentId: string,
@@ -638,16 +690,6 @@ export interface IRunnerHost {
     requestId: string,
     decision: SecretRequestDecision,
   ): Promise<SecretRequestDecideFetchResult>;
-  /**
-   * An executable-write grant for one host, minted by authn on the user's
-   * session (`host-client/executable-write-grant.ts`). Sent with a write that
-   * can reach an execution sink on that host.
-   */
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult>;
-
   openExternalLink(url: string): Promise<void>;
 
   /**
@@ -756,6 +798,12 @@ export interface IRunnerHost {
    * implementations (dev runner, tests) keep a single round-trippable entry.
    */
   readonly tokenStore: ITokenStore;
+
+  /**
+   * The only credential this app ever puts in a frame to a host. Desktop backs it
+   * with main's file, mobile with the secure store.
+   */
+  readonly hostTokens: HostTokenSource;
 
   /**
    * Declares whether this shell actually exposes a local-host stream.
@@ -995,9 +1043,14 @@ export interface IRunnerHost {
    * Idempotent and unscoped by design: it asserts nothing about membership -
    * only that the authority's copy is stale - so a duplicate or late call
    * costs one refetch and can never publish something false. Callers are the
-   * membership mutations themselves, not surfaces reacting to them.
+   * membership mutations themselves, and the host directory, which reads the
+   * outcome to decide whether discovery may conclude over the fleet.
+   *
+   * Never rejects: a thrown or refused read is `unavailable`, mapped at the
+   * shell boundary by every implementer, so no caller needs a catch to learn
+   * what happened.
    */
-  refreshHostFleet(): Promise<void>;
+  refreshHostFleet(): Promise<FleetRefreshOutcome>;
 
   /**
    * Subscribes to the shell's own registry reads, when the shell OWNS the
@@ -1086,6 +1139,18 @@ export interface IRunnerHost {
    * shell; `null` everywhere else, since no other platform has the gesture.
    */
   readonly statusBarTap: IStatusBarTapHost | null;
+
+  /** Follows no redirect. Never throws. */
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 /**
@@ -1410,6 +1475,24 @@ export interface IPushPermissionHost {
    */
   onChange(handler: () => void): Disposable;
 }
+
+/**
+ * What one {@link IRunnerHost.refreshHostFleet} call did to the selection
+ * authority's fleet.
+ *
+ * - `published`: a fleet snapshot read for the current identity reached the
+ *   authority (a signed-out empty fleet included - that is an answer).
+ * - `unavailable`: the read failed or was refused, and nothing was published.
+ *   The authority keeps whatever fleet it had, possibly none.
+ * - `superseded`: the read finished but nothing current came of it - the
+ *   identity moved during it, or the source was disposed. A read that lost
+ *   only to a newer read of the same identity is `published`: the authority
+ *   already holds that newer fleet.
+ */
+export type FleetRefreshOutcome =
+  | { readonly kind: "published" }
+  | { readonly kind: "unavailable" }
+  | { readonly kind: "superseded" };
 
 /**
  * One shell-owned registry read, delivered to a consumer that would otherwise
@@ -2266,6 +2349,13 @@ export interface INotificationSystemSettingsHost {
 export interface NotificationForegroundAppLocal {
   readonly userId: string;
   readonly entry: unknown;
+  /**
+   * The row's kind does not interrupt on this device (Settings → Alerts), so
+   * the request exists only to reach a focused sibling window's inbox: the
+   * shell relays it there and never raises an OS notification for it, and
+   * the window that receives it lists the row without a toast or a chime.
+   */
+  readonly inboxOnly: boolean;
 }
 
 /** Plain-data main -> renderer relay used instead of an OS notification while
@@ -3110,8 +3200,6 @@ export type MaintenanceDoctorProjection =
  * for every NDJSON `progress` event the CLI emits along the way.
  */
 export interface IHostManagement {
-  /** Clear cached local admission after the same host is claimed. */
-  readonly invalidateLocalTeamAdmission?: (hostId: string) => Promise<void>;
   // Two-lane canonical status (Host Update Layer Redesign Tech Plan). Read
   // once on mount to prime the shared query cache; live updates arrive via
   // the desktop-only `hostControllerStatus` push bridge (see

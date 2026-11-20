@@ -220,7 +220,7 @@ export function useLandingComposerPaste(params: {
     (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
       const handle = editorRef.current;
       if (handle === null || !handle.isReady()) return 0;
-      handle.insertImageAttachments(attrs);
+      handle.insertImageAttachments(attrs, "caret");
       handle.focus();
       return attrs.length;
     },

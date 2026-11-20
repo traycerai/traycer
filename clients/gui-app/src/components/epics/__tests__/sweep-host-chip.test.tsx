@@ -55,6 +55,10 @@ const state = vi.hoisted(() => ({
    */
   sweepingByHost: {} as Record<string, readonly string[]>,
   refreshing: false,
+  /** Hosts whose first census has not landed: no rows, no proven host yet. */
+  loadingHostIds: [] as readonly string[],
+  /** Hosts showing cached rows while their first proof is still fetching. */
+  seededHostIds: [] as readonly string[],
   /** Rows the classifier could not prove landed — the route to Review. */
   unproven: false,
   /** The directory has said what the fleet is. */
@@ -109,8 +113,11 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
     client: SweepCensusClient | null,
     epicIds: ReadonlyArray<string> | null,
   ) => {
-    const hostId = client?.getActiveHostId() ?? null;
-    captured.censusHostIds.push(hostId);
+    const clientHostId = client?.getActiveHostId() ?? null;
+    captured.censusHostIds.push(clientHostId);
+    const loading =
+      clientHostId !== null && state.loadingHostIds.includes(clientHostId);
+    const hostId = loading ? null : clientHostId;
     const rows =
       epicIds === null || hostId === null
         ? []
@@ -124,7 +131,9 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
     return {
       hostId,
       rows,
-      isPending: false,
+      isPending:
+        loading ||
+        (clientHostId !== null && state.seededHostIds.includes(clientHostId)),
       isError: false,
       checkedAt: 1_700_000_000_000,
       canRefresh: true,
@@ -276,6 +285,7 @@ function closedSweep() {
       epicIds={null}
       surfaceHostClient={SURFACE_CLIENT}
       surfaceHostId="host-a"
+      preferredHostId={null}
       taskTitle="Ship it"
       onOpenChange={(open) => captured.openChanges.push(open)}
     />
@@ -288,6 +298,7 @@ function sweep(surface: SurfaceHost) {
       epicIds={["epic-1"]}
       surfaceHostClient={surface.client}
       surfaceHostId={surface.hostId}
+      preferredHostId={null}
       taskTitle="Ship it"
       onOpenChange={(open) => captured.openChanges.push(open)}
     />
@@ -310,6 +321,8 @@ describe("Sweep host chip", () => {
     state.pathsByHost = { "host-a": ["/wt/a"], "host-b": ["/wt/b"] };
     state.sweepingByHost = {};
     state.refreshing = false;
+    state.loadingHostIds = [];
+    state.seededHostIds = [];
     state.unproven = false;
     state.fleetResolved = true;
     state.countByHost = {};
@@ -548,6 +561,29 @@ describe("Sweep host chip", () => {
     expect(screen.getByTestId("sweep-worktrees-count").textContent).toContain(
       "0 of 1",
     );
+  });
+
+  it("lets a person leave a host whose first census is still loading", () => {
+    state.loadingHostIds = ["host-a"];
+    renderSweep();
+
+    const popover = openHostPopover();
+    fireEvent.click(within(popover).getByRole("button", { name: /Studio/ }));
+
+    expect(lastCensusHostId()).toBe("host-b");
+    expect(screen.getByTestId("sweep-host-chip").textContent).toContain(
+      "on Studio",
+    );
+  });
+
+  it("lets a person leave cached rows whose first proof is still loading", () => {
+    state.seededHostIds = ["host-a"];
+    renderSweep();
+
+    const popover = openHostPopover();
+    fireEvent.click(within(popover).getByRole("button", { name: /Studio/ }));
+
+    expect(lastCensusHostId()).toBe("host-b");
   });
 
   it("puts the chip out of reach while the census is being re-proved", () => {

@@ -386,7 +386,7 @@ function createFixture(
   );
   const client = spine.createRequester(mockLocalHostEntry);
   recordNegotiatedHostManifest(HOST_ID, {
-    "epic.listChatRecords": { major: 1, minor: 5 },
+    "epic.listChatRecords": { major: 1, minor: 6 },
   });
   runtime.client = client;
   const handle = newSession();

@@ -22,6 +22,9 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
+import { LandingTerminalTabStrip } from "@/components/home/terminal-panel/landing-terminal-tab-strip";
+import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
+import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -29,6 +32,7 @@ import type {
   EpicNodeRef,
   SplitDirection,
 } from "@/stores/epics/canvas/types";
+import type { LandingTerminalTabRef } from "@/stores/home/landing-panel-store";
 import { makeGitBundleDiffTile } from "@/lib/git/git-diff-tile";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 import {
@@ -220,6 +224,13 @@ const TERMINAL_TAB: EpicNodeRef = {
   cwd: "/repo",
 };
 
+const terminalDirectory = new Map<
+  string,
+  { readonly displayName: string; readonly avatarUrl: string | null }
+>();
+const terminalDirectoryResolver: BotMemberResolver = (userId) =>
+  terminalDirectory.get(userId) ?? null;
+
 const CHAT_TAB: EpicNodeRef = {
   id: "chat-1",
   instanceId: "inst-chat-1",
@@ -350,29 +361,31 @@ function renderTabStripForTab(
           value={consumeNotificationEntity}
         >
           <TooltipProvider delayDuration={0}>
-            <TabStrip
-              epicId="epic-1"
-              tabId={VIEW_TAB_ID}
-              groupId="group-1"
-              tabs={[tab]}
-              activeTabId={tab.instanceId}
-              onSelectTab={() => undefined}
-              onCloseTab={input.onClose}
-              onPromotePreview={input.onPromotePreview}
-              onSplit={onSplit}
-              onCloseGroup={() => undefined}
-              onOpenBlankTab={input.onOpenBlankTab}
-              canRenameTabs
-              menuHandlers={{
-                onClose: input.onMenuClose ?? (() => undefined),
-                onCloseOthers: () => undefined,
-                onCloseRight: () => undefined,
-                onCloseAll: () => undefined,
-                onSplit: () => undefined,
-                onRevealInSidebar: () => undefined,
-                onRename: () => undefined,
-              }}
-            />
+            <PersonMembersContext.Provider value={terminalDirectoryResolver}>
+              <TabStrip
+                epicId="epic-1"
+                tabId={VIEW_TAB_ID}
+                groupId="group-1"
+                tabs={[tab]}
+                activeTabId={tab.instanceId}
+                onSelectTab={() => undefined}
+                onCloseTab={input.onClose}
+                onPromotePreview={input.onPromotePreview}
+                onSplit={onSplit}
+                onCloseGroup={() => undefined}
+                onOpenBlankTab={input.onOpenBlankTab}
+                canRenameTabs
+                menuHandlers={{
+                  onClose: input.onMenuClose ?? (() => undefined),
+                  onCloseOthers: () => undefined,
+                  onCloseRight: () => undefined,
+                  onCloseAll: () => undefined,
+                  onSplit: () => undefined,
+                  onRevealInSidebar: () => undefined,
+                  onRename: () => undefined,
+                }}
+              />
+            </PersonMembersContext.Provider>
           </TooltipProvider>
         </NotificationConsumptionContext.Provider>
       </BrowserSessionsContext.Provider>
@@ -383,6 +396,7 @@ function renderTabStripForTab(
 describe("<TabStrip />", () => {
   afterEach(() => {
     cleanup();
+    terminalDirectory.clear();
     vi.unstubAllGlobals();
     testState.draggableInputs = [];
     testState.droppableInputs = [];
@@ -397,6 +411,76 @@ describe("<TabStrip />", () => {
     liveTitlesById.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
+  });
+
+  it("draws no pictures of attached people in the canvas tab strip", () => {
+    terminalDirectory.set("member-a", {
+      displayName: "Member A",
+      avatarUrl: "https://images.example.test/member-a.png",
+    });
+    terminalDirectory.set("member-b", {
+      displayName: "Member B",
+      avatarUrl: "https://images.example.test/member-b.png",
+    });
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
+
+    expect(screen.getByTestId("tab-title-inst-terminal-1")).toBeTruthy();
+    expect(screen.queryByTestId("terminal-viewers")).toBeNull();
+    expect(screen.queryByTestId("terminal-viewers-more")).toBeNull();
+    expect(screen.queryAllByTestId("person-avatar")).toHaveLength(0);
+  });
+
+  it("draws no pictures of attached people in the landing panel's terminal tab", () => {
+    terminalDirectory.set("landing-viewer", {
+      displayName: "Landing Viewer",
+      avatarUrl: "https://images.example.test/landing-viewer.png",
+    });
+    const landingTab: LandingTerminalTabRef = {
+      kind: "terminal",
+      instanceId: "landing-terminal-viewers",
+      sessionId: "landing-viewers-session",
+      hostId: "host-A",
+      cwd: "/repo",
+      name: "Team terminal",
+      titleSource: "default",
+    };
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <TooltipProvider delayDuration={0}>
+          <PersonMembersContext.Provider value={terminalDirectoryResolver}>
+            <LandingTerminalTabStrip
+              tabs={[landingTab]}
+              placeholder={null}
+              activeInstanceId={landingTab.instanceId}
+              addTooltip="New tab"
+              onAdd={() => undefined}
+              onActivate={() => undefined}
+              onClose={() => undefined}
+              onDismissPlaceholder={() => undefined}
+              onCloseAll={() => undefined}
+              onRename={() => undefined}
+              canRename={() => false}
+              terminalViewModels={{}}
+              browserViewModels={{}}
+            />
+          </PersonMembersContext.Provider>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("Team terminal")).toBeTruthy();
+    expect(screen.queryByTestId("terminal-viewers")).toBeNull();
+    expect(screen.queryAllByTestId("person-avatar")).toHaveLength(0);
   });
 
   it("writes a chat tile's resolved title into its persisted name snapshot", () => {
@@ -512,8 +596,10 @@ describe("<TabStrip />", () => {
     const frame = screen
       .getByTestId(`tab-item-${TAB.instanceId}`)
       .closest("[data-tile-item-id]");
-    expect(frame).not.toBeNull();
-    expect((frame as HTMLElement).style.opacity).toBe("0.36");
+    if (!(frame instanceof HTMLElement)) {
+      throw new Error("Expected the tab item frame to be an HTMLElement");
+    }
+    expect(frame.style.opacity).toBe("0.36");
   });
 
   it("uses the live browser tab title, URL, and favicon", () => {

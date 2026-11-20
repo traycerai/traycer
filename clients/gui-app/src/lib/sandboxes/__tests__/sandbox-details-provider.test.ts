@@ -7,8 +7,6 @@ import type {
   SandboxListResponse,
 } from "@traycer/protocol/host/sandbox-control";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
 import { sandboxQueryKeys } from "@/lib/query-keys";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { sandboxDetailsEntry } from "@/lib/sandboxes/sandbox-details-provider";
@@ -19,6 +17,7 @@ import {
 import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import { getDetailsProvider } from "@/lib/settings-details-entry";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { beginEnvironmentCloudOperation } from "@/hooks/environment/use-environment-cloud";
 
 const NOW = 1_791_100_000_000;
 
@@ -469,9 +468,7 @@ function loadSandboxDetails(queryClient: QueryClient, sandboxId: string) {
   return provider(
     { environmentId: "env-personal", kind: "sandbox", key: sandboxId },
     {
-      hostId: null,
-      // Unused: a sandbox's evidence is the control plane's, not a host's.
-      client: {} as HostClient<HostRpcRegistry>,
+      environmentCloud: beginEnvironmentCloudOperation(null),
       queryClient,
     },
   );

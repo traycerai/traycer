@@ -1,15 +1,33 @@
-import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
 import type {
-  TeamComputersResult,
-  SetEnvironmentBotHostResult,
-} from "@traycer-clients/shared/host-client/team-computers";
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
 import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
 import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
 import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
 import { ipcRenderer } from "electron";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
+  RunnerHostSync,
 } from "../ipc-contracts/ipc-channels";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type {
@@ -23,7 +41,6 @@ import type {
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
   SandboxAutomationFetchResult,
-  ExecutableWriteGrantFetchResult,
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
@@ -38,6 +55,8 @@ import type {
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxPatchRequest,
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -73,6 +92,15 @@ import type {
 } from "../ipc-contracts/window-types";
 import type { SoundtrackSetReadResult } from "../ipc-contracts/soundtrack-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
+import {
+  NO_ISSUED_HOST_TOKEN_ERA,
+  type HostTokenBridgeChange,
+  type HostTokenEraReply,
+  type HostTokenObtainReply,
+  type HostTokenRenewReply,
+  type HostTokensBridgeSurface,
+} from "../ipc-contracts/host-token-types";
+import { readSyncNumberFor } from "./sync-bootstrap";
 
 /**
  * Eagerly subscribe at module load so a cold-start browser-return deep link
@@ -151,12 +179,6 @@ export interface AuthBridgeSurface {
     bearer: string,
     environmentId: string,
   ): Promise<TeamComputersResult>;
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult>;
   mintTeamComputerInstallToken(
     bearerToken: string,
     environmentId: string,
@@ -174,6 +196,15 @@ export interface AuthBridgeSurface {
   ): Promise<DeregisterHostFetchResult>;
   readSoundtrackSet(): Promise<SoundtrackSetReadResult>;
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult>;
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
   getSandboxCatalogue(
     bearerToken: string,
@@ -247,6 +278,18 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -260,6 +303,10 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     teamId: string,
   ): Promise<TeamEnvironmentFetchResult>;
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult>;
   getEnvironmentProviders(
     bearerToken: string,
     environmentId: string,
@@ -270,12 +317,19 @@ export interface AuthBridgeSurface {
     requestId: string,
     decision: SecretRequestDecision,
   ): Promise<SecretRequestDecideFetchResult>;
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: Listener<void>): Disposable;
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
 }
 
 export function buildAuthBridge(): AuthBridgeSurface {
@@ -352,14 +406,6 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearer,
         environmentId,
       ) as Promise<TeamComputersResult>,
-    setEnvironmentBotHost: (bearer, environmentId, hostId, sharingGeneration) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.setEnvironmentBotHost,
-        bearer,
-        environmentId,
-        hostId,
-        sharingGeneration,
-      ) as Promise<SetEnvironmentBotHostResult>,
     mintTeamComputerInstallToken: (bearerToken, environmentId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.mintTeamComputerInstallToken,
@@ -391,6 +437,26 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.listSandboxes,
         bearerToken,
       ) as Promise<SandboxListFetchResult>,
+
+    listEnvironments: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listEnvironments,
+        bearerToken,
+      ) as Promise<EnvironmentDirectoryResult>,
+
+    saveAutoPolicy: (bearerToken, body) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.saveAutoPolicy,
+        bearerToken,
+        body,
+      ) as Promise<AutoPolicySaveResult>,
+
+    attachTaskEnvironment: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.attachTaskEnvironment,
+        bearerToken,
+        request,
+      ) as Promise<TaskEnvironmentAttachmentResult>,
 
     getSandboxCosts: (bearerToken) =>
       ipcRenderer.invoke(
@@ -539,6 +605,27 @@ export function buildAuthBridge(): AuthBridgeSurface {
         request,
       ) as Promise<SlackAppWriteResult>,
 
+    updateBotRunSettings: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotRunSettings,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    updateBotReplyMode: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotReplyMode,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    deleteBot: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.deleteBot,
+        bearerToken,
+        request,
+      ) as Promise<BotDeleteResult>,
+
     getSandboxGrants: (bearerToken, environmentId, hostId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getSandboxGrants,
@@ -554,19 +641,19 @@ export function buildAuthBridge(): AuthBridgeSurface {
         teamId,
       ) as Promise<TeamEnvironmentFetchResult>,
 
+    replaceEnvironmentApiKey: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.replaceEnvironmentApiKey,
+        bearerToken,
+        request,
+      ) as Promise<EnvironmentApiKeyReplaceResult>,
+
     getEnvironmentProviders: (bearerToken, environmentId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getEnvironmentProviders,
         bearerToken,
         environmentId,
       ) as Promise<EnvironmentProvidersFetchResult>,
-
-    mintExecutableWriteGrant: (bearerToken, hostId) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.mintExecutableWriteGrant,
-        bearerToken,
-        hostId,
-      ) as Promise<ExecutableWriteGrantFetchResult>,
 
     decideSecretRequest: (bearerToken, environmentId, requestId, decision) =>
       ipcRenderer.invoke(
@@ -583,6 +670,19 @@ export function buildAuthBridge(): AuthBridgeSurface {
     beginAuthAttempt: () => undefined,
 
     onAuthCallback: (handler) => subscribeAuthCallback(handler),
+    getTeamChatAutoArchive: (bearerToken, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+      ) as Promise<TeamChatAutoArchiveReadResult>,
+    setTeamChatAutoArchive: (bearerToken, teamId, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+        request,
+      ) as Promise<TeamChatAutoArchiveWriteResult>,
   };
 }
 
@@ -657,6 +757,50 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
         legacy,
       ) as Promise<CredentialsMigrationOutcome>,
+  };
+}
+
+export function buildHostTokensBridge(): HostTokensBridgeSurface {
+  return {
+    era: (userId) =>
+      readSyncNumberFor(
+        RunnerHostSync.hostTokensEra,
+        userId,
+        NO_ISSUED_HOST_TOKEN_ERA,
+      ),
+    obtain: (userId, hostId, fresh, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensObtain,
+        userId,
+        hostId,
+        fresh,
+        expectedEra,
+      ) as Promise<HostTokenObtainReply>,
+    renew: (userId, hostIds, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensRenew,
+        userId,
+        hostIds,
+        expectedEra,
+      ) as Promise<HostTokenRenewReply>,
+    adopt: (userId, hostId, token, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensAdopt,
+        userId,
+        hostId,
+        token,
+        expectedEra,
+      ) as Promise<HostTokenEraReply>,
+    forgetUser: (userId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensForgetUser,
+        userId,
+      ) as Promise<HostTokenEraReply>,
+    subscribe: (handler) =>
+      subscribe<HostTokenBridgeChange>(
+        RunnerHostEvent.hostTokensChange,
+        handler,
+      ),
   };
 }
 

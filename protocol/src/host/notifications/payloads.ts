@@ -147,6 +147,8 @@ export const hostNotificationChatStoppedPayloadSchema = lazySchema(() =>
       messageId: idSchema.optional(),
       eventId: idSchema.optional(),
       backgroundWorkRunning: z.boolean().optional(),
+      /** Present only with `backgroundWorkRunning` when only another agent's reply is pending. */
+      awaitingAgentReply: z.literal(true).optional(),
       automaticRecovery: z.literal(true).optional(),
       /** Present only on a completed turn the provider paused before verification. */
       unverified: z.literal(true).optional(),
@@ -178,6 +180,8 @@ export const hostNotificationEpicStoppedPayloadSchema = lazySchema(() =>
       providerId: z.string().optional(),
       occurrenceId: idSchema.optional(),
       backgroundWorkRunning: z.boolean().optional(),
+      /** Present only with `backgroundWorkRunning` when only another agent's reply is pending. */
+      awaitingAgentReply: z.literal(true).optional(),
       automaticRecovery: z.literal(true).optional(),
     })
     .catchall(z.unknown()),
@@ -185,14 +189,6 @@ export const hostNotificationEpicStoppedPayloadSchema = lazySchema(() =>
 export type HostNotificationEpicStoppedPayload = z.infer<
   typeof hostNotificationEpicStoppedPayloadSchema
 >;
-
-/**
- * `agent.stalled`'s `reason` for a turn that ran past the time its person set.
- * The row says a turn is still going, not how one ended, so it stays out of the
- * Error and Done glyphs on every plane; it reaches the person through the
- * notification center and the push.
- */
-export const HOST_NOTIFICATION_LONG_TURN_REASON = "long_turn";
 
 /**
  * `agent.stalled` payload. `agentName` carries the chat title. `reason` is

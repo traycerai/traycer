@@ -1,18 +1,24 @@
-import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useCallback, useMemo } from "react";
-import type { UseQueryResult } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useQueries,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  EnvironmentHostListResponseV11,
+  EnvironmentHostListResponseV12,
   EnvironmentHostRecordV11,
 } from "@traycer/protocol/host/environment/contracts";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
 import {
-  useHostQueries,
-  type HostRequestSpec,
-} from "@/hooks/host/use-host-queries";
+  beginEnvironmentCloudOperation,
+  environmentCloudQueryKey,
+  useEnvironmentCloud,
+} from "@/hooks/environment/use-environment-cloud";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 const METHOD = "environment.host.list";
 
@@ -34,45 +40,37 @@ export interface EnvironmentHostLists {
 }
 
 /**
- * `environment.host.list` for several team environments at once, on one
- * client (Tracy Bots): the machines each environment's members may see -
- * its sandboxes, whoever added them, plus the caller's own bound hosts.
- *
- * `enabled` is the capability gate the caller resolved with
- * `useHostMethodSupport` on the same client's host.
+ * `environment.host.list` for several environments at once, each the app's
+ * own read of authn on the viewer's sign-in (Tracy Bots): the machines each
+ * environment's members may see - its sandboxes, whoever added them, plus
+ * the caller's own bound hosts.
  *
  * Each list carries the caller's own bound hosts, so its key carries the
  * viewer and the read waits until the viewer resolves, as
- * `useEnvironmentListQuery` does: an account switch marks host keys stale
- * without dropping them, and an unpartitioned entry would show the previous
+ * `useEnvironmentListQuery` does: an account switch marks keys stale without
+ * dropping them, and an unpartitioned entry would show the previous
  * account's machines to the next one until its refetch lands.
  */
 export function useEnvironmentHostLists(
-  client: HostClient<HostRpcRegistry> | null,
   environmentIds: ReadonlyArray<string>,
   enabled: boolean,
 ): EnvironmentHostLists {
-  const servingClient = usePoolTierHostClient(client);
+  const cloud = useEnvironmentCloud();
   const viewerUserId = useCloudChatViewerId();
+  const authorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   const idsKey = environmentIds.join("\n");
   const ids = useMemo(
     () => idsKey.split("\n").filter((id) => id.length > 0),
     [idsKey],
-  );
-  const requests = useMemo(
-    (): ReadonlyArray<HostRequestSpec<HostRpcRegistry, typeof METHOD>> =>
-      ids.map((environmentId) => ({
-        method: METHOD,
-        params: { environmentId },
-      })),
-    [ids],
   );
   // Stable per id list, so `useQueries` hands back the same lists until an
   // answer moves rather than new ones every render.
   const combine = useCallback(
     (
       results: Array<
-        UseQueryResult<EnvironmentHostListResponseV11, HostRpcError>
+        UseQueryResult<EnvironmentHostListResponseV12, HostRpcError>
       >,
     ): EnvironmentHostLists => {
       const hostsByEnvironmentId = new Map<
@@ -103,14 +101,25 @@ export function useEnvironmentHostLists(
     },
     [ids],
   );
-  return useHostQueries<HostRpcRegistry, typeof METHOD, EnvironmentHostLists>({
-    client: servingClient,
-    requests,
-    cacheKeyIdentity: viewerUserId,
-    options: {
-      enabled: enabled && viewerUserId.length > 0,
-      refetchOnWindowFocus: false,
-    },
+  return useQueries({
+    queries: ids.map((environmentId) =>
+      // `cloud` is the sign-in of the viewer the key already names; adding it
+      // would refetch on its identity alone.
+      // eslint-disable-next-line @tanstack/query/exhaustive-deps
+      queryOptions<EnvironmentHostListResponseV12, HostRpcError>({
+        queryKey: environmentCloudQueryKey(
+          METHOD,
+          { environmentId },
+          viewerUserId,
+          [],
+        ),
+        queryFn: () =>
+          beginEnvironmentCloudOperation(cloud)(METHOD, { environmentId }),
+        enabled:
+          enabled && cloud !== null && viewerUserId.length > 0 && authorized,
+        refetchOnWindowFocus: false,
+      }),
+    ),
     combine,
   });
 }

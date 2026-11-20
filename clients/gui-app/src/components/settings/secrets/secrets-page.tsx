@@ -4,7 +4,7 @@ import {
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -12,17 +12,16 @@ import { AddSecretDialog } from "@/components/settings/secrets/add-secret-dialog
 import { RemovedSecretRow } from "@/components/settings/secrets/removed-secret-row";
 import { SecretRow } from "@/components/settings/secrets/secret-row";
 import { HeldItemsLine } from "@/components/settings/secrets/held-items-line";
+import { isListedSecret } from "@/components/settings/secrets/listed-secrets";
 import { Button } from "@/components/ui/button";
 import { useEnvironmentSecretsQuery } from "@/hooks/environment/team/use-secrets-query";
+import { useSecretsEnvironment } from "@/hooks/environment/use-environment-secrets-calls";
 import {
   useCanEditConfiguration,
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { TeamSecretNames } from "@/components/settings/environment/team-secret-names";
-import {
-  HostMethodVersionUnsatisfiedError,
-  type ResponseOfMethod,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
@@ -33,7 +32,6 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
 import {
   PERSONAL_SECRETS_READ_FAILED,
   SECRETS_ADD_LABEL,
-  SECRETS_NEED_UPDATED_HOST,
 } from "@/lib/sandboxes/secrets-page-copy";
 
 type SecretsList = ResponseOfMethod<
@@ -53,7 +51,9 @@ function secretRows(list: SecretsList | undefined): {
   if (list === undefined) return { secrets: null, removing: [] };
   return {
     secrets: list.secrets.filter(
-      (secret) => !list.removed.some((entry) => entry.id === secret.secretId),
+      (secret) =>
+        isListedSecret(secret) &&
+        !list.removed.some((entry) => entry.id === secret.secretId),
     ),
     removing: list.removed.filter(
       (entry) => entry.removal.outcome !== "destroyed",
@@ -62,19 +62,12 @@ function secretRows(list: SecretsList | undefined): {
 }
 
 /**
- * Why the list is not shown: an old host by name, else the configuration's own
- * line. A remote error body is never rendered to the person — it says the
- * server's words ("the destination api.example.com does not resolve"), not
- * what this page could not do.
+ * Why the list is not shown: the configuration's own line. A remote error
+ * body is never rendered to the person — it says the server's words ("the
+ * destination api.example.com does not resolve"), not what this page could
+ * not do.
  */
-function readFailureText(
-  error: Error | null,
-  personal: boolean,
-  configurationName: string,
-): string {
-  if (error instanceof HostMethodVersionUnsatisfiedError) {
-    return SECRETS_NEED_UPDATED_HOST;
-  }
+function readFailureText(personal: boolean, configurationName: string): string {
   if (personal) return PERSONAL_SECRETS_READ_FAILED;
   return `Couldn't read ${configurationName}'s secrets.`;
 }
@@ -89,14 +82,26 @@ export function SecretsPage(props: {
   readonly hostId: string | null;
   /** In place of the list when there is no secret: the configuration's text. */
   readonly emptyText: string;
-  /** A host's name by its id, for the rotation's per-host lines. */
+  /** A host's name by its id, for a removal's per-host lines. */
   readonly hostName: (hostId: string) => string;
 }): ReactNode {
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
   const configurationClient = usePoolTierHostClient(props.client);
   const list = useEnvironmentSecretsQuery(configurationClient);
-  const read = useBoundedRead(list);
+  // Retry first asks again for what naming the environment needed.
+  const { retry: retryEnvironment } =
+    useSecretsEnvironment(configurationClient);
+  const { refetch: refetchList } = list;
+  const refetch = useCallback(() => {
+    retryEnvironment();
+    return refetchList();
+  }, [retryEnvironment, refetchList]);
+  const read = useBoundedRead({
+    isPending: list.isPending,
+    isError: list.isError,
+    refetch,
+  });
   const configurationName = useConfigurationName();
   const canEdit = useCanEditConfiguration();
   const source = useConfigurationSource();
@@ -139,7 +144,7 @@ export function SecretsPage(props: {
           data-testid="secrets-page-error"
         >
           <span className="min-w-0 max-w-[72ch]">
-            {readFailureText(list.error, personal, configurationName)}
+            {readFailureText(personal, configurationName)}
           </span>
           <Button type="button" size="sm" variant="ghost" onClick={read.retry}>
             Retry

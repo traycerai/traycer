@@ -143,7 +143,14 @@ export function buildConfigHostFixture(options: {
     },
     "config.shell.get": async () => {
       const config = await cli.shellConfigGet();
-      return { ...config, args: [...config.args] };
+      return {
+        ...config,
+        args: [...config.args],
+        entries: cli.shellEntries.map((entry) => ({
+          path: entry.path,
+          args: entry.args === null ? null : [...entry.args],
+        })),
+      };
     },
     "config.shell.set": async (req) => {
       await cli.shellConfigSet(req);

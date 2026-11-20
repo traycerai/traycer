@@ -11,8 +11,12 @@ import type {
   PastedComposerImageOutcome,
 } from "@/components/chat/composer/editor/extensions/chat-paste-handler";
 import {
+  collectImages,
   useComposerPasteAdapter,
   type ComposerFilePathIngestArgs,
+  type HeldFileTransfer,
+  type HeldTransferOutcome,
+  type ImageAttachmentPlace,
   type UseComposerPasteResult,
 } from "@/hooks/composer/use-composer-paste";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
@@ -65,6 +69,13 @@ function validMessageImage(image: PastedComposerImage): boolean {
   return true;
 }
 
+/** The box's count refusal, for images a message has no room for. */
+export function refuseOverCount(): void {
+  refuse(
+    `A message carries at most ${String(BOT_CONVERSATION_ATTACHMENTS_MAX)} images.`,
+  );
+}
+
 /**
  * Keeps a message to what it can carry. Read from the editor as each batch
  * lands, because two pastes can be preparing at once.
@@ -76,12 +87,63 @@ function takeImages<Image>(
   const room =
     BOT_CONVERSATION_ATTACHMENTS_MAX -
     collectImageAtoms(editor.getJSON()).length;
-  if (images.length > room) {
-    refuse(
-      `A message carries at most ${String(BOT_CONVERSATION_ATTACHMENTS_MAX)} images.`,
-    );
-  }
+  if (images.length > room) refuseOverCount();
   return images.slice(0, Math.max(0, room));
+}
+
+/**
+ * What a box still reading its draft may hold of a drop or a pick (T386),
+ * checked as the box checks it before reading a byte: a file of a type a
+ * message never carries, a folder among them, gets the box's type refusal,
+ * and an image above the source ceiling the preparation's too-large one. File
+ * references are held as they are, for the box's own file route to take once
+ * it is there; preparation and the prepared-size limit wait for the box too.
+ */
+export function admitHeldTransfer(
+  transfer: HeldFileTransfer,
+): HeldFileTransfer {
+  const carried = transfer.files.filter((file) => isCarriedType(file.type));
+  if (carried.length < transfer.files.length) refuseAsNoImage();
+  return {
+    files: collectImages(carried, noop),
+    fileUrlPaths: transfer.fileUrlPaths,
+  };
+}
+
+function noop(): void {}
+
+/** The box's entry for what was dropped or picked on it while it read its draft (T386). */
+export interface BotBoxHeldTransferIngest {
+  /**
+   * Takes `transfer` as a drop of it would be taken, its images after
+   * everything the box holds, only while `stillOwned` says the box owns them.
+   */
+  readonly attachHeldTransfer: (
+    transfer: HeldFileTransfer,
+    stillOwned: () => boolean,
+  ) => Promise<HeldTransferOutcome>;
+}
+
+/**
+ * Puts into the box's editor, at `at`, the prepared images a message can
+ * carry; how many it took.
+ */
+function placeMessageImages(
+  editor: ComposerPromptEditorHandle | null,
+  attrs: ReadonlyArray<ImageAttachmentAttrs>,
+  at: ImageAttachmentPlace,
+): number {
+  if (editor === null || !editor.isReady()) return 0;
+  const accepted = attrs.filter((image) => {
+    if (image.b64content === undefined) {
+      refuseAsNoImage();
+      return false;
+    }
+    return validMessageImage(image);
+  });
+  const taken = takeImages(accepted, editor);
+  if (taken.length > 0) editor.insertImageAttachments(taken, at);
+  return taken.length;
 }
 
 /**
@@ -89,27 +151,16 @@ function takeImages<Image>(
  * same preparation and the same size refusal. An image lands in the editor; an
  * image a message cannot carry is refused before it is read, and a file that
  * is no image is refused, where the agent composer would write its path or
- * upload it.
+ * upload it. Files held for the box while it read its draft land after what
+ * it loaded (`attachHeldTransfer`).
  */
 export function useBotBoxImageIngest(
   editorRef: RefObject<ComposerPromptEditorHandle | null>,
-): UseComposerPasteResult {
+): UseComposerPasteResult & BotBoxHeldTransferIngest {
   const runnerHost = useRunnerHost();
   const insert = useCallback(
-    (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
-      const editor = editorRef.current;
-      if (editor === null) return 0;
-      const accepted = attrs.filter((image) => {
-        if (image.b64content === undefined) {
-          refuseAsNoImage();
-          return false;
-        }
-        return validMessageImage(image);
-      });
-      const taken = takeImages(accepted, editor);
-      if (taken.length > 0) editor.insertImageAttachments(taken);
-      return taken.length;
-    },
+    (attrs: ReadonlyArray<ImageAttachmentAttrs>): number =>
+      placeMessageImages(editorRef.current, attrs, "caret"),
     [editorRef],
   );
   const filePaths = useMemo(
@@ -127,7 +178,16 @@ export function useBotBoxImageIngest(
     [runnerHost.fileDrops],
   );
   const adapter = useComposerPasteAdapter(insert, filePaths, carriedImages);
-  return { ...adapter, attachFiles: refuseFiles };
+  const { attachHeldTransfer: attachHeld } = adapter;
+  const attachHeldTransfer = useCallback(
+    (transfer: HeldFileTransfer, stillOwned: () => boolean) =>
+      attachHeld(transfer, {
+        insert: (attrs) => placeMessageImages(editorRef.current, attrs, "end"),
+        stillOwned,
+      }),
+    [attachHeld, editorRef],
+  );
+  return { ...adapter, attachFiles: refuseFiles, attachHeldTransfer };
 }
 
 function refuseFiles(files: ReadonlyArray<File>): void {

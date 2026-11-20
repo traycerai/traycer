@@ -12,6 +12,10 @@ import {
   isBrowserSessionsJarServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
 import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transport/browser-sessions-stream-client";
 import type {
   StreamCloseReason,
@@ -634,9 +638,11 @@ class BrowserSessionsStream {
 
   private ownerIsCurrent(): boolean {
     if (this.disposed || this.openedOwnerKey === null) return false;
+    const entry = this.deps.directory.peek(this.hostId);
     if (
-      browserSessionsOwnerKey(this.deps.directory.peek(this.hostId)) ===
-      this.openedOwnerKey
+      entry !== null &&
+      !hostDirectoryEntryNeedsUpdate(entry, MINIMUM_HOST_VERSION) &&
+      browserSessionsOwnerKey(entry) === this.openedOwnerKey
     )
       return true;
     this.failToOpen("This host cannot be dialed.");

@@ -595,18 +595,58 @@ export type ListChatRecordsResponseV14 = z.infer<
   typeof listChatRecordsResponseV14Schema
 >;
 
+// `epic.listChatRecords@1.5`: request unchanged from `@1.3`; the row gains one
+// optional key, which an older peer's schema strips.
+
 /**
- * The session host's persisted redirect revision rides every record-list poll,
- * even when the chat rows are unchanged. It changes on every redirect write,
- * including re-decisions, and does not repeat across restarts. Null means the
- * host could not read the revision for this answer, not that it has no redirects.
+ * Who the chat's work is attributed to: its recorded creator, else a person owner,
+ * else `"system"`. Absent on a record saved before the field and on every foreign
+ * replica row. Set with the record and never patched, so no list revision moves for it.
  */
+const chatRecordStarterUserIdSchema = lazySchema(() =>
+  z.string().min(1).optional(),
+);
+
+/** The `@1.5` row: the `@1.4` row plus `starterUserId`. */
+export const chatRecordSummaryV15Schema = lazySchema(() =>
+  chatRecordSummaryV14Schema.extend({
+    starterUserId: chatRecordStarterUserIdSchema,
+  }),
+);
+export type ChatRecordSummaryV15 = z.infer<typeof chatRecordSummaryV15Schema>;
+
+/** The `@1.4` response with `@1.5` rows on the `snapshot` arm. */
 export const listChatRecordsResponseV15Schema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
       listStamp: recordListStampSchema.nullable(),
-      chats: z.array(chatRecordSummaryV14Schema),
+      chats: z.array(chatRecordSummaryV15Schema),
+    }),
+    z.object({
+      kind: z.literal("unchanged"),
+      listStamp: recordListStampSchema,
+      touched: z.array(recordListRecencyPatchSchema),
+    }),
+  ]),
+);
+export type ListChatRecordsResponseV15 = z.infer<
+  typeof listChatRecordsResponseV15Schema
+>;
+
+/**
+ * `epic.listChatRecords@1.6`: the `@1.5` response plus the session host's
+ * persisted redirect revision, which rides every record-list poll, even when
+ * the chat rows are unchanged. It changes on every redirect write, including
+ * re-decisions, and does not repeat across restarts. Null means the host could
+ * not read the revision for this answer, not that it has no redirects.
+ */
+export const listChatRecordsResponseV16Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      listStamp: recordListStampSchema.nullable(),
+      chats: z.array(chatRecordSummaryV15Schema),
       publicationRedirectRevision: z.string().nullable(),
     }),
     z.object({
@@ -617,8 +657,8 @@ export const listChatRecordsResponseV15Schema = lazySchema(() =>
     }),
   ]),
 );
-export type ListChatRecordsResponseV15 = z.infer<
-  typeof listChatRecordsResponseV15Schema
+export type ListChatRecordsResponseV16 = z.infer<
+  typeof listChatRecordsResponseV16Schema
 >;
 
 /**
@@ -653,6 +693,16 @@ export const chatRecordSummaryStreamV13Schema = lazySchema(() =>
 );
 export type ChatRecordSummaryStreamV13 = z.infer<
   typeof chatRecordSummaryStreamV13Schema
+>;
+
+/** The `@1.3` stream row plus `starterUserId`, as on the list row: the app's table takes rows from both. */
+export const chatRecordSummaryStreamV15Schema = lazySchema(() =>
+  chatRecordSummaryStreamV13Schema.extend({
+    starterUserId: chatRecordStarterUserIdSchema,
+  }),
+);
+export type ChatRecordSummaryStreamV15 = z.infer<
+  typeof chatRecordSummaryStreamV15Schema
 >;
 
 /**
@@ -1419,6 +1469,56 @@ export type HostChatRecordsSubscribeServerFrameV14 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV14
 >;
 
+// `host.chatRecords.subscribe@1.5`: every arm restated beside `@1.4`, for `@1.4`'s reason.
+export const hostChatRecordsSubscribeServerFrameSchemaV15 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("upsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        chatId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        listRevision: recordListRevisionSchema,
+        record: chatRecordSummaryStreamV15Schema,
+      }),
+      z.object({
+        kind: z.literal("remove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        chatId: z.string().min(1),
+        listRevision: recordListRevisionSchema,
+        reason: chatRecordRemovalReasonSchema,
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("tuiUpsert"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        listRevision: recordListRevisionSchema,
+        record: tuiAgentRecordSummaryV13Schema,
+      }),
+      z.object({
+        kind: z.literal("tuiRemove"),
+        ...textFrameFields,
+        epicId: z.string().min(1),
+        tuiAgentId: z.string().min(1),
+        listRevision: recordListRevisionSchema,
+        reason: chatRecordRemovalReasonSchema,
+      }),
+    ])
+    .superRefine(refineChatUpsertEnvelope)
+    .superRefine(refineTuiUpsertEnvelope),
+);
+export type HostChatRecordsSubscribeServerFrameV15 = z.infer<
+  typeof hostChatRecordsSubscribeServerFrameSchemaV15
+>;
+
 export const hostChatRecordsSubscribeClientFrameSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -1473,6 +1573,14 @@ export const hostChatRecordsSubscribeV14 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV14,
+  clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
+});
+
+export const hostChatRecordsSubscribeV15 = defineStreamRpcContract({
+  method: "host.chatRecords.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV15,
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });
 

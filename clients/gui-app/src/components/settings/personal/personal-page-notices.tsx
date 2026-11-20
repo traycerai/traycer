@@ -3,10 +3,10 @@
  * Update that file whenever this settings surface changes.
  */
 import { useContext, useState, type ReactNode } from "react";
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
   LocalOverrideTarget,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -21,7 +21,7 @@ import { PersonalPageContext } from "@/components/settings/personal/personal-pag
 import { itemLabel } from "@/components/settings/personal/personal-page-status";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
+import { useEnvironmentUndoMutation } from "@/hooks/environment/use-environment-undo-mutation";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
@@ -30,9 +30,13 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { environmentMutationKeys } from "@/lib/query-keys";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { useConfigurationName } from "@/components/settings/environment/mcp-servers-model";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Under a Personal page's status line: its convergence notices ("LOG_LEVEL
+ * In a Personal page's header: its convergence notices ("LOG_LEVEL
  * from dev-box now applies everywhere.", with Undo and, on that host, "Keep
  * dev-box's value on dev-box") and its "needs you" rows: a held value's opens
  * the retrospective sheet, every other one Secrets.
@@ -40,7 +44,9 @@ import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-shee
  */
 export function PersonalPageNotices(): ReactNode {
   const value = useContext(PersonalPageContext);
-  if (value === null || value.client === null) return null;
+  const source = useConfigurationSource();
+  const team = source.kind === "pool" && source.configuration === "team";
+  if (value === null || (value.client === null && !team)) return null;
   if (value.notices.length === 0 && value.review.length === 0) return null;
   const { client } = value;
   return (
@@ -48,15 +54,17 @@ export function PersonalPageNotices(): ReactNode {
       className="flex max-w-[72ch] flex-col gap-1.5"
       data-testid="personal-page-notices"
     >
-      {value.notices.map((notice) => (
-        <NoticeRow
-          key={notice.noticeId}
-          client={client}
-          hostId={value.hostId}
-          hostName={value.hostName}
-          notice={notice}
-        />
-      ))}
+      {client === null
+        ? null
+        : value.notices.map((notice) => (
+            <NoticeRow
+              key={notice.noticeId}
+              client={client}
+              hostId={value.hostId}
+              hostName={value.hostName}
+              notice={notice}
+            />
+          ))}
       {value.review.map((entry) => (
         <ReviewRow
           key={entry.entryId}
@@ -72,14 +80,6 @@ export function PersonalPageNotices(): ReactNode {
 const ROW_CLASS =
   "flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 rounded-md border border-border/60 bg-foreground/3 px-3 py-1.5 text-ui-sm";
 
-/** What an Undo or a Keep changes: the notices, the host's status, the values. */
-const UNDO_READS = [
-  "environment.notices",
-  "environment.status",
-  "config.env.list",
-  "providers.list",
-] as const;
-
 function NoticeRow(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string | null;
@@ -89,15 +89,7 @@ function NoticeRow(props: {
   const { notice } = props;
   const label = itemLabel(notice);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const grant = useExecutableWriteGrant();
-  const undo = useHostScopedMutationForClient(props.client, {
-    method: "environment.undo",
-    // The displaced value can run on every host, so the undo carries the grant.
-    prepareRequest: grant,
-    mutationKey: environmentMutationKeys.undo(),
-    errorMessage: "Couldn't undo.",
-    invalidateMethods: UNDO_READS,
-  });
+  const undo = useEnvironmentUndoMutation();
   const keepTarget = keepLocalTarget(notice, props.hostId);
   return (
     <li className={ROW_CLASS} data-testid="personal-notice">
@@ -124,7 +116,6 @@ function NoticeRow(props: {
                 try {
                   const outcome = await undo.mutateAsync({
                     noticeId: notice.noticeId,
-                    executableWriteGrant: null,
                   });
                   setRefusal(
                     undoRefusalText(outcome, label, {
@@ -145,7 +136,7 @@ function NoticeRow(props: {
             disabled={undo.isPending}
             onClick={() =>
               undo.mutate(
-                { noticeId: notice.noticeId, executableWriteGrant: null },
+                { noticeId: notice.noticeId },
                 {
                   onSuccess: (outcome) =>
                     setRefusal(undoRefusalText(outcome, label, null)),
@@ -184,11 +175,8 @@ function KeepLocalButton(props: {
   readonly onRefused: (text: string) => void;
 }): ReactNode {
   const current = useCurrentValue(props.client, props.target);
-  const grant = useExecutableWriteGrant();
   const keep = useHostScopedMutationForClient(props.client, {
     method: "config.env.localOverride.set",
-    // The value can select what starts, so it carries the grant.
-    prepareRequest: grant,
     mutationKey: environmentMutationKeys.localOverrideSet(),
     errorMessage: "Couldn't keep the value on this host.",
     scope: { id: "config.env.localOverride" },
@@ -206,7 +194,6 @@ function KeepLocalButton(props: {
           .mutateAsync({
             target: props.target,
             value: current,
-            executableWriteGrant: null,
           })
           .then(async (answer) => {
             if (answer.outcome === "needs_grant") {
@@ -267,12 +254,26 @@ function useCurrentValue(
 }
 
 /**
- * A "needs you" row. A held command's `Review` opens the retrospective sheet
- * for the host this page reads, where its Approve and Discard are; any other
- * row's opens Secrets.
+ * A "needs you" row: a hold. Its `Review` opens the retrospective sheet for
+ * the host this page reads, where its Approve and Discard are; with no host
+ * to read, Secrets.
  */
 function ReviewRow(props: {
-  readonly entry: EnvironmentReviewEntry;
+  readonly entry: ReviewHeldEntry;
+  readonly hostId: string | null;
+  readonly hostName: string;
+}): ReactNode {
+  const source = useConfigurationSource();
+  if (source.kind === "pool" && source.configuration === "team") {
+    return (
+      <TeamReviewRow entry={props.entry} environmentId={source.environmentId} />
+    );
+  }
+  return <HostReviewRow {...props} />;
+}
+
+function HostReviewRow(props: {
+  readonly entry: ReviewHeldEntry;
   readonly hostId: string | null;
   readonly hostName: string;
 }): ReactNode {
@@ -289,11 +290,47 @@ function ReviewRow(props: {
         variant="outline"
         data-testid="personal-review-link"
         onClick={() => {
-          if (props.entry.reason === "executable_entry" && hostId !== null) {
+          if (hostId !== null) {
             openRetrospective({ hostId, hostName: props.hostName });
             return;
           }
           navigateToSettingsSection("secrets");
+        }}
+      >
+        Review
+      </Button>
+    </li>
+  );
+}
+
+function TeamReviewRow(props: {
+  readonly entry: ReviewHeldEntry;
+  readonly environmentId: string;
+}): ReactNode {
+  const openReview = useRetrospectiveSheetStore(
+    (state) => state.openEnvironmentReview,
+  );
+  const viewerId = useCloudChatViewerId();
+  const environmentName = useConfigurationName();
+  return (
+    <li className={ROW_CLASS} data-testid="personal-review-row">
+      <span className="min-w-0 text-foreground">{reviewText(props.entry)}</span>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        data-testid="personal-review-link"
+        onClick={() => {
+          if (
+            viewerId.length === 0 ||
+            useAuthStore.getState().contextMetadata?.userId !== viewerId
+          )
+            return;
+          openReview({
+            environmentId: props.environmentId,
+            environmentName,
+            viewerId,
+          });
         }}
       >
         Review

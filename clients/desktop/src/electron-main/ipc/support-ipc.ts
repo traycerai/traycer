@@ -226,6 +226,7 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
         body,
         replaceKey,
         deliveryKey,
+        inboxOnly: parsedForegroundAppLocal?.inboxOnly === true,
         onClick: () => bridge.deliverNotificationClick(payload),
         onForegroundSuppressed: () => forwardDisplay(foregroundDisplay),
       });
@@ -415,7 +416,9 @@ function parseForegroundAppLocal(
     Array.isArray(value) ||
     !("userId" in value) ||
     typeof value.userId !== "string" ||
-    !("entry" in value)
+    !("entry" in value) ||
+    !("inboxOnly" in value) ||
+    typeof value.inboxOnly !== "boolean"
   ) {
     throw new Error(
       "notifications.show requires foreground app-local context or null",
@@ -424,6 +427,7 @@ function parseForegroundAppLocal(
   return {
     userId: value.userId,
     entry: value.entry,
+    inboxOnly: value.inboxOnly,
   };
 }
 

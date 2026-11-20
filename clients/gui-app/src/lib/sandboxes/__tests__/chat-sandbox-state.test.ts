@@ -50,7 +50,6 @@ function resting(
     kind: "resting",
     sandbox: { ...SANDBOX, state: "stopped" },
     configuration,
-    wakeChangesPayer: false,
   };
 }
 

@@ -656,7 +656,7 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
   hostClientRef.current = spine.createRequester(mockLocalHostEntry);
   recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
     "host.chatFork.get": { major: 1, minor: 0 },
-    "epic.listChatRecords": { major: 1, minor: 5 },
+    "epic.listChatRecords": { major: 1, minor: 6 },
   });
   useAuthStore.setState({
     contextMetadata: { userId: VIEWER_ID, username: VIEWER_ID },
