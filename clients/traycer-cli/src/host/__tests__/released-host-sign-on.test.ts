@@ -113,6 +113,11 @@ vi.mock("@traycer-clients/shared/host-transport/released-sign-on", async (import
       refusedNamingReason: (hostId: string): void => {
         releasedMemory.read().refusedNamingReason(hostId);
       },
+      declineProbe: (hostId: string): void => {
+        releasedMemory.read().declineProbe(hostId);
+      },
+      probeDeclined: (hostId: string): boolean =>
+        releasedMemory.read().probeDeclined(hostId),
       forgetAll: (): void => {
         releasedMemory.read().forgetAll();
       },

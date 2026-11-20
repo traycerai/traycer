@@ -375,6 +375,8 @@ export function createRemoteHostTransport<
               recovery: options.auth,
               allowed: () => Promise.resolve(true),
               hostTokenUnobtainable: () => false,
+              ownerSignInEligible: () => false,
+              heldTokenRefused: () => false,
               hosts: processReleasedHosts,
             }
           : null,

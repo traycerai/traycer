@@ -495,20 +495,32 @@ async function requestWithHostToken<
     ...(releasedSignOn === null
       ? {}
       : {
-          // An empty token is a session that could present none.
+          // An empty token is a session that could present none; a held one
+          // the host refused as expired is not presented again.
           hostBearerFor: (_hostId: string, held: OpenFrameBearerSource) =>
-            Promise.resolve(held.getBearerToken() === "" ? null : held),
+            Promise.resolve(
+              held.getBearerToken() === "" ||
+                releasedSignOn.ownerSignInEligible()
+                ? null
+                : held,
+            ),
           releasedSignOnFor: async (
             _authority: HostRequestAuthority,
             cause: ReleasedUnaryCause,
           ) => {
             const signIn = releasedSignOn.signIn();
+            const eligible =
+              cause === "refused" ||
+              (cause === "owner-sign-in"
+                ? releasedSignOn.ownerSignInEligible()
+                : releasedSignOn.hostTokenUnobtainable());
             return signIn !== null &&
-              (cause === "refused" || releasedSignOn.hostTokenUnobtainable()) &&
+              eligible &&
               (await releasedSignOn.allowed())
               ? { bearer: signIn, recovery: releasedSignOn.recovery }
               : null;
           },
+          heldTokenRefusedFor: () => releasedSignOn.heldTokenRefused(),
           releasedHosts: releasedSignOn.hosts,
           surfacesNotProvisioned: true,
         }),

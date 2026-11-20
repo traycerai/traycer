@@ -7,6 +7,7 @@ import type {
 import type { StreamAuthRevalidator } from "../auth/bearer-revalidator";
 import {
   authnDidNotAnswer,
+  heldWhileAuthnUnreachable,
   type TrackedHostTokens,
 } from "../auth/host-token-lease";
 import { readHostOwnershipViaHttp } from "../host-client/host-ownership";
@@ -36,6 +37,18 @@ export interface ReleasedSignOn {
    * with the sign-in, and so does this one.
    */
   readonly hostTokenUnobtainable: () => boolean;
+  /**
+   * This machine's host only: authn did not answer the mint and no host-only
+   * token can be presented ({@link ownerSignInEligible}). Only then is a current
+   * host's `owner_sign_in` answer followed by the sign-in.
+   */
+  readonly ownerSignInEligible: () => boolean;
+  /**
+   * The host refused the host-only token as expired; a held one is not
+   * presented again. Answers whether it was a held one presented because authn
+   * did not answer the mint.
+   */
+  readonly heldTokenRefused: () => boolean;
   /** What this process has seen of each host's answers; see {@link ReleasedHostMemory}. */
   readonly hosts: ReleasedHostMemory;
 }
@@ -56,6 +69,9 @@ export interface ReleasedHostMemory {
   readonly signInAdmitted: (userId: string, hostId: string) => void;
   readonly hostTokenAdmitted: (hostId: string) => void;
   readonly refusedNamingReason: (hostId: string) => void;
+  /** The host answered the probe naming a reason other than `owner_sign_in`: it is not probed again. */
+  readonly declineProbe: (hostId: string) => void;
+  readonly probeDeclined: (hostId: string) => boolean;
   readonly forgetAll: () => void;
 }
 
@@ -63,6 +79,7 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
   let person: string | null = null;
   const released = new Set<string>();
   const current = new Set<string>();
+  const declined = new Set<string>();
   const forgetAll = (): void => {
     person = null;
     released.clear();
@@ -86,6 +103,10 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
       released.delete(hostId);
       current.add(hostId);
     },
+    declineProbe: (hostId) => {
+      declined.add(hostId);
+    },
+    probeDeclined: (hostId) => declined.has(hostId),
     forgetAll,
   };
 }
@@ -142,7 +163,7 @@ export function isReleasedHostTokenRefusal(
 
 /**
  * No host-only token can be presented to this machine's host: authn has no row
- * for this person, or it did not answer (`authnDidNotAnswer`) and none is held.
+ * for this person, or {@link ownerSignInEligible}.
  */
 export function hostTokenUnobtainable(
   tokens: TrackedHostTokens,
@@ -151,9 +172,35 @@ export function hostTokenUnobtainable(
 ): boolean {
   return (
     tokens.lastMintFailure(userId, hostId) === "not-admitted" ||
-    (authnDidNotAnswer(tokens, userId, hostId) &&
-      tokens.current(userId, hostId) === null)
+    ownerSignInEligible(tokens, userId, hostId)
   );
+}
+
+/**
+ * The last mint ended without authn answering it (`authnDidNotAnswer`), and no
+ * held host-only token can be presented: none is held, or the host refused it
+ * as expired.
+ */
+export function ownerSignInEligible(
+  tokens: TrackedHostTokens,
+  userId: string,
+  hostId: string,
+): boolean {
+  return (
+    authnDidNotAnswer(tokens, userId, hostId) &&
+    heldWhileAuthnUnreachable(tokens, userId, hostId) === null
+  );
+}
+
+/** See {@link ReleasedSignOn.heldTokenRefused}. */
+export function heldTokenRefused(
+  tokens: TrackedHostTokens,
+  userId: string,
+  hostId: string,
+): boolean {
+  const presented = heldWhileAuthnUnreachable(tokens, userId, hostId) !== null;
+  tokens.noteHeldRefused(userId, hostId);
+  return presented;
 }
 
 /** For this machine's host when the caller holds its row; `null` unless the row allows it. */
@@ -173,6 +220,8 @@ export function releasedSignOnForLocalRow(
         allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () =>
           hostTokenUnobtainable(tokens, userId, hostId),
+        ownerSignInEligible: () => ownerSignInEligible(tokens, userId, hostId),
+        heldTokenRefused: () => heldTokenRefused(tokens, userId, hostId),
         hosts,
       }
     : null;
@@ -185,8 +234,11 @@ export interface ReleasedUnarySignOn {
   readonly recovery: StreamAuthRevalidator | null;
 }
 
-/** Why the unary client asks: the host refused the token, or none could be presented. */
-export type ReleasedUnaryCause = "refused" | "no-host-token";
+/**
+ * Why the unary client asks: the host refused the token, none could be
+ * presented, or a current host answered the probe `owner_sign_in`.
+ */
+export type ReleasedUnaryCause = "refused" | "no-host-token" | "owner-sign-in";
 
 /**
  * `WsRpcClientOptions.releasedSignOnFor` for this machine's host, for a caller
@@ -205,7 +257,10 @@ export function signInForLocalRow(
     const userId = authority.bearer.identity.userId;
     const allowed =
       opensReleasedWayOnThisMachine(resolveRow(hostId), userId) &&
-      (cause === "refused" || hostTokenUnobtainable(tokens, userId, hostId));
+      (cause === "refused" ||
+        (cause === "owner-sign-in"
+          ? ownerSignInEligible(tokens, userId, hostId)
+          : hostTokenUnobtainable(tokens, userId, hostId)));
     return Promise.resolve(
       allowed ? { bearer: authority.bearer, recovery } : null,
     );
@@ -224,6 +279,8 @@ export function releasedLocalSignOnFromRegistry(deps: {
   readonly signIn: BearerSourceProvider;
   readonly recovery: StreamAuthRevalidator | null;
   readonly hostTokenUnobtainable: () => boolean;
+  readonly ownerSignInEligible: () => boolean;
+  readonly heldTokenRefused: () => boolean;
   readonly hosts: ReleasedHostMemory;
 }): ReleasedSignOn {
   const answered = new Map<string, boolean>();
@@ -231,6 +288,8 @@ export function releasedLocalSignOnFromRegistry(deps: {
     signIn: deps.signIn,
     recovery: deps.recovery,
     hostTokenUnobtainable: deps.hostTokenUnobtainable,
+    ownerSignInEligible: deps.ownerSignInEligible,
+    heldTokenRefused: deps.heldTokenRefused,
     hosts: deps.hosts,
     allowed: async () => {
       const id = deps.hostId();

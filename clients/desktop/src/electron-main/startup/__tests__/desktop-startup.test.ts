@@ -609,6 +609,8 @@ function openStartupStream(): {
       recovery: null,
       allowed: () => Promise.resolve(true),
       hostTokenUnobtainable: () => false,
+      ownerSignInEligible: () => false,
+      heldTokenRefused: () => false,
       hosts: processReleasedHosts,
     },
     auth: null,

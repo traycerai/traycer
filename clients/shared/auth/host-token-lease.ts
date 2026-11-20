@@ -34,19 +34,29 @@ type HostTokenMintFailure = Exclude<
   { readonly kind: "ok" }
 >["kind"];
 
-/** A local door's token source, which remembers how the last mint for each pair ended. */
+/**
+ * A local door's token source, which remembers how the last mint for each pair
+ * ended, and which held token the host itself refused as expired.
+ */
 export interface TrackedHostTokens extends HostTokenAccess {
   /** `null` until a mint failed, and again once one succeeds. */
   readonly lastMintFailure: (
     userId: string,
     hostId: string,
   ) => HostTokenMintFailure | null;
+  /**
+   * The host refused the token held now as expired: it reads authn reachable,
+   * so presenting it again cannot open. A token minted later is not affected.
+   */
+  readonly noteHeldRefused: (userId: string, hostId: string) => void;
+  readonly heldRefused: (userId: string, hostId: string) => boolean;
 }
 
 export function trackHostTokenMints(
   tokens: HostTokenAccess,
 ): TrackedHostTokens {
   const failures = new Map<string, HostTokenMintFailure>();
+  const refusedHeld = new Map<string, string>();
   const keyOf = (userId: string, hostId: string): string =>
     `${userId}\u0000${hostId}`;
   return {
@@ -59,6 +69,17 @@ export function trackHostTokenMints(
     },
     lastMintFailure: (userId, hostId) =>
       failures.get(keyOf(userId, hostId)) ?? null,
+    noteHeldRefused: (userId, hostId) => {
+      const held = tokens.current(userId, hostId);
+      if (held !== null) refusedHeld.set(keyOf(userId, hostId), held.token);
+    },
+    heldRefused: (userId, hostId) => {
+      const refused = refusedHeld.get(keyOf(userId, hostId));
+      return (
+        refused !== undefined &&
+        tokens.current(userId, hostId)?.token === refused
+      );
+    },
   };
 }
 
@@ -81,17 +102,18 @@ export function authnDidNotAnswer(
 
 /**
  * The held host-only token a local door is given past its end: only while
- * authn did not answer the last mint, never after it refused one. The token is
- * kept on disk, so this holds across an app restart. The host admits it while
- * it cannot reach authn either; once a mint succeeds, the fresh token is
- * presented.
+ * authn did not answer the last mint, never after it refused one, and never
+ * once the host refused that token as expired. The token is kept on disk, so
+ * this holds across an app restart. The host admits it while it cannot reach
+ * authn either; once a mint succeeds, the fresh token is presented.
  */
 export function heldWhileAuthnUnreachable(
   tokens: TrackedHostTokens,
   userId: string,
   hostId: string,
 ): HostToken | null {
-  return authnDidNotAnswer(tokens, userId, hostId)
+  return authnDidNotAnswer(tokens, userId, hostId) &&
+    !tokens.heldRefused(userId, hostId)
     ? tokens.current(userId, hostId)
     : null;
 }

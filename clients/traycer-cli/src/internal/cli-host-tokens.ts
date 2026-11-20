@@ -25,7 +25,9 @@ import {
 import { isUsableHostToken } from "@traycer-clients/shared/auth/host-token-store";
 import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
 import {
+  heldTokenRefused,
   hostTokenUnobtainable,
+  ownerSignInEligible,
   releasedLocalSignOnFromRegistry,
   type ReleasedSignOn,
   processReleasedHosts,
@@ -124,6 +126,10 @@ export interface CliHostTokens {
   presentsHeldPastExpiry(hostId: string): boolean;
   /** See `hostTokenUnobtainable`. */
   hostTokenUnobtainable(hostId: string): boolean;
+  /** See `ownerSignInEligible`. */
+  ownerSignInEligible(hostId: string): boolean;
+  /** See `ReleasedSignOn.heldTokenRefused`. */
+  heldTokenRefused(hostId: string): boolean;
 }
 
 function createSource(signIn: VerifiedSignIn | null): HostTokenSource {
@@ -314,6 +320,9 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     presentsHeldPastExpiry: presentsHeld,
     hostTokenUnobtainable: (hostId) =>
       hostTokenUnobtainable(source, userId, hostId),
+    ownerSignInEligible: (hostId) =>
+      ownerSignInEligible(source, userId, hostId),
+    heldTokenRefused: (hostId) => heldTokenRefused(source, userId, hostId),
     onMintRefused: (listener) => {
       listeners.add(listener);
       return () => {
@@ -353,7 +362,13 @@ export function cliReleasedSignOn(
   authnBaseUrl: string,
   hostId: () => string | null,
   lease: BearerLease,
-  tokens: Pick<CliHostTokens, "refreshSignIn" | "hostTokenUnobtainable">,
+  tokens: Pick<
+    CliHostTokens,
+    | "refreshSignIn"
+    | "hostTokenUnobtainable"
+    | "ownerSignInEligible"
+    | "heldTokenRefused"
+  >,
 ): ReleasedSignOn {
   return releasedLocalSignOnFromRegistry({
     authnBaseUrl,
@@ -363,6 +378,14 @@ export function cliReleasedSignOn(
     hostTokenUnobtainable: () => {
       const id = hostId();
       return id !== null && tokens.hostTokenUnobtainable(id);
+    },
+    ownerSignInEligible: () => {
+      const id = hostId();
+      return id !== null && tokens.ownerSignInEligible(id);
+    },
+    heldTokenRefused: () => {
+      const id = hostId();
+      return id !== null && tokens.heldTokenRefused(id);
     },
     hosts: processReleasedHosts,
   });

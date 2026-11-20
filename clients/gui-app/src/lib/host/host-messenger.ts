@@ -16,6 +16,7 @@ import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
 import {
   opensReleasedWay,
   signInForLocalRow,
+  heldTokenRefused,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
@@ -1051,13 +1052,22 @@ function localDoorBearers(
   recovery: StreamAuthRevalidator | null,
 ): Pick<
   WsRpcClientOptions<VersionedRpcRegistry>,
-  "hostBearerFor" | "releasedSignOnFor" | "releasedHosts"
+  | "hostBearerFor"
+  | "releasedSignOnFor"
+  | "releasedHosts"
+  | "heldTokenRefusedFor"
 > {
   const tracked = trackHostTokenMints(tokens);
   return {
     hostBearerFor: hostTokenBearerFor(tracked, noteHostTokenRefusal),
     releasedSignOnFor: signInForLocalRow(resolveRow, recovery, tracked),
     releasedHosts: processReleasedHosts,
+    heldTokenRefusedFor: (authority) =>
+      heldTokenRefused(
+        tracked,
+        authority.bearer.identity.userId,
+        authority.endpoint.hostId,
+      ),
   };
 }
 

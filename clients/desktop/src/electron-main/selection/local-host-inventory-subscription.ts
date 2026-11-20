@@ -6,7 +6,9 @@ import {
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
+  heldTokenRefused,
   hostTokenUnobtainable,
+  ownerSignInEligible,
   releasedLocalSignOnFromRegistry,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
@@ -495,6 +497,10 @@ export function createLocalHostInventoryStreamClient(deps: {
         recovery: null,
         hostTokenUnobtainable: () =>
           hostTokenUnobtainable(hostTokens, userId, endpoint.hostId),
+        ownerSignInEligible: () =>
+          ownerSignInEligible(hostTokens, userId, endpoint.hostId),
+        heldTokenRefused: () =>
+          heldTokenRefused(hostTokens, userId, endpoint.hostId),
         hosts: processReleasedHosts,
       }),
       ...hostTokenSessionAuth(

@@ -291,6 +291,12 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    * as no token at all. The command line prints it, as a released one did.
    */
   readonly surfacesNotProvisioned?: boolean;
+  /**
+   * The host refused the call's host-only token as expired. Answers whether
+   * that token was a held one presented because authn did not answer the mint:
+   * then the call asks `hostBearerFor` once more, which no longer presents it.
+   */
+  readonly heldTokenRefusedFor?: (authority: HostRequestAuthority) => boolean;
 }
 
 /**
@@ -398,6 +404,16 @@ export class WsRpcClient<
   private readonly probeAuthorities = new WeakSet<HostRequestAuthority>();
   private readonly releasedHosts: ReleasedHostMemory;
   private readonly surfacesNotProvisioned: boolean;
+  private readonly heldTokenRefusedFor: WsRpcClientOptions<Registry>["heldTokenRefusedFor"];
+  /** Authorities carrying the sign-in a current host invited (`owner_sign_in`), with its recovery while unspent. */
+  private readonly ownerSignInAuthorities = new WeakMap<
+    HostRequestAuthority,
+    StreamAuthRevalidator | null
+  >();
+  /** The invited sign-in was refused as expired, a recovery is left, and the door has not heard of it. */
+  private readonly ownerSignInRefusals = new WeakSet<HostRpcError>();
+  /** A held token presented while authn did not answer was refused as expired; the door has not heard of it. */
+  private readonly heldRefusals = new WeakSet<HostRpcError>();
   /** Authorities carrying the sign-in only because `releasedHosts` remembers the host as released. */
   private readonly rememberedAuthorities = new WeakSet<HostRequestAuthority>();
   /** A remembered released host named its reason: it was updated, and the door has not heard of it. */
@@ -418,6 +434,7 @@ export class WsRpcClient<
     this.releasedSignOnFor = options.releasedSignOnFor;
     this.releasedHosts = options.releasedHosts ?? createReleasedHostMemory();
     this.surfacesNotProvisioned = options.surfacesNotProvisioned === true;
+    this.heldTokenRefusedFor = options.heldTokenRefusedFor;
     this.registry = options.registry;
     this.requestIdProvider = options.requestId;
     this.webSocketFactory = options.webSocketFactory;
@@ -462,6 +479,7 @@ export class WsRpcClient<
   ): Promise<ResponseOfMethod<Registry, Method>> {
     let challengeRetried = false;
     let grantReprobed = false;
+    let heldRetried = false;
     const hostBearerFor = this.hostBearerFor;
     const releasesBeforeLookup = this.localReleases;
     // With no token to look up, the claim stays in the caller's tick.
@@ -508,6 +526,40 @@ export class WsRpcClient<
           );
           continue;
         }
+        if (cause instanceof HostRpcError && this.ownerSignInRefusals.has(cause)) {
+          const authority = hostOptions.authority;
+          const recovery = this.ownerSignInAuthorities.get(authority) ?? null;
+          // Spent: a second refusal of this call's sign-in reaches the door.
+          this.ownerSignInAuthorities.set(authority, null);
+          const outcome =
+            recovery === null || cause.fatalDetails === null
+              ? "rejected"
+              : await revalidateStream(recovery, cause.fatalDetails).catch(
+                  () => "network-error" as const,
+                );
+          if (outcome === "rotated") continue;
+          this.reportRefusal(options.authority.endpoint.hostId, cause);
+          throw cause;
+        }
+        if (
+          cause instanceof HostRpcError &&
+          this.heldRefusals.has(cause) &&
+          hostBearerFor !== undefined &&
+          !heldRetried
+        ) {
+          heldRetried = true;
+          try {
+            hostOptions = await this.withHostBearer(
+              hostBearerFor,
+              options,
+              method,
+            );
+          } catch {
+            this.reportRefusal(options.authority.endpoint.hostId, cause);
+            throw cause;
+          }
+          continue;
+        }
         if (cause instanceof HostRpcError && this.signInRefusals.has(cause)) {
           const authority = hostOptions.authority;
           const recovery = this.signInAuthorities.get(authority) ?? null;
@@ -534,6 +586,23 @@ export class WsRpcClient<
           if (cause.fatalDetails === null) throw cause;
           const reason = readDoorReason(cause.fatalDetails.doorReason);
           if (reason === "absent") throw cause;
+          const hostId = options.authority.endpoint.hostId;
+          // A current host invites the sign-in: only while no host-only token
+          // can be had, and only where the row allows it.
+          const invited =
+            reason === "owner_sign_in"
+              ? await this.releasedSignOnFor?.(
+                  options.authority,
+                  "owner-sign-in",
+                ).catch(() => null)
+              : null;
+          if (invited !== undefined && invited !== null) {
+            const authority = { ...options.authority, bearer: invited.bearer };
+            this.ownerSignInAuthorities.set(authority, invited.recovery);
+            hostOptions = { ...options, authority };
+            continue;
+          }
+          if (reason !== "owner_sign_in") this.releasedHosts.declineProbe(hostId);
           if (reason === "not_provisioned" && this.surfacesNotProvisioned)
             throw cause;
           throw noHostTokenError(this.requestIdProvider(), method);
@@ -588,7 +657,7 @@ export class WsRpcClient<
       }
     }
     const bearer = await hostBearerFor(hostId, options.authority.bearer);
-    if (bearer === null && !this.releasedHosts.namedReason(hostId)) {
+    if (bearer === null && !this.releasedHosts.probeDeclined(hostId)) {
       const signIn = await this.releasedSignOnFor?.(
         options.authority,
         "no-host-token",
@@ -935,13 +1004,34 @@ export class WsRpcClient<
           isReleasedHostTokenRefusal(ackFrame.details) &&
           (this.signInAuthorities.get(authority) ?? null) !== null;
         const probe = this.probeAuthorities.has(authority);
-        const named = readDoorReason(ackFrame.details.doorReason) !== "absent";
+        const reason = readDoorReason(ackFrame.details.doorReason);
+        const named = reason !== "absent";
         if (named) this.releasedHosts.refusedNamingReason(selected.hostId);
         const updated = named && this.rememberedAuthorities.has(authority);
+        const ownerSignIn = this.ownerSignInAuthorities.has(authority);
+        const ownerSignInRefused =
+          ownerSignIn &&
+          reason === "token_expired" &&
+          (this.ownerSignInAuthorities.get(authority) ?? null) !== null;
+        if (ownerSignIn && named && reason !== "token_expired")
+          this.releasedHosts.declineProbe(selected.hostId);
+        const heldRefused =
+          reason === "token_expired" &&
+          !probe &&
+          !ownerSignIn &&
+          !this.signInAuthorities.has(authority) &&
+          (this.heldTokenRefusedFor?.(authority) ?? false);
         // Reported once the sign-in, or its refresh, cannot answer it; never
         // for the probe, which carried no credential of the person's, nor for
         // a remembered host that was updated, whose next dial carries the token.
-        if (!releasedWay && !signInRefused && !probe && !updated)
+        if (
+          !releasedWay &&
+          !signInRefused &&
+          !probe &&
+          !updated &&
+          !ownerSignInRefused &&
+          !heldRefused
+        )
           this.doorFor?.(selected.hostId).refused(ackFrame.details);
         if (
           ackFrame.details.code === SESSION_GRANT_REQUIRED &&
@@ -964,6 +1054,8 @@ export class WsRpcClient<
         if (releasedWay) this.releasedRefusals.add(error);
         if (signInRefused) this.signInRefusals.add(error);
         if (updated) this.updatedRefusals.add(error);
+        if (ownerSignInRefused) this.ownerSignInRefusals.add(error);
+        if (heldRefused) this.heldRefusals.add(error);
         if (
           usesSessionGrant &&
           this.localOpenAuth !== undefined &&
@@ -1002,7 +1094,10 @@ export class WsRpcClient<
           authority.bearer.identity.userId,
           selected.hostId,
         );
-      else if (!this.probeAuthorities.has(authority))
+      else if (
+        !this.probeAuthorities.has(authority) &&
+        !this.ownerSignInAuthorities.has(authority)
+      )
         this.releasedHosts.hostTokenAdmitted(selected.hostId);
       this.doorFor?.(selected.hostId).admitted();
       if (usesSessionGrant)

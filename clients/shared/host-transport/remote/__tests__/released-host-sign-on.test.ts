@@ -163,6 +163,8 @@ function signOnFor(
         recovery: null,
         allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () => false,
+        ownerSignInEligible: () => false,
+        heldTokenRefused: () => false,
         hosts: createReleasedHostMemory(),
       }
     : null;
@@ -368,6 +370,8 @@ describe("released personal host, remote door", () => {
         recovery: null,
         allowed: () => Promise.resolve(rowAllows),
         hostTokenUnobtainable: () => false,
+        ownerSignInEligible: () => false,
+        heldTokenRefused: () => false,
         hosts,
       },
       door,
