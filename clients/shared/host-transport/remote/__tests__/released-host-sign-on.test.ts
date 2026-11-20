@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostDoorStateOfRefusal } from "../../host-door-state";
 import { resetNegotiatedManifests } from "../../negotiated-manifest-registry";
 import {
-  releasedSignOnForRow,
+  opensReleasedWay,
   type ReleasedSignOn,
   type ReleasedSignOnRow,
 } from "../../released-sign-on";
@@ -138,7 +138,14 @@ function signOnFor(
   row: ReleasedSignOnRow,
   signIn: MutableBearerLease,
 ): ReleasedSignOn | null {
-  return releasedSignOnForRow(row, USER_ID, () => signIn, null);
+  return opensReleasedWay(row, USER_ID)
+    ? {
+        signIn: () => signIn,
+        recovery: null,
+        allowed: () => Promise.resolve(true),
+        hostTokenUnobtainable: () => false,
+      }
+    : null;
 }
 
 afterEach(() => {

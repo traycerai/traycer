@@ -25,9 +25,73 @@ import type {
   HostTokenMintOutcome,
   HostTokenSource,
 } from "./host-token-source";
-import { isUsableHostToken } from "./host-token-store";
+import { isUsableHostToken, type HostToken } from "./host-token-store";
 
 export type HostTokenAccess = Pick<HostTokenSource, "current" | "obtain">;
+
+type HostTokenMintFailure = Exclude<
+  HostTokenMintOutcome,
+  { readonly kind: "ok" }
+>["kind"];
+
+/** A local door's token source, which remembers how the last mint for each pair ended. */
+export interface TrackedHostTokens extends HostTokenAccess {
+  /** `null` until a mint failed, and again once one succeeds. */
+  readonly lastMintFailure: (
+    userId: string,
+    hostId: string,
+  ) => HostTokenMintFailure | null;
+}
+
+export function trackHostTokenMints(
+  tokens: HostTokenAccess,
+): TrackedHostTokens {
+  const failures = new Map<string, HostTokenMintFailure>();
+  const keyOf = (userId: string, hostId: string): string =>
+    `${userId}\u0000${hostId}`;
+  return {
+    current: (userId, hostId) => tokens.current(userId, hostId),
+    obtain: async (userId, hostId, fresh, signal) => {
+      const outcome = await tokens.obtain(userId, hostId, fresh, signal);
+      if (outcome.kind === "ok") failures.delete(keyOf(userId, hostId));
+      else failures.set(keyOf(userId, hostId), outcome.kind);
+      return outcome;
+    },
+    lastMintFailure: (userId, hostId) =>
+      failures.get(keyOf(userId, hostId)) ?? null,
+  };
+}
+
+/**
+ * The held host-only token a local door is given past its end: only while the
+ * last mint could not reach authn, never after authn refused one. The host
+ * admits it while it cannot reach authn either; once a mint succeeds, the fresh
+ * token is presented.
+ */
+export function heldWhileAuthnUnreachable(
+  tokens: TrackedHostTokens,
+  userId: string,
+  hostId: string,
+): HostToken | null {
+  return tokens.lastMintFailure(userId, hostId) === "unavailable"
+    ? tokens.current(userId, hostId)
+    : null;
+}
+
+/** For `WsStreamClientOptions.presentsHeldPastExpiry` on a local door's stream. */
+export function hostTokenHeldPastExpiry(
+  tokens: TrackedHostTokens,
+  signIn: BearerSourceProvider,
+  hostId: string,
+): () => boolean {
+  return () => {
+    const userId = signIn()?.identity.userId ?? null;
+    return (
+      userId !== null &&
+      heldWhileAuthnUnreachable(tokens, userId, hostId) !== null
+    );
+  };
+}
 
 export type HostTokenStateSink = (
   hostId: string,
@@ -46,9 +110,9 @@ function stateOfFailedMint(
 }
 
 // Never the sign-in token. One lease object per sign-in lease: transports keyed
-// on it see a new object exactly when the sign-in context changes.
+// on it see a new object exactly when the sign-in context changes. Local doors only.
 export function hostTokenBearer(
-  tokens: HostTokenAccess,
+  tokens: TrackedHostTokens,
   signIn: BearerSourceProvider,
   hostId: string,
   onState: HostTokenStateSink,
@@ -62,12 +126,15 @@ export function hostTokenBearer(
       void tokens.obtain(userId, hostId, false, null).then(
         (outcome) => {
           if (outcome.kind === "ok") return;
+          if (heldWhileAuthnUnreachable(tokens, userId, hostId) !== null)
+            return;
           const state = stateOfFailedMint(outcome, false);
           if (state !== null) onState(hostId, state);
         },
         () => undefined,
       );
-      return null;
+      if (heldWhileAuthnUnreachable(tokens, userId, hostId) === null)
+        return null;
     }
     const existing = leases.get(signInLease);
     if (existing !== undefined) return existing;
@@ -81,7 +148,7 @@ export function hostTokenBearer(
 }
 
 export function hostTokenBearerFor(
-  tokens: HostTokenAccess,
+  tokens: TrackedHostTokens,
   onState: HostTokenStateSink,
 ): (
   hostId: string,
@@ -89,16 +156,27 @@ export function hostTokenBearerFor(
 ) => Promise<OpenFrameBearerSource | null> {
   return async (hostId, signIn) => {
     const userId = signIn.identity.userId;
+    const lease: OpenFrameBearerSource = {
+      identity: { userId },
+      getBearerToken: () => tokens.current(userId, hostId)?.token ?? "",
+    };
+    // Already past its end with authn unreachable: the call need not wait for
+    // another mint to fail, and the next call reads whatever this one buys.
+    const held = heldWhileAuthnUnreachable(tokens, userId, hostId);
+    if (held !== null && !isUsableHostToken(held, Date.now())) {
+      void tokens.obtain(userId, hostId, false, null).catch(() => undefined);
+      return lease;
+    }
     const outcome = await tokens.obtain(userId, hostId, false, null);
-    if (outcome.kind !== "ok") {
+    if (
+      outcome.kind !== "ok" &&
+      heldWhileAuthnUnreachable(tokens, userId, hostId) === null
+    ) {
       const state = stateOfFailedMint(outcome, false);
       if (state !== null) onState(hostId, state);
       return null;
     }
-    return {
-      identity: { userId },
-      getBearerToken: () => tokens.current(userId, hostId)?.token ?? "",
-    };
+    return lease;
   };
 }
 

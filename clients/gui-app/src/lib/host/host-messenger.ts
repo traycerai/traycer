@@ -3,7 +3,11 @@ import {
   hostDirectoryEntryNeedsUpdate,
 } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
-import { hostTokenBearerFor } from "@traycer-clients/shared/auth/host-token-lease";
+import {
+  hostTokenBearerFor,
+  trackHostTokenMints,
+  type HostTokenAccess,
+} from "@traycer-clients/shared/auth/host-token-lease";
 import {
   appHostDoorObserver,
   noteHostTokenRefusal,
@@ -11,7 +15,7 @@ import {
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
 import {
   opensReleasedWay,
-  signInForReleasedRow,
+  signInForLocalRow,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { v4 as uuidv4 } from "uuid";
@@ -55,6 +59,7 @@ import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
   type RequestIdProvider,
+  type WsRpcClientOptions,
 } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type {
   FatalErrorDetails,
@@ -239,11 +244,11 @@ export function buildRawHostMessengerForTarget<
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
       doorFor: appHostDoorObserver,
-      hostBearerFor: hostTokenBearerFor(
+      ...localDoorBearers(
         localDoorHostTokens(params.hostTokens),
-        noteHostTokenRefusal,
+        () => params.target,
+        params.auth,
       ),
-      releasedSignOnFor: signInForReleasedRow(() => params.target, params.auth),
     }),
     remoteTransport: null,
   };
@@ -455,11 +460,11 @@ class RuntimeHostMessenger<
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
       doorFor: appHostDoorObserver,
-      hostBearerFor: hostTokenBearerFor(
+      ...localDoorBearers(
         localDoorHostTokens(this.hostTokens),
-        noteHostTokenRefusal,
+        this.resolveTarget,
+        this.auth,
       ),
-      releasedSignOnFor: signInForReleasedRow(this.resolveTarget, this.auth),
     });
     return this.localMessenger;
   }
@@ -1033,6 +1038,25 @@ interface RemoteBinding<Registry extends VersionedRpcRegistry> {
  */
 export function servesOverLocalSocket(entry: HostDirectoryEntry): boolean {
   return entry.kind === "local" || entry.kind === "mock";
+}
+
+/**
+ * The local socket's two bearer sources over ONE token tracker: the sign-in
+ * is offered with no host-only token only after that tracker saw the mint fail.
+ */
+function localDoorBearers(
+  tokens: HostTokenAccess,
+  resolveRow: (hostId: string) => HostDirectoryEntry | null,
+  recovery: StreamAuthRevalidator | null,
+): Pick<
+  WsRpcClientOptions<VersionedRpcRegistry>,
+  "hostBearerFor" | "releasedSignOnFor"
+> {
+  const tracked = trackHostTokenMints(tokens);
+  return {
+    hostBearerFor: hostTokenBearerFor(tracked, noteHostTokenRefusal),
+    releasedSignOnFor: signInForLocalRow(resolveRow, recovery, tracked),
+  };
 }
 
 function remoteTransportKey(entry: HostDirectoryEntry): string | null {

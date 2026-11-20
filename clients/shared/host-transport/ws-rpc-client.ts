@@ -27,8 +27,10 @@ import {
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import {
   isReleasedHostTokenRefusal,
+  type ReleasedUnaryCause,
   type ReleasedUnarySignOn,
 } from "./released-sign-on";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
@@ -264,11 +266,14 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    * Asked only after a released host's typed refusal of the call's host-only
    * token, with the caller's authority: the sign-in lease to send the call with
    * once more, or `null` unless the host's row is that person's own personal
-   * computer (`opensReleasedWay`). If the host refuses the sign-in too, its
-   * `recovery` refreshes it and the call goes once more, as a released client's did.
+   * computer (`opensReleasedWay`). Asked too, for this machine's host, when
+   * `hostBearerFor` has no token because none can be had. If the host refuses
+   * the sign-in, its `recovery` refreshes it and the call goes once more, as a
+   * released client's did.
    */
   readonly releasedSignOnFor?: (
     authority: HostRequestAuthority,
+    cause: ReleasedUnaryCause,
   ) => Promise<ReleasedUnarySignOn | null>;
 }
 
@@ -373,6 +378,11 @@ export class WsRpcClient<
     HostRequestAuthority,
     StreamAuthRevalidator | null
   >();
+  /**
+   * Hosts that refused, with their reason, a sign-in sent because no host-only
+   * token could be had: current hosts, never sent the sign-in that way again.
+   */
+  private readonly signInRefusedAsCurrent = new Set<string>();
   /** A released host refused the host-only token, and the door has not heard of it. */
   private readonly releasedRefusals = new WeakSet<HostRpcError>();
   /** A released host refused the sign-in, a recovery is left, and the door has not heard of it. */
@@ -454,6 +464,7 @@ export class WsRpcClient<
         if (cause instanceof HostRpcError && this.releasedRefusals.has(cause)) {
           const signIn = await this.releasedSignOnFor?.(
             options.authority,
+            "refused",
           ).catch(() => null);
           if (signIn === undefined || signIn === null) {
             this.reportRefusal(options.authority.endpoint.hostId, cause);
@@ -479,6 +490,13 @@ export class WsRpcClient<
           this.reportRefusal(options.authority.endpoint.hostId, cause);
           throw cause;
         }
+        if (
+          cause instanceof HostRpcError &&
+          this.signInAuthorities.has(hostOptions.authority) &&
+          cause.fatalDetails !== null &&
+          readDoorReason(cause.fatalDetails.doorReason) !== "absent"
+        )
+          this.signInRefusedAsCurrent.add(options.authority.endpoint.hostId);
         if (cause instanceof HostRpcError && cause.doorRefusal !== null)
           this.doorFor?.(options.authority.endpoint.hostId).refused(
             cause.doorRefusal,
@@ -514,6 +532,18 @@ export class WsRpcClient<
       options.authority.endpoint.hostId,
       options.authority.bearer,
     );
+    const hostId = options.authority.endpoint.hostId;
+    if (bearer === null && !this.signInRefusedAsCurrent.has(hostId)) {
+      const signIn = await this.releasedSignOnFor?.(
+        options.authority,
+        "no-host-token",
+      ).catch(() => null);
+      if (signIn !== undefined && signIn !== null) {
+        const authority = { ...options.authority, bearer: signIn.bearer };
+        this.signInAuthorities.set(authority, signIn.recovery);
+        return { ...options, authority };
+      }
+    }
     if (bearer === null)
       throw new HostRpcError({
         code: "RPC_ERROR",

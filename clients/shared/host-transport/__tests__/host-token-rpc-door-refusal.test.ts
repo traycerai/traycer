@@ -32,6 +32,7 @@ import {
 import {
   hostTokenBearerFor,
   hostTokenUnaryRevalidator,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -389,7 +390,7 @@ function doorHarness(): DoorHarness {
     frameTimeoutMs: 5_000,
     hostAttestationWindowMs: 0,
     evidence: NO_TRANSPORT_EVIDENCE,
-    hostBearerFor: hostTokenBearerFor(tokens, (hostId, kind) => {
+    hostBearerFor: hostTokenBearerFor(trackHostTokenMints(tokens), (hostId, kind) => {
       states.push({ hostId, kind, detail: null });
     }),
     doorFor: (hostId) => ({

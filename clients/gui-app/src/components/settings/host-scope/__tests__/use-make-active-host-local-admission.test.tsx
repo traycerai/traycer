@@ -8,6 +8,7 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import {
   hostTokenBearerFor,
   type HostTokenAccess,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenMintOutcome } from "@traycer-clients/shared/auth/host-token-source";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -218,7 +219,7 @@ async function rejectAfterLocalHostTokenMint(
     },
   };
   const hostBearerFor = hostTokenBearerFor(
-    localDoorHostTokens(tokens),
+    trackHostTokenMints(localDoorHostTokens(tokens)),
     noteHostTokenRefusal,
   );
   const context = mocks.state.activeContext;

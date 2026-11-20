@@ -373,6 +373,7 @@ export function createRemoteHostTransport<
               signIn: bearer,
               recovery: options.auth,
               allowed: () => Promise.resolve(true),
+              hostTokenUnobtainable: () => false,
             }
           : null,
         // The SAME read the grant provider above uses, now also reported to the

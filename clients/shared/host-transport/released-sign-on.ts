@@ -5,6 +5,7 @@ import type {
   OpenFrameBearerSource,
 } from "../auth/bearer-source";
 import type { StreamAuthRevalidator } from "../auth/bearer-revalidator";
+import type { TrackedHostTokens } from "../auth/host-token-lease";
 import { readHostOwnershipViaHttp } from "../host-client/host-ownership";
 import { hostDoorStateOfRefusal } from "./host-door-state";
 import type { HostRequestAuthority } from "./host-messenger";
@@ -15,35 +16,30 @@ export interface ReleasedSignOnRow {
   readonly sandbox?: object | null;
 }
 
-/** How a transport answers a released host's refusal of the host-only token. */
+/** How a transport opens a released host: with the person's sign-in. */
 export interface ReleasedSignOn {
   readonly signIn: BearerSourceProvider;
   /** Recovers a sign-in the released host refused, as a released app did. */
   readonly recovery: StreamAuthRevalidator | null;
   /**
-   * `opensReleasedWay` for the host's row, asked only after such a refusal.
-   * `false` (or a failed read) keeps the refusal as it is.
+   * Whether the host's row allows the sign-in, asked only after a released
+   * host refused the host-only token or none could be presented. `false` (or a
+   * failed read) keeps the refusal as it is.
    */
   readonly allowed: () => Promise<boolean>;
-}
-
-/** For a caller that holds the row: `null` unless the row allows it. */
-export function releasedSignOnForRow(
-  row: ReleasedSignOnRow,
-  userId: string,
-  signIn: BearerSourceProvider,
-  recovery: StreamAuthRevalidator | null,
-): ReleasedSignOn | null {
-  return opensReleasedWay(row, userId)
-    ? { signIn, recovery, allowed: () => Promise.resolve(true) }
-    : null;
+  /**
+   * This machine's host only: no host-only token can be presented
+   * ({@link hostTokenUnobtainable}). A released client then opened its host
+   * with the sign-in, and so does this one.
+   */
+  readonly hostTokenUnobtainable: () => boolean;
 }
 
 /**
  * A released host (client level 2) reads a person's own sign-in on `open` and
- * refuses a host-only token as an unknown credential. Only the person's own
- * personal computer is ever handed the sign-in: never a team's computer, a
- * sandbox, or a row whose owner is not known.
+ * refuses a host-only token as an unknown credential. Across machines only the
+ * person's own personal computer is handed the sign-in: never a team's
+ * computer, a sandbox, or a row whose owner is not known.
  */
 export function opensReleasedWay(
   row: ReleasedSignOnRow,
@@ -57,9 +53,24 @@ export function opensReleasedWay(
 }
 
 /**
+ * This machine's host may have no row yet: the app started with no cloud, or
+ * authn has none for this person. Only a row known to be a team's, a
+ * sandbox's or another person's is refused the sign-in.
+ */
+export function opensReleasedWayOnThisMachine(
+  row: ReleasedSignOnRow | null,
+  userId: string,
+): boolean {
+  if (row === null) return true;
+  if ((row.sandbox ?? null) !== null) return false;
+  const owner = row.owner ?? null;
+  return owner === null || (owner.kind === "user" && owner.id === userId);
+}
+
+/**
  * The typed answer of a released host to a host-only token: `UNAUTHORIZED`, no
- * `doorReason`, not retryable. A current host always names its reason, so this
- * never matches one; the message text is never read.
+ * `doorReason`, not retryable. A current host always names its reason when it
+ * refuses an open, so this never matches one; the message text is never read.
  */
 export function isReleasedHostTokenRefusal(
   details: FatalErrorDetails,
@@ -70,48 +81,94 @@ export function isReleasedHostTokenRefusal(
   );
 }
 
-/** What a unary call is sent with once more after a released host's refusal. */
+/**
+ * No host-only token can be presented to this machine's host: authn has no row
+ * for this person, or it could not be reached and none is held.
+ */
+export function hostTokenUnobtainable(
+  tokens: TrackedHostTokens,
+  userId: string,
+  hostId: string,
+): boolean {
+  const failure = tokens.lastMintFailure(userId, hostId);
+  return (
+    failure === "not-admitted" ||
+    (failure === "unavailable" && tokens.current(userId, hostId) === null)
+  );
+}
+
+/** For this machine's host when the caller holds its row; `null` unless the row allows it. */
+export function releasedSignOnForLocalRow(
+  row: ReleasedSignOnRow | null,
+  hostId: string,
+  userId: string,
+  signIn: BearerSourceProvider,
+  recovery: StreamAuthRevalidator | null,
+  tokens: TrackedHostTokens,
+): ReleasedSignOn | null {
+  return opensReleasedWayOnThisMachine(row, userId)
+    ? {
+        signIn,
+        recovery,
+        allowed: () => Promise.resolve(true),
+        hostTokenUnobtainable: () =>
+          hostTokenUnobtainable(tokens, userId, hostId),
+      }
+    : null;
+}
+
+/** What a unary call is sent with instead of, or after, the host-only token. */
 export interface ReleasedUnarySignOn {
   readonly bearer: OpenFrameBearerSource;
   /** Refreshes a sign-in the released host refused; the call then goes once more. */
   readonly recovery: StreamAuthRevalidator | null;
 }
 
+/** Why the unary client asks: the host refused the token, or none could be presented. */
+export type ReleasedUnaryCause = "refused" | "no-host-token";
+
 /**
- * `WsRpcClientOptions.releasedSignOnFor` for a caller that holds the rows: the
- * caller's own sign-in lease, for that person's own personal computer only.
+ * `WsRpcClientOptions.releasedSignOnFor` for this machine's host, for a caller
+ * that holds the rows: the caller's own sign-in lease.
  */
-export function signInForReleasedRow(
+export function signInForLocalRow(
   resolveRow: (hostId: string) => ReleasedSignOnRow | null,
   recovery: StreamAuthRevalidator | null,
-): (authority: HostRequestAuthority) => Promise<ReleasedUnarySignOn | null> {
-  return (authority) => {
-    const row = resolveRow(authority.endpoint.hostId);
+  tokens: TrackedHostTokens,
+): (
+  authority: HostRequestAuthority,
+  cause: ReleasedUnaryCause,
+) => Promise<ReleasedUnarySignOn | null> {
+  return (authority, cause) => {
+    const hostId = authority.endpoint.hostId;
+    const userId = authority.bearer.identity.userId;
+    const allowed =
+      opensReleasedWayOnThisMachine(resolveRow(hostId), userId) &&
+      (cause === "refused" || hostTokenUnobtainable(tokens, userId, hostId));
     return Promise.resolve(
-      row !== null && opensReleasedWay(row, authority.bearer.identity.userId)
-        ? { bearer: authority.bearer, recovery }
-        : null,
+      allowed ? { bearer: authority.bearer, recovery } : null,
     );
   };
 }
 
 /**
- * For a caller that holds no row: the row is read from authn only after a
- * released host refused the host-only token, and kept once authn answers it.
- * An unreachable authn, or one that refuses the sign-in, answers `false` for
- * that refusal and is asked again on the next. `hostId` is the host the
- * client dials now.
+ * For this machine's host when the caller holds no row: the row is read from
+ * authn only when it is needed, and kept once authn answers it. With no answer
+ * (authn unreachable, or refusing the sign-in) the host counts as the person's
+ * own, as a released client counted it. `hostId` is the host dialed now.
  */
-export function releasedSignOnFromRegistry(deps: {
+export function releasedLocalSignOnFromRegistry(deps: {
   readonly authnBaseUrl: string;
   readonly hostId: () => string | null;
   readonly signIn: BearerSourceProvider;
   readonly recovery: StreamAuthRevalidator | null;
+  readonly hostTokenUnobtainable: () => boolean;
 }): ReleasedSignOn {
   const answered = new Map<string, boolean>();
   return {
     signIn: deps.signIn,
     recovery: deps.recovery,
+    hostTokenUnobtainable: deps.hostTokenUnobtainable,
     allowed: async () => {
       const id = deps.hostId();
       const lease = deps.signIn();
@@ -124,12 +181,14 @@ export function releasedSignOnFromRegistry(deps: {
         id,
       );
       if (row.kind === "network-error" || row.kind === "unauthorized")
-        return false;
+        return true;
       const allowed =
-        row.kind === "ok" &&
-        row.host.kind !== "sandbox" &&
-        opensReleasedWay(
-          { owner: row.host.owner, sandbox: null },
+        row.kind === "not-found" ||
+        opensReleasedWayOnThisMachine(
+          {
+            owner: row.host.owner,
+            sandbox: row.host.kind === "sandbox" ? {} : null,
+          },
           lease.identity.userId,
         );
       answered.set(id, allowed);

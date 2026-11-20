@@ -21,9 +21,10 @@ import { hostDoorStateOfRefusal } from "../host-door-state";
 import type { IStreamSession } from "../i-stream-session";
 import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
 import { resetNegotiatedStreamVersions } from "../negotiated-stream-version-registry";
+import { trackHostTokenMints } from "../../auth/host-token-lease";
 import {
-  releasedSignOnForRow,
-  signInForReleasedRow,
+  releasedSignOnForLocalRow,
+  signInForLocalRow,
   type ReleasedSignOn,
   type ReleasedSignOnRow,
 } from "../released-sign-on";
@@ -49,6 +50,12 @@ const TEAM_ROW: ReleasedSignOnRow = {
   owner: { kind: "team", id: "team-1", name: "Team" },
   sandbox: null,
 };
+
+// Every case holds a host-only token, so no mint is ever asked for.
+const NO_MINTS = trackHostTokenMints({
+  current: () => null,
+  obtain: () => Promise.resolve({ kind: "no-sign-in" }),
+});
 
 const sessions: IStreamSession[] = [];
 const clients: WsStreamClient<typeof hostStreamRpcRegistry>[] = [];
@@ -100,7 +107,14 @@ function signOnFor(
   row: ReleasedSignOnRow,
   signIn: MutableBearerLease,
 ): ReleasedSignOn | null {
-  return releasedSignOnForRow(row, USER_ID, () => signIn, null);
+  return releasedSignOnForLocalRow(
+    row,
+    mockLocalHostEntry.hostId,
+    USER_ID,
+    () => signIn,
+    null,
+    NO_MINTS,
+  );
 }
 
 function makeStreamClient(
@@ -442,7 +456,14 @@ describe("released personal host, local stream", () => {
     const client = makeStreamClient(
       factory,
       hostToken,
-      releasedSignOnForRow(PERSONAL_ROW, USER_ID, () => signIn, recovery),
+      releasedSignOnForLocalRow(
+        PERSONAL_ROW,
+        mockLocalHostEntry.hostId,
+        USER_ID,
+        () => signIn,
+        recovery,
+        NO_MINTS,
+      ),
       door,
     );
     const { statuses } = subscribe(client);
@@ -520,7 +541,7 @@ describe("released personal host, local unary", () => {
       hostAttestationWindowMs: 0,
       evidence: NO_TRANSPORT_EVIDENCE,
       hostBearerFor: () => Promise.resolve(hostToken),
-      releasedSignOnFor: signInForReleasedRow(() => PERSONAL_ROW, null),
+      releasedSignOnFor: signInForLocalRow(() => PERSONAL_ROW, null, NO_MINTS),
       doorFor: () => door,
     });
     const settled = client

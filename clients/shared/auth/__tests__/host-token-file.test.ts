@@ -19,7 +19,7 @@ import {
   forgetHostTokensOnSignOut,
   type SignedInWatch,
 } from "../host-token-sign-out";
-import { hostTokenBearer } from "../host-token-lease";
+import { hostTokenBearer, trackHostTokenMints } from "../host-token-lease";
 
 const USER_A = "user-a";
 
@@ -488,7 +488,7 @@ describe("host-token source per-person eras", () => {
     const held = await tokens.obtain(USER_A, "computer-a", false, null);
     expect(held.kind).toBe("ok");
     const bearer = hostTokenBearer(
-      tokens,
+      trackHostTokenMints(tokens),
       () => ({
         identity: { userId: USER_A },
         getBearerToken: () => "sign-in-token",

@@ -4,6 +4,7 @@ import {
   hostTokenBearer,
   hostTokenBearerFor,
   hostTokenRevalidator,
+  trackHostTokenMints,
   type HostTokenAccess,
 } from "../host-token-lease";
 import {
@@ -98,7 +99,7 @@ describe("host-token renewal", () => {
     };
     const bearer: BearerSourceProvider = () => signInLease;
     const streamBearer = hostTokenBearer(
-      tokens,
+      trackHostTokenMints(tokens),
       bearer,
       HOST_IDS[0],
       () => undefined,
@@ -191,7 +192,7 @@ describe("host-token renewal", () => {
       endpoint: () => ({ ...mockLocalHostEntry, hostId }),
       hostId,
       bearer: hostTokenBearer(
-        localTokens,
+        trackHostTokenMints(localTokens),
         liveBearer(provider),
         hostId,
         () => undefined,
@@ -391,7 +392,7 @@ describe("host-token lease after a user era changes", () => {
       },
     };
     const bearer = hostTokenBearer(
-      access,
+      trackHostTokenMints(access),
       () => signInLease,
       hostId,
       (_refusedHostId, state) => states.push(state),
@@ -425,7 +426,9 @@ describe("host-token lease after a user era changes", () => {
       identity: { userId: USER_A },
       getBearerToken: () => "sign-in-a",
     };
-    const bearerFor = hostTokenBearerFor(tokens, (_refusedHostId, state) =>
+    const bearerFor = hostTokenBearerFor(
+      trackHostTokenMints(tokens),
+      (_refusedHostId, state) =>
       states.push(state),
     );
     const pending = bearerFor(hostId, signInLease);

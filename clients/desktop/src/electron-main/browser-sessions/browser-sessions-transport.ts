@@ -12,7 +12,9 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearer,
+  hostTokenHeldPastExpiry,
   hostTokenSessionAuth,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import { allowsBrowserLoginSync } from "@traycer-clients/shared/host-client/browser-login-ownership";
@@ -37,7 +39,7 @@ import { createRemoteHostTransport } from "@traycer-clients/shared/host-transpor
 import { isPersonalRemoteHost } from "@traycer-clients/shared/host-client/personal-remote-host";
 import {
   opensReleasedWay,
-  releasedSignOnForRow,
+  releasedSignOnForLocalRow,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   DEFAULT_DIAL_TIMEOUT_MS,
@@ -378,22 +380,35 @@ export function openBrowserSessionsTransport(
       },
     };
   }
+  const hostTokens = trackHostTokenMints(deps.hostTokens);
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     hostId: target.hostId,
     endpoint: deps.endpoint,
     bearer: hostTokenBearer(
-      deps.hostTokens,
+      hostTokens,
       deps.bearer,
       target.hostId,
       ignoreHostTokenState,
     ),
+    presentsHeldPastExpiry: hostTokenHeldPastExpiry(
+      hostTokens,
+      deps.bearer,
+      target.hostId,
+    ),
     // Main never refreshes the sign-in, so a refused one ends the stream too.
-    releasedSignOn: releasedSignOnForRow(target, userId, deps.bearer, null),
+    releasedSignOn: releasedSignOnForLocalRow(
+      target,
+      target.hostId,
+      userId,
+      deps.bearer,
+      null,
+      hostTokens,
+    ),
     userId,
     ...hostTokenSessionAuth(
       {
-        tokens: deps.hostTokens,
+        tokens: hostTokens,
         currentUserId: () => deps.bearer()?.identity.userId ?? null,
         hostId: target.hostId,
         signInRecovery: null,

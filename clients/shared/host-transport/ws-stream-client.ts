@@ -16,6 +16,7 @@ import {
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
   getMemoizedStreamMethodSupport,
@@ -143,11 +144,20 @@ export interface WsStreamClientOptions<
   readonly localOpenAuth?: LocalOpenAuth;
   readonly door?: SessionDoorObserver;
   /**
-   * Set only for the person's own personal computer (`opensReleasedWay`): the
-   * sign-in a released host takes in place of the host-only token `bearer`
-   * serves, presented on the dial after that host's typed refusal of it.
+   * Set only where the sign-in may go (`opensReleasedWay`, or on this machine
+   * `opensReleasedWayOnThisMachine`): the sign-in a released host takes in
+   * place of the host-only token `bearer` serves. It is presented on the dial
+   * after that host's typed refusal of the token, or when no token can be
+   * presented.
    */
   readonly releasedSignOn?: ReleasedSignOn | null;
+  /**
+   * A local door only: whether `bearer` is the held host-only token presented
+   * past its end because authn cannot be reached (`hostTokenHeldPastExpiry`).
+   * The host admits it while it cannot reach authn either, so the dial goes
+   * without the pre-dial renewal, which would wait for authn.
+   */
+  readonly presentsHeldPastExpiry?: (() => boolean) | null;
   /**
    * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
    * asserted to the host on every `open` frame and updated in place through
@@ -535,6 +545,7 @@ export class WsStreamClient<
             signIn: bearerSourceForUser(releasedSignOn.signIn, options.userId),
             recovery: releasedSignOn.recovery,
             allowed: releasedSignOn.allowed,
+            hostTokenUnobtainable: releasedSignOn.hostTokenUnobtainable,
           };
     const cloudAuthorized = options.cloudAuthorized;
     this.cloudAuthorized =
@@ -633,6 +644,7 @@ export class WsStreamClient<
       localOpenAuth: this.options.localOpenAuth,
       door: this.options.door,
       releasedSignOn: this.releasedSignOn,
+      presentsHeldPastExpiry: this.options.presentsHeldPastExpiry ?? null,
       cloudAuthorized: this.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
@@ -1667,6 +1679,7 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly localOpenAuth: LocalOpenAuth | undefined;
   readonly door: SessionDoorObserver | undefined;
   readonly releasedSignOn: ReleasedSignOn | null;
+  readonly presentsHeldPastExpiry: (() => boolean) | null;
   /** See `WsStreamClientOptions.cloudAuthorized`. */
   readonly cloudAuthorized: (() => boolean) | undefined;
   readonly auth: StreamAuthRevalidator | null;
@@ -1869,6 +1882,12 @@ class StreamSession<
    */
   private releasedPlan: "host-token" | "sign-in-next" | "sign-in" =
     "host-token";
+  private noHostTokenCheck = false;
+  /**
+   * A host refused, naming its reason, a sign-in dialed because no host-only
+   * token could be presented: a current host, so it is never dialed that way again.
+   */
+  private signInRefusedAsCurrent = false;
   private credentialSocketSequence = 0;
   private openFrameToken: string | null = null;
   /**
@@ -2377,6 +2396,17 @@ class StreamSession<
     } catch (cause) {
       if (cause instanceof MissingBearerTokenForOpenFrameError) {
         this.transitionTo("reconnecting", null, null);
+        const released = this.config.releasedSignOn;
+        if (
+          this.releasedPlan === "host-token" &&
+          released !== null &&
+          !this.signInRefusedAsCurrent &&
+          released.hostTokenUnobtainable() &&
+          released.signIn() !== null
+        ) {
+          this.dialSignInWithoutHostToken(released);
+          return;
+        }
         this.scheduleReconnect();
         return;
       }
@@ -2395,7 +2425,15 @@ class StreamSession<
     // undecodable token falls through to a normal dial.
     const auth = this.credentialRecovery();
     const expiresAtMs = readAccessTokenExpiryMs(token);
-    if (auth !== null && expiresAtMs !== null && expiresAtMs <= Date.now()) {
+    if (
+      auth !== null &&
+      expiresAtMs !== null &&
+      expiresAtMs <= Date.now() &&
+      !(
+        this.releasedPlan === "host-token" &&
+        (this.config.presentsHeldPastExpiry?.() ?? false)
+      )
+    ) {
       // THE EXPIRY READ IS A COMPARISON AGAINST `Date.now()`, so on a machine
       // whose clock is hours off it says "expired" about a bearer minted
       // seconds ago. Park rather than revalidate: authn (correct clock) would
@@ -3166,6 +3204,12 @@ class StreamSession<
     }
     const details = termParse.data.details;
     const releasedWay = this.answersReleasedWay(details);
+    if (
+      this.releasedPlan === "sign-in" &&
+      !releasedWay &&
+      readDoorReason(details.doorReason) !== "absent"
+    )
+      this.signInRefusedAsCurrent = true;
     // Answered by the sign-in, or reported once its recovery gives up.
     if (!releasedWay) this.config.door?.refused(details);
     const localAuth = this.config.localOpenAuth;
@@ -3328,6 +3372,25 @@ class StreamSession<
         return outcome;
       },
     });
+  }
+
+  /** No host-only token can be presented to this machine's host: open it with the sign-in, as a released client did. */
+  private dialSignInWithoutHostToken(released: ReleasedSignOn): void {
+    if (this.noHostTokenCheck) return;
+    this.noHostTokenCheck = true;
+    void released
+      .allowed()
+      .catch(() => false)
+      .then((allowed) => {
+        this.noHostTokenCheck = false;
+        if (this.disposed) return;
+        if (!allowed) {
+          this.scheduleReconnect();
+          return;
+        }
+        this.releasedPlan = "sign-in-next";
+        this.connect();
+      });
   }
 
   /** The lease this dial presents, or the next one will: the host-only token, or the sign-in. */

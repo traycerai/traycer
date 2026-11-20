@@ -425,6 +425,8 @@ export async function provisionInstalledHostCredential(
       // the host the endpoint names.
       bearer: () =>
         endpoint === null ? null : tokens.streamBearer(endpoint.hostId)(),
+      presentsHeldPastExpiry: () =>
+        endpoint !== null && tokens.presentsHeldPastExpiry(endpoint.hostId),
       userId: lease.identity.userId,
       releasedSignOn: cliReleasedSignOn(
         options.auth.authnBaseUrl,

@@ -7,7 +7,10 @@ import {
 } from "./agent-session-capability";
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import { openCliHostSession } from "./cli-host-tokens";
-import type { ReleasedSignOn } from "@traycer-clients/shared/host-transport/released-sign-on";
+import type {
+  ReleasedSignOn,
+  ReleasedUnaryCause,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   hostDoorRefusalCliError,
   hostTokenFailureCliError,
@@ -492,9 +495,17 @@ async function requestWithHostToken<
     ...(releasedSignOn === null
       ? {}
       : {
-          releasedSignOnFor: async () => {
+          // An empty token is a session that could present none.
+          hostBearerFor: (_hostId: string, held: OpenFrameBearerSource) =>
+            Promise.resolve(held.getBearerToken() === "" ? null : held),
+          releasedSignOnFor: async (
+            _authority: HostRequestAuthority,
+            cause: ReleasedUnaryCause,
+          ) => {
             const signIn = releasedSignOn.signIn();
-            return signIn !== null && (await releasedSignOn.allowed())
+            return signIn !== null &&
+              (cause === "refused" || releasedSignOn.hostTokenUnobtainable()) &&
+              (await releasedSignOn.allowed())
               ? { bearer: signIn, recovery: releasedSignOn.recovery }
               : null;
           },

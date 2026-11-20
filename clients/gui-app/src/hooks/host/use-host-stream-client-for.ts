@@ -39,7 +39,9 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearer,
+  hostTokenHeldPastExpiry,
   hostTokenSessionAuth,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
@@ -49,7 +51,7 @@ import {
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
 import {
   opensReleasedWay,
-  releasedSignOnForRow,
+  releasedSignOnForLocalRow,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
@@ -388,7 +390,9 @@ export function buildHostStreamClient(params: {
   }
 
   const hostId = params.target.hostId;
-  const localTokens = localDoorHostTokens(params.hostTokens);
+  const localTokens = trackHostTokenMints(
+    localDoorHostTokens(params.hostTokens),
+  );
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
@@ -413,11 +417,18 @@ export function buildHostStreamClient(params: {
       hostId,
       noteHostTokenRefusal,
     ),
-    releasedSignOn: releasedSignOnForRow(
+    presentsHeldPastExpiry: hostTokenHeldPastExpiry(
+      localTokens,
+      params.bearer,
+      hostId,
+    ),
+    releasedSignOn: releasedSignOnForLocalRow(
       params.target,
+      hostId,
       params.userId,
       params.bearer,
       params.auth,
+      localTokens,
     ),
     // The user every owner builds this client for: the tile cache key, the
     // app-wide stream's effect dependency, the transport key at open.

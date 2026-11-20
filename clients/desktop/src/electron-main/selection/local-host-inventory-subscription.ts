@@ -1,9 +1,14 @@
 import {
   hostTokenBearer,
+  hostTokenHeldPastExpiry,
   hostTokenSessionAuth,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
-import { releasedSignOnFromRegistry } from "@traycer-clients/shared/host-transport/released-sign-on";
+import {
+  hostTokenUnobtainable,
+  releasedLocalSignOnFromRegistry,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   MINIMUM_HOST_VERSION,
   hostVersionNeedsUpdate,
@@ -456,6 +461,7 @@ export function createLocalHostInventoryStreamClient(deps: {
   return (endpoint, userId) => {
     if (hostVersionNeedsUpdate(endpoint.version, MINIMUM_HOST_VERSION))
       return null;
+    const hostTokens = trackHostTokenMints(deps.hostTokens);
     const client = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,
@@ -470,21 +476,28 @@ export function createLocalHostInventoryStreamClient(deps: {
         return { hostId: current.hostId, websocketUrl: current.websocketUrl };
       },
       bearer: hostTokenBearer(
-        deps.hostTokens,
+        hostTokens,
         deps.bearer,
         endpoint.hostId,
         ignoreHostTokenState,
       ),
+      presentsHeldPastExpiry: hostTokenHeldPastExpiry(
+        hostTokens,
+        deps.bearer,
+        endpoint.hostId,
+      ),
       // Main never refreshes the sign-in, so a refused one ends the stream too.
-      releasedSignOn: releasedSignOnFromRegistry({
+      releasedSignOn: releasedLocalSignOnFromRegistry({
         authnBaseUrl: deps.authnBaseUrl,
         hostId: () => deps.localHost()?.hostId ?? null,
         signIn: deps.bearer,
         recovery: null,
+        hostTokenUnobtainable: () =>
+          hostTokenUnobtainable(hostTokens, userId, endpoint.hostId),
       }),
       ...hostTokenSessionAuth(
         {
-          tokens: deps.hostTokens,
+          tokens: hostTokens,
           currentUserId: () => deps.bearer()?.identity.userId ?? null,
           hostId: endpoint.hostId,
           signInRecovery: null,

@@ -14,7 +14,9 @@ import type {
 } from "../../ipc-contracts/window-types";
 import type { HostTokensBridgeSurface } from "../../ipc-contracts/host-token-types";
 import { createDesktopHostTokenSource } from "../../renderer-shell/desktop-host-tokens";
-import { hostTokenBearer } from "@traycer-clients/shared/auth/host-token-lease";
+import { hostTokenBearer,
+  trackHostTokenMints,
+} from "@traycer-clients/shared/auth/host-token-lease";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -1549,7 +1551,7 @@ describe("preload host-token era reads", () => {
       getBearerToken: () => "sign-in-token",
     };
     const bearer = hostTokenBearer(
-      tokens,
+      trackHostTokenMints(tokens),
       () => signInLease,
       hostId,
       () => undefined,
