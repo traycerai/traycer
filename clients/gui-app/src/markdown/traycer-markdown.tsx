@@ -81,8 +81,9 @@ export interface TraycerMarkdownProps {
   quotable: boolean;
   /**
    * Whether `children` is still growing (a streaming turn). Forwarded to
-   * Tailmark's `StreamingMarkdown`, which drives open-tail memo and the
-   * streaming code-highlight path via `useIsMarkdownStreaming`.
+   * Tailmark's `StreamingMarkdown`, which drives open-tail memo. A fenced
+   * block stays plain while it is that tail and is highlighted once it
+   * leaves the tail or the turn finishes.
    */
   isStreaming: boolean;
 }
@@ -99,12 +100,20 @@ export function TraycerMarkdown({
   isStreaming,
 }: TraycerMarkdownProps) {
   const mergedComponents = useMemo((): Components => {
-    if (!components) return DEFAULT_COMPONENTS;
-    return {
-      ...DEFAULT_COMPONENTS,
-      ...(components as Components),
-    };
-  }, [components]);
+    const base: Components = !components
+      ? DEFAULT_COMPONENTS
+      : {
+          ...DEFAULT_COMPONENTS,
+          ...(components as Components),
+        };
+    // Blocks memoize on this object. It stays put while the turn is
+    // streaming so a settled fence does not re-render as the tail grows.
+    // A new identity when the turn finishes renders a fence that was still
+    // the open tail: its bytes do not change on that update, so nothing
+    // else would ask it to highlight.
+    if (isStreaming) return base;
+    return { ...base };
+  }, [components, isStreaming]);
 
   // Only caller extras - Tailmark already ships GFM + disable-indented-code.
   const effectiveRemarkPlugins = useMemo<PluggableList | undefined>(
