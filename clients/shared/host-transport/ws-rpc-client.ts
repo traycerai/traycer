@@ -560,7 +560,12 @@ export class WsRpcClient<
     method: string,
   ): Promise<HostRequestOptions> {
     const hostId = options.authority.endpoint.hostId;
-    if (this.releasedHosts.opensReleasedWay(hostId)) {
+    if (
+      this.releasedHosts.opensReleasedWay(
+        options.authority.bearer.identity.userId,
+        hostId,
+      )
+    ) {
       const remembered = await this.releasedSignOnFor?.(
         options.authority,
         "refused",
@@ -983,7 +988,10 @@ export class WsRpcClient<
         });
       }
       if (this.signInAuthorities.has(authority))
-        this.releasedHosts.signInAdmitted(selected.hostId);
+        this.releasedHosts.signInAdmitted(
+          authority.bearer.identity.userId,
+          selected.hostId,
+        );
       else if (!this.probeAuthorities.has(authority))
         this.releasedHosts.hostTokenAdmitted(selected.hostId);
       this.doorFor?.(selected.hostId).admitted();

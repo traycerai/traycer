@@ -1896,6 +1896,11 @@ class StreamSession<
   private probing = false;
   /** This dial presents the sign-in because the process remembers the host as released. */
   private signInFromMemory = false;
+  /** The row's answer before a remembered dial: a remembered host is still asked `allowed`. */
+  private rememberedRow: "unasked" | "asking" | "allowed" | "refused" =
+    "unasked";
+  /** The person this dial's sign-in is for, while it presents one. */
+  private signInUserId: string | null = null;
   private credentialSocketSequence = 0;
   private openFrameToken: string | null = null;
   /**
@@ -2392,16 +2397,33 @@ class StreamSession<
 
     const released = this.config.releasedSignOn;
     const signInNow = released?.signIn() ?? null;
-    this.signInFromMemory =
+    const remembered =
       this.releasedPlan !== "sign-in-next" &&
       signInNow !== null &&
       released !== null &&
-      released.hosts.opensReleasedWay(selected.hostId);
+      released.hosts.opensReleasedWay(
+        signInNow.identity.userId,
+        selected.hostId,
+      );
+    if (
+      remembered &&
+      released !== null &&
+      (this.rememberedRow === "unasked" || this.rememberedRow === "asking")
+    ) {
+      this.askRowForRememberedHost(released);
+      return;
+    }
+    this.signInFromMemory = remembered && this.rememberedRow === "allowed";
+    this.rememberedRow = "unasked";
     this.releasedPlan =
       signInNow !== null &&
       (this.releasedPlan === "sign-in-next" || this.signInFromMemory)
         ? "sign-in"
         : "host-token";
+    this.signInUserId =
+      this.releasedPlan === "sign-in" && signInNow !== null
+        ? signInNow.identity.userId
+        : null;
     this.probing = this.probeNext && this.releasedPlan === "host-token";
     this.probeNext = false;
     const bearer = this.wireBearer();
@@ -2891,9 +2913,9 @@ class StreamSession<
     const admittedHostId = this.openFrameHostId;
     const released = this.config.releasedSignOn;
     if (released !== null && admittedHostId !== null) {
-      if (this.releasedPlan === "sign-in")
-        released.hosts.signInAdmitted(admittedHostId);
-      else released.hosts.hostTokenAdmitted(admittedHostId);
+      if (this.signInUserId !== null)
+        released.hosts.signInAdmitted(this.signInUserId, admittedHostId);
+      else if (!this.probing) released.hosts.hostTokenAdmitted(admittedHostId);
     }
     this.supportsCredentialUpdate = ackParse.data.capabilities.includes(
       STREAM_CAPABILITY_CREDENTIAL_UPDATE,
@@ -3434,6 +3456,20 @@ class StreamSession<
           return;
         }
         this.probeNext = true;
+        this.connect();
+      });
+  }
+
+  /** A remembered host's dial waits for the row's answer, as every sign-in does. */
+  private askRowForRememberedHost(released: ReleasedSignOn): void {
+    if (this.rememberedRow === "asking") return;
+    this.rememberedRow = "asking";
+    void released
+      .allowed()
+      .catch(() => false)
+      .then((allowed) => {
+        if (this.disposed) return;
+        this.rememberedRow = allowed ? "allowed" : "refused";
         this.connect();
       });
   }

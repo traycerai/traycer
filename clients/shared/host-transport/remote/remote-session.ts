@@ -19,6 +19,7 @@ import type {
   RemoteSessionOpenAuth,
 } from "@traycer/protocol/host-transport/remote/auth";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { AttachGrantProvider } from "@traycer/protocol/host-transport/remote/grant";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import {
   isReleasedHostTokenRefusal,
@@ -269,22 +270,29 @@ function hostTokenOpenAuth(
   };
 }
 
+interface HostTokenSessionDial {
+  readonly auth: RemoteSessionAuth;
+  readonly grantProvider: AttachGrantProvider;
+}
+
 function createHostTokenRemoteSessionAuth(
   hostId: string,
+  grantProvider: AttachGrantProvider,
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: SessionDoorObserver | null,
   releasedSignOn: ReleasedSignOn | null,
-): RemoteSessionAuth {
+): HostTokenSessionDial {
   if (releasedSignOn !== null)
     return createReleasedSignOnSessionAuth(
       hostId,
+      grantProvider,
       readHostToken,
       auth,
       door,
       releasedSignOn,
     );
-  return {
+  return { grantProvider, auth: {
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => hostTokenOpenAuth(readHostToken),
     readCredentialUpdateBearer: readHostToken,
@@ -295,28 +303,43 @@ function createHostTokenRemoteSessionAuth(
         ? null
         : (refusal) => revalidateStream(auth, refusal),
     ...(door === null ? {} : { door }),
-  };
+  } };
 }
 
 /**
  * A dial presents the host-only token first, unless this process remembers the
- * host as released (`ReleasedHostMemory`). A released host's typed refusal of it
- * makes the next dial present the sign-in, `authz: null`, as a released app did;
- * that connection's credential pushes carry the sign-in. A host that names its
+ * host as released for this person (`ReleasedHostMemory`) and the row still
+ * allows the sign-in: `allowed` is asked once the dial's relay pass is in hand,
+ * before its `open`. A released host's typed refusal of the token makes the
+ * next dial present the sign-in, `authz: null`, as a released app did; that
+ * connection's credential pushes carry the sign-in. A host that names its
  * reason is never handed the sign-in again.
  */
 function createReleasedSignOnSessionAuth(
   hostId: string,
+  grantProvider: AttachGrantProvider,
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: SessionDoorObserver | null,
   releasedSignOn: ReleasedSignOn,
-): RemoteSessionAuth {
+): HostTokenSessionDial {
   const readSignIn = bearerReader(releasedSignOn.signIn);
   const hosts = releasedSignOn.hosts;
   let plan: "host-token" | "sign-in-next" | "sign-in" = "host-token";
   let openAdmitted = false;
   let signInFromMemory = false;
+  /** The person this dial's sign-in is for, while it presents one. */
+  let signInUserId: string | null = null;
+  /** The row's answer for the dial about to open; `false` until asked. */
+  let rowAllows = false;
+  const remembered = (): string | null => {
+    const lease = releasedSignOn.signIn();
+    return lease !== null &&
+      plan !== "sign-in-next" &&
+      hosts.opensReleasedWay(lease.identity.userId, hostId)
+      ? lease.identity.userId
+      : null;
+  };
   const named = (refusal: FatalErrorDetails): boolean =>
     readDoorReason(refusal.doorReason) !== "absent";
   // Only a refusal of this dial's open switches to the sign-in: a current host
@@ -360,20 +383,23 @@ function createReleasedSignOnSessionAuth(
     door?.refused(refusal);
     return recoverHostToken(refusal);
   };
-  return {
+  const sessionAuth: RemoteSessionAuth = {
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
       openAdmitted = false;
-      signInFromMemory =
-        plan !== "sign-in-next" && hosts.opensReleasedWay(hostId);
+      signInFromMemory = rowAllows && remembered() !== null;
+      rowAllows = false;
       if (plan === "sign-in-next" || signInFromMemory) {
+        const lease = releasedSignOn.signIn();
         const signIn = readSignIn();
-        if (signIn !== null) {
+        if (lease !== null && signIn !== null) {
           plan = "sign-in";
+          signInUserId = lease.identity.userId;
           return { bearer: signIn, authz: null, fingerprint: signIn };
         }
       }
       signInFromMemory = false;
+      signInUserId = null;
       plan = "host-token";
       return hostTokenOpenAuth(readHostToken);
     },
@@ -404,10 +430,20 @@ function createReleasedSignOnSessionAuth(
       },
       admitted: () => {
         openAdmitted = true;
-        if (plan === "sign-in") hosts.signInAdmitted(hostId);
+        if (plan === "sign-in" && signInUserId !== null)
+          hosts.signInAdmitted(signInUserId, hostId);
         else hosts.hostTokenAdmitted(hostId);
         door?.admitted();
       },
+    },
+  };
+  return {
+    auth: sessionAuth,
+    grantProvider: async () => {
+      const provision = await grantProvider();
+      if (provision.kind === "ok" && remembered() !== null)
+        rowAllows = await releasedSignOn.allowed().catch(() => false);
+      return provision;
     },
   };
 }
@@ -468,15 +504,18 @@ function toProtocolSessionOptions<
     };
   }
   const { hostToken, auth, door, releasedSignOn, ...coreOptions } = options;
+  const dial = createHostTokenRemoteSessionAuth(
+    options.hostId,
+    options.grantProvider,
+    hostToken,
+    auth,
+    door,
+    releasedSignOn,
+  );
   return {
     ...coreOptions,
     ...clientWiring,
-    auth: createHostTokenRemoteSessionAuth(
-      options.hostId,
-      hostToken,
-      auth,
-      door,
-      releasedSignOn,
-    ),
+    grantProvider: dial.grantProvider,
+    auth: dial.auth,
   };
 }

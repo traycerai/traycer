@@ -41,29 +41,43 @@ export interface ReleasedSignOn {
 }
 
 /**
- * Process memory only, per host id, never on disk and never keyed on a version.
- * A host that refused the host-only token the released way and then admitted
- * the sign-in is opened with the sign-in at once on later dials. That is
- * forgotten the moment the host admits a host-only token or refuses anything
- * naming its reason (it was updated). A host that has named a reason in this
- * process is never handed the sign-in again.
+ * Process memory only, per signed-in person and host id, never on disk and never
+ * keyed on a version. A host that refused the host-only token the released way
+ * and then admitted that person's sign-in skips the refused token dial on that
+ * person's later dials; the row check (`ReleasedSignOn.allowed`) is still asked
+ * every time. It holds one person: a dial by anyone else forgets it, and so does
+ * sign-out (`forgetAll`). It is forgotten for everyone the moment the host admits
+ * a host-only token or refuses anything naming its reason (it was updated). A
+ * host that has named a reason in this process is never handed the sign-in again.
  */
 export interface ReleasedHostMemory {
-  readonly opensReleasedWay: (hostId: string) => boolean;
+  readonly opensReleasedWay: (userId: string, hostId: string) => boolean;
   readonly namedReason: (hostId: string) => boolean;
-  readonly signInAdmitted: (hostId: string) => void;
+  readonly signInAdmitted: (userId: string, hostId: string) => void;
   readonly hostTokenAdmitted: (hostId: string) => void;
   readonly refusedNamingReason: (hostId: string) => void;
+  readonly forgetAll: () => void;
 }
 
 export function createReleasedHostMemory(): ReleasedHostMemory {
+  let person: string | null = null;
   const released = new Set<string>();
   const current = new Set<string>();
+  const forgetAll = (): void => {
+    person = null;
+    released.clear();
+  };
   return {
-    opensReleasedWay: (hostId) => released.has(hostId),
+    opensReleasedWay: (userId, hostId) => {
+      if (person !== userId) forgetAll();
+      return released.has(hostId);
+    },
     namedReason: (hostId) => current.has(hostId),
-    signInAdmitted: (hostId) => {
-      if (!current.has(hostId)) released.add(hostId);
+    signInAdmitted: (userId, hostId) => {
+      if (current.has(hostId)) return;
+      if (person !== userId) forgetAll();
+      person = userId;
+      released.add(hostId);
     },
     hostTokenAdmitted: (hostId) => {
       released.delete(hostId);
@@ -72,6 +86,7 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
       released.delete(hostId);
       current.add(hostId);
     },
+    forgetAll,
   };
 }
 
