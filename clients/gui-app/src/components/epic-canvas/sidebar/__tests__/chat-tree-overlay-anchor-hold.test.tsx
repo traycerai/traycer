@@ -320,11 +320,12 @@ describe("an open overlay holds its chat-tree row in the window", () => {
   it("keeps a row with its context menu open, and lets it go when the menu closes", async () => {
     const user = userEvent.setup();
     const session = mountTree(HOST_ID);
-    const row = screen.getByTestId(`epic-sidebar-item-${TARGET}`);
-    await user.pointer({
-      keys: "[MouseRight]",
-      target: row,
-      coords: { x: 40, y: 12, clientX: 40, clientY: 12 },
+    // A right-click would also focus the row, and the focused row stays
+    // mounted for the keyboard; a menu opened without focus leaves its hold
+    // the only thing keeping the row.
+    fireEvent.contextMenu(screen.getByTestId(`epic-sidebar-item-${TARGET}`), {
+      clientX: 40,
+      clientY: 12,
     });
     await waitFor(() => {
       expect(screen.getByRole("menu")).toBeTruthy();
