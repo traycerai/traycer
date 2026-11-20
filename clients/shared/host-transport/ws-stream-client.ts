@@ -1861,7 +1861,7 @@ class StreamSession<
   private grantMintAbort: AbortController | null = null;
   private usesSessionGrant = false;
   private grantReprobed = false;
-  private grantOpenAcknowledged = false;
+  private openAcknowledged = false;
   private openFrameBearer: OpenFrameBearerSource | null = null;
   /**
    * `sign-in-next` after a released host's typed refusal of the host-only token;
@@ -2545,7 +2545,7 @@ class StreamSession<
     );
     this.activeSocket = socket;
     if (this.usesSessionGrant) this.openFrameToken = token;
-    this.grantOpenAcknowledged = false;
+    this.openAcknowledged = false;
     this.openFrameHostId = selected.hostId;
     this.phase = "dialing";
     this.pendingBinaryEnvelope = null;
@@ -2833,7 +2833,7 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    this.grantOpenAcknowledged = true;
+    this.openAcknowledged = true;
     this.supportsCredentialUpdate = ackParse.data.capabilities.includes(
       STREAM_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -3179,7 +3179,7 @@ class StreamSession<
       }
       if (
         this.usesSessionGrant &&
-        !this.grantOpenAcknowledged &&
+        !this.openAcknowledged &&
         !isLocalAdmissionFatal(details.code) &&
         !this.grantReprobed
       ) {
@@ -3270,14 +3270,19 @@ class StreamSession<
     this.goTerminal(details);
   }
 
-  /** See `released-sign-on.ts`. With no sign-in to present, the refusal takes the token's own path. */
+  /**
+   * See `released-sign-on.ts`. Only a refusal of this dial's open switches to the
+   * sign-in: a current host can close a stream it admitted the same way. With
+   * no sign-in to present, the refusal takes the token's own path.
+   */
   private answersReleasedWay(details: FatalErrorDetails): boolean {
     const released = this.config.releasedSignOn;
     return (
       released !== null &&
       !this.usesSessionGrant &&
       isReleasedHostTokenRefusal(details) &&
-      (this.releasedPlan === "sign-in" || released.signIn() !== null)
+      (this.releasedPlan === "sign-in" ||
+        (!this.openAcknowledged && released.signIn() !== null))
     );
   }
 

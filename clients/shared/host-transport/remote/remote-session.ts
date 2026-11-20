@@ -309,10 +309,13 @@ function createReleasedSignOnSessionAuth(
 ): RemoteSessionAuth {
   const readSignIn = bearerReader(releasedSignOn.signIn);
   let plan: "host-token" | "sign-in-next" | "sign-in" = "host-token";
-  // With no sign-in to present, the refusal takes the host-only token's own path.
+  let openAdmitted = false;
+  // Only a refusal of this dial's open switches to the sign-in: a current host
+  // can end a session it admitted the same way. With no sign-in to present,
+  // the refusal takes the host-only token's own path.
   const answersReleasedWay = (refusal: FatalErrorDetails): boolean =>
     isReleasedHostTokenRefusal(refusal) &&
-    (plan === "sign-in" || readSignIn() !== null);
+    (plan === "sign-in" || (!openAdmitted && readSignIn() !== null));
   const recoverSignIn = async (
     refusal: FatalErrorDetails,
   ): Promise<RemoteSessionAuthRecoveryOutcome> => {
@@ -350,6 +353,7 @@ function createReleasedSignOnSessionAuth(
   return {
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
+      openAdmitted = false;
       if (plan === "sign-in-next") {
         const signIn = readSignIn();
         if (signIn !== null) {
@@ -378,6 +382,7 @@ function createReleasedSignOnSessionAuth(
         door?.refused(details);
       },
       admitted: () => {
+        openAdmitted = true;
         door?.admitted();
       },
     },

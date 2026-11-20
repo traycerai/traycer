@@ -335,9 +335,9 @@ export interface CliHostSession {
 
 /**
  * The host's row is read from authn only after a released host refused the
- * host-only token, and kept once authn answers; an unreachable authn answers
- * `false` for that refusal and is asked again on the next. `hostId` is the host
- * the client dials now.
+ * host-only token, and kept once authn answers it. An unreachable authn, or one
+ * that refuses the stored sign-in, answers `false` for that refusal and is
+ * asked again on the next. `hostId` is the host the client dials now.
  */
 export function cliReleasedSignOn(
   authnBaseUrl: string,
@@ -357,7 +357,8 @@ export function cliReleasedSignOn(
       const signIn = readLeaseBearer(lease);
       if (signIn === null) return false;
       const row = await readHostOwnershipViaHttp(authnBaseUrl, signIn, id);
-      if (row.kind === "network-error") return false;
+      if (row.kind === "network-error" || row.kind === "unauthorized")
+        return false;
       const allowed =
         row.kind === "ok" &&
         row.host.kind !== "sandbox" &&
