@@ -130,8 +130,10 @@ describe("chat tree windowing", () => {
     const mounted = mountedChatIds();
     expect(mounted.length).toBeLessThanOrEqual(MOUNT_BOUND);
     expect(mounted).toContain("c1000");
-    expect(mounted).not.toContain("c0");
-    expect(screen.queryByTestId("epic-sidebar-item-c0")).toBeNull();
+    // The first and last rows stay mounted for Tab into the tree; the rows
+    // after the first go with the window.
+    expect(mounted).not.toContain("c5");
+    expect(screen.queryByTestId("epic-sidebar-item-c5")).toBeNull();
     expect(treeList().getAttribute("data-chat-tree-row-count")).toBe(
       String(ROWS),
     );
