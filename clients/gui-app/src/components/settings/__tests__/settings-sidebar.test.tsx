@@ -9,9 +9,9 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { setMobileApp } from "@/lib/mobile-app";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import {
   resetEnvironmentSectionReads,
-  personalHostScopeOverrides,
   windowHostRunsPersonal,
 } from "@/components/settings/__tests__/environment-section-reads-fixture";
 import {
@@ -80,49 +80,69 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-// The Environment dropdown reads each registered computer's
-// `environment.status` and negotiated version, and the footer's Sandboxes link
-// reads the environment list: all `useQuery`s, and this suite mounts no query
-// client. "No host has answered" is the honest empty answer; the picker's own
-// rows are covered by environment-picker.test.tsx.
-vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
-  useRegisteredHostEnvironmentStatuses: () => new Map(),
-}));
-vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
-  useHostNegotiatedMethodVersions: () => new Map(),
-}));
-// The picker's Personal row reads the hosts running Personal from one hook;
-// these suites are about the sidebar around it.
+// Reads this suite mounts no host runtime or query client for answer the
+// honest "nothing has answered" from the shared fixture; the rows and pickers
+// have their own suites.
 vi.mock(
-  "@/components/settings/environment/use-hosts-running-configuration",
-  () => ({
-    useHostsRunningPersonal: () => ({
-      hosts: [],
-      state: "ready",
-      collisions: [],
-      retry: () => undefined,
-    }),
+  "@/hooks/environment/use-registered-host-environment-statuses",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).registeredHostEnvironmentStatusesModule,
+);
+vi.mock(
+  "@/hooks/host/use-host-negotiated-method-version",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/host/use-host-negotiated-method-version")
+    >()),
+    ...(
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).negotiatedMethodVersionModule,
   }),
 );
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: undefined }),
-}));
-vi.mock("@/components/settings/move-sheet", () => ({
-  MoveSheet: () => null,
-}));
-// The Team rows and the trigger's team label read the environment list
-// through the window's host client, and this suite mounts no host runtime.
-// The rows have their own suite; a Personal pick names no team.
-vi.mock("@/components/settings/environment/team-pick-label", () => ({
-  usePickedTeamLabel: () => null,
-  useInvitedTeamName: () => null,
-}));
-vi.mock("@/components/settings/environment/team-rows", () => ({
-  TeamRows: () => null,
-}));
-vi.mock("@/components/settings/members/invite-accept-dialog", () => ({
-  InviteAcceptDialog: () => null,
-}));
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).hostsRunningConfigurationModule,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-list-query",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).environmentListQueryModule,
+);
+vi.mock(
+  "@/components/settings/move-sheet",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).moveSheetModule,
+);
+vi.mock(
+  "@/components/settings/environment/team-pick-label",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).teamPickLabelModule,
+);
+vi.mock(
+  "@/components/settings/environment/team-rows",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).teamRowsModule,
+);
+vi.mock(
+  "@/components/settings/members/invite-accept-dialog",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).inviteAcceptDialogModule,
+);
 // The Guide group leaves the rail once every Getting started step is done;
 // the real answer reads several `useQuery`s and this suite mounts no query
 // client. Not done by default, as for a new account.
@@ -131,56 +151,44 @@ vi.mock("@/components/onboarding/getting-started-checklist", () => ({
   useGettingStartedGuideIsComplete: () => guideComplete.current,
 }));
 
-vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
-  AddHostDialog: () => null,
-}));
-
-// The sidebar now opts into the liveness poll directly (see
-// `useRegisteredHostsPollLiveness` in `settings-sidebar.tsx`). This suite
-// mocks `useHostScope` wholesale and renders no `QueryClientProvider`, so the
-// real hook — which calls `useQuery` unconditionally — would throw for want
-// of a query client. It is also irrelevant to navigation, which is what this
-// suite is about.
-vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
-  useRegisteredHostsPollLiveness: () => undefined,
-}));
-
-// Same reasoning, one hook later: the picker now resolves each row's update
-// badge through `useFleetUpdateViews`, which owns a `useQuery` for the fleet
-// sweep and therefore needs a query client this navigation suite deliberately
-// does not mount. Stubbed to the "nothing observed" answer — which is also the
-// honest production answer for a fleet with no borrowable sessions, so the
-// rows this suite asserts on render exactly as they would there.
-//
-// The badge's OWN behaviour is covered where it belongs (the host-option row
-// and per-host isolation suites); stubbing it here keeps a navigation test from
-// silently becoming a fleet-polling test.
-// Returns the SHARED constant rather than a literal spelled out here. A mock
-// factory is not type-checked against the module it replaces, so a hand-written
-// view silently loses any field added later — and `undefined` is not `null`, so
-// the row's badge would have read "last seen undefined" on every host while
-// this navigation suite went on passing. The whole point of exporting
-// `UNKNOWN_FLEET_UPDATE_VIEW` is that no caller, test or otherwise, writes one
-// of these by hand.
-// The environment label resolver is a per-host query hook (Tracy Bots);
-// mocked here for the same reason the fleet views are: this suite mounts no
-// QueryClient and the label is not what it tests.
-vi.mock("@/hooks/bots/use-host-environment-labels", () => ({
-  useHostEnvironmentLabelResolver: () => () => null,
-}));
-vi.mock("@/hooks/host/use-fleet-update-views", async () => {
-  const { UNKNOWN_FLEET_UPDATE_VIEW } =
-    await import("@/lib/host/fleet-update/fleet-update-view");
-  return { useFleetUpdateViews: () => () => UNKNOWN_FLEET_UPDATE_VIEW };
-});
-
-// The host picker's balance banner reads the sandbox list through a
-// `useQuery`, which needs a query client this navigation suite deliberately
-// does not mount. It is irrelevant to navigation (it renders nothing for an
-// account with no sandboxes), and has its own suite.
-vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
-  SandboxBalanceBanner: () => null,
-}));
+// The shared fixture answers "nothing observed" for the liveness poll, the
+// picker rows' labels and update badges, and the balance banner: each reads a
+// `useQuery` this navigation suite mounts no client for.
+vi.mock(
+  "@/components/settings/host-scope/add-host-dialog",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).addHostDialogModule,
+);
+vi.mock(
+  "@/hooks/auth/use-registered-hosts-query",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).registeredHostsLivenessModule,
+);
+vi.mock(
+  "@/hooks/bots/use-host-environment-labels",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).hostEnvironmentLabelsModule,
+);
+vi.mock(
+  "@/hooks/host/use-fleet-update-views",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).fleetUpdateViewsModule,
+);
+vi.mock(
+  "@/components/hosts/sandbox-balance-banner",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).sandboxBalanceBannerModule,
+);
 
 // The deployment offers Automations and no row exists yet: the one state the
 // sidebar once drew an Automations / Start entry for.
@@ -200,13 +208,41 @@ vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => sandboxControl.reason,
 }));
 
-// The cloud road by default: a Personal pick offers the cloud's pages.
+// The cloud road by default: a Personal pick offers the cloud's pages. A case
+// that is about what the window's host scope says sets `realWindowHostRuns`
+// to run the real hook over that scope.
+const realWindowHostRuns = vi.hoisted(() => ({ current: false }));
 vi.mock(
   "@/components/settings/personal/use-window-host-runs-personal",
-  async () =>
-    (
-      await import("@/components/settings/__tests__/environment-section-reads-fixture")
-    ).windowHostRunsPersonalModule,
+  async (importOriginal) => {
+    const real =
+      await importOriginal<
+        typeof import("@/components/settings/personal/use-window-host-runs-personal")
+      >();
+    const { windowHostRunsPersonalModule } =
+      await import("@/components/settings/__tests__/environment-section-reads-fixture");
+    return {
+      useWindowHostRunsPersonal: (scope: HostScope) =>
+        realWindowHostRuns.current
+          ? real.useWindowHostRunsPersonal(scope)
+          : windowHostRunsPersonalModule.useWindowHostRunsPersonal(),
+    };
+  },
+);
+// The real hook reads the window host's status through a `useQuery`; none is
+// mounted, and the case that runs it answers on the scope's status alone.
+vi.mock(
+  "@/hooks/environment/use-environment-reads",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/environment/use-environment-reads")
+    >()),
+    useEnvironmentStatusRead: () => ({
+      supported: null,
+      data: null,
+      isError: false,
+    }),
+  }),
 );
 
 // The Secrets and GitHub entry renders only with a runner host (it needs the
@@ -1098,6 +1134,8 @@ describe("<SettingsSidebar /> Environment pick", () => {
     scopeOverrides.current = { client: null };
     resetNegotiatedManifests();
     resetEnvironmentSectionReads();
+    realWindowHostRuns.current = false;
+    globalScopeOverrides.current = { client: null };
     useSettingsSearchStore.setState({ query: "" });
     setMobileApp(false);
   });
@@ -1273,7 +1311,8 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
   it("offers Personal's Secrets row while the window's host is unreachable, since the page reads the cloud", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
-    personalHostScopeOverrides.current = { status: "unreachable" };
+    realWindowHostRuns.current = true;
+    globalScopeOverrides.current = { status: "unreachable" };
     recordNegotiatedHostMethods("host-a", ["environment.status"]);
 
     await renderRail();
