@@ -9,6 +9,7 @@ import {
 import {
   OPEN_AUTHZ_SESSION_GRANT_VERSION,
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
+  SESSION_CONTROL_STREAM_ID,
 } from "@traycer/protocol/host-transport/mux";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -301,6 +302,41 @@ describe("released personal host, remote door", () => {
       expect(relay.openAuthz[1]).toBeNull();
       expect(refusals).toHaveLength(1);
       expect(hostDoorStateOfRefusal(refusals[0])).toBe("older-host");
+      const opensAtClose = relay.openBearers.length;
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(session.isClosed()).toBe(true);
+      expect(relay.openBearers).toHaveLength(opensAtClose);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it("keeps every later open on the host-only token when an admitted session is closed without a door reason", async () => {
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door, refusals } = recordingDoor();
+    scriptHost(relay, { value: false });
+    const session = openSession(
+      relay,
+      signIn,
+      signOnFor(PERSONAL_ROW, signIn),
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, releasedRefusal());
+      await vi.waitFor(() => {
+        expect(relay.openBearers).toEqual([""]);
+        expect(relay.openAuthz).toEqual([
+          { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant: HOST_TOKEN },
+        ]);
+        expect(refusals).toHaveLength(1);
+        expect(hostDoorStateOfRefusal(refusals[0])).toBe("older-host");
+        expect(session.isClosed()).toBe(true);
+      }, WAIT);
       const opensAtClose = relay.openBearers.length;
       vi.useFakeTimers();
       await vi.advanceTimersByTimeAsync(30_000);

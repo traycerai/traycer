@@ -1,3 +1,4 @@
+import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
@@ -374,6 +375,102 @@ describe("released personal host, local stream", () => {
     vi.useFakeTimers();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sockets).toHaveLength(opensAtClose);
+  });
+
+  it("keeps every later dial on the host-only token when an admitted stream is closed without a door reason", async () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door, refusals } = recordingDoor();
+    const client = makeStreamClient(
+      factory,
+      hostToken,
+      signOnFor(PERSONAL_ROW, signIn),
+      door,
+    );
+    const { statuses } = subscribe(client);
+    await vi.waitFor(
+      () => expect(sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const open = await openFrame(sockets[0]);
+    expect(open.token).toBe(HOST_TOKEN);
+    ack(sockets[0], open, ["credentialUpdate"]);
+    await untilStatus(statuses, "open");
+    sockets[0].fireText(releasedRefusal());
+    // The stub sends no open until the test opens it, so a dial that appears
+    // after the fatal is read the same way as the first.
+    await vi.waitFor(() => {
+      for (const socket of sockets) {
+        if (socket.textSent.length === 0) socket.fireOpen();
+      }
+      expect(
+        sockets.flatMap((socket) =>
+          socket.textSent
+            .map((raw) => readFrame(raw))
+            .filter((frame) => frame.kind === "open")
+            .map((frame) => frame.token),
+        ),
+      ).toEqual([HOST_TOKEN]);
+      expect(sockets.flatMap((socket) => tokensOf(socket))).not.toContain(
+        SIGN_IN,
+      );
+      expect(sockets).toHaveLength(1);
+      expect(refusals).toHaveLength(1);
+      expect(hostDoorStateOfRefusal(refusals[0])).toBe("older-host");
+      expect(statuses).toContain("closed");
+    }, WAIT);
+    const opensAtClose = sockets.length;
+    vi.useFakeTimers();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sockets).toHaveLength(opensAtClose);
+  });
+
+  it("redials the sign-in when the sign-in connection is closed without a door reason", async () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const recovered: FatalErrorDetails[] = [];
+    const recovery: StreamAuthRevalidator = {
+      revalidateForReconnect: () => Promise.resolve("rotated"),
+      revalidateRefused: (refusal) => {
+        recovered.push(refusal);
+        return Promise.resolve("rotated");
+      },
+    };
+    const { door, refusals } = recordingDoor();
+    const client = makeStreamClient(
+      factory,
+      hostToken,
+      releasedSignOnForRow(PERSONAL_ROW, USER_ID, () => signIn, recovery),
+      door,
+    );
+    const { statuses } = subscribe(client);
+    await vi.waitFor(
+      () => expect(sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const refused = await openFrame(sockets[0]);
+    expect(refused.token).toBe(HOST_TOKEN);
+    sockets[0].fireText(releasedRefusal());
+    await vi.waitFor(
+      () => expect(sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    const admitted = await openFrame(sockets[1]);
+    expect(admitted.token).toBe(SIGN_IN);
+    ack(sockets[1], admitted, ["credentialUpdate"]);
+    await untilStatus(statuses, "open");
+    sockets[1].fireText(releasedRefusal());
+    await vi.waitFor(() => expect(recovered).toHaveLength(1), WAIT);
+    expect(hostDoorStateOfRefusal(recovered[0])).toBe("older-host");
+    await vi.waitFor(
+      () => expect(sockets.length).toBeGreaterThanOrEqual(3),
+      WAIT,
+    );
+    const again = await openFrame(sockets[2]);
+    expect(again.token).toBe(SIGN_IN);
+    expect(refusals).toEqual([]);
   });
 });
 
