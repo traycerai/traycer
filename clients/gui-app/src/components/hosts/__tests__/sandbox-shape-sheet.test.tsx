@@ -38,7 +38,7 @@ const WINDOWS_SANDBOX_LIMITATION =
 const CATALOGUE: SandboxCatalogue = {
   providers: [
     {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: {
         cpuMin: 1,

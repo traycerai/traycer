@@ -631,7 +631,7 @@ describe("per state", () => {
     mocks.catalogue = {
       providers: [
         {
-          provider: "tensorlake",
+          provider: "firecracker",
           os: ["linux"],
           shape: {
             cpuMin: 1,

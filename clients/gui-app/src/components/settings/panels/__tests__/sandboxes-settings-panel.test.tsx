@@ -82,7 +82,7 @@ import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memo
 const CATALOGUE: SandboxCatalogue = {
   providers: [
     {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: {
         cpuMin: 1,

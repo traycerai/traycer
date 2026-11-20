@@ -20,7 +20,7 @@ export function sandboxSummaryFixture(
     id: "sbx_1",
     hostId: "host-sbx-1",
     kind: "agent",
-    provider: "tensorlake",
+    provider: "firecracker",
     region: "us-east",
     os: "linux",
     cpus: 2,
