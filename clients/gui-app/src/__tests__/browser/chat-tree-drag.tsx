@@ -297,6 +297,14 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         complete: true,
       }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
+      // Every row that mounts asks for these. Unanswered, each failure
+      // re-renders every mounted row in one long task, which an auto-scroll
+      // that mounts rows every few frames would read as a stall.
+      "epic.listTaskHosts": () => ({ hosts: [] }),
+      "epic.listCollaborators": () => ({
+        collaborators: [],
+        collaboratorsAvailable: true,
+      }),
     },
   });
 

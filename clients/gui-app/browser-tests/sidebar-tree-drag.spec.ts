@@ -80,7 +80,9 @@ const NO_SCROLL_SPAN_MS = 250;
  * missed, or no `scroll` event for `NO_SCROLL_SPAN_MS`. The second covers an
  * action that scrolls nothing and a scroll the list writes straight to
  * `scrollTop` after a `scrollend` (its own anchor correction), which ends
- * without another `scrollend`.
+ * without another `scrollend`. Only for a scroll the action itself starts: a
+ * scroll that starts after React work can begin after the quiet span has
+ * already passed.
  */
 async function afterScrollEnds(
   page: Page,
@@ -91,14 +93,24 @@ async function afterScrollEnds(
       .filter((node) => node.querySelector("ul[role=tree]") !== null)
       .at(-1);
     if (scroller === undefined) throw new Error("no sidebar scroller");
-    const watch = { ended: false, lastScrollAt: performance.now() };
-    scroller.addEventListener("scroll", () => {
+    const watch = {
+      ended: false,
+      lastScrollAt: performance.now(),
+      stop: (): void => {},
+    };
+    const onScroll = (): void => {
       watch.ended = false;
       watch.lastScrollAt = performance.now();
-    });
-    scroller.addEventListener("scrollend", () => {
+    };
+    const onScrollEnd = (): void => {
       watch.ended = true;
-    });
+    };
+    watch.stop = (): void => {
+      scroller.removeEventListener("scroll", onScroll);
+      scroller.removeEventListener("scrollend", onScrollEnd);
+    };
+    scroller.addEventListener("scroll", onScroll);
+    scroller.addEventListener("scrollend", onScrollEnd);
     Reflect.set(window, "__scrollWatch", watch);
   }, SCROLLER);
   await action();
@@ -113,6 +125,8 @@ async function afterScrollEnds(
           const ended = Reflect.get(watch, "ended") === true;
           const lastScrollAt = Number(Reflect.get(watch, "lastScrollAt"));
           if (ended || performance.now() - lastScrollAt >= span) {
+            const stop: unknown = Reflect.get(watch, "stop");
+            if (typeof stop === "function") Reflect.apply(stop, watch, []);
             resolve();
           } else {
             requestAnimationFrame(tick);
@@ -150,28 +164,51 @@ function overlay(page: Page): Locator {
   return page.locator('div[style*="position: fixed"][style*="touch-action"]');
 }
 
-/** Whether the list's `scrollTop` leaves `before` within `spanMs` of real time. */
+/**
+ * A stalled auto-scroll also needs this many rendered frames with the list
+ * still: dnd-kit arms its 5 ms interval only once the pointer move it reacts
+ * to has rendered, so one long render can use up the real-time span before
+ * the scroller had a chance to move. Time alone reads a slow render as a
+ * stall; frames alone read a fast display as one.
+ */
+const STALL_FRAMES = 15;
+
+/**
+ * Whether the list's `scrollTop` leaves `before` before both `spanMs` of real
+ * time and `STALL_FRAMES` rendered frames have passed.
+ */
 async function scrollsWithin(
   page: Page,
   before: number,
   spanMs: number,
 ): Promise<boolean> {
   return page.evaluate(
-    ({ selector, from, span }) =>
+    ({ selector, from, span, minFrames }) =>
       new Promise<boolean>((resolve) => {
         const scroller = [...document.querySelectorAll(selector)]
           .filter((node) => node.querySelector("ul[role=tree]") !== null)
           .at(-1);
         if (scroller === undefined) throw new Error("no sidebar scroller");
         const startedAt = performance.now();
+        let frames = 0;
         const tick = (): void => {
+          frames += 1;
           if (scroller.scrollTop !== from) resolve(true);
-          else if (performance.now() - startedAt >= span) resolve(false);
-          else requestAnimationFrame(tick);
+          else if (
+            performance.now() - startedAt >= span &&
+            frames >= minFrames
+          ) {
+            resolve(false);
+          } else requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
       }),
-    { selector: SCROLLER, from: before, span: spanMs },
+    {
+      selector: SCROLLER,
+      from: before,
+      span: spanMs,
+      minFrames: STALL_FRAMES,
+    },
   );
 }
 
