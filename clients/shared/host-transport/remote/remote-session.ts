@@ -330,8 +330,12 @@ function createReleasedSignOnSessionAuth(
   let signInFromMemory = false;
   /** The person this dial's sign-in is for, while it presents one. */
   let signInUserId: string | null = null;
-  /** The row's answer for the dial about to open; `false` until asked. */
-  let rowAllows = false;
+  /**
+   * The row's answer from the latest relay pass, for the person it was asked
+   * for: every pass sets or clears it, and an open spends it.
+   */
+  let rowAnswer: { readonly userId: string; readonly allowed: boolean } | null =
+    null;
   const remembered = (): string | null => {
     const lease = releasedSignOn.signIn();
     return lease !== null &&
@@ -387,8 +391,13 @@ function createReleasedSignOnSessionAuth(
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
       openAdmitted = false;
-      signInFromMemory = rowAllows && remembered() !== null;
-      rowAllows = false;
+      const rememberedFor = remembered();
+      signInFromMemory =
+        rememberedFor !== null &&
+        rowAnswer !== null &&
+        rowAnswer.userId === rememberedFor &&
+        rowAnswer.allowed;
+      rowAnswer = null;
       if (plan === "sign-in-next" || signInFromMemory) {
         const lease = releasedSignOn.signIn();
         const signIn = readSignIn();
@@ -441,8 +450,14 @@ function createReleasedSignOnSessionAuth(
     auth: sessionAuth,
     grantProvider: async () => {
       const provision = await grantProvider();
-      if (provision.kind === "ok" && remembered() !== null)
-        rowAllows = await releasedSignOn.allowed().catch(() => false);
+      const rememberedFor = provision.kind === "ok" ? remembered() : null;
+      rowAnswer =
+        rememberedFor === null
+          ? null
+          : {
+              userId: rememberedFor,
+              allowed: await releasedSignOn.allowed().catch(() => false),
+            };
       return provision;
     },
   };

@@ -1798,6 +1798,13 @@ const WAKE_PROBE_TIMEOUT_MS = 5_000;
  * on the current `phase` so invalid transitions surface as no-ops rather
  * than silent crashes.
  */
+/** `allowed`'s answer for one person and host, or the ask still in flight. */
+interface RememberedRowAnswer {
+  readonly userId: string;
+  readonly hostId: string;
+  readonly state: "asking" | "allowed" | "refused";
+}
+
 class StreamSession<
   Registry extends VersionedStreamRpcRegistry,
 > implements IStreamSession {
@@ -1896,9 +1903,12 @@ class StreamSession<
   private probing = false;
   /** This dial presents the sign-in because the process remembers the host as released. */
   private signInFromMemory = false;
-  /** The row's answer before a remembered dial: a remembered host is still asked `allowed`. */
-  private rememberedRow: "unasked" | "asking" | "allowed" | "refused" =
-    "unasked";
+  /**
+   * The row's answer before a remembered dial: a remembered host is still asked
+   * `allowed`. An answer counts only for the person and host it was asked for,
+   * and only for the `connect` that follows it, whichever way that one ends.
+   */
+  private rememberedRow: RememberedRowAnswer | null = null;
   /** The person this dial's sign-in is for, while it presents one. */
   private signInUserId: string | null = null;
   private credentialSocketSequence = 0;
@@ -2368,6 +2378,9 @@ class StreamSession<
     if (this.disposed) {
       return;
     }
+    const rowAnswer =
+      this.rememberedRow?.state === "asking" ? null : this.rememberedRow;
+    if (rowAnswer !== null) this.rememberedRow = null;
     // A dial is happening, so nothing is parked any more - whether we got here
     // from the recovery edge itself or from a wake `forceReconnect` that ran
     // straight through the park. Idempotent, and the only place besides
@@ -2405,16 +2418,21 @@ class StreamSession<
         signInNow.identity.userId,
         selected.hostId,
       );
-    if (
-      remembered &&
-      released !== null &&
-      (this.rememberedRow === "unasked" || this.rememberedRow === "asking")
-    ) {
-      this.askRowForRememberedHost(released);
+    const answered =
+      rowAnswer !== null &&
+      signInNow !== null &&
+      rowAnswer.userId === signInNow.identity.userId &&
+      rowAnswer.hostId === selected.hostId;
+    if (remembered && released !== null && signInNow !== null && !answered) {
+      this.askRowForRememberedHost(
+        released,
+        signInNow.identity.userId,
+        selected.hostId,
+      );
       return;
     }
-    this.signInFromMemory = remembered && this.rememberedRow === "allowed";
-    this.rememberedRow = "unasked";
+    this.signInFromMemory =
+      remembered && answered && rowAnswer.state === "allowed";
     this.releasedPlan =
       signInNow !== null &&
       (this.releasedPlan === "sign-in-next" || this.signInFromMemory)
@@ -3461,15 +3479,23 @@ class StreamSession<
   }
 
   /** A remembered host's dial waits for the row's answer, as every sign-in does. */
-  private askRowForRememberedHost(released: ReleasedSignOn): void {
-    if (this.rememberedRow === "asking") return;
-    this.rememberedRow = "asking";
+  private askRowForRememberedHost(
+    released: ReleasedSignOn,
+    userId: string,
+    hostId: string,
+  ): void {
+    if (this.rememberedRow?.state === "asking") return;
+    this.rememberedRow = { userId, hostId, state: "asking" };
     void released
       .allowed()
       .catch(() => false)
       .then((allowed) => {
         if (this.disposed) return;
-        this.rememberedRow = allowed ? "allowed" : "refused";
+        this.rememberedRow = {
+          userId,
+          hostId,
+          state: allowed ? "allowed" : "refused",
+        };
         this.connect();
       });
   }
