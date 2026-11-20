@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import {
   flattenChatTreeRows,
   indexRowsByKey,
@@ -22,40 +22,6 @@ function nextModel(
     rows,
     revision: previous.revision + 1,
     indexByKey: indexRowsByKey(rows),
-  };
-}
-
-interface RowModelCache {
-  readonly modelFor: (fresh: readonly ChatTreeRow[]) => ChatTreeRowModel;
-  readonly commit: (model: ChatTreeRowModel) => void;
-}
-
-/**
- * Every model is built from the last COMMITTED model and the current flatten
- * alone, so a render React throws away (a StrictMode re-run, an interrupted
- * concurrent render) never changes what a committed render returns. A row
- * object is reused only where its values equal the committed row of the same
- * key, and the revision moves only when the key sequence differs from the
- * committed one. The same flatten gets the same model, so a render run twice
- * reads one model.
- */
-function createRowModelCache(): RowModelCache {
-  let committed: ChatTreeRowModel | null = null;
-  let source: readonly ChatTreeRow[] | null = null;
-  let built: ChatTreeRowModel | null = null;
-  return {
-    modelFor: (fresh) => {
-      if (fresh === source && built !== null) return built;
-      built =
-        committed === null
-          ? { rows: fresh, revision: 0, indexByKey: indexRowsByKey(fresh) }
-          : nextModel(committed, fresh);
-      source = fresh;
-      return built;
-    },
-    commit: (model) => {
-      committed = model;
-    },
   };
 }
 
@@ -100,10 +66,19 @@ export function useChatTreeRowModel(
       clock,
     ],
   );
-  const [cache] = useState(createRowModelCache);
-  const model = cache.modelFor(fresh);
+  // The last COMMITTED model, written only in the layout effect below. Each
+  // model is built from it and the flatten alone, so a render React throws
+  // away never changes what a committed render returns.
+  const committed = useRef<ChatTreeRowModel | null>(null);
+  const model = useMemo(
+    () =>
+      committed.current === null
+        ? { rows: fresh, revision: 0, indexByKey: indexRowsByKey(fresh) }
+        : nextModel(committed.current, fresh),
+    [fresh],
+  );
   useLayoutEffect(() => {
-    cache.commit(model);
-  }, [cache, model]);
+    committed.current = model;
+  }, [model]);
   return model;
 }

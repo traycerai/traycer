@@ -2668,6 +2668,26 @@ export default tseslint.config(
     },
   },
   {
+    // The chat tree's row model and its row presence are each derived from
+    // the last COMMITTED value, so a row whose values did not change keeps its
+    // object and its memoised row does not re-render. That value is read from
+    // a ref during render to derive the next one, and written only in a
+    // layout effect or by an event handler, never during render. The
+    // derivation is idempotent: the same committed value and inputs give an
+    // equal result, so a render React throws away (a StrictMode re-run, an
+    // interrupted concurrent render) changes nothing a committed render
+    // returns. A state update during render instead re-runs the whole panel
+    // body on every change, and a mutable cell held in `useState` trips
+    // `react-hooks/immutability`.
+    files: [
+      "src/components/epic-canvas/sidebar/use-chat-tree-row-model.ts",
+      "src/components/epic-canvas/sidebar/use-chat-tree-row-presence.ts",
+    ],
+    rules: {
+      "react-hooks/refs": "off",
+    },
+  },
+  {
     // Router -> store synchronization direction for an already-committed epic
     // route. This is the inverse of navigateToTabIntent's entry-point seam,
     // so it may read the store action directly while the rest of the app may

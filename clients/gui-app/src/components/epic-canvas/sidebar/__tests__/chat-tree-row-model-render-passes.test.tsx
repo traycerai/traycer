@@ -53,10 +53,6 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) =>
   (await import("./chat-tree-host-mocks")).cloudChatQueriesMock(importOriginal),
 );
 
-vi.mock("@/lib/epic-selectors", async (importOriginal) =>
-  (await import("./chat-tree-host-mocks")).epicSelectorsMock(importOriginal),
-);
-
 const passes = vi.hoisted(() => ({ renders: 0, commits: 0 }));
 
 vi.mock(
