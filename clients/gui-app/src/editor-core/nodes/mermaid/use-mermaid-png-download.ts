@@ -62,8 +62,8 @@ export function useMermaidPngDownload(
       // `saveBlobToDisk` is the shell's own save route, which on a shell that
       // also owns a chooser-free download IS the share sheet.
       return input.action === "share"
-        ? saveBlobToDisk(blob, "mermaid-diagram.png", fileSave)
-        : downloadBlobToDevice(blob, "mermaid-diagram.png", fileSave);
+        ? saveBlobToDisk(blob, "mermaid-diagram.png", fileSave, null)
+        : downloadBlobToDevice(blob, "mermaid-diagram.png", fileSave, null);
     },
     onSuccess: (saved, input) => {
       if (saved !== null) {

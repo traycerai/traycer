@@ -719,18 +719,42 @@ export function releaseOpenEpicSession(epicId: string): void {
  * arriving there means they answered for them. `"keep"` belongs to involuntary
  * paths, where nothing was shown and dropping the buffer would be a silent
  * loss.
+ *
+ * An artifact reader owns the session jointly with the tabs, so the last tab
+ * closing under one does not end it: a clean close or a `"keep"` leaves the
+ * same handle to the reader, and only a discard the user confirmed over
+ * unsynced work retires it, after which the reader is given one fresh source.
  */
 export function releaseOpenEpicSessionIfUnused(
   epicId: string,
   retainedBuffers: "discard" | "keep",
   dirtyLiveHandle: RetainedHandleIdentity | null,
 ): void {
+  if (epicHasOpenTab(epicId)) return;
+  if (registry.hasReaderDemand(epicId)) {
+    if (retainedBuffers === "keep" || !registry.hasUnsyncedEdits(epicId)) {
+      return;
+    }
+    registry.releaseForReaderRebuild(epicId, dirtyLiveHandle);
+    return;
+  }
+  registry.release(epicId, retainedBuffers, dirtyLiveHandle);
+}
+
+/**
+ * The access-loss close: the epic is gone for this user, so readers do not
+ * keep its session; they are refused through the same denial.
+ */
+export function releaseOpenEpicSessionForAccessLoss(epicId: string): void {
+  if (epicHasOpenTab(epicId)) return;
+  registry.release(epicId, "discard", null);
+}
+
+function epicHasOpenTab(epicId: string): boolean {
   const state = useEpicCanvasStore.getState();
-  const stillOpen = state.openTabOrder.some(
+  return state.openTabOrder.some(
     (tabId) => state.tabsById[tabId]?.epicId === epicId,
   );
-  if (stillOpen) return;
-  registry.release(epicId, retainedBuffers, dirtyLiveHandle);
 }
 
 /**

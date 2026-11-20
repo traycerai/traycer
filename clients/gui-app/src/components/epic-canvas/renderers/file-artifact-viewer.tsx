@@ -127,6 +127,7 @@ export function FileArtifactViewer(props: {
         blob,
         name,
         fileSave,
+        null,
       );
     } catch {
       setSaveError("Couldn't save this file. Please retry.");

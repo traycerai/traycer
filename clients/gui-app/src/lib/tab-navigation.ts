@@ -23,8 +23,9 @@ import {
   homeTabIntent,
   openEpicTabIntent,
   settingsTabIntent,
-  type EpicPostResolvePreparation,
+  type AdmittedTileOpenPreparation,
   type EpicRouteFocus,
+  type OpenEpicPreparation,
   type TabActivationIntent,
   type TabNavigationIntent,
 } from "@/lib/tab-navigation/intents";
@@ -80,6 +81,11 @@ import {
 import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import { normalizeEpicFocusSearch } from "@/routes/epic-route-search";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import { artifactReadIsCurrent } from "@/lib/artifacts/artifact-read-lifetime";
+import {
+  tabBindingHostId,
+  withRequestedTabHost,
+} from "@/lib/epics/requested-tab-host";
 
 export {
   completeEpicMigrationIntent,
@@ -201,6 +207,13 @@ interface TaskOpening {
   readonly tabId: string;
   readonly tracyOrigin: StampedTracyOrigin | null;
 }
+
+type AdmittedOpenIntent = Extract<
+  TabActivationIntent,
+  { kind: "open-epic" }
+> & {
+  readonly preparation: AdmittedTileOpenPreparation;
+};
 
 interface QueuedActivation {
   readonly navigate: NavigateFn;
@@ -1176,6 +1189,17 @@ export class TabNavigationController {
     options: TabNavigationOptions | undefined,
     tracyOrigin: StampedTracyOrigin | null,
   ): boolean {
+    if (
+      requestedIntent.kind === "open-epic" &&
+      requestedIntent.preparation?.kind === "open-admitted-tile"
+    ) {
+      return this.executeAdmittedOpen(
+        navigate,
+        { ...requestedIntent, preparation: requestedIntent.preparation },
+        options,
+        tracyOrigin,
+      );
+    }
     const layoutBefore = currentLayout();
     if (requestedIntent.kind === "open-epic") {
       const prepared = this.prepareDraftSwap(
@@ -1248,6 +1272,53 @@ export class TabNavigationController {
     };
     this.issueUserNavigation(navigate, pending);
     return true;
+  }
+
+  /**
+   * Runs when the activation does, which a hydration queue may have delayed,
+   * so the read's lifetime and the window's tab binding are read here rather
+   * than when the card was clicked. A tab already bound to another host wins
+   * and is focused as it is; otherwise the admitted host is requested for the
+   * activation that publishes the tab, so its session opens there and the
+   * reader on that host keeps its handle.
+   */
+  private executeAdmittedOpen(
+    navigate: NavigateFn,
+    intent: AdmittedOpenIntent,
+    options: TabNavigationOptions | undefined,
+    tracyOrigin: StampedTracyOrigin | null,
+  ): boolean {
+    const admitted = intent.preparation;
+    if (!artifactReadIsCurrent(admitted.lifetime)) return false;
+    const boundHostId = tabBindingHostId(intent.epicId);
+    if (boundHostId !== null && boundHostId !== admitted.hostId) {
+      return this.executeActivation(
+        navigate,
+        {
+          ...intent,
+          focus: undefined,
+          preparation: null,
+          includeNestedFocus: false,
+        },
+        options,
+        tracyOrigin,
+      );
+    }
+    return withRequestedTabHost(intent.epicId, admitted.hostId, () =>
+      this.executeActivation(
+        navigate,
+        {
+          ...intent,
+          preparation: {
+            kind: "open-tile",
+            node: admitted.node,
+            gesture: admitted.gesture,
+          },
+        },
+        options,
+        tracyOrigin,
+      ),
+    );
   }
 
   private activationTarget(
@@ -1367,11 +1438,14 @@ export class TabNavigationController {
 
   private prepareEpicTarget(
     tabId: string,
-    preparation: EpicPostResolvePreparation | null,
+    preparation: OpenEpicPreparation | null,
   ) {
     if (preparation === null) return null;
     const canvas = useEpicCanvasStore.getState();
-    if (preparation.kind === "open-tile") {
+    if (
+      preparation.kind === "open-tile" ||
+      preparation.kind === "open-admitted-tile"
+    ) {
       // `commitWithoutNavigation`: this target is folded into the tab
       // navigation envelope being built here, so the open must not issue a
       // route write of its own.

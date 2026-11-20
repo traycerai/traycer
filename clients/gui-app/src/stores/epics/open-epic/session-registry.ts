@@ -246,6 +246,17 @@ interface EpicRegistrySession {
   /** Monotonic elapsed-time origin; survives repeated acquires and re-points. */
   unknownActivitySinceMs: number | null;
   /**
+   * A reader's own acquisition built this session and no tab has joined it.
+   * It holds no tab to return to and no chat of its own, so once its last
+   * reader leaves only the data-loss guards keep it: the activity arms do not
+   * apply. Cleared for good when a tab joins. A reader-only entry is pinned
+   * to its card's host and never re-points, so no re-point replaces a handle
+   * that carries it ("a reader-only entry is pinned to its card's host and
+   * never re-points when the window's host moves", in
+   * `artifact-reader-card-bound.test.tsx`).
+   */
+  readerBuilt: boolean;
+  /**
    * Unsubscribe from the handle's unsynced-queue signal. Reaped on
    * release / disposeAll so we don't leak a zustand subscription after
    * the underlying session is gone.
@@ -700,6 +711,13 @@ export class OpenEpicSessionRegistry {
   private readonly environment: RendererRuntimeEnvironment =
     createRendererRuntimeEnvironment();
   private readonly sessions: SessionRegistry<EpicRegistrySession>;
+  private readonly readerHolds = new Map<string, Set<symbol>>();
+  /**
+   * The live handle a confirmed discard retired while readers still held the
+   * epic, so the controller can tell that retirement from a cap or sign-out
+   * release and give the readers one fresh source.
+   */
+  private readonly readerRebuilds = new Map<string, OpenEpicStoreHandle>();
   private capExemptionEpisodes = new Map<string, EpicCapExemptionReason>();
   private readonly capExemptionSeenReasons = new Map<
     string,
@@ -862,9 +880,91 @@ export class OpenEpicSessionRegistry {
     return this.sessions.size();
   }
 
+  /**
+   * Whether an artifact reader holds this epic. A marker only: the reader's
+   * residency is its mount unit, taken through `acquireMounted` like a tab's.
+   */
+  hasReaderDemand(epicId: string): boolean {
+    return this.readerHolds.has(epicId);
+  }
+
+  /**
+   * A confirmed discard of the last tab while readers remain: the ordinary
+   * discard retirement, marked so the readers' next source is built fresh.
+   */
+  releaseForReaderRebuild(
+    epicId: string,
+    dirtyLiveHandle: RetainedHandleIdentity | null,
+  ): void {
+    this.sessions.transact(() => {
+      const live = this.sessions.peek(epicId);
+      if (live !== null) this.readerRebuilds.set(epicId, live.handle);
+      this.release(epicId, "discard", dirtyLiveHandle);
+    });
+  }
+
+  /**
+   * Consumes the discard mark for `epicId`; true only when it names `handle`,
+   * so repeated notifications of one retirement rebuild once.
+   */
+  takeReaderRebuild(epicId: string, handle: OpenEpicStoreHandle): boolean {
+    const marked = this.readerRebuilds.get(epicId);
+    this.readerRebuilds.delete(epicId);
+    return marked === handle;
+  }
+
+  /**
+   * Marks `epicId` as held by an artifact reader until the returned release
+   * runs. Repeated or post-`disposeAll` releases are no-ops.
+   */
+  addReaderDemand(epicId: string): () => void {
+    return this.sessions.transact(() => {
+      const holds = this.readerHolds.get(epicId) ?? new Set<symbol>();
+      const token = Symbol();
+      const generation = this.disposalGeneration;
+      holds.add(token);
+      this.readerHolds.set(epicId, holds);
+      this.sessions.notify();
+      return () => {
+        if (
+          this.disposalGeneration !== generation ||
+          this.readerHolds.get(epicId) !== holds ||
+          !holds.has(token)
+        ) {
+          return;
+        }
+        this.sessions.transact(() => {
+          holds.delete(token);
+          if (holds.size === 0) {
+            this.readerHolds.delete(epicId);
+          }
+          this.sessions.notify();
+        });
+      };
+    });
+  }
+
+  /** Records that a reader's acquisition built `handle`, with no tab in it. */
+  markReaderBuilt(epicId: string, handle: OpenEpicStoreHandle): void {
+    const entry = this.sessions.peekEntry(epicId);
+    if (entry === null || entry.session.handle !== handle) return;
+    entry.session.readerBuilt = true;
+  }
+
+  /** A tab joined `handle`: the activity arms apply to it from now on. */
+  clearReaderBuilt(epicId: string, handle: OpenEpicStoreHandle): void {
+    const entry = this.sessions.peekEntry(epicId);
+    if (entry === null || entry.session.handle !== handle) return;
+    entry.session.readerBuilt = false;
+  }
+
   private epicCapActivityBlocker(
     session: EpicRegistrySession,
   ): "agent-working" | EpicCapUnknownReason | null {
+    // The arms keep a worked-on session warm for a tab's return; a session
+    // only a reader ever held has none, so the cap and byte budget take it on
+    // the data-loss guards alone.
+    if (session.readerBuilt) return null;
     return epicCapActivityBlocker(session.epicId, session.handle.hostId, {
       unknownSinceMs: session.unknownActivitySinceMs,
       nowMs: this.environment.clock.monotonicNow(),
@@ -1580,6 +1680,7 @@ export class OpenEpicSessionRegistry {
       lastEligibilityKey: eligibilityKeyFor(epicId, handle),
       pendingRetention: null,
       pendingPark: false,
+      readerBuilt: false,
     };
     const handleEligibilityChange = (): void => {
       const previousUnknownSinceMs = session.unknownActivitySinceMs;
@@ -1789,6 +1890,8 @@ export class OpenEpicSessionRegistry {
 
   disposeAll(): void {
     this.scheduleCapGraceRecheck(null);
+    this.readerHolds.clear();
+    this.readerRebuilds.clear();
     this.sessions.transact(() => {
       this.sessions.disposeAll();
       this.capExemptionEpisodes.clear();

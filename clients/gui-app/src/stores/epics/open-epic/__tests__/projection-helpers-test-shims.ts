@@ -125,3 +125,23 @@ export function projectTerminalAgentsSliceForTests(
   }
   return { byId, allIds: allIds.length === 0 ? EMPTY_ARRAY : allIds };
 }
+
+/**
+ * Writes one artifact entry into the doc with exactly `fields`, however
+ * partial: for a test that needs a kind `createArtifactInDocForTests` does not
+ * build (an html artifact with its head), or a malformed entry.
+ */
+export function setArtifactFieldsInDocForTests(
+  doc: Y.Doc,
+  id: string,
+  fields: Readonly<Record<string, unknown>>,
+): void {
+  doc.transact(() => {
+    const artifacts = ensureMap(getEpicMap(doc), "artifacts");
+    const entry = new Y.Map<unknown>();
+    for (const [key, value] of Object.entries(fields)) {
+      entry.set(key, value);
+    }
+    artifacts.set(id, entry);
+  });
+}

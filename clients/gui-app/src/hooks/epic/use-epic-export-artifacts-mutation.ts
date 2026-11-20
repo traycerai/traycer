@@ -159,6 +159,7 @@ export function useEpicExportArtifacts() {
           output.blob,
           output.suggestedName,
           fileSave,
+          null,
         ),
         artifactCount: serialized.length,
       };

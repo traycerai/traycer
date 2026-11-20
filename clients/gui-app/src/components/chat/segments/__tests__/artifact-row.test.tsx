@@ -1375,3 +1375,139 @@ describe("<ArtifactRow />", () => {
     });
   });
 });
+
+/**
+ * What a captured card's source must keep promising its consumers: the frame
+ * is handed one `readSpan` and an in-flight export is handed the same one, so
+ * neither a version change nor the card going away may retire it.
+ */
+describe("<ArtifactRow /> a captured card's source outlives its own changes", () => {
+  function servingEveryObject(gate: {
+    current: Promise<void> | null;
+  }): ChatAttachmentReadClient {
+    return makeArtifactReadClient(async () => {
+      if (gate.current !== null) await gate.current;
+      return {
+        kind: "bytes",
+        bytesBase64: HEAD_BYTES_BASE64,
+        offset: 0,
+        totalBytes: HEAD_BYTES_LENGTH,
+        mediaType: "text/html",
+      };
+    });
+  }
+
+  function serveArtifactWith(
+    projection: ArtifactProjection,
+    versions: readonly HtmlArtifactVersion[],
+  ): void {
+    storeMocks.current = {
+      artifacts: {
+        byId: { [ARTIFACT_ID]: projection },
+        allIds: [ARTIFACT_ID],
+      },
+      deletedArtifacts: EMPTY_DELETED,
+    };
+    historyMocks.page = historyOf(versions);
+  }
+
+  const NO_GATE = { current: null } as const;
+
+  it("Latest following a first comment's stamped-ID manifest keeps the frame and its readSpan, and a later read of the new head succeeds", async () => {
+    const STAMPED_SHA = "e".repeat(64);
+    const stampedHead: ArtifactProjection = {
+      ...PROJECTION_WITH_HEAD,
+      head: {
+        files: {
+          "index.html": {
+            sha256: STAMPED_SHA,
+            byteLength: HEAD_BYTES_LENGTH,
+            mediaType: "text/html",
+            status: "published",
+          },
+        },
+        capturedAt: 3_000,
+      },
+    };
+    // One reader for the whole case: the same client and scope both times.
+    const scope = scopeWithClient(servingEveryObject(NO_GATE));
+    serveArtifactWith(PROJECTION_WITH_HEAD, [V3, V2, V1]);
+    const view = render(taskTree("tab-1", scope, STAMP));
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: /HTML version history/ }),
+    );
+    await user.click(screen.getByRole("menuitemradio", { name: /Latest/ }));
+    expect(servedEntrySha256()).toBe(HEAD_SHA);
+    const first = latestArtifactFrame().source;
+    const mountsBefore = sandboxFrameMocks.mounts;
+
+    // The first comment stamps ids into the page: Latest is a new manifest.
+    serveArtifactWith(stampedHead, [
+      savedVersion(4, STAMPED_SHA, HEAD_BYTES_LENGTH, 3_000),
+      V3,
+      V2,
+      V1,
+    ]);
+    view.rerender(taskTree("tab-1", scope, STAMP));
+
+    expect(servedEntrySha256()).toBe(STAMPED_SHA);
+    expect(sandboxFrameMocks.mounts).toBe(mountsBefore);
+    expect(latestArtifactFrame().source.readSpan).toBe(first.readSpan);
+    const read = await first.readSpan(
+      STAMPED_SHA,
+      0,
+      HEAD_BYTES_LENGTH,
+      new AbortController().signal,
+    );
+    expect(read).not.toHaveProperty("unavailable");
+  });
+
+  it("an export started on the captured card continues across a version pick and the card unmounting", async () => {
+    serveArtifactWith(PROJECTION_WITH_HEAD, [V3, V2, V1]);
+    const gate = { current: Promise.withResolvers<void>() };
+    const view = render(
+      taskTree(
+        "tab-1",
+        scopeWithClient(servingEveryObject({ current: gate.current.promise })),
+        STAMP,
+      ),
+    );
+    // The export holds the source the card showed when it was pressed.
+    const exported = latestArtifactFrame().source;
+    const inFlight = exported.readSpan(
+      STAMP_SHA,
+      0,
+      HEAD_BYTES_LENGTH,
+      new AbortController().signal,
+    );
+
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: /HTML version history/ }),
+    );
+    await user.click(screen.getByRole("menuitemradio", { name: /Latest/ }));
+    expect(servedEntrySha256()).toBe(HEAD_SHA);
+    gate.current.resolve();
+
+    expect(await inFlight).not.toHaveProperty("unavailable");
+    // The next chunk of the same export, after the pick and after the unmount.
+    expect(
+      await exported.readSpan(
+        STAMP_SHA,
+        0,
+        HEAD_BYTES_LENGTH,
+        new AbortController().signal,
+      ),
+    ).not.toHaveProperty("unavailable");
+    view.unmount();
+    expect(
+      await exported.readSpan(
+        STAMP_SHA,
+        0,
+        HEAD_BYTES_LENGTH,
+        new AbortController().signal,
+      ),
+    ).not.toHaveProperty("unavailable");
+  });
+});

@@ -1,15 +1,20 @@
-import { use } from "react";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { useTracyTranscriptOrigin } from "@/components/bots/tracy-transcript-origin-context";
+import { activateTabIntent, resourceEpicTabIntent } from "@/lib/tab-navigation";
+import { fromTracyTranscript } from "@/lib/tab-navigation/intents";
+import {
+  artifactReadIsCurrent,
+  type ArtifactReadLifetime,
+} from "@/lib/artifacts/artifact-read-lifetime";
+import { useCallback } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { toast } from "sonner";
 import { v4 as uuidv4 } from "uuid";
 import type { BotSurfaceReference } from "@traycer/protocol/persistence/epic/messages";
 import type { BotInputNeeded } from "@traycer/protocol/host/bot/schemas";
-import { artifactLinkPathRootAgnostic } from "@traycer/protocol/common/artifact-path";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { routeNotificationForHost } from "@/lib/notifications/payload";
-import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import {
   useChatTranscriptJumpStore,
   type ChatTranscriptJumpTarget,
@@ -21,7 +26,7 @@ import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
  * Open on a bot's surface card: where a notification of the
  * same surface opens it - the question's block or the approval's row in the
  * task's chat on its machine, the browser tile on its machine - and the
- * artifact in its task through the channel's link policy. Like Home's focus
+ * artifact uses the separate admitted-target action below. Like Home's focus
  * actions it compares the surface's machine with the window's effective
  * host, the host a hostless task tab opens on: a question or an approval on
  * another machine opens a chat tile bound to that machine in the task's tab
@@ -31,7 +36,7 @@ import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
  * `title` names a tile opened fresh until the chat's own name arrives.
  */
 export function useBotSurfaceOpen(
-  surface: BotSurfaceReference,
+  surface: Exclude<BotSurfaceReference, { kind: "artifact" }>,
   open: BotInputNeeded | null,
   title: string,
 ): () => void {
@@ -39,7 +44,6 @@ export function useBotSurfaceOpen(
   const effectiveHostId = useEffectiveHostId();
   const { openTile } = useEpicTileNavigation();
   const requestJump = useChatTranscriptJumpStore((state) => state.requestJump);
-  const linkPolicy = use(MarkdownLinkContext);
   const elsewhere =
     effectiveHostId !== null && surface.hostId !== effectiveHostId;
   /** The chat's tile bound to the surface's machine, in the task's tab. */
@@ -128,17 +132,6 @@ export function useBotSurfaceOpen(
         );
         return;
       }
-      case "artifact": {
-        const opened =
-          linkPolicy?.openFileLink({
-            path: artifactLinkPath(surface.epicId, surface.artifactPath),
-            line: null,
-            col: null,
-            isDirectory: false,
-          }) ?? false;
-        if (!opened) toast("Couldn't open link");
-        return;
-      }
     }
   };
 }
@@ -174,10 +167,65 @@ function gateOf(surface: BotSurfaceReference): {
   }
 }
 
-/** The artifact's path as a link to it names it, inside its task's artifacts. */
-function artifactLinkPath(epicId: string, artifactPath: string): string {
-  if (artifactLinkPathRootAgnostic(artifactPath, epicId) !== null) {
-    return artifactPath;
-  }
-  return `epics/${epicId}/artifacts/${artifactPath.replace(/^[\\/]+/u, "")}`;
+export interface BotArtifactOpenTarget {
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly artifactId: string;
+  readonly title: string;
+  readonly kind: EpicArtifactKind;
+  readonly lifetime: ArtifactReadLifetime;
+}
+
+/**
+ * The admitted tile on its serving host, with a return to this Tracy
+ * transcript. The task's tab opens on that host unless a tab of this window
+ * already holds the task elsewhere, and the read's lifetime is checked again
+ * when the activation runs.
+ */
+export function useBotArtifactOpen(
+  target: BotArtifactOpenTarget | null,
+): (() => void) | null {
+  const navigate = useNavigate();
+  const origin = useTracyTranscriptOrigin();
+  const open = useCallback(() => {
+    if (
+      target === null ||
+      origin === null ||
+      !artifactReadIsCurrent(target.lifetime)
+    )
+      return;
+    activateTabIntent(
+      navigate,
+      fromTracyTranscript(
+        resourceEpicTabIntent({
+          epicId: target.epicId,
+          tabId: null,
+          name: undefined,
+          focus: {
+            focusedAt: undefined,
+            focusArtifactId: target.artifactId,
+            focusThreadId: undefined,
+            migrationSource: undefined,
+          },
+          preparation: {
+            kind: "open-admitted-tile",
+            node: {
+              id: target.artifactId,
+              instanceId: uuidv4(),
+              type: target.kind,
+              name: target.title,
+              hostId: target.hostId,
+            },
+            hostId: target.hostId,
+            gesture: "explicit",
+            lifetime: target.lifetime,
+          },
+          includeNestedFocus: true,
+        }),
+        origin,
+      ),
+      undefined,
+    );
+  }, [navigate, origin, target]);
+  return target === null || origin === null ? null : open;
 }

@@ -10,11 +10,13 @@ import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { canDownloadToDevice } from "@/lib/files/save-blob-to-disk";
 import { epicMutationKeys } from "@/lib/query-keys";
+import type { ArtifactReadLifetime } from "@/lib/artifacts/artifact-read-lifetime";
 
 interface HtmlArtifactDownloadProps {
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
   readonly title: string;
   readonly hostId: string;
+  readonly lifetime: ArtifactReadLifetime | null;
 }
 
 interface HtmlArtifactDownloadAction {
@@ -49,7 +51,12 @@ function useHtmlArtifactDownloadAction(
       ? "Download ZIP"
       : "Downloads are unavailable on this device",
     pending: building,
-    start: () => download.mutate({ source: props.source, title: props.title }),
+    start: () =>
+      download.mutate({
+        source: props.source,
+        title: props.title,
+        lifetime: props.lifetime,
+      }),
   };
 }
 

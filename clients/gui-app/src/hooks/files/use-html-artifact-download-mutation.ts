@@ -1,3 +1,4 @@
+import { anyAbortSignal } from "@traycer-clients/shared/auth/request-abort";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
@@ -15,10 +16,16 @@ import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import {
+  artifactReadIsCurrent,
+  assertArtifactReadLive,
+  type ArtifactReadLifetime,
+} from "@/lib/artifacts/artifact-read-lifetime";
 
 interface HtmlArtifactDownloadInput {
   readonly source: Extract<SandboxSource, { kind: "artifact" }>;
   readonly title: string;
+  readonly lifetime: ArtifactReadLifetime | null;
 }
 
 export function useHtmlArtifactDownload(
@@ -32,7 +39,8 @@ export function useHtmlArtifactDownload(
     // Bound memory across inline and full-view exports in this renderer, too.
     scope: { id: "html-artifact-download" },
     gcTime: 0,
-    mutationFn: async ({ source, title }) => {
+    mutationFn: async ({ source, title, lifetime }) => {
+      assertArtifactReadLive(lifetime);
       // Freeze the manifest and its bound reader in mutation variables. A
       // version switch while downloading cannot change the exported snapshot.
       const controller = new AbortController();
@@ -43,15 +51,28 @@ export function useHtmlArtifactDownload(
       const blob = await createHtmlArtifactZip({
         manifest: source.manifest,
         readSpan: source.readSpan,
-        signal: controller.signal,
+        signal:
+          lifetime === null
+            ? controller.signal
+            : anyAbortSignal([controller.signal, lifetime.signal]),
       }).finally(() => clearTimeout(timeout));
-      return downloadBlobToDevice(blob, htmlArtifactZipName(title), fileSave);
+      assertArtifactReadLive(lifetime);
+      const saved = await downloadBlobToDevice(
+        blob,
+        htmlArtifactZipName(title),
+        fileSave,
+        lifetime === null ? null : () => assertArtifactReadLive(lifetime),
+      );
+      assertArtifactReadLive(lifetime);
+      return saved;
     },
-    onSuccess: (saved) => {
+    onSuccess: (saved, { lifetime }) => {
+      if (!artifactReadIsCurrent(lifetime)) return;
       if (saved !== null)
         toastSavedFile(saved, openSaved.mutate, fileSave, "save");
     },
-    onError: (error) => {
+    onError: (error, { lifetime }) => {
+      if (!artifactReadIsCurrent(lifetime)) return;
       if (error instanceof HostRpcError) {
         toastFromHostError(error, "Could not download this artifact.");
       } else {

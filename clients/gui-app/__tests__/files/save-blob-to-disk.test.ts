@@ -29,6 +29,30 @@ function restoreUrlMethod(
   Object.defineProperty(URL, name, descriptor);
 }
 
+/** The one request a shell's save or download was handed. */
+function onlyRequest(
+  calls: ReadonlyArray<readonly [FileSaveRequest]>,
+): FileSaveRequest {
+  expect(calls).toHaveLength(1);
+  const request = calls.at(0)?.[0];
+  if (request === undefined) throw new Error("the shell was never called");
+  return request;
+}
+
+/** Where a mock's first call falls in the order every mock was called in. */
+function firstCallOrder(mock: {
+  readonly mock: { readonly invocationCallOrder: readonly number[] };
+}): number {
+  const order = mock.mock.invocationCallOrder.at(0);
+  if (order === undefined) throw new Error("the mock was never called");
+  return order;
+}
+
+/** The bytes a request's own `readBytes` yields. */
+async function bytesOf(request: FileSaveRequest): Promise<number[]> {
+  return Array.from(new Uint8Array(await request.readBytes()));
+}
+
 afterEach(() => {
   window.showSaveFilePicker = undefined;
   restoreUrlMethod("createObjectURL", createObjectUrlDescriptor);
@@ -53,6 +77,7 @@ describe("saveBlobToDisk", () => {
         new Blob(["png"], { type: "image/png" }),
         "diagram.png",
         null,
+        null,
       ),
     ).resolves.toBeNull();
     expect(createObjectURL).not.toHaveBeenCalled();
@@ -62,6 +87,7 @@ describe("saveBlobToDisk", () => {
     const writable = {
       write: vi.fn().mockRejectedValue(new Error("write failed")),
       close: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined),
     };
     const createWritable = vi.fn().mockResolvedValue(writable);
     const createObjectURL = vi.fn(() => "blob:mermaid");
@@ -88,12 +114,112 @@ describe("saveBlobToDisk", () => {
         new Blob(["png"], { type: "image/png" }),
         "diagram.png",
         null,
+        null,
       ),
     ).resolves.toEqual({ name: "diagram.png", path: null });
     expect(createWritable).toHaveBeenCalledTimes(1);
     expect(writable.write).toHaveBeenCalledTimes(1);
     expect(writable.close).not.toHaveBeenCalled();
+    // The half-written file is abandoned before the anchor writes the real one.
+    expect(writable.abort).toHaveBeenCalledTimes(1);
     expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(firstCallOrder(writable.abort)).toBeLessThan(
+      firstCallOrder(createObjectURL),
+    );
+  });
+
+  describe("with a source lifetime and no shell", () => {
+    it("goes straight to the anchor download and never opens the picker", async () => {
+      const createObjectURL = vi.fn(() => "blob:lifetime");
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: createObjectURL,
+      });
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: vi.fn(),
+      });
+      const click = vi
+        .spyOn(HTMLAnchorElement.prototype, "click")
+        .mockImplementation(() => undefined);
+      window.showSaveFilePicker = vi.fn();
+      const beforeSave = vi.fn();
+
+      await expect(
+        saveBlobToDisk(
+          new Blob(["png"], { type: "image/png" }),
+          "diagram.png",
+          null,
+          beforeSave,
+        ),
+      ).resolves.toEqual({ name: "diagram.png", path: null });
+
+      expect(window.showSaveFilePicker).not.toHaveBeenCalled();
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(click).toHaveBeenCalledTimes(1);
+    });
+
+    it("dispatches nothing once the lifetime has retired", async () => {
+      const createObjectURL = vi.fn(() => "blob:lifetime");
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: createObjectURL,
+      });
+      const click = vi
+        .spyOn(HTMLAnchorElement.prototype, "click")
+        .mockImplementation(() => undefined);
+      window.showSaveFilePicker = vi.fn();
+      const retired = new Error("The artifact is no longer shown");
+
+      await expect(
+        saveBlobToDisk(
+          new Blob(["png"], { type: "image/png" }),
+          "diagram.png",
+          null,
+          () => {
+            throw retired;
+          },
+        ),
+      ).rejects.toBe(retired);
+
+      expect(window.showSaveFilePicker).not.toHaveBeenCalled();
+      expect(createObjectURL).not.toHaveBeenCalled();
+      expect(click).not.toHaveBeenCalled();
+    });
+
+    it("still uses the picker when there is no lifetime to honour (control)", async () => {
+      const writable = {
+        write: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      const createObjectURL = vi.fn(() => "blob:lifetime");
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: createObjectURL,
+      });
+      window.showSaveFilePicker = vi.fn().mockResolvedValue({
+        name: "diagram.png",
+        createWritable: vi.fn().mockResolvedValue(writable),
+      });
+
+      await expect(
+        saveBlobToDisk(
+          new Blob(["png"], { type: "image/png" }),
+          "diagram.png",
+          null,
+          null,
+        ),
+      ).resolves.toEqual({ name: "diagram.png", path: null });
+
+      expect(window.showSaveFilePicker).toHaveBeenCalledTimes(1);
+      expect(writable.close).toHaveBeenCalledTimes(1);
+      expect(createObjectURL).not.toHaveBeenCalled();
+    });
   });
 
   it("uses the shell's native save host before browser save APIs", async () => {
@@ -112,24 +238,31 @@ describe("saveBlobToDisk", () => {
 
     const blob = new Blob(["png"], { type: "image/png" });
     await expect(
-      saveBlobToDisk(blob, "diagram.png", {
-        saveFile,
-        openSavedFile: () => Promise.resolve(),
-        downloadFile: null,
-        downloadUrl: null,
+      saveBlobToDisk(
+        blob,
+        "diagram.png",
+        {
+          saveFile,
+          openSavedFile: () => Promise.resolve(),
+          downloadFile: null,
+          downloadUrl: null,
 
-        saveRoute: "download",
-      }),
+          saveRoute: "download",
+        },
+        null,
+      ),
     ).resolves.toEqual({
       name: "diagram.png",
       path: "/tmp/diagram.png",
     });
-    expect(saveFile).toHaveBeenCalledTimes(1);
-    expect(saveFile).toHaveBeenCalledWith({
-      name: "diagram.png",
-      type: "image/png",
-      bytes: await blob.arrayBuffer(),
-    });
+    const request = onlyRequest(saveFile.mock.calls);
+    expect(request.name).toBe("diagram.png");
+    expect(request.type).toBe("image/png");
+    // No lifetime was given, so the shell is told nothing can retire it.
+    expect(request.stillWanted).toBeNull();
+    expect(await bytesOf(request)).toEqual(
+      Array.from(new Uint8Array(await blob.arrayBuffer())),
+    );
     expect(window.showSaveFilePicker).not.toHaveBeenCalled();
     expect(createObjectURL).not.toHaveBeenCalled();
   });
@@ -153,22 +286,29 @@ describe("downloadBlobToDevice", () => {
 
     const blob = new Blob(["png"], { type: "image/png" });
     await expect(
-      downloadBlobToDevice(blob, "usage.png", {
-        saveFile,
-        openSavedFile: null,
-        downloadFile,
-        downloadUrl: null,
-        saveRoute: "share",
-      }),
+      downloadBlobToDevice(
+        blob,
+        "usage.png",
+        {
+          saveFile,
+          openSavedFile: null,
+          downloadFile,
+          downloadUrl: null,
+          saveRoute: "share",
+        },
+        null,
+      ),
     ).resolves.toEqual({
       name: "usage.png",
       path: "file:///docs/Traycer/usage.png",
     });
-    expect(downloadFile).toHaveBeenCalledWith({
-      name: "usage.png",
-      type: "image/png",
-      bytes: await blob.arrayBuffer(),
-    });
+    const request = onlyRequest(downloadFile.mock.calls);
+    expect(request.name).toBe("usage.png");
+    expect(request.type).toBe("image/png");
+    expect(request.stillWanted).toBeNull();
+    expect(await bytesOf(request)).toEqual(
+      Array.from(new Uint8Array(await blob.arrayBuffer())),
+    );
     expect(saveFile).not.toHaveBeenCalled();
   });
 
@@ -190,6 +330,7 @@ describe("downloadBlobToDevice", () => {
           downloadUrl: null,
           saveRoute: "download",
         },
+        null,
       ),
     ).resolves.toEqual({ name: "usage.png", path: "/tmp/usage.png" });
     expect(saveFile).toHaveBeenCalledTimes(1);
@@ -212,6 +353,7 @@ describe("downloadBlobToDevice", () => {
       downloadBlobToDevice(
         new Blob(["png"], { type: "image/png" }),
         "usage.png",
+        null,
         null,
       ),
     ).resolves.toEqual({ name: "usage.png", path: null });
@@ -260,6 +402,7 @@ describe("canDownloadToDevice", () => {
         new Blob(["x"], { type: "image/png" }),
         "u.png",
         shell,
+        null,
       ),
     ).rejects.toThrow("no download destination");
     expect(shell.saveFile).not.toHaveBeenCalled();

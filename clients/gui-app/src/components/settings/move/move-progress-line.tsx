@@ -185,6 +185,7 @@ function MoveDiagnosticsSaveButton(props: OverviewCardLineProps): ReactNode {
         }),
         MOVE_DIAGNOSTICS_FILE_NAME,
         runner?.fileSave ?? null,
+        null,
       );
     },
   });

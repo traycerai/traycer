@@ -178,6 +178,7 @@ describe("saveBlobToDisk", () => {
       new Blob(["x"], { type: "image/png" }),
       "d.png",
       fileSaveHost(saveFile, () => Promise.resolve()),
+      null,
     );
 
     expect(result).toEqual({ name: "d.png", path: "/tmp/d.png" });
@@ -190,7 +191,7 @@ describe("saveBlobToDisk", () => {
       expect.objectContaining({ name: "d.png", type: "image/png" }),
     );
     const [[input]] = saveFile.mock.calls;
-    expect(input.bytes).toBeInstanceOf(ArrayBuffer);
+    expect(await input.readBytes()).toBeInstanceOf(ArrayBuffer);
   });
 
   it("resolves null when the save host reports a dismissal", async () => {
@@ -198,6 +199,7 @@ describe("saveBlobToDisk", () => {
       new Blob(["x"], { type: "image/png" }),
       "d.png",
       fileSaveHost(resolvingSaveFile(null), () => Promise.resolve()),
+      null,
     );
 
     expect(result).toBeNull();
@@ -208,8 +210,67 @@ describe("saveBlobToDisk", () => {
       new Blob(["x"], { type: "image/png" }),
       "d.png",
       fileSaveHost(resolvingSaveFile({ name: "d.png", path: null }), null),
+      null,
     );
 
     expect(result).toEqual({ name: "d.png", path: null });
+  });
+
+  it("keeps a cancellation authoritative when aborting the writable also fails: it resolves null and never falls back to a download", async () => {
+    const cancelled = new DOMException("The save was cancelled.", "AbortError");
+    const writable = {
+      write: vi.fn(() => Promise.reject(cancelled)),
+      close: vi.fn(() => Promise.resolve()),
+      abort: vi.fn(() =>
+        Promise.reject(new Error("The writable could not be aborted.")),
+      ),
+    };
+    const handle = {
+      name: "d.png",
+      createWritable: () => Promise.resolve(writable),
+    };
+    const pickerDescriptor = Object.getOwnPropertyDescriptor(
+      window,
+      "showSaveFilePicker",
+    );
+    Object.defineProperty(window, "showSaveFilePicker", {
+      value: vi.fn(() => Promise.resolve(handle)),
+      configurable: true,
+      writable: true,
+    });
+    const objectUrlDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "createObjectURL",
+    );
+    const createObjectURL = vi.fn(() => "blob:fallback");
+    Object.defineProperty(URL, "createObjectURL", {
+      value: createObjectURL,
+      configurable: true,
+      writable: true,
+    });
+    const anchorClick = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    try {
+      const result = await saveBlobToDisk(
+        new Blob(["x"], { type: "image/png" }),
+        "d.png",
+        null,
+        null,
+      );
+
+      expect(result).toBeNull();
+      expect(writable.abort).toHaveBeenCalledTimes(1);
+      expect(createObjectURL).not.toHaveBeenCalled();
+      expect(anchorClick).not.toHaveBeenCalled();
+    } finally {
+      if (pickerDescriptor === undefined)
+        Reflect.deleteProperty(window, "showSaveFilePicker");
+      else
+        Object.defineProperty(window, "showSaveFilePicker", pickerDescriptor);
+      if (objectUrlDescriptor === undefined)
+        Reflect.deleteProperty(URL, "createObjectURL");
+      else Object.defineProperty(URL, "createObjectURL", objectUrlDescriptor);
+    }
   });
 });

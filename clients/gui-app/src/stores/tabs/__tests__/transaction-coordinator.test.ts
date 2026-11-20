@@ -11,10 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import {
-  __resetTabSyncCoordinatorForTesting,
-  installTabSyncCoordinator,
-} from "@/lib/tab-sync/tab-sync-coordinator";
+import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import {
   browserTabId,
   resetBrowserTabIdentityForTesting,
@@ -56,6 +53,11 @@ import {
   type TabCommandCoordinatorDiagnostics,
 } from "@/stores/tabs/tab-command-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  openEpicSource,
+  resetStores,
+  seedCommittedLayout,
+} from "@/stores/tabs/test-support/tab-layout-test-support";
 import type { TabRef } from "@/stores/tabs/types";
 import {
   landingDraftIsRetired,
@@ -173,38 +175,6 @@ function captureSession(): CaptureSession {
       };
     },
   };
-}
-
-function resetStores(): void {
-  useTabsStore.setState({
-    version: 2,
-    items: [],
-    activeItemId: null,
-    stripOrder: [],
-    systemTabs: { history: null, settings: null },
-  });
-  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useLandingDraftStore.setState({
-    drafts: [],
-    activeDraftId: null,
-    resumeDraftId: null,
-  });
-  __resetTabSyncCoordinatorForTesting();
-}
-
-function seedCommittedLayout(layout: PersistedTabStripLayout): void {
-  useTabsStore.setState({
-    ...layout,
-    stripOrder: flattenLayoutRefs(layout),
-  });
-}
-
-function openEpicSource(
-  epicId: string,
-  name: string,
-): { readonly tabId: string; readonly ref: TabRef } {
-  const tabId = useEpicCanvasStore.getState().openEpicTab(epicId, name);
-  return { tabId, ref: { kind: "epic", id: tabId } };
 }
 
 function openDraftSource(): TabRef {

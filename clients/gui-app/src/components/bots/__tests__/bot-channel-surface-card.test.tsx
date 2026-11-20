@@ -17,7 +17,14 @@ import {
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
 import { StrictMode } from "react";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
@@ -67,6 +74,24 @@ import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import * as Y from "yjs";
+import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
+import {
+  defaultTestEpicSessionEnvironment,
+  installTestEpicSessionEnvironment,
+  setTestEffectiveHost,
+} from "@/lib/registries/test-support/epic-session-controller-test-support";
+import {
+  createTestHostClient,
+  type TestHostHandlers,
+} from "@/lib/host/test-support/test-host-client";
+import { useAuthStore, type AuthState } from "@/stores/auth/auth-store";
+import { answerArtifactObjectRead } from "@/lib/host/test-support/artifact-object-answer";
+import { setArtifactFieldsInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
+import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
+import { AlwaysIntersectingObserver } from "@/components/bots/__tests__/always-intersecting-observer";
+import { expectArtifactOpenIntent } from "@/components/bots/__tests__/artifact-open-intent-support";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 
 type TranscriptState = Pick<
   ChatSessionState,
@@ -104,6 +129,7 @@ const mocks = vi.hoisted(() => ({
   route: vi.fn<(...args: unknown[]) => void>(),
   resolveArtifact:
     vi.fn<(args: unknown) => Promise<ResolveArtifactByPathResult | null>>(),
+  activateTabIntent: vi.fn<(intent: TabActivationIntent) => void>(),
 }));
 
 vi.mock(
@@ -129,11 +155,25 @@ vi.mock("@/lib/notifications/payload", async (importOriginal) => ({
 // The tab-navigation controller holds an activation until the router has
 // hydrated; this suite has no router, so the navigate it would issue is
 // issued at once, as in the chat link provider's suite.
-vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
-  navigateToTabIntent: (navigate: (intent: unknown) => void, intent: unknown) =>
-    navigate(intent),
-}));
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/lib/tab-navigation")>();
+  return {
+    ...original,
+    navigateToTabIntent: (
+      navigate: (intent: unknown) => void,
+      intent: unknown,
+    ) => navigate(intent),
+    // The router boundary this suite has no router for: the intent that would
+    // be handed to it is recorded, then passed on as before.
+    activateTabIntent: (
+      ...args: Parameters<typeof original.activateTabIntent>
+    ) => {
+      mocks.activateTabIntent(args[1]);
+      return original.activateTabIntent(...args);
+    },
+  };
+});
 vi.mock("@/lib/host/resolve-artifact-by-path", () => ({
   fetchResolveArtifactByPath: (args: unknown) => mocks.resolveArtifact(args),
 }));
@@ -156,11 +196,17 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   useHostMethodSupport: (_hostId: string, method: string) =>
     !mocks.unsupported.has(method),
 }));
-vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
-  usePaneVisible: () => true,
-  usePaneFocused: () => true,
-  usePaneFocusProbe: () => () => true,
-}));
+vi.mock(
+  "@/components/epic-tabs/pane-visibility-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-tabs/pane-visibility-context")
+    >()),
+    usePaneVisible: () => true,
+    usePaneFocused: () => true,
+    usePaneFocusProbe: () => () => true,
+  }),
+);
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: [{ conversationId: CHANNEL_ID }] },
@@ -195,6 +241,18 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => null,
 }));
+// JSDOM never fetches a served artifact URL, so the real frame reads nothing
+// here. The driver stands in for the browser's entry-document request (test-only;
+// object-port and shared-renderer proof, not iframe or Expand proof).
+vi.mock("@/components/sandbox/sandbox-frame", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/components/sandbox/sandbox-frame")
+  >()),
+  SandboxFrame: (
+    await import("@/components/sandbox/__tests__/artifact-frame-browser-driver")
+  ).ArtifactFrameBrowserDriver,
+}));
+
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =
     await import("@/components/chat/__tests__/chat-expansion-test-providers");
@@ -620,6 +678,7 @@ beforeEach(() => {
   mocks.navigate.mockReset();
   mocks.route.mockReset();
   mocks.resolveArtifact.mockReset();
+  mocks.activateTabIntent.mockReset();
   rowBlocks.clear();
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   useBotSurfaceActionsStore.setState({ entries: {} });
@@ -660,7 +719,7 @@ describe("<BotChannelView tiles={null} /> a post's surface card: what it shows",
     );
   });
 
-  it("names what an approval wants, a parked page by its title, and an artifact by its name", () => {
+  it("names what an approval wants and a parked page by its title, and shows an artifact reference as the shared figure with no title or Open before its task snapshot has loaded", () => {
     mountChannel({
       rows: [
         botPost(APPROVAL, "Approve the publish?", "post-approval"),
@@ -671,33 +730,32 @@ describe("<BotChannelView tiles={null} /> a post's surface card: what it shows",
       surfaceActions: [],
     });
 
+    // Only the approval and the parked page are generic surface cards.
     const cards = screen.getAllByTestId("bot-surface-card");
     expect(
       cards.map(
         (each) =>
           within(each).getByTestId("bot-surface-card-title").textContent,
       ),
-    ).toEqual([
-      "Wants to use Bash: npm publish",
-      "Sign in to Example",
-      "rollout",
-    ]);
+    ).toEqual(["Wants to use Bash: npm publish", "Sign in to Example"]);
     expect(
       cards.map(
         (each) =>
           within(each).queryByTestId("bot-surface-card-state")?.textContent ??
           null,
       ),
-    ).toEqual(["Needs your decision", "Waiting for you to sign in", null]);
+    ).toEqual(["Needs your decision", "Waiting for you to sign in"]);
     expect(
       within(cards[0]).getByRole("button", { name: "Allow" }),
     ).toBeTruthy();
     expect(within(cards[0]).getByRole("button", { name: "Deny" })).toBeTruthy();
-    expect(
-      within(cards[2])
-        .getAllByRole("button")
-        .map((button) => button.textContent),
-    ).toEqual(["Open"]);
+
+    // The artifact reference is the shared figure. Its task's snapshot has not
+    // been delivered (this is a pending boundary, not a refusal), so it names
+    // nothing and offers no Open.
+    const figure = screen.getByTestId("artifact-row");
+    expect(within(figure).queryByText("rollout")).toBeNull();
+    expect(within(figure).queryAllByRole("button")).toHaveLength(0);
   });
 
   it("shows a settled surface's resolution, by whom, and offers only Open", () => {
@@ -990,32 +1048,23 @@ describe("<BotChannelView tiles={null} /> a post's surface card: Open", () => {
     expect(mocks.route).not.toHaveBeenCalled();
   });
 
-  it("opens an artifact in its task, focused on it", async () => {
-    const user = userEvent.setup();
-    mocks.resolveArtifact.mockResolvedValue({
-      artifactId: "artifact-rollout",
-      kind: "spec",
-    });
+  it("offers no Open on an artifact reference before its task snapshot has loaded, and looks nothing up by path", () => {
     mountChannel({
       rows: [post(ARTIFACT)],
       tasks: [task([])],
       surfaceActions: [],
     });
 
-    await user.click(within(card()).getByRole("button", { name: "Open" }));
-
-    await vi.waitFor(() => expect(mocks.navigate).toHaveBeenCalled());
-    expect(mocks.resolveArtifact).toHaveBeenCalledWith(
-      expect.objectContaining({
-        hostId: HOST_ID,
-        epicId: TASK_ID,
-        filePath: `epics/${TASK_ID}/artifacts/plans/rollout/index.md`,
-      }),
-    );
-    expect(focusedArtifact()).toEqual({
-      epicId: TASK_ID,
-      artifactId: "artifact-rollout",
-    });
+    // The admitted Open, with the reference host and Tracy provenance, is
+    // covered by the live artifact card cases below.
+    const figure = screen.getByTestId("artifact-row");
+    expect(
+      within(figure).queryByRole("button", { name: "Open in panel" }),
+    ).toBeNull();
+    expect(within(figure).queryByRole("button", { name: "Open" })).toBeNull();
+    expect(mocks.resolveArtifact).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 
   it("opens an artifact path in the bot's own text through the channel's link policy", async () => {
@@ -1682,4 +1731,230 @@ describe("<BotChannelView tiles={null} /> a post's surface card: answering and d
       expect(acts).toEqual([]);
     },
   );
+});
+
+describe("<BotChannelView tiles={null} /> a post's live artifact card", () => {
+  // The frame is the test-only browser driver: these cases prove which host the
+  // bytes come from and when, through the shared renderer's object port. Real
+  // iframe, Expand and one-instance proof belong to the browser fixtures.
+  const LIVE_ARTIFACT: BotSurfaceReference = {
+    kind: "artifact",
+    epicId: TASK_ID,
+    hostId: TASK_HOST_ID,
+    artifactPath: "rollout/index.html",
+    resolution: null,
+  };
+  const INDEX_SHA = "a".repeat(64);
+  const sessionHarness = createEpicSessionTestHarness(TASK_ID);
+  let previousAuth: AuthState;
+  const queryClient = new QueryClient();
+  const objectReads: Record<string, number> = {};
+  const handlersByHost = new Map<string, TestHostHandlers>();
+
+  function handlersFor(hostId: string) {
+    const held = handlersByHost.get(hostId);
+    if (held !== undefined) return held;
+    const made: TestHostHandlers = {
+      "epic.readArtifactObject": (request) => {
+        objectReads[hostId] = (objectReads[hostId] ?? 0) + 1;
+        return answerArtifactObjectRead(request, "<html></html>", "text/html");
+      },
+    };
+    handlersByHost.set(hostId, made);
+    return made;
+  }
+
+  function seedRollout(doc: Y.Doc): void {
+    setArtifactFieldsInDocForTests(doc, "artifact-rollout", {
+      kind: "html",
+      title: "Rollout plan",
+      folderName: "rollout",
+      parentId: null,
+      createdAt: 1,
+      updatedAt: 2,
+      createdManually: true,
+      head: {
+        files: {
+          "index.html": {
+            sha256: INDEX_SHA,
+            byteLength: 13,
+            mediaType: "text/html",
+            status: "published",
+          },
+        },
+        capturedAt: 5,
+      },
+    });
+  }
+
+  beforeEach(() => {
+    // The cards are all in view: a card is shown only while it is presented.
+    vi.stubGlobal("IntersectionObserver", AlwaysIntersectingObserver);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    handlersByHost.clear();
+    for (const key of Object.keys(objectReads)) delete objectReads[key];
+    __getOpenEpicRegistryForTests().disposeAll();
+    const resolveHostClient = (hostId: string) =>
+      createTestHostClient(
+        hostId,
+        VIEWER_USER_ID,
+        queryClient,
+        handlersFor(hostId),
+      );
+    installTestEpicSessionEnvironment({
+      ...defaultTestEpicSessionEnvironment(),
+      resolveHostClient,
+    });
+    setTestEffectiveHost(HOST_ID, true);
+    // The tab's own client: a wrong route would land its read here.
+    mocks.client = createTestHostClient(
+      HOST_ID,
+      VIEWER_USER_ID,
+      queryClient,
+      handlersFor(HOST_ID),
+    );
+    sessionHarness.install(seedRollout, "editor");
+    previousAuth = useAuthStore.getState();
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: VIEWER_USER_ID,
+        userName: "Olive Owner",
+        email: "olive@example.com",
+        avatarUrl: null,
+      },
+      contextMetadata: { userId: VIEWER_USER_ID, username: "Olive Owner" },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.setState(previousAuth, true);
+    sessionHarness.teardown();
+    __getOpenEpicRegistryForTests().disposeAll();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** The live card is the shared figure; it has no surface-card wrapper. */
+  function liveCard(): HTMLElement {
+    return screen.getByTestId("artifact-row");
+  }
+
+  async function deliverSnapshot(): Promise<void> {
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  it("asks for no artifact bytes until the task's own snapshot has loaded, then reads them from the task's host only", async () => {
+    mountChannel({
+      rows: [botPost(LIVE_ARTIFACT, "The rollout plan is ready.", "post-live")],
+      tasks: [],
+      surfaceActions: [],
+    });
+    expect(objectReads).toEqual({});
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+
+    await deliverSnapshot();
+
+    await vi.waitFor(() =>
+      expect(objectReads[TASK_HOST_ID] ?? 0).toBeGreaterThan(0),
+    );
+    expect(objectReads[HOST_ID]).toBeUndefined();
+    expect(document.querySelectorAll("iframe")).toHaveLength(1);
+  });
+
+  it("admits the task through the registry without opening a tab or keeping an artifact room hot", async () => {
+    const tabsBefore = useEpicCanvasStore.getState().openTabOrder;
+    mountChannel({
+      rows: [botPost(LIVE_ARTIFACT, "The rollout plan is ready.", "post-live")],
+      tasks: [],
+      surfaceActions: [],
+    });
+    await deliverSnapshot();
+    await vi.waitFor(() =>
+      expect(objectReads[TASK_HOST_ID] ?? 0).toBeGreaterThan(0),
+    );
+
+    const handle = __getOpenEpicRegistryForTests().peek(TASK_ID);
+    if (handle === null) throw new Error("the task was not admitted");
+    expect(handle.hotArtifactRoomIdsForTests()).toEqual([]);
+    // The reference opened no tab of its own: no fake tab stands in for it.
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual(tabsBefore);
+  });
+
+  it("opens the artifact in its task through the existing navigation, not through the tab's host", async () => {
+    mountChannel({
+      rows: [botPost(LIVE_ARTIFACT, "The rollout plan is ready.", "post-live")],
+      tasks: [],
+      surfaceActions: [],
+    });
+    await deliverSnapshot();
+    // A synchronous click: user-event's action wrapper waits on a timer
+    // that vitest's fake clock never advances.
+    fireEvent.click(
+      within(liveCard()).getByRole("button", { name: "Open in panel" }),
+    );
+
+    expectArtifactOpenIntent(mocks.activateTabIntent.mock.calls, {
+      epicId: TASK_ID,
+      artifactId: "artifact-rollout",
+      title: "Rollout plan",
+      // The reference host, not the window's: HOST_ID is the tab's.
+      hostId: TASK_HOST_ID,
+      botId: BOT_ID,
+    });
+    // The id came from the admitted handle, not from a path lookup.
+    expect(mocks.resolveArtifact).not.toHaveBeenCalled();
+    expect(objectReads[HOST_ID]).toBeUndefined();
+  });
+
+  it("shows a path no artifact answers as unavailable and reads nothing", async () => {
+    mountChannel({
+      rows: [
+        botPost(
+          { ...LIVE_ARTIFACT, artifactPath: "missing/index.html" },
+          "Gone.",
+          "post-gone",
+        ),
+      ],
+      tasks: [],
+      surfaceActions: [],
+    });
+    await deliverSnapshot();
+
+    expect(screen.getByText(/unavailable/i)).toBeTruthy();
+    expect(objectReads).toEqual({});
+  });
+
+  it("two posts of one task share one session entry", async () => {
+    mountChannel({
+      rows: [
+        botPost(LIVE_ARTIFACT, "First.", "post-1"),
+        botPost(LIVE_ARTIFACT, "Second.", "post-2"),
+      ],
+      tasks: [],
+      surfaceActions: [],
+    });
+    await deliverSnapshot();
+
+    expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  it("stops asking for bytes once its row has gone", async () => {
+    const view = mountChannel({
+      rows: [botPost(LIVE_ARTIFACT, "Ready.", "post-live")],
+      tasks: [],
+      surfaceActions: [],
+    });
+    await deliverSnapshot();
+    await vi.waitFor(() =>
+      expect(objectReads[TASK_HOST_ID] ?? 0).toBeGreaterThan(0),
+    );
+
+    view.write([]);
+    const settled = objectReads[TASK_HOST_ID];
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(objectReads[TASK_HOST_ID]).toBe(settled);
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+  });
 });

@@ -2,8 +2,9 @@ import { ipcRenderer, webUtils } from "electron";
 import { RunnerHostInvoke } from "../ipc-contracts/ipc-channels";
 import type {
   FileDownloadUrlInput,
-  FileSaveInput,
+  FileSavePickInput,
   FileSaveResult,
+  FileSaveWriteInput,
 } from "../ipc-contracts/platform-types";
 
 export interface FileDropWriteTemporaryInput {
@@ -17,8 +18,11 @@ export interface FileDropsBridgeSurface {
   writeTemporaryFile(input: FileDropWriteTemporaryInput): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
-  saveFile(input: FileSaveInput): Promise<FileSaveResult | null>;
-  /** Open a file a prior `saveFile` wrote, with the OS default application. */
+  /** The save dialog; a one-shot target id, or `null` when dismissed. */
+  pickFileSaveTarget(input: FileSavePickInput): Promise<string | null>;
+  writeFileSave(input: FileSaveWriteInput): Promise<FileSaveResult>;
+  cancelFileSave(id: string): Promise<void>;
+  /** Open a file a prior `writeFileSave` wrote, with the OS default application. */
   openSavedFile(path: string): Promise<void>;
   /** Download an https URL natively into a file the user names. */
   downloadUrl(input: FileDownloadUrlInput): Promise<FileSaveResult | null>;
@@ -73,11 +77,17 @@ export function buildFileDropsBridge(
             RunnerHostInvoke.fileDropReadNativeClipboardPaths,
           ) as Promise<readonly string[]>)
         : Promise.resolve([]),
-    saveFile: (input) =>
+    pickFileSaveTarget: (input) =>
+      ipcRenderer.invoke(RunnerHostInvoke.fileSavePick, input) as Promise<
+        string | null
+      >,
+    writeFileSave: (input) =>
       ipcRenderer.invoke(
-        RunnerHostInvoke.fileSave,
+        RunnerHostInvoke.fileSaveWrite,
         input,
-      ) as Promise<FileSaveResult | null>,
+      ) as Promise<FileSaveResult>,
+    cancelFileSave: (id) =>
+      ipcRenderer.invoke(RunnerHostInvoke.fileSaveCancel, id) as Promise<void>,
     openSavedFile: (path) =>
       ipcRenderer.invoke(RunnerHostInvoke.fileOpenSaved, path) as Promise<void>,
     downloadUrl: (input) =>

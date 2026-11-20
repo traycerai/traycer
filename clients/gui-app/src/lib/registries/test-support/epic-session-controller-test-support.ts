@@ -19,9 +19,11 @@
  * knows its entries, exactly as sign-out does in production.
  */
 import { afterEach } from "vitest";
+import * as Y from "yjs";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { fakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
 import {
@@ -29,6 +31,7 @@ import {
   installEpicSessionControllerEnvironment,
 } from "@/lib/registries/epic-session-controller";
 import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
@@ -156,3 +159,35 @@ export function readTestEpicSessionHostClientResolver():
 afterEach(() => {
   hostClientResolverOverride = null;
 });
+
+/**
+ * Seed a LOCAL root edit without reaching for a `Y.Doc` directly on the
+ * handle - it lives on the worker thread, so `applyRootUpdate` is the surface
+ * production itself writes through. The entry then holds unsynced work.
+ */
+export async function seedLocalRootEdit(
+  handle: OpenEpicStoreHandle,
+  key: string,
+  value: string,
+): Promise<void> {
+  const donor = new Y.Doc();
+  donor.getMap("epic").set(key, value);
+  await handle.applyRootUpdate(Y.encodeStateAsUpdate(donor), true);
+  donor.destroy();
+}
+
+/** The snapshot meta a host sends for an epic the viewer may edit. */
+export function snapshotMeta(roomId: string): SnapshotMetaEpic {
+  return {
+    schemaVersion: "2.0.0",
+    roomId,
+    epicLight: null,
+    permissionRole: "editor",
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64: "AA==",
+  };
+}
