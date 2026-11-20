@@ -60,5 +60,9 @@ export function applyQuitDecision(
  * failure at the switch above rather than a silent fall-through to "quit".
  */
 function unhandledQuitDecision(decision: never): Error {
-  return new Error(`unhandled quit decision: ${String(decision)}`);
+  // The decision is not rendered into the message: the only way to reach this
+  // is a value that slipped past the type system, and the call site in the
+  // stack identifies the switch.
+  void decision;
+  return new Error("unhandled quit decision");
 }

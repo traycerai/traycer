@@ -105,10 +105,13 @@ export async function dispatchCuratedCdp(
       };
     }
     default: {
+      // The command is NOT serialised. Reaching here means a kind this build
+      // does not know arrived across the boundary, and a CDP command carries
+      // page content - `cdpInsertText` its text, `cdpEvaluate` its expression.
+      // Sinks log whole error objects, so dumping one would publish that.
       const exhaustive: never = command;
-      throw new Error(
-        `Unhandled browser CDP command: ${JSON.stringify(exhaustive)}`,
-      );
+      void exhaustive;
+      throw new Error("Unhandled browser CDP command");
     }
   }
 }

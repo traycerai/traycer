@@ -628,12 +628,20 @@ async function serve(
   }
 }
 
+// The call is NOT serialised. Reaching here means a `kind` this build does not
+// know arrived across the bridge, so the value is unvalidated inbound structure
+// - `isMainToWorkerFrame` accepts any string `kind` and trusts the rest. This
+// message is not thrown here but carried in the reply, and `issueCall` turns it
+// into `new BridgeCallError(result.name, result.message)`, whose `super(message)`
+// puts it on an Error that sinks log whole. `name` already tells a caller which
+// failure class this is, which is what the remote-name field exists for.
 function unservedCall(call: never): ServedReply {
+  void call;
   return {
     result: {
       outcome: "error",
       name: "BridgeUnknownCallError",
-      message: `The runtime worker has no handler for ${JSON.stringify(call)}`,
+      message: "The runtime worker has no handler for this call",
     },
     transfer: [],
   };

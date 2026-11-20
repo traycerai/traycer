@@ -163,10 +163,17 @@ export function interpretProbeMarker(input: {
   }
 }
 
+// Neither guard serialises its value. Both are reachable only by an arm that
+// slipped past the type system, which here means it came out of the probe
+// marker's parse - unvalidated structure read off a boundary - and sinks log
+// whole error objects. The union is named in the text and the call site is in
+// the stack, which is what a reader needs.
 function exhaustiveFrame(frame: never): never {
-  throw new Error(`Unhandled Layer0Frame: ${JSON.stringify(frame)}`);
+  void frame;
+  throw new Error("Unhandled Layer0Frame");
 }
 
 function exhaustiveOutcome(outcome: never): never {
-  throw new Error(`Unhandled probe marker outcome: ${JSON.stringify(outcome)}`);
+  void outcome;
+  throw new Error("Unhandled probe marker outcome");
 }

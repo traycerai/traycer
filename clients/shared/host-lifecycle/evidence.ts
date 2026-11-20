@@ -50,9 +50,16 @@ export function indeterminate<T, Cause extends string>(
  * The throw is unreachable by construction; it exists so a value that slipped
  * past the type system at runtime (untyped JSON, a version skew across a
  * package boundary) is loud rather than silently mis-planned.
+ *
+ * That same sentence is why the value is NOT serialised into the message: the
+ * only values that reach here came out of an unvalidated parse, and sinks log
+ * whole error objects, so rendering one would publish whatever it carried.
+ * `context` is supplied by the caller and names the union, which is the part
+ * a reader needs.
  */
 export function assertNever(value: never, context: string): never {
-  throw new Error(`${context}: unhandled union arm ${JSON.stringify(value)}`);
+  void value;
+  throw new Error(`${context}: unhandled union arm`);
 }
 
 /**

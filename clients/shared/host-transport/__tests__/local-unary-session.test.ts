@@ -2002,7 +2002,9 @@ describe("local unary session", () => {
       throw new Error("expected the malformed frame");
     }
     expect(error.code).toBe("RPC_ERROR");
-    expect(error.message).toBe("Malformed host frame: not-json");
+    expect(error.message).toBe(
+      "Malformed host frame: not valid JSON (length 8)",
+    );
     expect(error.fatalDetails).toBeNull();
     expect(mayHaveReachedHost(error)).toBe(false);
     expect(requestFrames(discovering)).toHaveLength(0);
@@ -2055,7 +2057,7 @@ describe("local unary session", () => {
       throw new Error("expected the invalid frame");
     }
     expect(error.message).toBe(
-      `Malformed host frame: ${JSON.stringify({ kind: "nope" })}`,
+      "Malformed host frame: failed schema validation (length 15)",
     );
     expect(requestFrames(discovering)).toHaveLength(0);
     expect(discovering.socket.closed).toEqual({ code: 1000, reason: "ok" });
