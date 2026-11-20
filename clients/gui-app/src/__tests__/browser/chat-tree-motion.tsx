@@ -189,6 +189,8 @@ interface RowSample {
   readonly bottom: number;
   readonly left: number;
   readonly opacity: number;
+  /** When it was sampled, in ms after the change (0 before it). */
+  readonly at: number;
 }
 const LOCAL_ROW_PREFIX = "epic-sidebar-item-";
 const CLOUD_ROW_PREFIX = "epic-sidebar-cloud-item-";
@@ -204,7 +206,7 @@ function drawnOpacity(element: HTMLElement): number {
   }
   return Math.round(opacity * 1000) / 1000;
 }
-function sampleOf(id: string, element: HTMLElement): RowSample {
+function sampleOf(id: string, element: HTMLElement, at: number): RowSample {
   const box = element.getBoundingClientRect();
   return {
     id,
@@ -212,6 +214,7 @@ function sampleOf(id: string, element: HTMLElement): RowSample {
     bottom: Math.round(box.bottom * 10) / 10,
     left: Math.round(box.left * 10) / 10,
     opacity: drawnOpacity(element),
+    at,
   };
 }
 /**
@@ -219,7 +222,7 @@ function sampleOf(id: string, element: HTMLElement): RowSample {
  * its cloud chat id), and every group rail's, by `rail:` and the row key of
  * the row that owns it.
  */
-function sampleRows(): RowSample[] {
+function sampleRows(at: number): RowSample[] {
   const out: RowSample[] = [];
   for (const button of document.querySelectorAll<HTMLElement>(
     `[data-testid^="${LOCAL_ROW_PREFIX}"], [data-testid^="${CLOUD_ROW_PREFIX}"]`,
@@ -231,13 +234,14 @@ function sampleRows(): RowSample[] {
           ? testId.slice(CLOUD_ROW_PREFIX.length)
           : testId.slice(LOCAL_ROW_PREFIX.length),
         button,
+        at,
       ),
     );
   }
   for (const rail of document.querySelectorAll<HTMLElement>(
     "[data-tree-guide-for]",
   )) {
-    out.push(sampleOf(`rail:${rail.dataset.treeGuideFor ?? ""}`, rail));
+    out.push(sampleOf(`rail:${rail.dataset.treeGuideFor ?? ""}`, rail, at));
   }
   return out;
 }
@@ -253,6 +257,8 @@ async function nextFrame(): Promise<void> {
  * then a slide, 160 ms each, with margin.
  */
 const RECORD_WINDOW_MS = 5 * 160;
+/** The index of the commit counted for the last change, when counting. */
+let changeCommit: number | null = null;
 /**
  * Samples, runs `change`, then samples once per frame until it has taken at
  * least `frames` frames and `RECORD_WINDOW_MS` has passed since the change.
@@ -261,7 +267,9 @@ async function record(
   change: () => void,
   frames: number,
 ): Promise<RowSample[][]> {
-  const samples: RowSample[][] = [sampleRows()];
+  const samples: RowSample[][] = [sampleRows(0)];
+  const log: unknown = Reflect.get(window, "__chatTreeCommits");
+  changeCommit = isCommitLog(log) && log.on ? log.commits.length : null;
   const start = performance.now();
   change();
   while (
@@ -269,7 +277,7 @@ async function record(
     performance.now() - start < RECORD_WINDOW_MS
   ) {
     await nextFrame();
-    samples.push(sampleRows());
+    samples.push(sampleRows(Math.round((performance.now() - start) * 10) / 10));
   }
   return samples;
 }
@@ -401,11 +409,15 @@ const probe = {
     log.panel = panel;
     log.on = true;
   },
-  /** The commits counted since `startCommitCount`, counting off. */
+  /**
+   * The commits counted from the last recorded change's on, the first being
+   * that change's; counting off.
+   */
   stopCommitCount: (): CommitCount[] => {
     const log = commitLog();
     log.on = false;
-    return [...log.commits];
+    if (changeCommit === null) throw new Error("no change was recorded");
+    return log.commits.slice(changeCommit);
   },
   seedCloudChats,
   recordCloud: (specs: readonly CloudSpec[], frames: number) =>
@@ -416,7 +428,6 @@ const probe = {
   setShape: (shape: Shape) => {
     setShape(shape, []);
   },
-  sampleRows,
   recordShape: (shape: Shape, frames: number) =>
     record(() => {
       setShape(shape, []);
