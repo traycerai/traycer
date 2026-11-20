@@ -138,6 +138,46 @@ async function tokensFor(
   return { source, mintCalls: () => mintCalls };
 }
 
+/**
+ * An app started while authn cannot be reached. The stored sign-in stays the
+ * window's lease, but the session is unverified, so this source's `signIn`
+ * returns null and every mint ends `no-sign-in` without asking authn.
+ */
+async function unverifiedTokens(
+  hostId: string,
+  held: { readonly token: string; readonly expiresAtMs: number } | null,
+): Promise<{
+  readonly source: HostTokenSource;
+  readonly signInReads: () => number;
+  readonly mintCalls: () => number;
+}> {
+  let signInReads = 0;
+  let mintCalls = 0;
+  const source = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => {
+      mintCalls += 1;
+      return Promise.resolve({
+        kind: "unavailable",
+        detail: "authn was asked",
+      });
+    },
+    signIn: () => {
+      signInReads += 1;
+      return null;
+    },
+    now: () => Date.now(),
+  });
+  if (held !== null) {
+    await source.adopt(USER_A, hostId, held, source.era(USER_A));
+  }
+  return {
+    source,
+    signInReads: () => signInReads,
+    mintCalls: () => mintCalls,
+  };
+}
+
 function openClient(hostId: string, source: HostTokenSource, owner: HostDirectoryEntry["owner"]) {
   const provider = newProvider();
   signIn(provider, USER_A, SIGN_IN_TOKEN);
@@ -552,6 +592,118 @@ describe("local stream while authn cannot mint", () => {
     expect(open.token).toBe(NO_HOST_TOKEN_PROBE);
     socket.fireMessage(namedRefusal("not_admitted"));
     await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS * 4);
+    expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE]);
+    expect(heard).toEqual([]);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("opens with the held expired token when the session is unverified", async () => {
+    const hostId = "local-unverified-held";
+    clearHostDoorState(hostId);
+    const expired = expiredJwt(Date.now());
+    const { source, signInReads, mintCalls } = await unverifiedTokens(
+      hostId,
+      expired,
+    );
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await vi.waitFor(() => expect(signInReads()).toBeGreaterThanOrEqual(1));
+    const socket = await socketAt(1);
+    const open = await readOpen(socket);
+    expect(open.token).toBe(expired.token);
+    expect(mintCalls()).toBe(0);
+    expect(hostDoorStateFor(hostId)).toBeNull();
+    expect(heard).toEqual([]);
+    socket.fireMessage(openAckFrame([], null));
+    await settle();
+    expect(sentTokens()).toEqual([expired.token]);
+    expect(hostDoorStateFor(hostId)).toBeNull();
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("opens with the placeholder, then the sign-in, when the session is unverified and none is held", async () => {
+    const hostId = "local-unverified-none";
+    clearHostDoorState(hostId);
+    const { source, signInReads, mintCalls } = await unverifiedTokens(
+      hostId,
+      null,
+    );
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await vi.waitFor(() => expect(signInReads()).toBeGreaterThanOrEqual(1));
+    const probe = await socketAt(1);
+    const probed = await readOpen(probe);
+    expect(probed.token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(releasedRefusal());
+    const second = await socketOnThisTurn(2);
+    const open = await readOpen(second);
+    expect(open.token).toBe(SIGN_IN_TOKEN);
+    expect(mintCalls()).toBe(0);
+    expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE, SIGN_IN_TOKEN]);
+    expect(heard).toEqual([]);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("opens a released host with the sign-in after the unverified session's held token is refused", async () => {
+    const hostId = "local-unverified-released-held";
+    clearHostDoorState(hostId);
+    const expired = expiredJwt(Date.now());
+    const { source, signInReads, mintCalls } = await unverifiedTokens(
+      hostId,
+      expired,
+    );
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await vi.waitFor(() => expect(signInReads()).toBeGreaterThanOrEqual(1));
+    const first = await socketAt(1);
+    const refused = await readOpen(first);
+    expect(refused.token).toBe(expired.token);
+    first.fireMessage(releasedRefusal());
+    const second = await socketOnThisTurn(2);
+    const open = await readOpen(second);
+    expect(open.token).toBe(SIGN_IN_TOKEN);
+    expect(mintCalls()).toBe(0);
+    second.fireMessage(openAckFrame([], null));
+    await settle();
+    expect(sentTokens()).toEqual([expired.token, SIGN_IN_TOKEN]);
+    expect(heard).toEqual([]);
+    expect(hostDoorStateFor(hostId)?.kind ?? null).not.toBe("token-expired");
+    expect(hostDoorStateFor(hostId)?.kind ?? null).not.toBe("token-unavailable");
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("sends only the placeholder to a current team host when the session is unverified and no token is held", async () => {
+    const hostId = "local-unverified-team-host";
+    clearHostDoorState(hostId);
+    const { source, signInReads, mintCalls } = await unverifiedTokens(
+      hostId,
+      null,
+    );
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await vi.waitFor(() => expect(signInReads()).toBeGreaterThanOrEqual(1));
+    const socket = await socketAt(1);
+    const open = await readOpen(socket);
+    expect(open.token).toBe(NO_HOST_TOKEN_PROBE);
+    socket.fireMessage(namedRefusal("not_admitted"));
+    await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS * 4);
+    expect(mintCalls()).toBe(0);
     expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE]);
     expect(heard).toEqual([]);
     session.close();

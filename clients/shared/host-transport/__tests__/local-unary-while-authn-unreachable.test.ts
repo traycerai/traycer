@@ -175,6 +175,33 @@ function sourceOf(outcomes: readonly HostTokenMintOutcome[]): {
   return { source, tokens: trackHostTokenMints(source) };
 }
 
+/**
+ * An unverified session: `signIn` returns null, so the mint ends `no-sign-in`
+ * and authn is never asked. The call's bearer lease is still the stored sign-in.
+ */
+async function unverifiedSource(
+  held: { readonly token: string; readonly expiresAtMs: number } | null,
+): Promise<{
+  readonly tokens: TrackedHostTokens;
+  readonly mintCalls: () => number;
+}> {
+  let mintCalls = 0;
+  const source = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => {
+      mintCalls += 1;
+      return Promise.resolve({
+        kind: "unavailable",
+        detail: "authn was asked",
+      });
+    },
+    signIn: () => null,
+    now: () => Date.now(),
+  });
+  if (held !== null) await holdExpired(source, held);
+  return { tokens: trackHostTokenMints(source), mintCalls: () => mintCalls };
+}
+
 async function holdExpired(
   source: HostTokenSource,
   token: { readonly token: string; readonly expiresAtMs: number },
@@ -512,6 +539,98 @@ describe("local unary while authn cannot mint", () => {
       value: { echoed: "hi" },
     });
     expect(driven.refusals).toEqual([]);
+  });
+
+  it("carries the held expired token when the session is unverified", async () => {
+    const expired = expiredJwt(Date.now());
+    const { tokens, mintCalls } = await unverifiedSource(expired);
+    const driven = driveCall(tokens, PERSONAL_ROW);
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const socket = driven.sockets[0];
+    if (socket === undefined) throw new Error("dial missing");
+    const open = await openAndRead(socket);
+    expect(open.token).toBe(expired.token);
+    expect(mintCalls()).toBe(0);
+    ackAndEcho(socket, open);
+    await answerEcho(socket);
+    expect(await driven.settled).toEqual({
+      kind: "fulfilled",
+      value: { echoed: "hi" },
+    });
+    expect(driven.states).toEqual([]);
+    expect(driven.sockets).toHaveLength(1);
+  });
+
+  it("opens with the placeholder, then the sign-in, when the session is unverified and none is held", async () => {
+    const { tokens, mintCalls } = await unverifiedSource(null);
+    const driven = driveCall(tokens, null);
+    clients.push(driven.client);
+    await admitAfterProbe(driven);
+    expect(mintCalls()).toBe(0);
+    expect(await driven.settled).toEqual({
+      kind: "fulfilled",
+      value: { echoed: "hi" },
+    });
+    expect(driven.refusals).toEqual([]);
+  });
+
+  it("opens a released host with the sign-in after the unverified session's held token is refused", async () => {
+    const expired = expiredJwt(Date.now());
+    const { tokens, mintCalls } = await unverifiedSource(expired);
+    const driven = driveCall(tokens, PERSONAL_ROW);
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const first = driven.sockets[0];
+    if (first === undefined) throw new Error("host-token dial missing");
+    const refused = await openAndRead(first);
+    expect(refused.token).toBe(expired.token);
+    first.fireMessage(releasedRefusal());
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    const second = driven.sockets[1];
+    if (second === undefined) throw new Error("sign-in dial missing");
+    const open = await openAndRead(second);
+    expect(open.token).toBe(SIGN_IN);
+    expect(mintCalls()).toBe(0);
+    ackAndEcho(second, open);
+    await answerEcho(second);
+    expect(await driven.settled).toEqual({
+      kind: "fulfilled",
+      value: { echoed: "hi" },
+    });
+    expect(driven.refusals).toEqual([]);
+  });
+
+  it("sends only the placeholder to a current team host when the session is unverified and no token is held", async () => {
+    const { tokens, mintCalls } = await unverifiedSource(null);
+    const driven = driveCall(tokens, null);
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const socket = driven.sockets[0];
+    if (socket === undefined) throw new Error("probe dial missing");
+    const open = await openAndRead(socket);
+    expect(open.token).toBe(NO_HOST_TOKEN_PROBE);
+    socket.fireMessage(namedRefusal("not_admitted"));
+    await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+    expect(await driven.settled).toMatchObject({ kind: "rejected" });
+    expect(driven.refusals).toEqual([]);
+    const again = requestEcho(driven.client);
+    expect(await again).toMatchObject({ kind: "rejected" });
+    expect(mintCalls()).toBe(0);
+    expect(driven.sockets).toHaveLength(1);
+    expect(openToken(socket)).toBe(NO_HOST_TOKEN_PROBE);
   });
 });
 
