@@ -616,4 +616,199 @@ describe("released personal host, local unary", () => {
       client.releaseIdleLocalSessions();
     }
   });
+
+  it("refreshes the refused sign-in once and the door hears nothing", async () => {
+    const recoveryCalls: string[] = [];
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const driven = driveUnaryRefresh(signIn, {
+      revalidateForReconnect: () => {
+        recoveryCalls.push("revalidateForReconnect");
+        signIn.rotate(ROTATED_SIGN_IN);
+        return Promise.resolve("rotated");
+      },
+    });
+    try {
+      await refuseHostTokenThenSignIn(driven);
+      await vi.waitFor(
+        () => expect(driven.sockets.length).toBeGreaterThanOrEqual(3),
+        WAIT,
+      );
+      const rotated = driven.sockets[2];
+      if (rotated === undefined) throw new Error("rotated dial missing");
+      rotated.fireOpen();
+      await vi.waitFor(() => expect(rotated.sent.length).toBeGreaterThan(0), WAIT);
+      const open = readFrame(rotated.sent[0]);
+      expect(open.token).toBe(ROTATED_SIGN_IN);
+      rotated.fireMessage({
+        kind: "openAck",
+        manifest: open.manifest,
+        optionalManifest: open.optionalManifest,
+      });
+      await vi.waitFor(
+        () => expect(rotated.sent.length).toBeGreaterThanOrEqual(2),
+        WAIT,
+      );
+      const request = readFrame(rotated.sent[1]);
+      rotated.fireMessage({
+        kind: "response",
+        requestId: request.requestId,
+        method: request.method,
+        schemaVersion: request.schemaVersion,
+        result: { echoed: "hi" },
+        error: null,
+      });
+      expect(await driven.settled).toEqual({
+        kind: "fulfilled",
+        value: { echoed: "hi" },
+      });
+      expect(recoveryCalls).toEqual(["revalidateForReconnect"]);
+      expect(openTokensOf(driven.sockets)).toEqual([
+        HOST_TOKEN,
+        SIGN_IN,
+        ROTATED_SIGN_IN,
+      ]);
+      expect(driven.refusals).toEqual([]);
+    } finally {
+      driven.client.releaseIdleLocalSessions();
+    }
+  });
+
+  it("fails the call when the sign-in refresh is rejected and the door hears that refusal once", async () => {
+    const recoveryCalls: string[] = [];
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const driven = driveUnaryRefresh(signIn, {
+      revalidateForReconnect: () => {
+        recoveryCalls.push("revalidateForReconnect");
+        return Promise.resolve("rejected");
+      },
+    });
+    try {
+      await refuseHostTokenThenSignIn(driven);
+      await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+      expect(await driven.settled).toMatchObject({ kind: "rejected" });
+      expect(recoveryCalls).toEqual(["revalidateForReconnect"]);
+      expect(driven.refusals).toHaveLength(1);
+      expect(hostDoorStateOfRefusal(driven.refusals[0])).toBe("older-host");
+      expect(openTokensOf(driven.sockets)).toEqual([HOST_TOKEN, SIGN_IN]);
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(openTokensOf(driven.sockets)).toEqual([HOST_TOKEN, SIGN_IN]);
+    } finally {
+      vi.useRealTimers();
+      driven.client.releaseIdleLocalSessions();
+    }
+  });
 });
+
+function openTokensOf(sockets: readonly UnarySocket[]): unknown[] {
+  return sockets.map((socket) => readFrame(socket.sent[0]).token);
+}
+
+function driveUnaryRefresh(
+  signIn: MutableBearerLease,
+  recovery: StreamAuthRevalidator,
+): {
+  readonly client: WsRpcClient<typeof echoRegistry>;
+  readonly sockets: UnarySocket[];
+  readonly refusals: FatalErrorDetails[];
+  readonly settled: Promise<
+    | { readonly kind: "fulfilled"; readonly value: { readonly echoed: string } }
+    | { readonly kind: "rejected"; readonly error: unknown }
+  >;
+  finished: boolean;
+} {
+  const sockets: UnarySocket[] = [];
+  const factory: IWebSocketFactory = {
+    create: () => {
+      const socket = new UnarySocket();
+      sockets.push(socket);
+      return socket;
+    },
+  };
+  const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
+  const { door, refusals } = recordingDoor();
+  let nextRequestId = 0;
+  const client = new WsRpcClient({
+    clientIdentity: TEST_CLIENT_IDENTITY,
+    registry: echoRegistry,
+    requestId: () => `req-${(nextRequestId += 1)}`,
+    webSocketFactory: factory,
+    dialTimeoutMs: 1_000,
+    frameTimeoutMs: 1_000,
+    hostAttestationWindowMs: 0,
+    evidence: NO_TRANSPORT_EVIDENCE,
+    hostBearerFor: () => Promise.resolve(hostToken),
+    releasedSignOnFor: signInForLocalRow(() => PERSONAL_ROW, recovery, NO_MINTS),
+    doorFor: () => door,
+  });
+  const driven = {
+    client,
+    sockets,
+    refusals,
+    finished: false,
+    settled: client
+      .request(
+        "host.echo",
+        { message: "hi" },
+        {
+          idempotencyKey: null,
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+          authority: {
+            endpoint: {
+              hostId: mockLocalHostEntry.hostId,
+              websocketUrl: mockLocalHostEntry.websocketUrl,
+            },
+            bearer: signIn,
+            abortSignal: new AbortController().signal,
+          },
+        },
+      )
+      .then(
+        (value) => ({ kind: "fulfilled" as const, value }),
+        (error: unknown) => ({ kind: "rejected" as const, error }),
+      ),
+  };
+  void driven.settled.then(
+    () => {
+      driven.finished = true;
+    },
+    () => {
+      driven.finished = true;
+    },
+  );
+  return driven;
+}
+
+/** Refuses the host-only token, then the first sign-in, the way a 1.5.4 host does. */
+async function refuseHostTokenThenSignIn(driven: {
+  readonly sockets: readonly UnarySocket[];
+  finished: boolean;
+}): Promise<void> {
+  await vi.waitFor(
+    () => expect(driven.finished || driven.sockets.length >= 1).toBe(true),
+    WAIT,
+  );
+  const first = driven.sockets[0];
+  if (first === undefined) return;
+  first.fireOpen();
+  await vi.waitFor(
+    () => expect(driven.finished || first.sent.length > 0).toBe(true),
+    WAIT,
+  );
+  if (first.sent.length === 0) return;
+  first.fireMessage(releasedRefusal());
+  await vi.waitFor(
+    () => expect(driven.finished || driven.sockets.length >= 2).toBe(true),
+    WAIT,
+  );
+  const second = driven.sockets[1];
+  if (second === undefined) return;
+  second.fireOpen();
+  await vi.waitFor(
+    () => expect(driven.finished || second.sent.length > 0).toBe(true),
+    WAIT,
+  );
+  if (second.sent.length === 0) return;
+  second.fireMessage(releasedRefusal());
+}

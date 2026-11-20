@@ -23,7 +23,6 @@ import {
   USER_A,
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
-import { appHostDoorObserver } from "@/lib/host/host-door-observer";
 import {
   resetHostCredentialProvisioning,
   setHostCredentialMintRunner,
@@ -128,9 +127,7 @@ async function tokensFor(
     persistence: createMemoryHostTokenPersistence(),
     mint: () => {
       mintCalls += 1;
-      const outcome = queue[mintCalls - 1];
-      if (outcome === undefined) throw new Error("unexpected host-token mint");
-      return Promise.resolve(outcome);
+      return Promise.resolve(queue[mintCalls - 1]);
     },
     signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
     now: () => Date.now(),
@@ -182,17 +179,13 @@ async function socketCounted(count: number): Promise<FakeNativeWebSocket> {
   await vi.waitFor(() =>
     expect(FakeNativeWebSocket.instances).toHaveLength(count),
   );
-  const socket = FakeNativeWebSocket.instances[count - 1];
-  if (socket === undefined) throw new Error("socket missing");
-  return socket;
+  return FakeNativeWebSocket.instances[count - 1];
 }
 
 async function readOpen(socket: FakeNativeWebSocket): Promise<Record<string, unknown>> {
   socket.fireOpen();
   await vi.waitFor(() => expect(sentFramesOfKind(socket, "open")).toHaveLength(1));
-  const open = sentFramesOfKind(socket, "open")[0];
-  if (open === undefined) throw new Error("open frame missing");
-  return open;
+  return sentFramesOfKind(socket, "open")[0];
 }
 
 describe("local stream while authn cannot mint", () => {
