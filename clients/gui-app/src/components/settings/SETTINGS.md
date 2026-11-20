@@ -1245,9 +1245,11 @@ a query or mutation, so it reaches no cache, and closing the dialog drops it. A
 refusal shows the host's words (`Connect to manage secrets.` with no session on
 this computer) or the `secretChangeRefusalLine` for a create refusal's code;
 `destination_unresolvable` reads "Couldn't reach <address>. Check the server
-address, then save again." On a team's host the page is the team line, no list;
-on a host whose version predates the page, "Update this host to use your secrets
-here." **Replace** (`environment.secrets.replaceValue`, compare-and-set on the
+address, then save again." On a team's host the page is the team line, no list.
+On a host that does not serve `environment.secrets.list`, Settings offers no
+Secrets row or search hit (none while that is still unknown either,
+`environmentSectionServed`), and the page reached there anyway shows its title
+and nothing under it. **Replace** (`environment.secrets.replaceValue`, compare-and-set on the
 version the list showed; a stale answer asks to look again) carries the same
 custody sentence, and the row then reads the rotation
 (`environment.secrets.rotation`, polled every 3 s only while it moves): "New

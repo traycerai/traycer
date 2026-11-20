@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { searchSettings } from "@/lib/settings-search/settings-search";
+import { everySectionShown } from "@/lib/settings-search/__tests__/every-section-shown";
 
 vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
@@ -24,7 +25,7 @@ function recordingHits(
   query: string,
   context: SettingsAvailabilityContext,
 ): string[] {
-  return searchSettings(query, context).flatMap((result) =>
+  return searchSettings(query, context, everySectionShown).flatMap((result) =>
     result.entry.anchor === RECORDING_ANCHOR ? [result.entry.section] : [],
   );
 }

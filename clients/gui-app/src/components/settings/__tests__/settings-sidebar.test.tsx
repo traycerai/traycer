@@ -9,6 +9,14 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { setMobileApp } from "@/lib/mobile-app";
+import {
+  resetEnvironmentSectionReads,
+  windowHostRunsPersonal,
+} from "@/components/settings/__tests__/environment-section-reads-fixture";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -191,6 +199,15 @@ vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => sandboxControl.reason,
 }));
 
+// The cloud road by default: a Personal pick offers the cloud's pages.
+vi.mock(
+  "@/components/settings/personal/use-window-host-runs-personal",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).windowHostRunsPersonalModule,
+);
+
 // The Secrets and GitHub entry renders only with a runner host (it needs the
 // platform origin), and the existing cases in this suite have none. The
 // default stays `null` so they are unaffected; the sandbox cases below set it.
@@ -228,6 +245,44 @@ function buildRouter(initialPath: string) {
   return createRouter({
     routeTree,
     history: createMemoryHistory({ initialEntries: [initialPath] }),
+  });
+}
+
+function buildVariantRouter(
+  initialEntries: Array<string>,
+  variant: SettingsSidebarVariant,
+) {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <>
+        <SettingsSidebar mode={{ kind: "route" }} variant={variant} />
+        <Outlet />
+      </>
+    ),
+  });
+  const taskRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/task-stub",
+    component: () => <div data-testid="task-stub" />,
+  });
+  const settingsIndexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings",
+    component: () => <div data-testid="settings-list" />,
+  });
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/$section",
+    component: () => <div data-testid="settings-body" />,
+  });
+  const routeTree = rootRoute.addChildren([
+    taskRoute,
+    settingsIndexRoute,
+    settingsRoute,
+  ]);
+  return createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries }),
   });
 }
 
@@ -554,44 +609,6 @@ describe("<SettingsSidebar /> leader hints", () => {
 // the user-observable anchor is where back() lands - rather than through the
 // Link's props.
 describe("<SettingsSidebar /> section navigation history", () => {
-  function buildVariantRouter(
-    initialEntries: Array<string>,
-    variant: SettingsSidebarVariant,
-  ) {
-    const rootRoute = createRootRoute({
-      component: () => (
-        <>
-          <SettingsSidebar mode={{ kind: "route" }} variant={variant} />
-          <Outlet />
-        </>
-      ),
-    });
-    const taskRoute = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/task-stub",
-      component: () => <div data-testid="task-stub" />,
-    });
-    const settingsIndexRoute = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/settings",
-      component: () => <div data-testid="settings-list" />,
-    });
-    const settingsRoute = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/settings/$section",
-      component: () => <div data-testid="settings-body" />,
-    });
-    const routeTree = rootRoute.addChildren([
-      taskRoute,
-      settingsIndexRoute,
-      settingsRoute,
-    ]);
-    return createRouter({
-      routeTree,
-      history: createMemoryHistory({ initialEntries }),
-    });
-  }
-
   it("mobile list pushes a section, so back returns to the list", async () => {
     const router = buildVariantRouter(
       ["/task-stub", "/settings"],
@@ -815,10 +832,13 @@ describe("<SettingsSidebar /> scope groups", () => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setMobileApp(false);
+    // A resolved pick: Secrets is offered once the pick is known to serve it.
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
   });
 
   afterEach(() => {
     cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
     scopeOverrides.current = { client: null };
     globalScopeOverrides.current = { client: null };
     setMobileApp(false);
@@ -1065,6 +1085,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setMobileApp(false);
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
   });
 
   afterEach(() => {
@@ -1074,6 +1095,10 @@ describe("<SettingsSidebar /> Environment pick", () => {
       defaultPick: PERSONAL_PICK,
     });
     scopeOverrides.current = { client: null };
+    resetNegotiatedManifests();
+    resetEnvironmentSectionReads();
+    useSettingsSearchStore.setState({ query: "" });
+    setMobileApp(false);
   });
 
   async function renderRail(): Promise<void> {
@@ -1117,6 +1142,15 @@ describe("<SettingsSidebar /> Environment pick", () => {
       .map((row) => row.textContent);
   }
 
+  const LOCAL_PICK = {
+    kind: "local",
+    hostId: "host-old",
+    hostName: "Old laptop",
+  } as const;
+  const SECRETS_LIST = "environment.secrets.list";
+  const secretsHit = (): Element | null =>
+    document.querySelector("[data-testid^='settings-search-result-secrets:']");
+
   const PERSONAL_ROWS = [
     "Providers",
     "MCP servers",
@@ -1142,9 +1176,8 @@ describe("<SettingsSidebar /> Environment pick", () => {
   });
 
   it("keeps MCP servers, Skills, Sandboxes and Storage visible under a Local pick, and hides Members", async () => {
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
-    });
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
 
     await renderRail();
 
@@ -1159,5 +1192,126 @@ describe("<SettingsSidebar /> Environment pick", () => {
     await renderRail();
 
     expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
+  });
+
+  it("offers no Secrets row under a Local pick until its host serves the list, then offers it and keeps it", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    await renderRail();
+
+    expect(present("secrets")).toBe(false);
+    expect(present("providers")).toBe(true);
+
+    act(() => {
+      recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
+    });
+
+    expect(present("secrets")).toBe(true);
+  });
+
+  it("offers no Secrets row under a Local pick whose host answered without the list", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+
+    await renderRail();
+
+    expect(environmentRows()).toEqual(
+      PERSONAL_ROWS.filter((label) => label !== "Secrets"),
+    );
+  });
+
+  it.each([
+    {
+      name: "unknown",
+      runs: null,
+      served: false,
+      offered: false,
+    },
+    {
+      name: "a host that runs Personal and serves the list",
+      runs: true,
+      served: true,
+      offered: true,
+    },
+    {
+      name: "a host that runs Personal and does not serve the list",
+      runs: true,
+      served: false,
+      offered: false,
+    },
+    {
+      name: "a host that does not run Personal",
+      runs: false,
+      served: false,
+      offered: true,
+    },
+  ])(
+    "Personal's Secrets row, with the window's host being $name: offered is $offered",
+    async ({ runs, served, offered }) => {
+      windowHostRunsPersonal.current = runs;
+      recordNegotiatedHostMethods(
+        "host-a",
+        served ? [SECRETS_LIST] : ["environment.status"],
+      );
+
+      await renderRail();
+
+      expect(present("secrets")).toBe(offered);
+    },
+  );
+
+  it("offers a team's Secrets row whatever its window's host serves", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-team" },
+    });
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+
+    await renderRail();
+
+    expect(present("secrets")).toBe(true);
+  });
+
+  it("offers a Secrets search result only where the pick's source serves the page", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+    const input = await screen.findByRole("combobox", {
+      name: "Search settings",
+    });
+
+    fireEvent.change(input, { target: { value: "secrets" } });
+
+    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+    expect(secretsHit()).toBeNull();
+
+    act(() => {
+      recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
+    });
+
+    expect(secretsHit()).not.toBeNull();
+  });
+
+  it("offers the phone's settings list no Secrets row under a Local pick whose host does not serve the list", async () => {
+    setMobileApp(true);
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    const router = buildVariantRouter(["/settings"], "mobile-list");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+    await screen.findByTestId("settings-sidebar-item-providers");
+
+    expect(present("secrets")).toBe(false);
+
+    act(() => {
+      recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
+    });
+
+    expect(present("secrets")).toBe(true);
   });
 });

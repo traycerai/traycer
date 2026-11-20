@@ -414,8 +414,10 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: MousePointerClick,
     group: "personal",
   },
-  // Where secrets and GitHub access are managed. The page itself lives on the
-  // web dashboard; this entry is how Settings reaches it.
+  // The picked configuration's secrets, the page itself
+  // (`panels/secrets-settings-panel.tsx`). Offered where that page can draw:
+  // not on a host that does not serve `environment.secrets.list`
+  // (`environmentSectionShown`).
   {
     id: "secrets",
     label: "Secrets",

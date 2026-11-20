@@ -102,11 +102,12 @@ const KIND_SCORE_FACTOR: Readonly<Record<SettingsSearchEntryKind, number>> = {
 /**
  * The searchable index for THIS shell.
  *
- * Filtered twice, for the same reason each time — a hit that navigates to
- * something the current build will not draw is a dead end with no way back:
- * by `visibleSettingsSections()` (the mobile app offers no Keybindings,
+ * Filtered three times, for the same reason each time — a hit that navigates
+ * to something the current build will not draw is a dead end with no way
+ * back: by `visibleSettingsSections()` (the mobile app offers no Keybindings,
  * Link-mobile, or Application Diagnostics page), exactly as the sidebar and
- * the command palette filter,
+ * the command palette filter; by `sectionShown`, the sections the picked
+ * configuration's source can draw;
  * and then per entry by its `availableWhen` — the same predicate the panel
  * calls to decide whether the entry's element renders at all.
  *
@@ -116,6 +117,7 @@ const KIND_SCORE_FACTOR: Readonly<Record<SettingsSearchEntryKind, number>> = {
  */
 function buildSearchDocuments(
   context: SettingsAvailabilityContext,
+  sectionShown: (section: SettingsSectionId) => boolean,
 ): ReadonlyArray<SettingsSearchDocument> {
   const sections = visibleSettingsSections();
   const scopeLabelByGroupId = new Map(
@@ -128,6 +130,7 @@ function buildSearchDocuments(
       (candidate) => candidate.id === entry.section,
     );
     if (section === undefined) continue;
+    if (!sectionShown(section.id)) continue;
     documents.push({
       entry,
       label: entry.label,
@@ -161,11 +164,12 @@ export function isSettingsSearchActive(query: string): boolean {
 export function searchSettings(
   query: string,
   context: SettingsAvailabilityContext,
+  sectionShown: (section: SettingsSectionId) => boolean,
 ): ReadonlyArray<SettingsSearchResult> {
   const trimmed = query.trim();
   if (trimmed.length === 0) return [];
   const matches = searchFuzzyMatches(
-    buildSearchDocuments(context),
+    buildSearchDocuments(context, sectionShown),
     trimmed,
     SEARCH_KEYS,
     {
