@@ -1843,7 +1843,7 @@ describe("publication targets follow the real chat-record revision", () => {
 
   it("refetches a stale legacy target slot when a second observer mounts", async () => {
     recordNegotiatedHostManifest(HOST_ID, {
-      "epic.listChatRecords": { major: 1, minor: 4 },
+      "epic.listChatRecords": { major: 1, minor: 5 },
     });
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",
@@ -2614,7 +2614,7 @@ describe("publication targets follow the real chat-record revision", () => {
 
   it("infers an older host's missing revision and retains the sorted full-id query key", async () => {
     recordNegotiatedHostManifest(HOST_ID, {
-      "epic.listChatRecords": { major: 1, minor: 4 },
+      "epic.listChatRecords": { major: 1, minor: 5 },
     });
     fixture.chatHandler.impl = () => ({
       kind: "snapshot",

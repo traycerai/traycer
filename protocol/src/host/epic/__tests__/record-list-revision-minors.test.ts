@@ -40,9 +40,8 @@ import {
 } from "@traycer/protocol/host/epic/record-list-revision";
 
 /**
- * Contract tests for the additive minors of `epic.listChatRecords`
- * (`@1.3` and `@1.5`) and `epic.listTuiAgents`, and
- * `host.chatRecords.subscribe@1.4`. These four
+ * Contract tests for the additive `@1.3` minors of `epic.listChatRecords`
+ * and `epic.listTuiAgents`, and `host.chatRecords.subscribe@1.4`. These four
  * minors landed on one branch (`322d48c24`); see that commit and
  * `record-list-revision.ts` / `agent-session-state.ts` for the vocabulary.
  */
@@ -216,7 +215,7 @@ describe("epic.listChatRecords@1.6 redirect revision", () => {
   const snapshotV16 = {
     kind: "snapshot" as const,
     listStamp: STAMP,
-    chats: [{ ...CHAT_ROW, evicted: false }],
+    chats: [{ ...CHAT_ROW, evicted: false, starterUserId: "user-1" }],
     publicationRedirectRevision: "redirect-revision-9",
   };
   const unchangedV16 = {
@@ -267,7 +266,7 @@ describe("epic.listChatRecords@1.6 redirect revision", () => {
     expect(listChatRecordsResponseV15Schema.parse(snapshotV16)).toEqual({
       kind: "snapshot",
       listStamp: STAMP,
-      chats: [{ ...CHAT_ROW, evicted: false }],
+      chats: [{ ...CHAT_ROW, evicted: false, starterUserId: "user-1" }],
     });
     expect(listChatRecordsResponseV15Schema.parse(unchangedV16)).toEqual({
       kind: "unchanged",

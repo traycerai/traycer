@@ -337,11 +337,12 @@ export function useEpicSyncChatRecords(epicId: string): void {
     query.isError && query.error.code === "E_HOST_UNSUPPORTED";
   const recordListAuthoritative = query.isSuccess || recordListUnsupported;
   const recordListFailed = query.isError && !recordListAuthoritative;
-  // Snapshot and unchanged answers settle negotiated support (@1.4 is false).
-  // Unsupported settles false and authorizes doc-only IDs. Other failures keep
-  // negotiated or last-known support for this viewer, using legacy false if
-  // neither is known, so the failed-list gate can read known IDs. A viewer reset
-  // alone leaves support null until that viewer's first terminal answer settles it.
+  // Snapshot and unchanged answers settle negotiated support (@1.5 and older
+  // are false). Unsupported settles false and authorizes doc-only IDs. Other
+  // failures keep negotiated or last-known support for this viewer, using legacy
+  // false if neither is known, so the failed-list gate can read known IDs. A
+  // viewer reset alone leaves support null until that viewer's first terminal
+  // answer settles it.
   useEffect(() => {
     if (recordListFailed || recordListAuthoritative) {
       store?.getState().setChatRecordListFailed(recordListFailed);
