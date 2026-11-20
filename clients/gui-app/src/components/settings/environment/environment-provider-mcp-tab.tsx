@@ -3,14 +3,12 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
-import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
 import {
   useConfigurationMcpServerMutations,
   useConfigurationMcpServersQuery,
   type EnvironmentMcpServer,
 } from "@/hooks/environment/team/use-mcp-servers";
-import { useHostClient } from "@/lib/host";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
   providerDisplayName,
@@ -34,7 +32,6 @@ import {
   serversCardHeading,
   toolCountPhrase,
 } from "./mcp-skills-copy";
-import { TeamMcpItems } from "./team-mcp-servers";
 import { TeamReadFailed } from "./team-read-failed";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 
@@ -46,15 +43,6 @@ import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 export function EnvironmentProviderMcpTab(props: {
   readonly providerId: ProviderId;
 }): ReactNode {
-  const version = useHostNegotiatedMethodVersion(
-    useHostClient(),
-    "environment.configuration.mcpServers.list",
-  );
-  if (version === null) return <MutedAgentSpinner />;
-  if (version === false)
-    return (
-      <TeamMcpItems providerId={providerIdToGuiHarnessId(props.providerId)} />
-    );
   return <ProviderServers providerId={props.providerId} />;
 }
 

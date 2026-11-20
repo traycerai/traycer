@@ -348,7 +348,153 @@ function workerDataIsStandIn(
   return false;
 }
 
+/**
+ * The tokens an operation needs before it can be a hit: `Object` and
+ * `Reflect` for their functions, `serialize` for both v8 forms, `workerData`
+ * for a Worker option, `for` for a for-in, and the rest by name.
+ * `OP_TEXT` holds the two that `mayHoldStandinOp` looks for as text: a
+ * spread's `...`, and `hasOwnProperty`, which the `.call` form matches at the
+ * end of any callee text (`x.myhasOwnProperty.call(...)` names no token).
+ */
+const OP_TOKENS = new Set([
+  "Object",
+  "Reflect",
+  "serialize",
+  "structuredClone",
+  "postMessage",
+  "workerData",
+  "for",
+]);
+const OP_TEXT = ["...", "hasOwnProperty"] as const;
+
+/** An identifier spelled in ASCII, as the lexer reads one from its start. */
+const ASCII_IDENTIFIER = /[A-Za-z_$][\w$]*/g;
+
+/**
+ * One escape as the lexer reads it: `\u{…}`, `\uXXXX` and `\xXX`, an octal
+ * escape, a line continuation, or a backslash before any other character.
+ */
+const ESCAPE =
+  /\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|([0-3][0-7]{0,2}|[4-7][0-7]?)|(\r\n|[\n\r\u2028\u2029])|([\s\S]))/g;
+
+/**
+ * An escape that can spell an identifier character or join a line. The others
+ * (`\b`, `\f`, `\n`, `\r`, `\t`, `\v`) read as a control character.
+ */
+const NAME_ESCAPE = /\\(?![bfnrtv])(?:[\w$]|\P{ASCII}|[\r\n])/u;
+
+/**
+ * The text with every escape read, so a name spelled through one shows: an
+ * identifier with `\u`, or a string import name (`import { "a\x62" as b }`).
+ * Elsewhere the reading may be wrong, and only adds tokens.
+ */
+function decodeEscapes(text: string): string {
+  return text.replace(
+    ESCAPE,
+    (
+      _escape: string,
+      braced: string | undefined,
+      four: string | undefined,
+      hex: string | undefined,
+      octal: string | undefined,
+      lineBreak: string | undefined,
+      other: string | undefined,
+    ) => {
+      const code = braced ?? four ?? hex;
+      if (code !== undefined) {
+        const point = Number.parseInt(code, 16);
+        return point <= 0x10ffff ? String.fromCodePoint(point) : "";
+      }
+      if (octal !== undefined) {
+        return String.fromCharCode(Number.parseInt(octal, 8));
+      }
+      if (lineBreak !== undefined) {
+        return "";
+      }
+      return other ?? "";
+    },
+  );
+}
+
+type NameLookup = {
+  /** Names the ASCII tokens miss; each is looked for as text. */
+  readonly nonAscii: readonly string[];
+  /** Names without `Schema`; every other name, and `lazySchema` and both contract slots, holds it. */
+  readonly withoutSchema: readonly string[];
+};
+
+const nameLookups = new WeakMap<ReadonlySet<string>, NameLookup>();
+
+function nameLookup(lazyExportNames: ReadonlySet<string>): NameLookup {
+  let lookup = nameLookups.get(lazyExportNames);
+  if (lookup === undefined) {
+    const names = [...lazyExportNames];
+    lookup = {
+      nonAscii: names.filter((name) => /\P{ASCII}/u.test(name)),
+      withoutSchema: names.filter((name) => !name.includes("Schema")),
+    };
+    nameLookups.set(lazyExportNames, lookup);
+  }
+  return lookup;
+}
+
+/**
+ * Whether a file can hold a hit, decided from its text before any parse.
+ * Every hit's operand passes `isStandInExpr`, and each way in names, as an
+ * identifier, a collected stand-in export, `lazySchema`, or a contract slot.
+ * Every hit's operation names an `OP_TOKENS` token or shows an `OP_TEXT`
+ * text. A file that shows one of each, as written or with its escapes read,
+ * is parsed; any other file cannot hold a hit. A file that shows neither
+ * `Schema` nor a name without it names no stand-in, and is not tokenized.
+ */
+function mayHoldStandinOp(
+  text: string,
+  lazyExportNames: ReadonlySet<string>,
+): boolean {
+  const lookup = nameLookup(lazyExportNames);
+  const readings = NAME_ESCAPE.test(text)
+    ? [text, decodeEscapes(text)]
+    : [text];
+  const mayNameStandIn = readings.some(
+    (reading) =>
+      reading.includes("Schema") ||
+      lookup.withoutSchema.some((name) => reading.includes(name)),
+  );
+  if (!mayNameStandIn) {
+    return false;
+  }
+  let namesOp = false;
+  let namesStandIn = false;
+  for (const reading of readings) {
+    namesOp ||= OP_TEXT.some((op) => reading.includes(op));
+    namesStandIn ||= lookup.nonAscii.some((name) => reading.includes(name));
+    for (const match of reading.matchAll(ASCII_IDENTIFIER)) {
+      const token = match[0];
+      namesOp ||= OP_TOKENS.has(token);
+      namesStandIn ||=
+        token === "lazySchema" ||
+        CONTRACT_SLOTS.has(token) ||
+        lazyExportNames.has(token);
+      if (namesOp && namesStandIn) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function findStandinOpHitsInSource(
+  sourceFile: string,
+  text: string,
+  lazyExportNames: ReadonlySet<string>,
+): StandinOpHit[] {
+  if (!mayHoldStandinOp(text, lazyExportNames)) {
+    return [];
+  }
+  return parseStandinOpHits(sourceFile, text, lazyExportNames);
+}
+
+function parseStandinOpHits(
   sourceFile: string,
   text: string,
   lazyExportNames: ReadonlySet<string>,
@@ -714,6 +860,90 @@ describe("pending stand-in own-key operations", () => {
     ).toEqual(["Object.keys"]);
   });
 
+  it("finds a stand-in or an operation spelled through an escape", () => {
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.keys(permission\\u004DodeSchema);\n`,
+      ),
+    ).toEqual(["Object.keys"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Object.keys(permission\\u{4D}odeSchema);\n`,
+      ),
+    ).toEqual(["Object.keys"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void Obj\\u0065ct.keys(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["Object.keys"]);
+    expect(
+      plantedWhats(
+        'import { "permission\\x4DodeSchema" as p } from "@traycer/protocol/persistence/epic/foundation";\nvoid Object.keys(p);\n',
+      ),
+    ).toEqual(["Object.keys"]);
+    expect(
+      plantedWhats(
+        'import { "permission\\115odeSchema" as p } from "@traycer/protocol/persistence/epic/foundation";\nvoid Object.keys(p);\n',
+      ),
+    ).toEqual(["Object.keys"]);
+    expect(
+      plantedWhats(
+        'import { "permission\\\nModeSchema" as p } from "@traycer/protocol/persistence/epic/foundation";\nvoid Object.keys(p);\n',
+      ),
+    ).toEqual(["Object.keys"]);
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}import { "seri\\x61lize" as s } from "node:v8";\nvoid s(permissionModeSchema);\n`,
+      ),
+    ).toEqual(["serialize"]);
+    const nonAscii = new Set(["schémaA"]);
+    expect(
+      findStandinOpHitsInSource(
+        "planted.ts",
+        'import { schémaA } from "x";\nvoid Object.keys(schémaA);\n',
+        nonAscii,
+      ).map((hit) => hit.what),
+    ).toEqual(["Object.keys"]);
+    expect(
+      findStandinOpHitsInSource(
+        "planted.ts",
+        'import { sch\\u00e9maA } from "x";\nvoid Object.keys(schémaA);\n',
+        nonAscii,
+      ).map((hit) => hit.what),
+    ).toEqual(["Object.keys"]);
+  });
+
+  it("parses no file that names no stand-in or no operation", () => {
+    expect(
+      plantedWhats(
+        `${STANDIN_IMPORT}void port.myhasOwnProperty.call(permissionModeSchema, "x");\n`,
+      ),
+    ).toEqual(["hasOwnProperty.call"]);
+    const plainName = new Set(["standIn"]);
+    expect(
+      findStandinOpHitsInSource(
+        "planted.ts",
+        'import { standIn } from "x";\nvoid Object.keys(standIn);\n',
+        plainName,
+      ).map((hit) => hit.what),
+    ).toEqual(["Object.keys"]);
+    expect(
+      mayHoldStandinOp(
+        `${STANDIN_IMPORT}void permissionModeSchema.parse(1);\n`,
+        PLANTED_LAZY_NAMES,
+      ),
+    ).toBe(false);
+    expect(
+      mayHoldStandinOp("void Object.keys(other);\n", PLANTED_LAZY_NAMES),
+    ).toBe(false);
+    expect(
+      mayHoldStandinOp(
+        `${STANDIN_IMPORT}void Object.keys(permissionModeSchema);\n`,
+        PLANTED_LAZY_NAMES,
+      ),
+    ).toBe(true);
+  });
+
   it("does not treat JSON.stringify as a stand-in own-key op", () => {
     expect(
       plantedWhats(
@@ -722,6 +952,8 @@ describe("pending stand-in own-key operations", () => {
     ).toEqual([]);
   });
 
+  // A whole-source scan whose cost grows with the source (5.3 s on a shared host),
+  // so it states its own limit rather than the default 20 s.
   it("production protocol and OSS client sources have zero stand-in own-key ops", () => {
     const protocolFiles = gitListedFiles(TRAYCER_ROOT, ["protocol/src/"]);
     expect(protocolFiles.length).toBeGreaterThan(0);

@@ -322,7 +322,7 @@ describe("useProvidersMcpMutate fold", () => {
       expect(listRendered.result.current.data?.servers[0]?.enabled).toBe(true);
     });
 
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
 
@@ -372,7 +372,7 @@ describe("useProvidersMcpMutate fold", () => {
       expect(listRendered.result.current.data?.servers).toHaveLength(1);
     });
 
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
 

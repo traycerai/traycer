@@ -110,7 +110,10 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 // in this file before this fix.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
-    hostId === null ? (hostBindingMock.current?.hostClient ?? null) : hostId,
+    hostId === null
+      ? (hostBindingMock.current?.hostClient ?? null)
+      : { getActiveHostId: () => hostId },
+  useHostDirectoryEntryForHostId: (_hostId: string | null): null => null,
 }));
 
 // This suite's host binding is a bare fake with no directory, which the real
@@ -396,38 +399,48 @@ function codexProviderWithProfiles(): ProviderCliState {
 
 function modelsResponseFor(
   harnessId: GuiHarnessId,
+  count: number,
 ): ListGuiAgentModelsResponse {
   return {
     harnessId,
-    models: [
-      {
-        harnessId,
-        slug: `${harnessId}-model-1`,
-        label: `${harnessId} Model 1`,
-        description: null,
-        contextWindow: null,
-        maxOutputTokens: null,
-        defaultReasoningEffort: null,
-        supportedReasoningEfforts: [],
-        defaultServiceTier: null,
-        supportedServiceTiers: [],
-        deprecationNotice: null,
-        metadata: {},
-      },
-    ],
+    models: Array.from({ length: count }, (_unused, index) => ({
+      harnessId,
+      slug: `${harnessId}-model-${String(index + 1)}`,
+      label: `${harnessId} Model ${String(index + 1)}`,
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [],
+      defaultServiceTier: null,
+      supportedServiceTiers: [],
+      deprecationNotice: null,
+      metadata: {},
+    })),
   };
 }
 
 interface RpcCallLog {
-  readonly listModels: Array<{ readonly harnessId: GuiHarnessId }>;
+  readonly listModels: Array<{
+    readonly harnessId: GuiHarnessId;
+    readonly profileId: string | null;
+  }>;
   readonly listCommands: Array<{
     readonly harnessId: GuiHarnessId;
     readonly profileId: string | null;
   }>;
 }
 
+/** How many models one profile's nth (1-based) `listModels` answers with. */
+type ModelCountAnswer = (request: {
+  readonly profileId: string | null;
+  readonly nth: number;
+}) => number;
+
 interface PickerRpcFixture {
   readonly calls: RpcCallLog;
+  /** Replaced by a test that scripts the host's answers; one model by default. */
+  readonly modelCountAnswer: { current: ModelCountAnswer };
   readonly requiredModelFloors: Array<
     HostRequestOptions["requiredHostMethodVersion"]
   >;
@@ -493,6 +506,9 @@ function createPickerRpcFixture(
   },
 ): PickerRpcFixture {
   const calls: RpcCallLog = { listModels: [], listCommands: [] };
+  const modelCountAnswer: { current: ModelCountAnswer } = {
+    current: () => 1,
+  };
   const requiredModelFloors: Array<
     HostRequestOptions["requiredHostMethodVersion"]
   > = [];
@@ -524,14 +540,23 @@ function createPickerRpcFixture(
         handlers: {
           "agent.gui.listHarnesses": () => ({ harnesses: [...harnesses] }),
           "agent.gui.listModels": (params) => {
-            calls.listModels.push({ harnessId: params.harnessId });
+            const profileId = params.profileId ?? null;
+            calls.listModels.push({ harnessId: params.harnessId, profileId });
             if (
               params.profileId !== null &&
               options.profileModelsErrorMessage !== undefined
             ) {
               throw new Error(options.profileModelsErrorMessage);
             }
-            return modelsResponseFor(params.harnessId);
+            const nth = calls.listModels.filter(
+              (entry) =>
+                entry.harnessId === params.harnessId &&
+                entry.profileId === profileId,
+            ).length;
+            return modelsResponseFor(
+              params.harnessId,
+              modelCountAnswer.current({ profileId, nth }),
+            );
           },
           "agent.gui.listCommands": (params) => {
             calls.listCommands.push({
@@ -559,7 +584,13 @@ function createPickerRpcFixture(
       {props.children}
     </QueryClientProvider>
   );
-  return { calls, requiredModelFloors, queryClient, Wrapper };
+  return {
+    calls,
+    modelCountAnswer,
+    requiredModelFloors,
+    queryClient,
+    Wrapper,
+  };
 }
 
 function countFor(
@@ -1174,5 +1205,71 @@ describe("<HarnessModelPicker /> real-RPC intent edges", () => {
 
     expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
     expect(countFor(fixture.calls.listCommands, "opencode")).toBe(0);
+  });
+
+  it("asks the selected account's slot again on open when its first answer was an empty list, and shows the models that come back", async () => {
+    providersQueryMock.providers = [codexProviderWithProfiles()];
+    const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {});
+    fixture.modelCountAnswer.current = ({ nth }) => (nth === 1 ? 0 : 10);
+    renderPickerWithFixture(fixture, profileSelection("codex", "profile-work"));
+    await waitFor(() => {
+      expect(fixture.calls.listModels).toHaveLength(1);
+      expect(fixture.queryClient.isFetching()).toBe(0);
+    });
+
+    await openPickerByTriggerName(/^Select model/);
+    await findModelRow("codex Model 10");
+
+    expect(fixture.calls.listModels.map((call) => call.profileId)).toEqual([
+      "profile-work",
+      "profile-work",
+    ]);
+    const rows = within(screen.getByTestId("virtuoso-scroller"));
+    for (let position = 1; position <= 10; position += 1) {
+      rows.getByText(`codex Model ${String(position)}`);
+    }
+    expect(screen.queryByText("No models available")).toBeNull();
+  });
+
+  it("asks an account's slot again when the person returns to it and its earlier answer was an empty list", async () => {
+    providersQueryMock.providers = [
+      {
+        ...codexProviderWithProfiles(),
+        profiles: [
+          ...codexProviderWithProfiles().profiles,
+          providerProfile("profile-other", "managed", "Other account"),
+        ],
+      },
+    ];
+    const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {});
+    fixture.modelCountAnswer.current = ({ profileId, nth }) =>
+      profileId === "profile-other" && nth === 1 ? 0 : 10;
+    renderPickerWithFixture(fixture, profileSelection("codex", "profile-work"));
+    await screen.findByText("codex Model 1");
+    await openPickerByTriggerName(/^codex Model 1/);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Other account/ }));
+    await screen.findByText("No models available");
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Work account/ }));
+    await findModelRow("codex Model 10");
+    await waitFor(() => {
+      expect(fixture.queryClient.isFetching()).toBe(0);
+    });
+    expect(fixture.calls.listModels.map((call) => call.profileId)).toEqual([
+      "profile-work",
+      "profile-other",
+    ]);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Other account/ }));
+    await waitFor(() => {
+      expect(screen.queryByText("No models available")).toBeNull();
+    });
+    await findModelRow("codex Model 10");
+
+    expect(fixture.calls.listModels.map((call) => call.profileId)).toEqual([
+      "profile-work",
+      "profile-other",
+      "profile-other",
+    ]);
   });
 });

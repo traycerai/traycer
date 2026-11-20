@@ -976,7 +976,7 @@ export type ToolCallFeedbackDraftStamp = z.infer<
   typeof toolCallFeedbackDraftStampSchema
 >;
 
-export const toolCallBlockSchema = lazySchema(() =>
+export const toolCallBlockSchemaPreFeedbackOrigin = lazySchema(() =>
   z.object({
     ...baseBlockFields,
     status: actionBlockStatus,
@@ -1094,6 +1094,34 @@ export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
     mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
   }),
 );
+/** Owner-verified destination captured before a bot accepts a feedback draft. */
+export const toolCallFeedbackDraftOriginSchema = lazySchema(() => {
+  const fields = {
+    botId: z.string().min(1).max(255),
+    hostEpoch: z.number().int().nonnegative(),
+    conversationId: z.string().min(1).max(255),
+    initiatingMessageId: z.string().min(1).max(255),
+    initiatingRequestId: z.string().min(1).max(255),
+  };
+  return z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("channel"), ...fields }),
+    z.strictObject({
+      kind: z.literal("thread"),
+      ...fields,
+      channelId: z.string().min(1).max(255),
+    }),
+  ]);
+});
+export type ToolCallFeedbackDraftOrigin = z.infer<
+  typeof toolCallFeedbackDraftOriginSchema
+>;
+
+export const toolCallBlockSchema = lazySchema(() =>
+  toolCallBlockSchemaPreFeedbackOrigin.extend({
+    feedbackDraftOrigin: toolCallFeedbackDraftOriginSchema.optional(),
+  }),
+);
+
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
 // Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.37` through
@@ -1749,13 +1777,49 @@ export type AutonomousResumeOutputFile = z.infer<
   typeof autonomousResumeOutputFileSchema
 >;
 
+// One image a bot conversation delivery carried into the session (T472). It
+// names its bytes by `attachmentHash`, the key `tool_call` image results and
+// resolved `imageResolutions` use, so a reader that collects attachment
+// references by that key counts these too.
+export const autonomousResumeConversationImageSchema = lazySchema(() =>
+  z.object({
+    attachmentHash: imageSha256HexSchema,
+    mediaType: supportedImageMediaTypeSchema,
+    fileName: z.string(),
+  }),
+);
+export type AutonomousResumeConversationImage = z.infer<
+  typeof autonomousResumeConversationImageSchema
+>;
+
 // The member's message a bot conversation delivery carried (Tracy Bots
 // T159): the row as its conversation stores it (`conversationId` is the
 // channel for a post and a thread's own record for a message in the thread),
 // the request it opened, and who wrote it when - so a reader whose
 // conversation row is gone still says who wrote and when.
 // `senderUserId` is `null` for a row whose sender is no member.
+// `images` are the images the delivery carried, in the order the message
+// holds them: what the session was given, so it can name one exactly to pass
+// on. Defaulted, so a trigger written before the key reads as carrying none.
+// Added in place on the unreleased `chat.subscribe@1.44`; `1.43` binds
+// `autonomousResumeConversationMessageSchemaPreImages` below.
 export const autonomousResumeConversationMessageSchema = lazySchema(() =>
+  z.object({
+    conversationId: z.string(),
+    messageId: z.string(),
+    requestId: z.string(),
+    senderUserId: z.string().nullable(),
+    postedAt: z.number(),
+    images: z.array(autonomousResumeConversationImageSchema).default([]),
+  }),
+);
+export type AutonomousResumeConversationMessage = z.infer<
+  typeof autonomousResumeConversationMessageSchema
+>;
+
+// Wire-freeze copy of the member's message as `chat.subscribe@1.43` ships it:
+// no `images`. Hand-frozen field-for-field, NOT `.omit()` off the live shape.
+const autonomousResumeConversationMessageSchemaPreImages = lazySchema(() =>
   z.object({
     conversationId: z.string(),
     messageId: z.string(),
@@ -1764,9 +1828,6 @@ export const autonomousResumeConversationMessageSchema = lazySchema(() =>
     postedAt: z.number(),
   }),
 );
-export type AutonomousResumeConversationMessage = z.infer<
-  typeof autonomousResumeConversationMessageSchema
->;
 
 // One background task whose terminal settle contributed to waking the agent
 // into an autonomous (no-user-message) turn. `kind` mirrors the live
@@ -1856,6 +1917,36 @@ export const autonomousResumeTriggerSchema = lazySchema(() =>
 export type AutonomousResumeTrigger = z.infer<
   typeof autonomousResumeTriggerSchema
 >;
+
+// Wire-freeze copy of the trigger as `chat.subscribe@1.43` ships it: the
+// member's message without the `images` that `1.44` added. Hand-frozen
+// field-for-field, NOT `.omit()` off the live shape.
+const autonomousResumeTriggerSchemaPreConversationImages = lazySchema(() =>
+  z.object({
+    kind: z.enum(["command", "monitor", "subagent", "wakeup"]),
+    title: z.string(),
+    status: z.enum(["completed", "failed", "stopped"]),
+    summary: z.string(),
+    blockId: z.string().default(""),
+    outputFile: autonomousResumeOutputFileSchema.nullable().default(null),
+    mcp: z
+      .object({ serverName: z.string(), toolName: z.string() })
+      .nullable()
+      .default(null),
+    live: z.boolean().default(false),
+    managedCommand: z
+      .object({
+        commandId: z.string(),
+        monitoring: z.boolean().default(false),
+        hostId: z.string().nullable().default(null),
+      })
+      .nullable()
+      .default(null),
+    conversationMessage: autonomousResumeConversationMessageSchemaPreImages
+      .nullable()
+      .default(null),
+  }),
+);
 
 // Wire-freeze copy of the trigger as `chat.subscribe@1.11` through `@1.42`
 // ship it: the live trigger without the `conversationMessage` that `1.43`
@@ -2073,9 +2164,42 @@ type RawStoredAutonomousResumeBlockPreConversationMessage = Omit<
   deliveryPlacement?: AutonomousResumeDeliveryPlacement;
 };
 
+// Checkpoint for chat.subscribe 1.43: the member's message on a trigger, no
+// images on it. Same key order as the checkpoint for the same reason.
+const persistedAutonomousResumeBlockSchemaPreConversationImages = lazySchema(
+  () =>
+    persistedAutonomousResumeBlockSchemaV18
+      .omit({ triggers: true, wakeTriggers: true })
+      .extend({
+        deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
+        triggers: z.array(autonomousResumeTriggerSchemaPreConversationImages),
+        wakeTriggers:
+          persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
+      }),
+);
+const domainAutonomousResumeBlockSchemaPreConversationImages = lazySchema(() =>
+  domainAutonomousResumeBlockSchemaV18.omit({ triggers: true }).extend({
+    deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
+    triggers: z.array(autonomousResumeTriggerSchemaPreConversationImages),
+  }),
+);
+type AutonomousResumeBlockPreConversationImages = z.infer<
+  typeof domainAutonomousResumeBlockSchemaPreConversationImages
+>;
+type PersistedAutonomousResumeBlockPreConversationImages = z.infer<
+  typeof persistedAutonomousResumeBlockSchemaPreConversationImages
+>;
+type RawStoredAutonomousResumeBlockPreConversationImages = Omit<
+  PersistedAutonomousResumeBlockPreConversationImages,
+  "wakeTriggers" | "deliveryPlacement"
+> & {
+  wakeTriggers: AutonomousResumeWakeTrigger[] | undefined;
+  deliveryPlacement?: AutonomousResumeDeliveryPlacement;
+};
+
 // The live shape: the 1.11-1.42 checkpoint with `triggers` swapped for the
-// live trigger, which can carry the member's message a delivery carried. Same
-// key order as the checkpoint for the same reason.
+// live trigger, which can carry the member's message a delivery carried and
+// the images it brought. Same key order as the checkpoint for the same reason.
 const persistedAutonomousResumeBlockSchema = lazySchema(() =>
   persistedAutonomousResumeBlockSchemaV18
     .omit({ triggers: true, wakeTriggers: true })
@@ -2118,7 +2242,7 @@ export type RawStoredAutonomousResumeBlock = Omit<
 // it was over - nothing about a schedule keeps producing), never an MCP call,
 // never a managed command and never a member's message. `managedCommand` and
 // `conversationMessage` are null, so the row belongs to the live trigger and
-// to both freezes - the fields they differ on - which is what lets the merge
+// to every freeze - the fields they differ on - which is what lets the merge
 // and split below serve every codec here without a per-shape copy.
 type WakeupTrigger = AutonomousResumeTrigger &
   AutonomousResumeTriggerPreShellHost;
@@ -2235,9 +2359,29 @@ function decodeAutonomousResumeBlockPreConversationMessage(
   };
 }
 
+function decodeAutonomousResumeBlockPreConversationImages(
+  stored: RawStoredAutonomousResumeBlockPreConversationImages,
+): AutonomousResumeBlockPreConversationImages {
+  const { deliveryPlacement, wakeTriggers, ...rest } = stored;
+  return {
+    ...rest,
+    triggers:
+      wakeTriggers === undefined || wakeTriggers.length === 0
+        ? rest.triggers
+        : withWakeTriggers(rest.triggers, wakeTriggers),
+    deliveryPlacement: deliveryPlacement ?? null,
+  };
+}
+
 export function encodeAutonomousResumeBlock(
   domain: AutonomousResumeBlock,
 ): PersistedAutonomousResumeBlock {
+  return { ...domain, ...splitWakeTriggers(domain.triggers) };
+}
+
+function encodeAutonomousResumeBlockPreConversationImages(
+  domain: AutonomousResumeBlockPreConversationImages,
+): PersistedAutonomousResumeBlockPreConversationImages {
   return { ...domain, ...splitWakeTriggers(domain.triggers) };
 }
 
@@ -2290,6 +2434,23 @@ export const autonomousResumeBlockSchemaV18 = lazySchema(() =>
       encode: (domain) =>
         encodeAutonomousResumeBlockV18(
           domainAutonomousResumeBlockSchemaV18.parse(domain),
+        ),
+    },
+  ),
+);
+
+// Frozen wire shape for chat.subscribe 1.43: the member's message on a
+// trigger, no images on it. Bound through
+// `openContentBlockSchemaPreConversationImages` in `open-harness-records.ts`.
+export const autonomousResumeBlockSchemaPreConversationImages = lazySchema(() =>
+  z.codec(
+    persistedAutonomousResumeBlockSchemaPreConversationImages,
+    domainAutonomousResumeBlockSchemaPreConversationImages,
+    {
+      decode: decodeAutonomousResumeBlockPreConversationImages,
+      encode: (domain) =>
+        encodeAutonomousResumeBlockPreConversationImages(
+          domainAutonomousResumeBlockSchemaPreConversationImages.parse(domain),
         ),
     },
   ),
@@ -2810,6 +2971,25 @@ export const contentBlockSchemaPreHtml = lazySchema(() =>
   ]),
 );
 
+export const contentBlockSchemaPreFeedbackOrigin = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    textBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchemaPreFeedbackOrigin,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    planBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchema,
+    steerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
 export const contentBlockSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     textBlockSchema,

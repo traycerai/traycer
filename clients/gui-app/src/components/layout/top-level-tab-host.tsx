@@ -33,7 +33,7 @@ import { useRegionShown } from "@/lib/layout-overrides";
 import { homeHeaderTab } from "@/stores/tabs/kinds/home";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { draftTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
-import { newestLandingDraftId } from "@/stores/home/landing-draft-store";
+import { resumableLandingDraftId } from "@/stores/home/landing-draft-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { subscribeTabStructuralLocks } from "@/stores/tabs/tab-structural-lock";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -54,6 +54,11 @@ import {
   type TopLevelFillableTarget,
 } from "@/components/layout/tabs/top-level-tab-dnd";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  TracyOpening,
+  TracyPlaybackScope,
+} from "@/components/bots/tracy-playback-slot";
+import { useInstalledAppTileForm } from "@/hooks/ui/use-installed-app-level2-form";
 import { DelayedRoutePendingScreen } from "@/components/loading/route-pending-screen";
 import { PhaseMigrationControllerHost } from "@/components/epic-tabs/phase-migration-controller-host";
 import { PhaseMigrationSurface } from "@/components/epic-tabs/phase-migration-surface";
@@ -391,19 +396,32 @@ function TopLevelSurfaceMount(props: {
           >
             {mount.tab.kind === "home" ||
             mount.tab.kind === "draft" ||
-            mount.tab.kind === "settings" ||
-            mount.tab.kind === "tracy" ? (
+            mount.tab.kind === "settings" ? (
               <SoundtrackPlaybackControls placement="surface" />
             ) : null}
             {/* A retained hidden tab must start its loading delay only when
                 the user actually opens it. */}
-            <Suspense
-              fallback={
-                mount.activity.visible ? <DelayedRoutePendingScreen /> : null
-              }
-            >
-              <TabSurface tab={mount.tab} />
-            </Suspense>
+            {mount.tab.kind === "tracy" ? (
+              // The tab's one group of playback controls is held out here,
+              // so it is there while the surface's code is still loading.
+              <TracyPlaybackScope>
+                <Suspense
+                  fallback={
+                    mount.activity.visible ? <TracySurfacePending /> : null
+                  }
+                >
+                  <TabSurface tab={mount.tab} />
+                </Suspense>
+              </TracyPlaybackScope>
+            ) : (
+              <Suspense
+                fallback={
+                  mount.activity.visible ? <DelayedRoutePendingScreen /> : null
+                }
+              >
+                <TabSurface tab={mount.tab} />
+              </Suspense>
+            )}
           </SurfacePresentationBoundary>
         </TabSurfaceActivityProvider>
       </div>
@@ -436,7 +454,7 @@ function useHomeTabDisabledFallback(
     const previouslyEnabled = previouslyEnabledRef.current;
     previouslyEnabledRef.current = enabled;
     if (enabled || !previouslyEnabled || activeItemId !== null) return;
-    const existingDraftId = newestLandingDraftId();
+    const existingDraftId = resumableLandingDraftId();
     navigateToTabIntent(
       navigate,
       existingDraftId === null
@@ -561,6 +579,19 @@ function FillableSplitSlot(props: {
         </SurfacePresentationBoundary>
       </TabSurfaceActivityProvider>
     </div>
+  );
+}
+
+/** A Tracy tab whose surface is loading: on its way to a channel. */
+function TracySurfacePending(): ReactNode {
+  const level2 = useInstalledAppTileForm(1)?.level2 ?? null;
+  return (
+    <TracyOpening
+      titled={level2 !== "menu" && level2 !== "bar"}
+      identity={null}
+    >
+      <DelayedRoutePendingScreen />
+    </TracyOpening>
   );
 }
 

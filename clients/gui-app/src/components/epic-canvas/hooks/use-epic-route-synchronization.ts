@@ -20,6 +20,7 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
+import type { TileLayoutNode } from "@/stores/epics/canvas/types";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import {
   MANUAL_TILE_OPEN,
@@ -187,6 +188,11 @@ export function useEpicRouteSynchronization(
     () =>
       collectPanes(canvas.root).some((pane) => pane.tabInstanceIds.length > 0),
     [canvas.root],
+  );
+  const landingAwaitsFirstRecords = useSeededOpenerAwaitsLanding(
+    tabId,
+    canvas.root,
+    canvasHoldsTiles,
   );
   const nestedRouteTarget = useMemo(
     () =>
@@ -502,6 +508,7 @@ export function useEpicRouteSynchronization(
         focusArtifactId,
         recordCount: records.length,
         requestOutrunsNestedRoute: focusRequestOutrunsNestedRoute,
+        landingAwaitsFirstRecords,
       })
     ) {
       return;
@@ -568,9 +575,9 @@ export function useEpicRouteSynchronization(
       // of `openResolvedArtifact` only navigates once
       // `epic.resolveArtifactByPath` has confirmed one.
       //
-      // A LANDING still spends its key on a null resolve: it runs once per
-      // epic.
-      if (!hasExplicitFocus) {
+      // A LANDING still spends its key on a null resolve, with the one
+      // exception `nullResolveSpendsKey` names.
+      if (nullResolveSpendsKey(hasExplicitFocus, landingAwaitsFirstRecords)) {
         lastAutoOpenKey.current = key;
       }
       return;
@@ -653,6 +660,7 @@ export function useEpicRouteSynchronization(
     focusRequestRestored,
     lastReturnSeq,
     focusRequestOutrunsNestedRoute,
+    landingAwaitsFirstRecords,
   ]);
 
   const lastSyncedFocus = useRef<string | null>(persistedFocus);
@@ -848,6 +856,42 @@ function replaceNestedFocusRoute(
 }
 
 /**
+ * Whether the canvas is still exactly the empty opener pane this session
+ * seeded for it: a task this machine had no layout and no records for, whose
+ * chat records come later from the polled record list. Only that landing is
+ * unanswered. The seed is recorded by the store rather than inferred from an
+ * empty canvas, because a pane the person emptied and a restored empty pane
+ * look the same from here and must stay empty.
+ *
+ * One way: once the seeded pane has held a tile or left the layout the record
+ * is retired, so a pane that is empty later is the person's, whatever id it
+ * carries.
+ */
+function useSeededOpenerAwaitsLanding(
+  tabId: string,
+  root: TileLayoutNode | null,
+  canvasHoldsTiles: boolean,
+): boolean {
+  const seededOpenerPaneId = useEpicCanvasStore(
+    (s) => s.seededOpenerPaneIdByTabId[tabId],
+  );
+  const retireSeededOpenerPane = useEpicCanvasStore(
+    (s) => s.retireSeededOpenerPane,
+  );
+  const awaitsLanding =
+    seededOpenerPaneId !== undefined &&
+    root?.kind === "pane" &&
+    root.id === seededOpenerPaneId &&
+    !canvasHoldsTiles;
+  useEffect(() => {
+    if (seededOpenerPaneId === undefined) return;
+    if (awaitsLanding) return;
+    retireSeededOpenerPane(tabId);
+  }, [seededOpenerPaneId, awaitsLanding, retireSeededOpenerPane, tabId]);
+  return awaitsLanding;
+}
+
+/**
  * What this run of the legacy auto-open effect may do, before anything is
  * resolved: give up, spend the key without resolving, or go on and resolve.
  *
@@ -873,6 +917,22 @@ function gateLegacyAutoOpen(args: {
   // records its key and chooses nothing. Empty seeded panes are still openers.
   if (canvasHoldsTiles) return "spend-key";
   return anyKeySpent ? "skip" : "resolve";
+}
+
+/**
+ * Whether a resolve that found nothing ends the wait for this key.
+ *
+ * A request never does: its record has not projected yet. A landing does,
+ * because it runs once per epic - except on the seeded opener pane, which is
+ * still waiting for a record it may choose. A first batch holding only kinds a
+ * landing never picks (html, canvas, file) must not close the door on the chat
+ * records that follow it.
+ */
+function nullResolveSpendsKey(
+  hasExplicitFocus: boolean,
+  landingAwaitsFirstRecords: boolean,
+): boolean {
+  return !hasExplicitFocus && !landingAwaitsFirstRecords;
 }
 
 interface FocusRequestBaseline {
@@ -988,6 +1048,14 @@ function shouldSuppressLegacyAutoOpen(args: {
    * precedence alone.
    */
   readonly requestOutrunsNestedRoute: boolean;
+  /**
+   * Whether the canvas is still the empty opener pane this session seeded.
+   * The nested-route effect writes that pane into the URL, so the route names
+   * a target nobody chose, and it does not stand the landing down. Every
+   * other empty pane in a route is one the person left empty, and governs as
+   * before, as does any target once an explicit request is present.
+   */
+  readonly landingAwaitsFirstRecords: boolean;
 }): boolean {
   const {
     nestedFocusEnabled,
@@ -995,11 +1063,15 @@ function shouldSuppressLegacyAutoOpen(args: {
     focusArtifactId,
     recordCount,
     requestOutrunsNestedRoute,
+    landingAwaitsFirstRecords,
   } = args;
+  const unansweredLanding =
+    focusArtifactId === undefined && landingAwaitsFirstRecords;
   if (
     nestedFocusEnabled &&
     nestedRouteTarget !== null &&
-    !requestOutrunsNestedRoute
+    !requestOutrunsNestedRoute &&
+    !unansweredLanding
   ) {
     return true;
   }

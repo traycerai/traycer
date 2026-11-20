@@ -19,13 +19,29 @@ import { toastFromHostError } from "@/lib/host-error-toast";
  * catalog changed - which makes "invalidate only on `done`" wrong for exactly
  * these two.
  */
-function isCustomProviderWrite(action: ModelProviderAuthAction): boolean {
+function isCustomProviderWrite(
+  action: ModelProviderAuthVariables["action"],
+): boolean {
   return action.action === "createCustom" || action.action === "updateCustom";
 }
 
+type CredentialFreeAction<Action> = Action extends ModelProviderAuthAction
+  ? Omit<
+      Action,
+      | "key"
+      | "code"
+      | "headers"
+      | "inputs"
+      | "name"
+      | "baseUrl"
+      | "models"
+      | "env"
+    >
+  : never;
+
 export interface ModelProviderAuthVariables {
   readonly providerId: ProviderId;
-  readonly action: ModelProviderAuthAction;
+  readonly action: CredentialFreeAction<ModelProviderAuthAction>;
 }
 
 interface ModelProviderAuthContext {
@@ -43,7 +59,14 @@ interface ModelProviderAuthContext {
  * inline next to the field that produced it - a toast for those would put the
  * explanation somewhere other than the form the user is still holding.
  */
-export function useProvidersModelProviderAuth(): UseMutationResult<
+export function useProvidersModelProviderAuth(
+  readAction:
+    | ((
+        target: ModelProviderAuthVariables["action"],
+      ) => ModelProviderAuthAction)
+    | null,
+  clearActionInput: (() => void) | null,
+): UseMutationResult<
   ProvidersModelProviderAuthResponse,
   HostRpcError,
   ModelProviderAuthVariables,
@@ -59,10 +82,18 @@ export function useProvidersModelProviderAuth(): UseMutationResult<
   >({
     client,
     method: "providers.modelProviderAuth",
-    mapVariables: (variables) => ({
-      providerId: variables.providerId,
-      action: variables.action,
-    }),
+    mapVariables: (variables) => {
+      if (variables.action.action === "disconnect") {
+        return { providerId: variables.providerId, action: variables.action };
+      }
+      if (readAction === null) {
+        throw new Error("Model provider input is unavailable.");
+      }
+      return {
+        providerId: variables.providerId,
+        action: readAction(variables.action),
+      };
+    },
     options: {
       mutationKey: providersMutationKeys.modelProviderAuth(),
       // Captured here, not read in `onSuccess`: a host swap mid-flight would
@@ -91,6 +122,7 @@ export function useProvidersModelProviderAuth(): UseMutationResult<
           });
         }
       },
+      onSettled: () => clearActionInput?.(),
       onError: (error) =>
         toastFromHostError(error, "Couldn't reach the host for that sign-in."),
     },

@@ -56,3 +56,32 @@ describe("blockquote submit round-trip", () => {
     expect(container.textContent).toContain("my reply");
   });
 });
+
+describe("a node whose type is named like an inherited member", () => {
+  it("renders its children the way an unknown node type does", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "constructor",
+              content: [{ type: "text", text: "inner words" }],
+            },
+          ],
+        },
+      ],
+    };
+    const { container } = render(
+      <ComposerContentRenderer
+        content={content}
+        variant={undefined}
+        className={undefined}
+        testId={undefined}
+      />,
+    );
+
+    expect(container.textContent).toBe("inner words");
+  });
+});

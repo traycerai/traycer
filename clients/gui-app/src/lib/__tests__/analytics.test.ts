@@ -305,6 +305,20 @@ describe("analytics", () => {
     expect(analyticsBlockerFromError("something inscrutable")).toBe("unknown");
   });
 
+  it("maps a host error code named like an inherited member by its text, not to a blocker", async () => {
+    const { analyticsBlockerFromError } = await import("@/lib/analytics");
+
+    expect(
+      analyticsBlockerFromError({ code: "constructor", message: "opaque" }),
+    ).toBe("unknown");
+    expect(
+      analyticsBlockerFromError({
+        code: "constructor",
+        message: "Request timed out",
+      }),
+    ).toBe("timeout");
+  });
+
   it("filters real SDK custom and identify CaptureResults after enrichment", async () => {
     const { POSTHOG_CONFIG, sanitizePostHogCaptureResult } =
       await import("@/lib/analytics");

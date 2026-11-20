@@ -17,7 +17,18 @@ export function readSyncBoolean(channel: string, fallback: boolean): boolean {
  * plausible number.
  */
 export function readSyncNumber(channel: string, fallback: number): number {
-  const value = ipcRenderer.sendSync(channel);
+  return syncNumberOf(ipcRenderer.sendSync(channel), fallback);
+}
+
+export function readSyncNumberFor(
+  channel: string,
+  argument: string,
+  fallback: number,
+): number {
+  return syncNumberOf(ipcRenderer.sendSync(channel, argument), fallback);
+}
+
+function syncNumberOf(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isSafeInteger(value)
     ? value
     : fallback;

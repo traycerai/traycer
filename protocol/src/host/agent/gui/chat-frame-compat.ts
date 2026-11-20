@@ -1912,26 +1912,44 @@ function supportsFeedbackDrafts(negotiated: SchemaVersion | null): boolean {
   );
 }
 
-function stripFeedbackDraftStamp(block: unknown): unknown {
-  if (!isRecord(block) || !("feedbackDraft" in block)) return block;
-  const { feedbackDraft: _feedbackDraft, ...rest } = block;
-  return rest;
-}
-
-function projectFeedbackDraftRow(row: unknown): unknown {
+function projectFeedbackDraftRow(row: unknown, keepStamp: boolean): unknown {
   if (!isRecord(row) || row.role !== "assistant" || !Array.isArray(row.blocks))
     return row;
   const original = row.blocks;
-  const blocks = original.map(stripFeedbackDraftStamp);
+  const blocks = original.map((block) => {
+    if (!isRecord(block)) return block;
+    if (!keepStamp && "feedbackDraft" in block) {
+      const {
+        feedbackDraft: _stamp,
+        feedbackDraftOrigin: _origin,
+        ...rest
+      } = block;
+      return rest;
+    }
+    if ("feedbackDraftOrigin" in block) {
+      const { feedbackDraftOrigin: _origin, ...rest } = block;
+      return rest;
+    }
+    return block;
+  });
+  if ("feedbackDraft" in row) {
+    const { feedbackDraft: _projection, ...rest } = row;
+    return { ...rest, blocks };
+  }
   return blocks.every((block, index) => block === original[index])
     ? row
     : { ...row, blocks };
 }
 
-function projectFeedbackDraftContainer(value: unknown): unknown {
+function projectFeedbackDraftContainer(
+  value: unknown,
+  keepStamp: boolean,
+): unknown {
   if (!isRecord(value) || !Array.isArray(value.messages)) return value;
   const original = value.messages;
-  const messages = original.map(projectFeedbackDraftRow);
+  const messages = original.map((row) =>
+    projectFeedbackDraftRow(row, keepStamp),
+  );
   return messages.every((message, index) => message === original[index])
     ? value
     : { ...value, messages };
@@ -1941,15 +1959,17 @@ function projectFeedbackDraftFrame(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
-  if (supportsFeedbackDrafts(negotiated)) return frame;
+  if (negotiated !== null && negotiated.major === 1 && negotiated.minor >= 45)
+    return frame;
+  const keepStamp = supportsFeedbackDrafts(negotiated);
   if (frame.kind === "range") {
-    const range = projectFeedbackDraftContainer(frame.range);
+    const range = projectFeedbackDraftContainer(frame.range, keepStamp);
     return range === frame.range ? frame : { ...frame, range };
   }
   if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
   const original = frame.snapshot;
-  const chat = projectFeedbackDraftContainer(original.chat);
-  const tail = projectFeedbackDraftContainer(original.tail);
+  const chat = projectFeedbackDraftContainer(original.chat, keepStamp);
+  const tail = projectFeedbackDraftContainer(original.tail, keepStamp);
   if (chat === original.chat && tail === original.tail) return frame;
   const snapshot = { ...original };
   if (chat !== original.chat) snapshot.chat = chat;
@@ -2004,6 +2024,33 @@ function projectProviderSelectionFrame(
   return { ...frame, snapshot };
 }
 
+const CHAT_SUBSCRIBE_ACCOUNT_WAIT_MINOR = 46;
+
+function projectAccountWaitFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_ACCOUNT_WAIT_MINOR
+  )
+    return frame;
+  if (frame.kind === "turnStateChanged" && "accountWait" in frame) {
+    const { accountWait: _accountWait, ...rest } = frame;
+    return rest;
+  }
+  if (
+    frame.kind === "snapshot" &&
+    isRecord(frame.snapshot) &&
+    "accountWait" in frame.snapshot
+  ) {
+    const { accountWait: _accountWait, ...snapshot } = frame.snapshot;
+    return { ...frame, snapshot };
+  }
+  return frame;
+}
+
 export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
@@ -2011,7 +2058,10 @@ export function projectChatServerFrameForVersion(
   const projected = projectChatServerFrameBeforeUltracode(
     projectDeliveryWorktreeIntent(
       projectFeedbackDraftFrame(
-        projectProviderSelectionFrame(frame, negotiated),
+        projectAccountWaitFrame(
+          projectProviderSelectionFrame(frame, negotiated),
+          negotiated,
+        ),
         negotiated,
       ),
       negotiated,

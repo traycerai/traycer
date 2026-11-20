@@ -69,12 +69,12 @@ export function defineComposedView(
 }
 
 /**
- * Ranks every role a contributor may REPORT, so the lesser claim can be
- * picked. The retired view-only role ranks lowest because it authorizes
- * nothing: an intersection that meets it must not report more than it.
+ * Ranks every role a contributor may REPORT, by the access it gives, so the
+ * lesser claim can be picked. The view-only role gives the access of editor
+ * (`grantedRole`), so it ranks with editor.
  */
 const ROLE_RANK: Readonly<Record<WirePermissionRole, number>> = {
-  viewer: 0,
+  viewer: 1,
   editor: 1,
   owner: 2,
 };

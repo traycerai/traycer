@@ -2,6 +2,7 @@ import type {
   HostRpcRegistry,
   HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
+import type { PROFILE_SYNC_LINK_RPC_METHODS } from "@traycer/protocol/host/profile-sync-link-contracts";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import {
   isPoolHostDirectoryEntry,
@@ -39,8 +40,9 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  *   `autoPolicy.*`, a configuration's own cloud state (its records, secrets,
  *   members, host list, history and plans, and the skills and guide its room
  *   holds: what its Settings pages read and edit, so they work with no host
- *   running it), the environment arm
- *   (`environment.chats.subscribe`,
+ *   running it; a member's running work, which only the computer running it
+ *   can count, is the one members read that stays `target-host`), the
+ *   environment arm (`environment.chats.subscribe`,
  *   `.plainTerminals.subscribe`, `.communicationGraph.subscribe`), which no
  *   host serves, and the chat serving witness (`chat.serving.subscribe`),
  *   the server's published fact. A pool-only call never has a host fallback
@@ -68,9 +70,8 @@ import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
  * time - reachability, a refusal, an outage - ever moves a call between the
  * pool and a host.
  *
- * Exhaustive by type (`satisfies` over both registries rejects a missing and an
- * unknown name) and by test (`__tests__/host-rpc-routing.test.ts` walks the
- * released floor fixture and both registries).
+ * Exhaustive over client-routable names by type and test. Legacy profile-sync
+ * methods remain on the wire for released peers, with no client route.
  */
 export type HostRpcRoute =
   | "target-host"
@@ -81,9 +82,13 @@ export type HostRpcRoute =
   | "target-host-live-pool-at-rest";
 
 export type HostUnaryRpcMethod = keyof HostRpcRegistry & string;
+export type ClientHostUnaryRpcMethod = Exclude<
+  HostUnaryRpcMethod,
+  keyof typeof PROFILE_SYNC_LINK_RPC_METHODS
+>;
 export type HostStreamRpcMethod = keyof HostStreamRpcRegistry & string;
 
-/** The route of `method`, unary or stream; `null` for a name neither knows. */
+/** The client route of `method`, unary or stream; `null` when none is declared. */
 export function hostRpcRouteOf(method: string): HostRpcRoute | null {
   return ROUTE_BY_METHOD.get(method) ?? null;
 }
@@ -500,17 +505,23 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.members.invite": "pool-only",
   "environment.members.noticeSeen": "pool-only",
   "environment.members.remove": "pool-only",
-  "environment.members.removePreview": "pool-only",
+  // Counted by the computer that runs them; the pool is never asked.
+  "environment.members.removePreview": "target-host",
   "environment.members.seats": "pool-only",
   "environment.members.setRole": "pool-only",
   "environment.move.accept": "target-host",
+  "environment.move.outcome": "target-host",
   "environment.move.plan": "target-host",
+  "environment.move.stage": "target-host",
+  "environment.move.start": "target-host",
   "environment.move.stop": "target-host",
   "environment.move.stopPreview": "target-host",
   "environment.notices": "target-host",
   "environment.plans.list": "pool-only",
   "environment.plans.unlink": "pool-only",
   "environment.plans.unlinkPreview": "pool-only",
+  "environment.previewLocalFacts": "target-host",
+  "environment.proposals": "target-host",
   "environment.reachDiagnostics": "target-host",
   "environment.review": "target-host",
   "environment.review.heldApply": "target-host",
@@ -641,6 +652,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.getRuntimeCapabilities": "addressed-peer",
   "host.identity.get": "target-host",
   "host.identity.set": "target-host",
+  "host.accountSettings.refresh": "target-host",
   "host.notificationHooks.save": "target-host",
   "host.notificationHooks.status": "target-host",
   "host.notificationHooks.test": "target-host",
@@ -651,21 +663,16 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.notifications.cloudFeed.markRead": "pool-only",
   "host.notifications.cloudFeed.resolve": "pool-only",
   "host.notifications.getConfig": "target-host",
-  "host.notifications.getLongTurnAlert": "target-host",
   "host.notifications.indicatorState": "target-host",
   "host.notifications.list": "target-host",
   "host.notifications.markAllRead": "target-host",
   "host.notifications.markRead": "target-host",
   "host.notifications.resolve": "target-host",
   "host.notifications.setConfig": "target-host",
-  "host.notifications.setLongTurnAlert": "target-host",
   "host.oneOffShell.run": "target-host",
   "host.portForward.acquireLease": "target-host",
   "host.portForward.leaseEnded": "target-host",
   "host.portForward.releaseLease": "target-host",
-  "host.profileSync.apply": "target-host",
-  "host.profileSync.fetchCredential": "target-host",
-  "host.profileSync.offerCredential": "target-host",
   "host.rebindLocalStore": "target-host",
   "host.remoteAccess.set": "target-host",
   "host.resolveRepoPaths": "target-host",
@@ -675,6 +682,7 @@ export const HOST_UNARY_RPC_ROUTES = {
   "host.service.register": "target-host",
   "host.service.status": "target-host",
   "host.status": "addressed-peer",
+  "host.status.refresh": "target-host",
   "host.update.activate": "target-host",
   "host.update.check": "target-host",
   "host.update.continue": "target-host",
@@ -707,14 +715,17 @@ export const HOST_UNARY_RPC_ROUTES = {
   "pr.getLocalDiffSummary": "target-host",
   "pr.getLocalFileDiff": "target-host",
   "providers.addCustomPath": "target-host",
+  "providers.answerProfileName": "target-host",
   "providers.awaitLogin": "target-host",
   "providers.awaitMcpAuth": "target-host",
   "providers.awaitModelProviderAuth": "target-host",
+  "providers.beginApiKeyChange": "target-host",
   "providers.cancelLogin": "target-host",
   "providers.cancelMcpAuth": "target-host",
   "providers.cancelModelProviderAuth": "target-host",
   "providers.clearApiKey": "target-host",
   "providers.clearProfileApiKey": "target-host",
+  "providers.commitProfileMove": "target-host",
   "providers.consumeRateLimitResetCredit": "target-host",
   "providers.deleteEnvOverride": "target-host",
   "providers.detectVersion": "target-host",
@@ -725,23 +736,19 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.fallbackPolicy.restoreTierGroups": "target-host",
   "providers.fallbackPolicy.set": "target-host",
   "providers.installPackVersion": "target-host",
-  "providers.link": "target-host",
-  "providers.linkComplete": "target-host",
   "providers.list": "target-host",
   "providers.listModelProviders": "target-host",
   "providers.mcpAuth": "target-host",
   "providers.modelProviderAuth": "target-host",
   "providers.nativeMutate": "target-host",
-  "providers.profileSync.acceptAccount": "target-host",
-  "providers.profileSync.overview": "target-host",
-  "providers.profileSync.setKeepInSync": "target-host",
-  "providers.profileSync.syncNow": "target-host",
+  "providers.previewProfileMove": "target-host",
   "providers.readModelRoutes": "target-host",
   "providers.refreshPackDiscovery": "target-host",
   "providers.refreshProfileStatus": "target-host",
   "providers.removeCustomPath": "target-host",
   "providers.removePackVersion": "target-host",
   "providers.setApiKey": "target-host",
+  "providers.settleApiKeyChange": "target-host",
   "providers.setAutoJudge": "target-host",
   "providers.setEnabled": "target-host",
   "providers.setEnvOverride": "target-host",
@@ -828,7 +835,9 @@ export const HOST_UNARY_RPC_ROUTES = {
   "worktree.setEntryMode": "target-host",
   "worktree.setRepoBranchPrefix": "target-host",
   "worktree.setRepoScripts": "target-host",
-} as const satisfies { readonly [Method in HostUnaryRpcMethod]: HostRpcRoute };
+} as const satisfies {
+  readonly [Method in ClientHostUnaryRpcMethod]: HostRpcRoute;
+};
 
 export const HOST_STREAM_RPC_ROUTES = {
   "agent.activity.subscribe": "target-host",

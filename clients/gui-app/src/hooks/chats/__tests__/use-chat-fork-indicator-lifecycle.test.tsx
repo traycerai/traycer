@@ -5,18 +5,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
-  recordNegotiatedHostMethods,
+  recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { ChatForkEvent } from "@traycer/protocol/host/chat-fork/schemas";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { useChatForkEventQuery } from "@/hooks/chats/use-chat-fork-queries";
-import { useChatPublicationTargets } from "@/hooks/chats/use-chat-publication-targets";
+import {
+  publicationTargetMap,
+  readCachedChatPublicationId,
+  useChatPublicationTargets,
+} from "@/hooks/chats/use-chat-publication-targets";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { queryKeys } from "@/lib/query-keys";
+import { selectUnfoldedCloudChats } from "@/lib/chats/unified-chat-list";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -80,11 +88,30 @@ vi.mock("sonner", () => ({
 
 const CHAT_ID = "chat-1";
 const EPIC_ID = "epic-1";
+const TARGETS_QUERY_KEY = queryKeys.hostMethod<
+  HostRpcRegistry,
+  "epic.listChatPublicationTargets"
+>(mockLocalHostEntry.hostId, "epic.listChatPublicationTargets", {
+  epicId: EPIC_ID,
+  chatIds: [],
+});
+const VIEWER_ID = "user-a";
+const VIEWER_TARGETS_QUERY_KEY = [...TARGETS_QUERY_KEY, VIEWER_ID] as const;
 
 interface Harness {
   readonly queryClient: QueryClient;
   readonly forkEvent: { value: ChatForkEvent | null };
   readonly calls: Array<string>;
+  readonly targetRequests: Array<readonly string[]>;
+  readonly targetFailure: { value: "unsupported" | "rpc-error" | null };
+  readonly targetRedirects: {
+    value: Array<{ chatId: string; publicationChatId: string }> | null;
+  };
+  readonly targetGate: {
+    promise: Promise<void> | null;
+    release: (() => void) | null;
+  };
+  readonly targetGateIndex: { value: number };
 }
 
 afterEach(() => {
@@ -174,15 +201,25 @@ describe("fork lifecycle notification-indicator refresh", () => {
     ).toHaveLength(3);
   });
 
-  it("re-reads the chat publication-target map on the same fork edge, inside its 5-minute stale window", async () => {
+  it("ignores a new chat and refreshes the full ID set on a fork edge", async () => {
     const harness = createHarness(null);
-    const { result } = renderHook(
+    const initialIds = Array.from(
+      { length: 2_000 },
+      (_, index) => `chat-${String(index)}`,
+    );
+    let chatIds = initialIds;
+    const { result, rerender } = renderHook(
       () => {
         const fork = useChatForkEventQuery();
         const targets = useChatPublicationTargets({
           client: requireHostClient(),
           epicId: EPIC_ID,
-          chatIds: [CHAT_ID],
+          chatIds,
+          publicationRedirectRevision: "revision-1",
+          publicationRedirectRevisionSupported: true,
+          recordListStore: null,
+          chatIdsAuthoritative: true,
+          chatRecordListFailed: false,
           enabled: true,
         });
         return {
@@ -202,10 +239,16 @@ describe("fork lifecycle notification-indicator refresh", () => {
         (method) => method === "epic.listChatPublicationTargets",
       ),
     ).toHaveLength(1);
+    expect(harness.targetRequests).toEqual([initialIds]);
 
-    // The host detects the fork and mints the redirect. Nothing here touches
-    // the targets query: no remount, no key change, and `staleTime` still has
-    // five minutes to run. Only the fork edge can make it read again.
+    // A newly created chat does not change the task key and cannot cause a
+    // refresh by itself.
+    chatIds = [...initialIds, "chat-created-later"];
+    rerender();
+    expect(harness.targetRequests).toHaveLength(1);
+
+    // The host detects the fork and mints the redirect. Only the fork edge
+    // invalidates the task-keyed answer; the new chat did not issue a request.
     harness.forkEvent.value = sampleForkEvent();
     await act(async () => {
       await result.current.refetchFork();
@@ -219,6 +262,10 @@ describe("fork lifecycle notification-indicator refresh", () => {
         (method) => method === "epic.listChatPublicationTargets",
       ),
     ).toHaveLength(2);
+    expect(harness.targetRequests[1]).toEqual([
+      ...initialIds,
+      "chat-created-later",
+    ]);
   });
 
   it("leaves the publication-target map alone while the episode is unchanged", async () => {
@@ -230,6 +277,11 @@ describe("fork lifecycle notification-indicator refresh", () => {
           client: requireHostClient(),
           epicId: EPIC_ID,
           chatIds: [CHAT_ID],
+          publicationRedirectRevision: "revision-1",
+          publicationRedirectRevisionSupported: true,
+          recordListStore: null,
+          chatIdsAuthoritative: true,
+          chatRecordListFailed: false,
           enabled: true,
         });
         return { refetchFork: fork.refetch };
@@ -261,6 +313,257 @@ describe("fork lifecycle notification-indicator refresh", () => {
       ),
     ).toHaveLength(1);
   });
+
+  it("shares one task entry between sidebar-shaped and palette-shaped observers", async () => {
+    const harness = createHarness(null);
+    const sidebarIds = ["chat-c", "chat-a", "chat-b"];
+    const paletteIds = [...sidebarIds].sort();
+    const useTargets = (chatIds: readonly string[]) =>
+      useChatPublicationTargets({
+        client: requireHostClient(),
+        epicId: EPIC_ID,
+        chatIds,
+        publicationRedirectRevision: "revision-1",
+        publicationRedirectRevisionSupported: true,
+        recordListStore: null,
+        chatIdsAuthoritative: true,
+        chatRecordListFailed: false,
+        enabled: true,
+      });
+    const sidebar = renderHook(() => useTargets(sidebarIds), {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    const palette = renderHook(() => useTargets(paletteIds), {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+
+    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+    expect(sidebar.result.current.data).toEqual(palette.result.current.data);
+    expect(harness.targetRequests).toHaveLength(1);
+    expect([...(harness.targetRequests[0] ?? [])].sort()).toEqual(paletteIds);
+    expect(
+      harness.queryClient
+        .getQueryCache()
+        .findAll({ queryKey: VIEWER_TARGETS_QUERY_KEY }),
+    ).toHaveLength(1);
+  });
+
+  it("waits for an in-flight partial answer before fetching the full list once", async () => {
+    const harness = createHarness(null);
+    const knownIds = ["chat-known"];
+    const allIds = Array.from(
+      { length: 2_001 },
+      (_, index) => `chat-${String(index)}`,
+    );
+    harness.targetGate.promise = new Promise<void>((resolve) => {
+      harness.targetGate.release = resolve;
+    });
+    let authoritative = false;
+    let failed = false;
+    let ids: readonly string[] = knownIds;
+    const useTargets = () =>
+      useChatPublicationTargets({
+        client: requireHostClient(),
+        epicId: EPIC_ID,
+        chatIds: ids,
+        publicationRedirectRevision: "revision-1",
+        publicationRedirectRevisionSupported: true,
+        recordListStore: null,
+        chatIdsAuthoritative: authoritative,
+        chatRecordListFailed: failed,
+        enabled: true,
+      });
+    const sidebar = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    const palette = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(harness.targetRequests).toHaveLength(0);
+    vi.useRealTimers();
+
+    failed = true;
+    act(() => {
+      sidebar.rerender();
+      palette.rerender();
+    });
+    await waitFor(() => expect(harness.targetRequests).toHaveLength(1));
+    expect(harness.targetRequests[0]).toEqual(knownIds);
+
+    const writesBeforeRecovery =
+      harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
+        ?.dataUpdateCount ?? 0;
+    ids = allIds;
+    authoritative = true;
+    failed = false;
+    act(() => {
+      sidebar.rerender();
+      palette.rerender();
+    });
+    expect(harness.targetRequests).toHaveLength(1);
+    harness.targetGate.release?.();
+
+    await waitFor(() =>
+      expect(
+        harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
+          ?.dataUpdateCount,
+      ).toBe(writesBeforeRecovery + 2),
+    );
+    await act(async () => {});
+    expect(harness.targetRequests).toEqual([knownIds, allIds]);
+  });
+
+  it("recovers an identical failed-latch answer with one authoritative refresh across observers", async () => {
+    const harness = createHarness(null);
+    const partialIds = ["chat-known"];
+    const allIds = ["chat-known", "chat-new"];
+    let authoritative = false;
+    let failed = true;
+    let ids: readonly string[] = partialIds;
+    const useTargets = () =>
+      useChatPublicationTargets({
+        client: requireHostClient(),
+        epicId: EPIC_ID,
+        chatIds: ids,
+        publicationRedirectRevision: "revision-1",
+        publicationRedirectRevisionSupported: true,
+        recordListStore: null,
+        chatIdsAuthoritative: authoritative,
+        chatRecordListFailed: failed,
+        enabled: true,
+      });
+    const sidebar = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+    const palette = renderHook(useTargets, {
+      wrapper: wrapperFor(harness.queryClient),
+    });
+
+    await waitFor(() => expect(harness.targetRequests).toEqual([partialIds]));
+    await waitFor(() => expect(sidebar.result.current.isFetching).toBe(false));
+
+    harness.targetGateIndex.value = 2;
+    harness.targetGate.promise = new Promise<void>((resolve) => {
+      harness.targetGate.release = resolve;
+    });
+    const writesBeforeRecovery =
+      harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
+        ?.dataUpdateCount ?? 0;
+    act(() => {
+      void sidebar.result.current.refetch();
+    });
+    await waitFor(() =>
+      expect(harness.targetRequests).toEqual([partialIds, partialIds]),
+    );
+
+    ids = allIds;
+    authoritative = true;
+    failed = false;
+    act(() => {
+      sidebar.rerender();
+      palette.rerender();
+    });
+    expect(harness.targetRequests).toHaveLength(2);
+    harness.targetGate.release?.();
+
+    await waitFor(() =>
+      expect(
+        harness.queryClient.getQueryState(VIEWER_TARGETS_QUERY_KEY)
+          ?.dataUpdateCount,
+      ).toBe(writesBeforeRecovery + 2),
+    );
+    await act(async () => {});
+    expect(harness.targetRequests).toEqual([partialIds, partialIds, allIds]);
+  });
+
+  it("does not refetch when a supported host reports no revision", async () => {
+    const harness = createHarness(null);
+    const { result, rerender } = renderHook(
+      () =>
+        useChatPublicationTargets({
+          client: requireHostClient(),
+          epicId: EPIC_ID,
+          chatIds: [CHAT_ID],
+          chatIdsAuthoritative: true,
+          chatRecordListFailed: false,
+          publicationRedirectRevision: null,
+          publicationRedirectRevisionSupported: true,
+          recordListStore: null,
+          enabled: true,
+        }),
+      { wrapper: wrapperFor(harness.queryClient) },
+    );
+
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    rerender();
+    expect(harness.targetRequests).toHaveLength(1);
+  });
+
+  it("degrades unsupported hosts to an empty publication map without retrying", async () => {
+    const harness = createHarness(null);
+    harness.targetFailure.value = "unsupported";
+    const { result } = renderHook(
+      () =>
+        useChatPublicationTargets({
+          client: requireHostClient(),
+          epicId: EPIC_ID,
+          chatIds: [CHAT_ID],
+          publicationRedirectRevision: "revision-1",
+          publicationRedirectRevisionSupported: true,
+          recordListStore: null,
+          chatIdsAuthoritative: true,
+          chatRecordListFailed: false,
+          enabled: true,
+        }),
+      { wrapper: wrapperFor(harness.queryClient) },
+    );
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.error?.code).toBe("E_HOST_UNSUPPORTED");
+    expect(publicationTargetMap(result.current.data)).toEqual(new Map());
+    expect(harness.targetRequests).toEqual([[CHAT_ID]]);
+  });
+
+  it("feeds a fetched redirect into the real cloud-list fold", async () => {
+    const harness = createHarness(sampleForkEvent());
+    const { result } = renderHook(
+      () =>
+        useChatPublicationTargets({
+          client: requireHostClient(),
+          epicId: EPIC_ID,
+          chatIds: [CHAT_ID],
+          publicationRedirectRevision: "revision-1",
+          publicationRedirectRevisionSupported: true,
+          recordListStore: null,
+          chatIdsAuthoritative: true,
+          chatRecordListFailed: false,
+          enabled: true,
+        }),
+      { wrapper: wrapperFor(harness.queryClient) },
+    );
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    const rows = selectUnfoldedCloudChats({
+      chats: [
+        cloudSummary(CHAT_ID, "other-host", true),
+        cloudSummary("chat-1-forked", mockLocalHostEntry.hostId, true),
+      ],
+      localChatIds: [CHAT_ID],
+      publicationChatIdByChatId: publicationTargetMap(result.current.data),
+    });
+    expect(rows.map((chat) => chat.identity.chatId)).toEqual([CHAT_ID]);
+    expect(
+      readCachedChatPublicationId(
+        harness.queryClient,
+        mockLocalHostEntry.hostId,
+        EPIC_ID,
+        { chatId: CHAT_ID, viewerUserId: VIEWER_ID },
+      ),
+    ).toBe("chat-1-forked");
+  });
 });
 
 function createHarness(initialEvent: ChatForkEvent | null): Harness {
@@ -271,6 +574,13 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
   });
   const forkEvent = { value: initialEvent };
   const calls: string[] = [];
+  const targetRequests: Array<readonly string[]> = [];
+  const targetFailure = {
+    value: null as "unsupported" | "rpc-error" | null,
+  };
+  const targetRedirects: Harness["targetRedirects"] = { value: null };
+  const targetGate: Harness["targetGate"] = { promise: null, release: null };
+  const targetGateIndex = { value: 1 };
   let requestId = 0;
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -294,13 +604,47 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
         },
         // The redirect the sidebar folds the cloud list on. It is minted BY the
         // fork, so its answer flips exactly across the episode this test drives.
-        "epic.listChatPublicationTargets": () => {
+        "epic.listChatPublicationTargets": async (params) => {
           calls.push("epic.listChatPublicationTargets");
+          targetRequests.push([...params.chatIds]);
+          if (
+            targetRequests.length === targetGateIndex.value &&
+            targetGate.promise !== null
+          ) {
+            await targetGate.promise;
+          }
+          if (targetFailure.value === "unsupported") {
+            throw new HostRpcError({
+              code: "E_HOST_UNSUPPORTED",
+              message: "This host does not support publication targets.",
+              requestId: `request-${String(requestId)}`,
+              method: "epic.listChatPublicationTargets",
+              fatalDetails: {
+                code: "E_HOST_UNSUPPORTED",
+                reason: "This host does not support publication targets.",
+                incompatibleMethods: null,
+                upgradeGuidance: {
+                  clientShouldUpgrade: false,
+                  hostShouldUpgrade: true,
+                },
+              },
+            });
+          }
+          if (targetFailure.value === "rpc-error") {
+            throw new HostRpcError({
+              code: "RPC_ERROR",
+              message: "Temporary publication-target failure.",
+              requestId: `request-${String(requestId)}`,
+              method: "epic.listChatPublicationTargets",
+              fatalDetails: null,
+            });
+          }
           return {
             redirected:
-              forkEvent.value === null
+              targetRedirects.value ??
+              (forkEvent.value === null
                 ? []
-                : [{ chatId: CHAT_ID, publicationChatId: "chat-1-forked" }],
+                : [{ chatId: CHAT_ID, publicationChatId: "chat-1-forked" }]),
           };
         },
       },
@@ -310,11 +654,46 @@ function createHarness(initialEvent: ChatForkEvent | null): Harness {
     createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
   );
   hostClientRef.current = spine.createRequester(mockLocalHostEntry);
-  recordNegotiatedHostMethods(mockLocalHostEntry.hostId, ["host.chatFork.get"]);
-  useAuthStore.setState({
-    contextMetadata: { userId: "user-a", username: "user-a" },
+  recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+    "host.chatFork.get": { major: 1, minor: 0 },
+    "epic.listChatRecords": { major: 1, minor: 6 },
   });
-  return { queryClient, forkEvent, calls };
+  useAuthStore.setState({
+    contextMetadata: { userId: VIEWER_ID, username: VIEWER_ID },
+  });
+  return {
+    queryClient,
+    forkEvent,
+    calls,
+    targetRequests,
+    targetFailure,
+    targetRedirects,
+    targetGate,
+    targetGateIndex,
+  };
+}
+
+function cloudSummary(
+  chatId: string,
+  ownerHostId: string,
+  isOwnedByViewer: boolean,
+): CloudChatSummary {
+  return {
+    identity: { taskId: EPIC_ID, ownerUserId: "user-1", chatId },
+    ownerHostId,
+    createdAt: 1,
+    visibility: "task" as const,
+    title: chatId,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 1,
+    headSha256: null,
+    publishedAt: 1,
+    throughRecordSeq: null,
+    isOwnedByViewer,
+  };
 }
 
 function wrapperFor(queryClient: QueryClient) {

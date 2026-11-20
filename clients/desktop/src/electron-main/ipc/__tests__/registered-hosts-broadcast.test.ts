@@ -89,7 +89,9 @@ describe("registerRegisteredHostsBroadcast", () => {
       fanOut: vi.fn(),
     };
     const fleet = buildFleet();
-    const refreshSpy = vi.spyOn(fleet, "refresh").mockResolvedValue(undefined);
+    const refreshSpy = vi
+      .spyOn(fleet, "refresh")
+      .mockResolvedValue({ kind: "published" });
 
     registerRegisteredHostsBroadcast(bridge, fleet);
 
@@ -109,7 +111,9 @@ describe("registerRegisteredHostsBroadcast", () => {
       fanOut: vi.fn(),
     };
     const fleet = buildFleet();
-    const refreshSpy = vi.spyOn(fleet, "refresh").mockResolvedValue(undefined);
+    const refreshSpy = vi
+      .spyOn(fleet, "refresh")
+      .mockResolvedValue({ kind: "published" });
 
     registerRegisteredHostsBroadcast(bridge, fleet);
     await vi.advanceTimersByTimeAsync(60_000);

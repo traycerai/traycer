@@ -303,6 +303,7 @@ export interface ChatLowerComposerState {
   ) => boolean | Promise<boolean>;
   /** `/btw` / `/side`: fork this chat and ask there (`startSideChat`). */
   readonly onSideChat: (input: ChatComposerSideChatInput) => boolean;
+  readonly onClone: () => void;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   /** The Location / Mode+branch / Environment chip cluster (+ context usage). */
   readonly workspaceControls: ReactNode;
@@ -870,11 +871,7 @@ function ComposerSurface(props: {
       </ComposerSlotShell>
     );
   }
-  if (
-    model.access.isViewer &&
-    model.access.restingSandbox === undefined &&
-    model.access.parksEvictedSend !== true
-  ) {
+  if (model.access.isViewer) {
     return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
@@ -960,7 +957,6 @@ function ViewerComposerSurface(props: {
   readonly layout: ComposerSurfaceLayout;
 }): ReactNode {
   const { model, layout } = props;
-  const sandboxSays = useContext(ChatSandboxLineContext);
   if (model.subagentView !== null) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -973,12 +969,19 @@ function ViewerComposerSurface(props: {
   return (
     <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
       <div className="flex flex-col gap-3">
-        {sandboxSays ? null : (
-          <ReadOnlyComposerNotice
-            notice={model.access.readOnlyNotice}
-            actions={null}
-          />
-        )}
+        <ReadOnlyComposerNotice
+          notice={model.access.readOnlyNotice}
+          actions={
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={model.composer.onClone}
+            >
+              Clone agent
+            </Button>
+          }
+        />
         {model.access.isCopy ? null : (
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}
@@ -1002,7 +1005,9 @@ function composerSendGate(model: ComposerSurfaceModel): {
   const restingMessage = model.access.restingSandbox !== undefined && !editing;
   const evictedMessage = model.access.parksEvictedSend === true && !editing;
   return {
-    disabled: !model.access.canAct && !restingMessage && !evictedMessage,
+    disabled:
+      model.access.isViewer ||
+      (!model.access.canAct && !restingMessage && !evictedMessage),
     hint:
       restingMessage || evictedMessage
         ? null
@@ -1194,8 +1199,7 @@ function ReadOnlyComposerNotice(props: {
           with, aligned to the first line of a notice that can wrap. */}
       <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1">
-        {props.notice ??
-          "Read-only viewer. The agent owner can send prompts and manage this queue."}
+        {props.notice ?? "Read-only viewer."}
       </span>
       {props.actions}
     </div>

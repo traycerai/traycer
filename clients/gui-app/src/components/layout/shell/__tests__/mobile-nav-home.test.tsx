@@ -35,6 +35,11 @@ import "../../../../../__tests__/test-browser-apis";
  */
 
 import type { UseNavigateResult } from "@tanstack/react-router";
+import {
+  drawsColouredMascot,
+  expectedTracyGlyph,
+  renderedTracyGlyphs,
+} from "@/components/bots/__tests__/mascot-drawing";
 import type { HostNotificationsIndicatorState } from "@traycer/protocol/host/notifications/contracts";
 import {
   cleanup,
@@ -151,6 +156,7 @@ vi.mock("@/lib/analytics", () => ({
 
 vi.mock("@/lib/host", () => ({
   useAuthService: () => ({ signOut: () => Promise.resolve() }),
+  useHostBinding: () => null,
 }));
 
 // The drawer's Notifications row opens the phone's notification centre, whose
@@ -332,7 +338,8 @@ describe("MobileNavDrawer rows", () => {
 
     const row = await screen.findByTestId("mobile-nav-tracy");
     expect(row.textContent).toBe("Tracy");
-    expect(within(row).getByTestId("tracy-entry-icon")).toBeTruthy();
+    expect(renderedTracyGlyphs(row)).toEqual([expectedTracyGlyph(16)]);
+    expect(drawsColouredMascot(row)).toBe(false);
     fireEvent.click(row);
 
     expect(useTracySurfaceStore.getState().hostId).toBe("host-a");

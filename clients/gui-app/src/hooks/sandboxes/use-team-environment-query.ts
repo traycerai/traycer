@@ -83,10 +83,10 @@ export function useTeamEnvironmentIds(teamIds: readonly string[]): {
       results.forEach((result, index) => {
         const teamId = teamIds[index];
         const answer = result.data;
-        if (answer === undefined) {
-          complete = false;
-          return;
-        }
+        // An answer kept from before a failed read still names the team's
+        // environment (it never changes), but it is not this read's answer.
+        if (answer === undefined || result.isError) complete = false;
+        if (answer === undefined) return;
         if (answer.kind === "ok") {
           byTeamId.set(teamId, answer.environmentId);
         } else if (answer.kind !== "not-a-member") {

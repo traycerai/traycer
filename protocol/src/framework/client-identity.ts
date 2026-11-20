@@ -43,6 +43,8 @@ import { z } from "zod";
  * | `1`   | every pre-field client           | legacy; may depend on the `epic.chats` Yjs projection          |
  * | `2`   | first host-1.2-compatible builds | does not depend on that projection; works off store-backed     |
  * |       |                                  | chat records                                                   |
+ * | `3`   | team host identity builds        | opens every host with a host-only token minted by authn and   |
+ * |       |                                  | never puts a sign-in token in an open frame                   |
  *
  * If a future architectural change cannot preserve all earlier guarantees, a
  * scalar cumulative epoch has stopped being expressive enough and that change
@@ -61,7 +63,7 @@ export const LEGACY_CLIENT_COMPATIBILITY_EPOCH = 1;
  * keeps this value, and only a change to what the client structurally
  * guarantees the host may raise it.
  */
-export const CURRENT_CLIENT_COMPATIBILITY_EPOCH = 2;
+export const CURRENT_CLIENT_COMPATIBILITY_EPOCH = 3;
 
 /**
  * The identity as it appears ON THE WIRE. Every member is optional, and both

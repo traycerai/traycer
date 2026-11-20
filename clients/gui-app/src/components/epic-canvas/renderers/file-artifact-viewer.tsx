@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { MediaArtifactContent } from "./media-artifact-content";
 import { useEffect, useState, type ReactNode } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -103,6 +104,12 @@ export function FileArtifactViewer(props: {
     fileSave,
   });
   const save = async (route: "download" | "share"): Promise<void> => {
+    if (
+      ((route === "download" && cloudDownload !== null) ||
+        query.data?.size !== object.byteLength) &&
+      showHostUpdateNeededForGesture(props.hostId)
+    )
+      return;
     setSaving(true);
     setSaveError(null);
     try {
@@ -200,7 +207,10 @@ export function FileArtifactViewer(props: {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => void query.refetch()}
+                    onClick={() => {
+                      if (showHostUpdateNeededForGesture(props.hostId)) return;
+                      void query.refetch();
+                    }}
                   >
                     Retry
                   </Button>

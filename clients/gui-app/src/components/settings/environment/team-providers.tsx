@@ -1,4 +1,14 @@
 import { useState, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
+import { isProviderKeyProviderId } from "@traycer-clients/shared/host-client/provider-api-key-change";
+import {
+  useCloudProviderApiKeyQuery,
+  useCloudProviderKeyScope,
+  type CloudProviderKeyScope,
+} from "@/hooks/providers/use-cloud-provider-api-key-query";
+import { CloudProviderApiKeySection } from "./cloud-provider-api-key-section";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type {
   EnvironmentOs,
@@ -29,7 +39,7 @@ import { useHostClient } from "@/lib/host";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import { cn } from "@/lib/utils";
 import { ConfigurationOsPicker } from "./configuration-os-picker";
-import { ConfigurationWriteFeedback } from "./configuration-write-feedback";
+import { TeamProviderWriteFeedback } from "./configuration-write-feedback";
 import {
   configurationWriteIssue,
   type ConfigurationWriteIssue,
@@ -43,9 +53,12 @@ import { TeamPackItem } from "./team-provider-items";
 import { EnvironmentProviderMcpTab } from "./environment-provider-mcp-tab";
 import { TeamProviderLiveFacts } from "./team-provider-live-facts";
 import { ConfigurationProfiles } from "./team-configuration-profiles";
-import { TeamPlans } from "./team-plans";
+import {
+  TeamProviderRecordsContext,
+  useTeamProviderRecordsRead,
+} from "./team-provider-records";
+import { TeamSyncedProviderProfiles } from "./team-synced-provider-profiles";
 import { ProviderRowDetails } from "@/components/settings/details/provider-row-details";
-import { useConfigurationAdminNames } from "@/hooks/environment/team/use-admin-names";
 import { EnvironmentProviderSkillsTab } from "./environment-skills";
 import {
   cloudProviderStanding,
@@ -54,6 +67,7 @@ import {
 } from "./team-provider-state-word";
 import { ConfigurationReadFailed } from "./team-read-failed";
 import { PROVIDER_ENV_TAB_SUBTITLE } from "@/components/settings/panels/provider-env-subtitle";
+import { useConfigurationSource } from "./configuration-source";
 
 type RailClass = "configured" | "unconfigured" | "unknown";
 
@@ -65,10 +79,12 @@ interface ProviderRailRow {
 }
 
 export function TeamProviders(): ReactNode {
+  const keyScope = useCloudProviderKeyScope();
+  const keyQuery = useCloudProviderApiKeyQuery(keyScope);
   const query = useConfigurationProviderItemsQuery();
   const read = useBoundedRead(query);
-  const members = useConfigurationAdminNames();
   const scope = useTeamViewingHost();
+  const records = useTeamProviderRecordsRead();
   const catalog = useProvidersListForClient(scope.client, {
     enabled: scope.client !== null,
     subscribed: true,
@@ -88,6 +104,7 @@ export function TeamProviders(): ReactNode {
     items: query.data,
     plans: plansQuery.data?.plans ?? null,
     secrets: secretsQuery.data?.secrets ?? null,
+    keyRecords: keyQuery.isError ? null : (keyQuery.data ?? null),
   });
   const railKey = rows
     .map((row) => `${row.providerId}:${row.railClass}`)
@@ -134,30 +151,35 @@ export function TeamProviders(): ReactNode {
     ]),
   ];
   return (
-    <TeamProvidersView
-      providerId={providerId}
-      os={os}
-      onOsChange={setOs}
-      issue={issue}
-      readPending={read.pending}
-      readFailed={read.failed}
-      onRetry={read.retry}
-      ready={query.data !== undefined}
-      rows={rows}
-      onSelect={selectProvider}
-      profiles={profiles}
-      adminNames={members.adminNames}
-      packIds={packIds}
-      packs={packs}
-      items={items}
-      writes={writes}
-      harness={harness}
-      onOutcome={(result) => setIssue(configurationWriteIssue(result))}
-    />
+    <TeamProviderRecordsContext.Provider value={records}>
+      <TeamProvidersView
+        providerId={providerId}
+        keyScope={keyScope}
+        keyQuery={keyQuery}
+        os={os}
+        onOsChange={setOs}
+        issue={issue}
+        readPending={read.pending}
+        readFailed={read.failed}
+        onRetry={read.retry}
+        ready={query.data !== undefined}
+        rows={rows}
+        onSelect={selectProvider}
+        profiles={profiles}
+        packIds={packIds}
+        packs={packs}
+        items={items}
+        writes={writes}
+        harness={harness}
+        onOutcome={(result) => setIssue(configurationWriteIssue(result))}
+      />
+    </TeamProviderRecordsContext.Provider>
   );
 }
 
 function TeamProvidersView(props: {
+  readonly keyScope: CloudProviderKeyScope;
+  readonly keyQuery: UseQueryResult<EnvironmentProfileRecords, HostRpcError>;
   readonly providerId: ProviderId;
   readonly os: EnvironmentOs;
   readonly onOsChange: (os: EnvironmentOs) => void;
@@ -169,7 +191,6 @@ function TeamProvidersView(props: {
   readonly rows: readonly ProviderRailRow[];
   readonly onSelect: (providerId: ProviderId) => void;
   readonly profiles: readonly ConfigurationItem[];
-  readonly adminNames: readonly string[];
   readonly packIds: readonly string[];
   readonly packs: readonly ConfigurationItem[];
   readonly items: readonly ConfigurationItem[];
@@ -191,7 +212,6 @@ function TeamProvidersView(props: {
     rows,
     onSelect,
     profiles,
-    adminNames,
     packIds,
     packs,
     items,
@@ -199,13 +219,14 @@ function TeamProvidersView(props: {
     harness,
     onOutcome,
   } = props;
+  const source = useConfigurationSource();
   return (
     <SettingsPanelShell
       title="Providers"
       description="Sign-ins, keys and tools for each coding agent."
       bodyClassName="flex flex-col gap-4 overflow-visible rounded-none border-none bg-transparent"
     >
-      <ConfigurationWriteFeedback issue={issue} />
+      <TeamProviderWriteFeedback issue={issue} />
       {readPending ? <MutedAgentSpinner /> : null}
       {readFailed ? (
         <ConfigurationReadFailed page="providers" onRetry={onRetry} />
@@ -257,12 +278,35 @@ function TeamProvidersView(props: {
                 ) : null}
               </TabsList>
               <TabsContent value="plans" className="flex flex-col gap-4">
-                <TeamPlans providerId={providerId} adminNames={adminNames} />
-                <ConfigurationProfiles
-                  providerLabel={providerDisplayName(providerId)}
-                  profiles={profiles}
-                  onOutcome={onOutcome}
-                />
+                {source.kind === "pool" && source.configuration === "team" ? (
+                  <TeamSyncedProviderProfiles
+                    providerId={providerId}
+                    onOutcome={onOutcome}
+                    fallback={
+                      <ConfigurationProfiles
+                        providerLabel={providerDisplayName(providerId)}
+                        profiles={profiles}
+                        onOutcome={onOutcome}
+                      />
+                    }
+                  />
+                ) : (
+                  <ConfigurationProfiles
+                    providerLabel={providerDisplayName(providerId)}
+                    profiles={profiles}
+                    onOutcome={onOutcome}
+                  />
+                )}
+                {/* A team's Viewer, or a role the app does not know, sees no key field. */}
+                {source.kind === "pool" &&
+                source.configuration === "team" &&
+                !props.keyScope.canEdit ? null : (
+                  <CloudProviderApiKeySection
+                    scope={props.keyScope}
+                    providerId={providerId}
+                    query={props.keyQuery}
+                  />
+                )}
                 <TeamProviderLiveFacts providerId={providerId} />
               </TabsContent>
               <TabsContent value="env" className="flex flex-col gap-3">
@@ -374,6 +418,7 @@ function providerRailAdjustment(input: {
 }
 
 function providerRailRows(input: {
+  readonly keyRecords: EnvironmentProfileRecords | null;
   readonly items: readonly ConfigurationItem[] | undefined;
   readonly plans: readonly EnvironmentPlan[] | null;
   readonly secrets: readonly EnvironmentSecret[] | null;
@@ -383,27 +428,74 @@ function providerRailRows(input: {
       input.items === undefined
         ? null
         : managedProfileCount(input.items, provider.harnessId);
-    const word = teamProviderStateWord({
-      providerId: provider.providerId,
-      harnessId: provider.harnessId,
-      plans: input.plans,
-      secrets: input.secrets,
-    });
+    const usesKeyRecords =
+      isProviderKeyProviderId(provider.providerId) &&
+      input.keyRecords?.profileSyncEnabled !== false;
+    const linkedPlan =
+      input.plans?.some(
+        (plan) =>
+          plan.harness === provider.harnessId && plan.status === "linked",
+      ) === true;
+    const recordKey =
+      input.keyRecords?.providerKeys.some(
+        (record) =>
+          record.providerId === provider.providerId && record.state === "live",
+      ) === true;
+    let standing: CloudProviderStanding;
+    let word: string | null;
+    if (usesKeyRecords) {
+      // Enabled record mode owns absence too: a removed key cannot be revived by a stale legacy secret.
+      standing = recordProviderStanding({
+        profileCount: count,
+        linkedPlan,
+        recordKey,
+        plansKnown: input.plans !== null,
+        recordsKnown: input.keyRecords !== null,
+      });
+      if (linkedPlan) word = "plan";
+      else if (recordKey) word = "key";
+      else word = null;
+    } else {
+      word = teamProviderStateWord({
+        providerId: provider.providerId,
+        harnessId: provider.harnessId,
+        plans: input.plans,
+        secrets: input.secrets,
+      });
+      standing = cloudProviderStanding({
+        providerId: provider.providerId,
+        harnessId: provider.harnessId,
+        profileCount: count,
+        plans: input.plans,
+        secrets: input.secrets,
+      });
+    }
     return {
       providerId: provider.providerId,
       harnessId: provider.harnessId,
-      railClass: providerRailClass(
-        cloudProviderStanding({
-          providerId: provider.providerId,
-          harnessId: provider.harnessId,
-          profileCount: count,
-          plans: input.plans,
-          secrets: input.secrets,
-        }),
-      ),
+      railClass: providerRailClass(standing),
       subtitle: word === "key" ? "key" : null,
     };
   });
+}
+
+/** A broker key read owns both presence and absence, after known profiles/plans. */
+function recordProviderStanding(input: {
+  readonly profileCount: number | null;
+  readonly linkedPlan: boolean;
+  readonly recordKey: boolean;
+  readonly plansKnown: boolean;
+  readonly recordsKnown: boolean;
+}): CloudProviderStanding {
+  if (
+    (input.profileCount !== null && input.profileCount > 0) ||
+    input.linkedPlan ||
+    input.recordKey
+  )
+    return "configured";
+  if (input.profileCount === null || !input.plansKnown || !input.recordsKnown)
+    return "unknown";
+  return "absent";
 }
 
 function providerRailClass(standing: CloudProviderStanding): RailClass {

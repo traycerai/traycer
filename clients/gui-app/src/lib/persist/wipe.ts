@@ -19,7 +19,8 @@ import {
 //      from BOTH localStorage and sessionStorage. Auth (`traycer.`) and any
 //      non-`traycer-gui-app:` key survive.
 //   3. Drop renderer dbs       — delete every per-window IndexedDB partition
-//      for pasted image bytes and file-edit recovery drafts, plus the
+//      for pasted image bytes, their measured sizes and file-edit recovery
+//      drafts, plus the
 //      app-global legacy stash database the drafts migration reads, so wiped
 //      state doesn't leak draft bytes. Enumeration is Chromium-only;
 //      absent → no-op.
@@ -59,11 +60,16 @@ const PERSIST_KEY_BOUNDARY = `${PERSIST_PREFIX}:`;
 
 // Renderer IndexedDB partitions are named
 // `traycer-gui-app:<partition>:<suffix>`. The suffixes below pin the wipe to
-// those stores: landing draft images, file-edit recovery, and transcript
-// chat/artifact image bytes. Other `traycer-gui-app:`-prefixed dbs survive.
+// those stores: landing draft images and their measured sizes, file-edit
+// recovery, and transcript chat/artifact image bytes. Other
+// `traycer-gui-app:`-prefixed dbs survive.
 const LANDING_IMAGE_DB_SUFFIX = ":landing-images";
+// Sizes of the images deleted with the store above: kept, they would charge
+// the image budget for bytes no longer there.
+const LANDING_IMAGE_SIZES_DB_SUFFIX = ":landing-image-sizes";
 const RENDERER_DB_SUFFIXES = [
   LANDING_IMAGE_DB_SUFFIX,
+  LANDING_IMAGE_SIZES_DB_SUFFIX,
   FILE_EDIT_RECOVERY_DB_SUFFIX,
   TRANSCRIPT_IMAGE_DB_SUFFIX,
   TRANSCRIPT_IMAGE_META_DB_SUFFIX,

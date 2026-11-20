@@ -44,32 +44,19 @@ import {
   type RemoteTrafficSnapshot,
 } from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import {
-  createResponderHandshake,
-  generateStaticKeyPair,
-  DEFAULT_REPLAY_WINDOW_SIZE,
-  NoiseSession,
-  type NoiseHandshakeState,
-  type NoiseKeyPair,
-} from "@traycer/protocol/crypto/noise";
-import {
   FINE_INBOUND_CREDIT_GRANT_BATCH,
   MuxFrameType,
-  NOISE_PROLOGUE,
   QosClass,
   SESSION_CONTROL_STREAM_ID,
-  decodeMuxFrame,
-  encodeMuxFrame,
   encodedSubscribeStreamId,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
-  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
   OPEN_AUTHZ_SESSION_GRANT_VERSION,
   type EncodeMuxFrameInput,
-  type MemberCredentialHandoff,
-  type MuxFrame,
   type MuxFrameTypeValue,
   type QosClassValue,
 } from "@traycer/protocol/host-transport/mux";
+import { isTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
   clockCanMakeValidBearersLookExpired,
@@ -83,7 +70,9 @@ import {
   HostTransportFailureError,
   mayHaveReachedHost,
   RetryableTransportError,
+  type HostRequestOptions,
 } from "../../host-messenger";
+import { createRetryingMessenger } from "../../retrying-messenger";
 import {
   getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
@@ -94,16 +83,9 @@ import type { DialPriority } from "../../dial-priority";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
-  StreamWebSocketMessageEvent,
 } from "../../ws-stream-factory";
-import type {
-  WebSocketCloseEvent,
-  WebSocketErrorEvent,
-  WebSocketOpenEvent,
-} from "../../ws-factory";
 import {
   BULK_CHUNK_SIZE_BYTES,
-  ChunkReassembler,
   encodeMuxMessageBody,
   nextSeqValue,
   OutboundChunkSource,
@@ -123,8 +105,16 @@ import {
   type RemoteSessionOptions,
 } from "../remote-session";
 import { RemoteSession as ProtocolRemoteSession } from "@traycer/protocol/host-transport/remote/session";
-import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
+import type {
+  RemoteSessionAuth,
+  SessionDoorObserver,
+} from "@traycer/protocol/host-transport/remote/auth";
 import { RemoteStreamClient } from "../remote-stream-client";
+import { RemoteHostMessenger } from "../remote-host-messenger";
+import {
+  hostDoorStateOfRefusal,
+  type HostDoorStateKind,
+} from "../../host-door-state";
 import {
   getNegotiatedStreamMethodVersion,
   resetNegotiatedStreamVersions,
@@ -150,6 +140,15 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { BrowserSessionsClientFrame } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionsStreamClient } from "../../browser-sessions-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
+import {
+  countWebCrypto,
+  settleNoise,
+} from "@traycer/protocol/host-transport/remote/__tests__/web-crypto-completion-fixture";
+import {
+  emptyStreamRegistry,
+  FakeRelayHost,
+  FakeSocket,
+} from "./fake-relay-host";
 import { WorktreeDeleteStreamClient } from "../../worktree-delete-stream-client";
 import { SessionImportRunClient } from "../../session-import-run-client";
 import { NoiseChannel } from "@traycer/protocol/host-transport/remote/noise-channel";
@@ -168,16 +167,42 @@ import { NoiseChannel } from "@traycer/protocol/host-transport/remote/noise-chan
 // recovery assertion waits with an explicit generous budget rather than
 // vitest's 1s `waitFor` / 5s per-test defaults.
 
-const EMPTY_AD = new Uint8Array(0);
 const WAIT = { timeout: 10_000, interval: 50 } as const;
 const TEST_BUDGET_MS = 15_000;
+
+function beginFakeNoiseClock(): () => Promise<void> {
+  vi.useFakeTimers();
+  countWebCrypto();
+  return async () => {
+    await settleNoise();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  };
+}
+
+async function advanceNoiseClock(ms: number): Promise<void> {
+  await vi.advanceTimersByTimeAsync(ms);
+  await settleNoise();
+}
+
+async function advanceNoiseUntil(
+  condition: () => boolean,
+  maxMs: number,
+  intervalMs: number,
+): Promise<void> {
+  for (let elapsed = 0; elapsed < maxMs; elapsed += intervalMs) {
+    if (condition()) return;
+    await advanceNoiseClock(intervalMs);
+  }
+  if (!condition()) {
+    throw new Error("wake condition was not reached within its deadline");
+  }
+}
 
 // Zero-method registries: the session's connect/open/fatal lifecycle under
 // test never dispatches a method, and an empty manifest is trivially
 // compatible with the fake host echoing an empty manifest back.
 const emptyRpcRegistry: VersionedRpcRegistry = defineVersionedRpcRegistry({});
-const emptyStreamRegistry: VersionedStreamRpcRegistry =
-  defineVersionedStreamRpcRegistry({});
 const cursorStreamRegistry = defineVersionedStreamRpcRegistry({
   "cursor.subscribe": {
     1: {
@@ -271,732 +296,6 @@ function retryableDropDetails(): FatalErrorDetails {
   return { ...unauthorizedDetails(), retryable: true };
 }
 
-class FakeSocket implements StreamWebSocketLike {
-  onopen: ((event: WebSocketOpenEvent) => void) | null = null;
-  onmessage: ((event: StreamWebSocketMessageEvent) => void) | null = null;
-  onerror: ((event: WebSocketErrorEvent) => void) | null = null;
-  onclose: ((event: WebSocketCloseEvent) => void) | null = null;
-
-  private readonly onSendData: (data: string | Uint8Array) => void;
-  private readonly onLocalClose: () => void;
-
-  constructor(
-    onSendData: (data: string | Uint8Array) => void,
-    onLocalClose: () => void,
-  ) {
-    this.onSendData = onSendData;
-    this.onLocalClose = onLocalClose;
-  }
-
-  send(data: string | Uint8Array): void {
-    this.onSendData(data);
-  }
-
-  close(_code: number, _reason: string): void {
-    this.onLocalClose();
-  }
-}
-
-interface FakeConnection {
-  readonly socket: FakeSocket;
-  noise: NoiseSession | null;
-  handshake: NoiseHandshakeState | null;
-  readonly reassembler: ChunkReassembler;
-  readonly seqByStream: Map<number, number>;
-  /**
-   * Host-side H11 mirror (`RemoteClientSession.inboundSeqByStream`): the
-   * `seq` due next on each client stream. The production host closes the
-   * whole session with `SESSION_FRAME_SEQUENCE_MISMATCH` when an unchunked
-   * frame skips or repeats one, so the fake fails the same way - into
-   * `errors`, which the suites assert empty. Without it a client that
-   * retired a stream's counter and THEN sent the CLOSE (seq 0 where 1 was
-   * due) passed every test here and killed every real session on the first
-   * unsubscribe.
-   */
-  readonly inboundSeqByStream: Map<number, number>;
-  /**
-   * Host-side R-2 mirror (`r2-host-stream-tombstone`), enforced per
-   * connection exactly like `RemoteClientSession.terminalStreamIds`: once the
-   * fake sends a FATAL for a stream, every later CLIENT frame for that id -
-   * a SUBSCRIBE included - is dropped at ingest, and the harness refuses to
-   * send server frames for it. Without this the fake accepted a re-subscribe
-   * of a tombstoned id that the production host silently ignores, and a
-   * recovery test passed against a client that was in fact permanently dead.
-   */
-  readonly terminalStreamIds: Set<number>;
-  /** Serializes async frame handling so mux ordering matches the wire. */
-  queue: Promise<void>;
-  closed: boolean;
-}
-
-/**
- * The relay + host end of the wire, scripted per test via `decideOpen`. Runs a
- * REAL responder Noise-NK handshake against the session's initiator and
- * answers each in-channel `open{bearer}` with an `openAck` or a session-level
- * `fatal`, recording every bearer presented.
- */
-class FakeRelayHost {
-  private readonly hostKeys: NoiseKeyPair = generateStaticKeyPair();
-  private readonly connections: FakeConnection[] = [];
-  /** Every bearer presented across all `open` frames, in arrival order. */
-  readonly openBearers: string[] = [];
-  /**
-   * The `clientIdentity` on every `open`, index-aligned with `openBearers`.
-   *
-   * Captured raw (`unknown`) rather than typed, deliberately: what a suite
-   * needs to prove is that the transport PUT IT ON THE WIRE, and a typed slot
-   * would let an absent field read as a shape mismatch rather than as the
-   * missing key it is.
-   */
-  readonly openIdentities: unknown[] = [];
-  /**
-   * The reserved `authz` slot on every `open`, index-aligned with
-   * `openBearers`. Raw for the reason `openIdentities` is.
-   */
-  readonly openAuthz: unknown[] = [];
-  /** Params carried by every logical subscribe, including reconnect replay. */
-  readonly subscribeParams: unknown[] = [];
-  /** Schema version carried beside each logical subscribe. */
-  readonly subscribeSchemaVersions: unknown[] = [];
-  /** streamId of every logical subscribe, index-aligned with `subscribeParams`. */
-  readonly subscribeStreamIds: number[] = [];
-  /** Every `credits` value from a CREDIT control frame the client sent. */
-  readonly creditGrants: number[] = [];
-  /** Fired synchronously the instant a CREDIT frame is recorded - lets a test
-   * capture ordering evidence (e.g. "was the stream frame already delivered
-   * to the consumer?") at the exact tick the grant landed, not on a later poll. */
-  onCreditGrant: (() => void) | null = null;
-  streamManifest = buildStreamManifest(
-    emptyStreamRegistry,
-    SERVES_EVERY_INSTALLED_MAJOR,
-  );
-  /**
-   * The OPTIONAL rpc manifest the fake host advertises in `openAck`. Floor
-   * stays empty (matching the empty client registries here); optional
-   * methods are the interesting surface - they must publish to the
-   * negotiated-manifest registry and must NEVER fatal the session, however
-   * unknown to the client they are.
-   */
-  optionalRpcManifest: Record<string, { major: number; minor: number }> = {};
-  /** The FLOOR rpc manifest advertised in `openAck` (compat-checked). */
-  floorRpcManifest: Record<string, { major: number; minor: number }> = {};
-  /**
-   * When false the `openAck` omits `optionalRpc` entirely - the shape a peer
-   * built before the floor/optional split would send. `sessionManifestsSchema`
-   * requires the field, so this exercises the parse-rejection path rather
-   * than a silently half-understood manifest.
-   */
-  sendOptionalRpc = true;
-  /** The `capabilities` array this fake host advertises in `openAck` (T5). */
-  openAckCapabilities: string[] = [];
-  /** Every mux frame decoded off the wire from the CLIENT, pre-reassembly - lets a test read `compressed` per frame exactly as the host would (T5). */
-  readonly clientFrames: MuxFrame[] = [];
-  /** Every REQUEST frame the client sent: method + on-wire version + params. */
-  readonly unaryRequests: {
-    method: string;
-    schemaVersion: unknown;
-    params: unknown;
-    idempotencyKey: string | null;
-    callerAgentId: string | null;
-    streamId: number;
-  }[] = [];
-  /** Answers the next REQUEST with this result payload. */
-  unaryResult: unknown = { ready: true };
-  /**
-   * When set, auto-RESPONSE carries this error envelope (and a null result)
-   * instead of `unaryResult`. Used to pin `WORKTREE_BUSY` holder preservation.
-   */
-  unaryError: {
-    readonly code: string;
-    readonly message: string;
-    readonly holders?: unknown;
-  } | null = null;
-  /**
-   * When true, a REQUEST is recorded in `unaryRequests` but NOT auto-answered
-   * with a RESPONSE - lets a test inject its own terminal frame (e.g. a
-   * stream-scoped FATAL) for that request's streamId instead of racing the
-   * harness's own reply.
-   */
-  skipUnaryAutoRespond = false;
-  /**
-   * When true at a connection's open-ack, THAT connection answers nothing
-   * afterwards (no unary RESPONSE). A later attach is a new connection and
-   * answers normally unless this flag is still set at ITS open-ack.
-   */
-  silentAfterReady = false;
-  private readonly silentConnections = new Set<FakeConnection>();
-  /**
-   * Withhold the auto-RESPONSE for these method names only; every other
-   * method (including the liveness probe) answers normally.
-   */
-  silentMethods = new Set<string>();
-  /** Delay auto-RESPONSE delivery for timer-bound remote unary tests. */
-  unaryResponseDelayMs: number | null = null;
-  /**
-   * Withhold the Noise responder message (msg1) after `attach_ack`, so the
-   * session sits in `handshaking`.
-   */
-  stallNoiseReply = false;
-  /** Count of initiator Noise msg0 frames this fake has ingested. */
-  noiseInitiatorMessages = 0;
-  /** Every auto-RESPONSE this fake actually put on the wire. */
-  readonly unaryResponses: {
-    method: string;
-    error: {
-      readonly code: string;
-      readonly message: string;
-      readonly holders?: unknown;
-    } | null;
-  }[] = [];
-  /** streamId of every CLOSE frame the CLIENT sent, in arrival order. */
-  readonly closesSent: number[] = [];
-  /**
-   * Every client frame the R-2 ingest check dropped (streamId + mux frame
-   * type). The production host logs these; recording them here is what lets
-   * a test observe "the client DID send X, and the host deliberately ignored
-   * it" - e.g. the belt-and-braces CLOSE a client sends for a stream the
-   * host already condemned with a FATAL.
-   */
-  readonly droppedTombstonedFrames: { streamId: number; type: number }[] = [];
-  /**
-   * Every `cloudAuthorized` value from a CLOUD_VERDICT_UPDATE control frame
-   * the client sent, decoded post-reassembly (the raw `clientFrames` log
-   * carries `json: null` for a chunked body - this is the actual payload,
-   * the way `subscribeParams` is for SUBSCRIBE).
-   */
-  readonly cloudVerdictUpdates: boolean[] = [];
-  /**
-   * The reassembled json of every CREDENTIAL_UPDATE control frame the client
-   * sent (raw, like `openAuthz`: the point is what the transport put on the
-   * wire). Post-reassembly for the reason `cloudVerdictUpdates` is.
-   */
-  readonly credentialUpdates: unknown[] = [];
-  /** Unexpected harness-side failures; asserted empty by the tests. */
-  readonly errors: unknown[] = [];
-  decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
-    kind: "ack",
-  });
-  /** Count of `relay-ping` keepalive frames received from the client. */
-  pingCount = 0;
-  /**
-   * When false, pings are counted but never answered - the half-open-socket
-   * shape an OS suspend leaves behind (sends go out, nothing comes back),
-   * which is what the wake-probe tests need the wire to look like.
-   */
-  answerPings = true;
-
-  get hostStaticPublicKey(): Uint8Array {
-    return this.hostKeys.publicKey;
-  }
-
-  readonly factory: IStreamWebSocketFactory = {
-    create: (): StreamWebSocketLike => {
-      const connection: FakeConnection = {
-        socket: new FakeSocket(
-          (data) => this.enqueue(connection, data),
-          () => {
-            connection.closed = true;
-          },
-        ),
-        noise: null,
-        handshake: null,
-        reassembler: new ChunkReassembler(undefined),
-        seqByStream: new Map(),
-        inboundSeqByStream: new Map(),
-        terminalStreamIds: new Set(),
-        queue: Promise.resolve(),
-        closed: false,
-      };
-      this.connections.push(connection);
-      const sid = this.connections.length;
-      queueMicrotask(() => {
-        if (connection.closed) {
-          return;
-        }
-        connection.socket.onopen?.({ type: "open" });
-        connection.socket.onmessage?.({
-          type: "text",
-          data: JSON.stringify({ type: "attach_ack", role: "client", sid }),
-        });
-      });
-      return connection.socket;
-    },
-  };
-
-  /** Relay control frame: the host's leg of the tunnel went away/came back. */
-  sendHostAttachment(state: "host_detached" | "host_attached"): void {
-    const connection = [...this.connections]
-      .reverse()
-      .find((entry) => !entry.closed);
-    if (connection === undefined) {
-      throw new Error("no live connection to signal on");
-    }
-    connection.socket.onmessage?.({
-      type: "text",
-      data: JSON.stringify({ type: state }),
-    });
-  }
-
-  /** Relay control frame: the peer/session was killed for a relay reason. */
-  sendRelayKill(type: "peer_gone" | "killed", reason: string): void {
-    const connection = this.liveConnection();
-    connection.socket.onmessage?.({
-      type: "text",
-      data: JSON.stringify({ type, reason }),
-    });
-  }
-
-  /** Server-side drop of the live socket (relay restart / network cut). */
-  dropCurrentConnection(): void {
-    const connection = [...this.connections]
-      .reverse()
-      .find((entry) => !entry.closed);
-    if (connection === undefined) {
-      throw new Error("no live connection to drop");
-    }
-    connection.closed = true;
-    connection.socket.onclose?.({
-      code: 1006,
-      reason: "server-drop",
-      wasClean: false,
-    });
-  }
-
-  /** The current live connection - shared lookup for the raw-frame helpers below. */
-  private liveConnection(): FakeConnection {
-    const connection = [...this.connections]
-      .reverse()
-      .find((entry) => !entry.closed);
-    if (connection === undefined) {
-      throw new Error("no live connection");
-    }
-    return connection;
-  }
-
-  /**
-   * Pushes a single logical STREAM_FRAME to the client through the REAL
-   * chunker (`OutboundChunkSource`, same as production `sendMux`) - a body
-   * over `BULK_CHUNK_SIZE_BYTES` spans many wire frames automatically. Used
-   * by the C1 per-frame credit-accounting regression to drive a transfer
-   * long enough to cross `FINE_INBOUND_CREDIT_GRANT_BATCH` mid-flight.
-   */
-  async sendStreamFrame(
-    streamId: number,
-    envelope: Record<string, unknown>,
-    binary: Uint8Array | null,
-    qos: QosClassValue,
-  ): Promise<void> {
-    const connection = this.liveConnection();
-    if (connection.terminalStreamIds.has(streamId)) {
-      // The real host tears its resolver down with the FATAL, so no server
-      // frame for a terminal id can exist. Loud rather than dropped: a test
-      // reaching here is asserting recovery on an id that never recovered.
-      throw new Error(
-        `test sent a server frame for tombstoned stream ${streamId}`,
-      );
-    }
-    await this.sendMux(connection, {
-      type: MuxFrameType.STREAM_FRAME,
-      streamId,
-      qos,
-      json: envelope,
-      binary,
-    });
-  }
-
-  /**
-   * Sends a stream-scoped FATAL for `streamId` through the real chunker
-   * (`sendMux`, same path as `sendStreamFrame`) - lets a test simulate the
-   * host abandoning a pending unary request or a live subscription without
-   * ever answering it normally.
-   */
-  async sendStreamFatal(
-    streamId: number,
-    details: FatalErrorDetails,
-  ): Promise<void> {
-    const connection = this.liveConnection();
-    // Mirrors `RemoteClientSession`: the host marks the stream terminal
-    // whenever it sends a FATAL - retryable or not - and its ingest drops
-    // every later client frame for the id, so a client re-open must arrive
-    // under a fresh id to be heard.
-    connection.terminalStreamIds.add(streamId);
-    connection.inboundSeqByStream.delete(streamId);
-    await this.sendMux(connection, {
-      type: MuxFrameType.FATAL,
-      streamId,
-      qos: QosClass.INTERACTIVE,
-      json: { details: { ...details } },
-      binary: null,
-    });
-  }
-
-  /**
-   * Sends a stream-scoped CLOSE for `streamId` - the host ending a stream
-   * NORMALLY (resolver finished, entity gone benignly). Mirrors
-   * `RemoteClientSession.handleStreamClose`: a host-side CLOSE is a terminal
-   * path exactly like a FATAL, so the id is tombstoned here too and every
-   * later client frame for it is dropped at ingest.
-   */
-  async sendStreamClose(streamId: number, reason: string): Promise<void> {
-    const connection = this.liveConnection();
-    connection.terminalStreamIds.add(streamId);
-    connection.inboundSeqByStream.delete(streamId);
-    await this.sendMux(connection, {
-      type: MuxFrameType.CLOSE,
-      streamId,
-      qos: QosClass.INTERACTIVE,
-      json: { reason },
-      binary: null,
-    });
-  }
-
-  /**
-   * Noise-encrypts one already-built `EncodeMuxFrameInput` WITHOUT delivering
-   * it - lets a test build several chunk sequences by hand, encrypt them in
-   * whatever order it chooses (the Noise send counter is reserved
-   * synchronously per call, so sequential `await`s here still produce a
-   * strictly increasing, decryptable counter sequence), and then hand the
-   * sealed bytes to `deliverToClient` in an INTERLEAVED order that differs
-   * from a naive "one sequence at a time" send.
-   */
-  async encryptFrame(input: EncodeMuxFrameInput): Promise<Uint8Array> {
-    const connection = this.liveConnection();
-    const noise = connection.noise;
-    if (noise === null) {
-      throw new Error("no established noise session");
-    }
-    return noise.encrypt(encodeMuxFrame(input), EMPTY_AD);
-  }
-
-  /**
-   * Hands one already-Noise-sealed frame straight to the client's socket
-   * `onmessage` - the same call `deliverBinary` makes internally, exposed so
-   * a test can fire several of these back-to-back with NO await between
-   * them, matching production `onData`'s fire-and-forget per-message entry.
-   */
-  deliverToClient(bytes: Uint8Array): void {
-    this.deliverBinary(this.liveConnection(), bytes);
-  }
-
-  private enqueue(connection: FakeConnection, data: string | Uint8Array): void {
-    // THE KEEPALIVE LANE DOES NOT QUEUE BEHIND THE MUX LANE. `handleClientSend`
-    // awaits a real WebCrypto decrypt for every data frame, and the queue is
-    // serial - so a ping sent while two frames are in flight is answered only
-    // after both decrypts resolve. Under `shouldAdvanceTime` that real latency
-    // becomes fake milliseconds, and on a loaded runner it can exceed the
-    // client's 12s awaiting-pong deadline: the socket fails 4004
-    // `relay-missed-pongs`, the session rebuilds mid-test, and whatever the
-    // test was actually pinning is lost to a teardown it never asked for.
-    // (Observed in CI on the D4 error-envelope control, never locally.) A real
-    // relay answers pings at its own edge, never behind the host's mux
-    // decryption, so this lane is the FAITHFUL order, not a convenience.
-    //
-    // A MICROTASK, never inline: `send` returning before its answer arrives is
-    // the one thing a real socket does guarantee, and the wake probe arms
-    // AFTER the forced ping is sent. Answering reentrantly inside `send`
-    // clears a probe that does not exist yet, leaves the armed one unanswered,
-    // and makes an answered arm look failed - which silently retires nothing
-    // and leaks the previous arm's policy into the next redial.
-    if (typeof data === "string" && data === "relay-ping") {
-      queueMicrotask(() => {
-        this.answerKeepalivePing(connection);
-      });
-      return;
-    }
-    connection.queue = connection.queue
-      .then(() => this.handleClientSend(connection, data))
-      .catch((error: unknown) => {
-        this.errors.push(error);
-      });
-  }
-
-  private answerKeepalivePing(connection: FakeConnection): void {
-    if (connection.closed) {
-      return;
-    }
-    this.pingCount += 1;
-    if (this.answerPings) {
-      connection.socket.onmessage?.({ type: "text", data: "relay-pong" });
-    }
-  }
-
-  private async handleClientSend(
-    connection: FakeConnection,
-    data: string | Uint8Array,
-  ): Promise<void> {
-    if (connection.closed) {
-      return;
-    }
-    if (typeof data === "string") {
-      // Pings never reach here - `enqueue` answers them off the queue, see
-      // its comment. `reauth` control frames need no ack for these tests.
-      return;
-    }
-    if (connection.noise === null) {
-      // Handshake msg0: run the responder side and answer with msg1.
-      const handshake = await createResponderHandshake(
-        this.hostKeys,
-        NOISE_PROLOGUE,
-      );
-      await handshake.readMessage(data);
-      const msg1 = await handshake.writeMessage(new Uint8Array(0));
-      connection.handshake = handshake;
-      connection.noise = NoiseSession.fromHandshake(
-        handshake,
-        DEFAULT_REPLAY_WINDOW_SIZE,
-      );
-      this.noiseInitiatorMessages += 1;
-      if (this.stallNoiseReply) {
-        return;
-      }
-      this.deliverBinary(connection, msg1);
-      return;
-    }
-    const muxBytes = await connection.noise.decrypt(data, EMPTY_AD);
-    const frame = decodeMuxFrame(muxBytes);
-    // Recorded BEFORE the tombstone drop below: `clientFrames` is what the
-    // CLIENT put on the wire, and a frame the host then drops was still sent.
-    // Folding the drop in first would silently shrink the frame/compression
-    // accounting the transfer assertions read.
-    this.clientFrames.push(frame);
-    // R-2 ingest drop, same placement as the production host's `feedInbound`:
-    // BEFORE `accept()`, so a tombstoned id can neither seed a fresh
-    // reassembler accumulator nor smuggle a SUBSCRIBE through to the handler.
-    if (connection.terminalStreamIds.has(frame.streamId)) {
-      this.droppedTombstonedFrames.push({
-        streamId: frame.streamId,
-        type: frame.type,
-      });
-      return;
-    }
-    // H11 mirror, same placement and predicate as the production host's
-    // `feedInbound`: after the tombstone drop, before `accept()`, unchunked
-    // frames only (chunk sequences are ordered by the reassembler itself).
-    const expectedSeq = connection.inboundSeqByStream.get(frame.streamId);
-    if (
-      !frame.chunked &&
-      expectedSeq !== undefined &&
-      frame.seq !== expectedSeq
-    ) {
-      throw new Error(
-        `SESSION_FRAME_SEQUENCE_MISMATCH: frame ${frame.seq} (type ${frame.type}) arrived on stream ${frame.streamId} where ${expectedSeq} was due`,
-      );
-    }
-    const message = connection.reassembler.accept(frame);
-    // Advanced only once the reassembler accepted the frame, as on the host.
-    connection.inboundSeqByStream.set(frame.streamId, nextSeqValue(frame.seq));
-    if (message === null) {
-      return;
-    }
-    await this.handleMuxMessage(connection, message);
-  }
-
-  private async handleMuxMessage(
-    connection: FakeConnection,
-    message: ReassembledMessage,
-  ): Promise<void> {
-    if (message.type === MuxFrameType.SUBSCRIBE) {
-      this.subscribeParams.push(message.json?.params);
-      this.subscribeSchemaVersions.push(message.json?.schemaVersion);
-      this.subscribeStreamIds.push(message.streamId);
-      return;
-    }
-    if (message.type === MuxFrameType.CLOUD_VERDICT_UPDATE) {
-      const json = message.json;
-      if (json !== null && typeof json.cloudAuthorized === "boolean") {
-        this.cloudVerdictUpdates.push(json.cloudAuthorized);
-      }
-      return;
-    }
-    if (message.type === MuxFrameType.CREDENTIAL_UPDATE) {
-      this.credentialUpdates.push(message.json);
-      return;
-    }
-    if (message.type === MuxFrameType.CREDIT) {
-      const json = message.json;
-      const credits =
-        json !== null && typeof json.credits === "number" ? json.credits : null;
-      if (credits !== null) {
-        this.creditGrants.push(credits);
-        this.onCreditGrant?.();
-      }
-      return;
-    }
-    if (message.type === MuxFrameType.REQUEST) {
-      const json = message.json ?? {};
-      this.unaryRequests.push({
-        method: typeof json.method === "string" ? json.method : "",
-        schemaVersion: json.schemaVersion,
-        params: json.params,
-        idempotencyKey:
-          typeof json.idempotencyKey === "string" ? json.idempotencyKey : null,
-        callerAgentId:
-          typeof json.callerAgentId === "string" ? json.callerAgentId : null,
-        streamId: message.streamId,
-      });
-      const method = typeof json.method === "string" ? json.method : "";
-      if (
-        this.skipUnaryAutoRespond ||
-        this.silentConnections.has(connection) ||
-        this.silentMethods.has(method)
-      ) {
-        return;
-      }
-      const sendResponse = async (): Promise<void> => {
-        await this.sendMux(connection, {
-          type: MuxFrameType.RESPONSE,
-          streamId: message.streamId,
-          qos: QosClass.INTERACTIVE,
-          json: {
-            requestId: typeof json.requestId === "string" ? json.requestId : "",
-            method,
-            result: this.unaryError === null ? this.unaryResult : null,
-            error: this.unaryError,
-          },
-          binary: null,
-        });
-      };
-      const responseDelayMs = this.unaryResponseDelayMs;
-      if (responseDelayMs === null) {
-        await sendResponse();
-      } else {
-        await new Promise<void>((resolve, reject) => {
-          setTimeout(() => {
-            sendResponse().then(resolve, reject);
-          }, responseDelayMs);
-        });
-      }
-      // AFTER the send resolves, so this records DELIVERY and not the
-      // intention to deliver. `sendMux` awaits WebCrypto encryption, and a
-      // test that waits on this entry and then jumps virtual time through a
-      // verdict window would otherwise race the threadpool: the frame lands
-      // after the jump, the verdict finds the counter unmoved, and a control
-      // manufactures the very silence drop it exists to disprove.
-      this.unaryResponses.push({
-        method,
-        error: this.unaryError,
-      });
-      return;
-    }
-    if (message.type === MuxFrameType.CLOSE) {
-      this.closesSent.push(message.streamId);
-      return;
-    }
-    if (
-      message.streamId !== SESSION_CONTROL_STREAM_ID ||
-      message.type !== MuxFrameType.OPEN
-    ) {
-      return;
-    }
-    const bearer =
-      message.json !== null && typeof message.json.bearer === "string"
-        ? message.json.bearer
-        : "";
-    const openIndex = this.openBearers.length;
-    this.openBearers.push(bearer);
-    this.openIdentities.push(message.json?.clientIdentity);
-    this.openAuthz.push(message.json?.authz);
-    if (this.stallOpens) {
-      // Freeze this attempt mid-flight (the session sits in its opening
-      // phase, its own phase timer pending) until the test releases it -
-      // the window the forced-intent ordering tests need to aim into.
-      this.stalledOpens.push({ connection, bearer, openIndex });
-      return;
-    }
-    await this.respondToOpen(connection, bearer, openIndex);
-  }
-
-  /**
-   * When true, `open` frames are recorded but not answered until
-   * {@link releaseStalledOpens} runs - the in-flight-attach window.
-   */
-  stallOpens = false;
-  private readonly stalledOpens: Array<{
-    connection: FakeConnection;
-    bearer: string;
-    openIndex: number;
-  }> = [];
-
-  /** Answers every stalled open, in arrival order, with `decideOpen`'s verdict. */
-  async releaseStalledOpens(): Promise<void> {
-    const stalled = this.stalledOpens.splice(0);
-    for (const open of stalled) {
-      await this.respondToOpen(open.connection, open.bearer, open.openIndex);
-    }
-  }
-
-  private async respondToOpen(
-    connection: FakeConnection,
-    bearer: string,
-    openIndex: number,
-  ): Promise<void> {
-    const decision = this.decideOpen(bearer, openIndex);
-    if (decision.kind === "ack") {
-      await this.sendMux(connection, {
-        type: MuxFrameType.OPEN_ACK,
-        streamId: SESSION_CONTROL_STREAM_ID,
-        qos: QosClass.INTERACTIVE,
-        json: {
-          manifest: this.sendOptionalRpc
-            ? {
-                rpc: this.floorRpcManifest,
-                optionalRpc: this.optionalRpcManifest,
-                stream: this.streamManifest,
-              }
-            : { rpc: this.floorRpcManifest, stream: this.streamManifest },
-          capabilities: this.openAckCapabilities,
-        },
-        binary: null,
-      });
-      if (this.silentAfterReady) {
-        this.silentConnections.add(connection);
-      }
-      return;
-    }
-    await this.sendMux(connection, {
-      type: MuxFrameType.FATAL,
-      streamId: SESSION_CONTROL_STREAM_ID,
-      qos: QosClass.INTERACTIVE,
-      json: { details: { ...decision.details } },
-      binary: null,
-    });
-  }
-
-  private async sendMux(
-    connection: FakeConnection,
-    message: OutboundMessage,
-  ): Promise<void> {
-    const noise = connection.noise;
-    if (noise === null || connection.closed) {
-      return;
-    }
-    const source = new OutboundChunkSource(
-      message,
-      () => {
-        const current = connection.seqByStream.get(message.streamId) ?? 0;
-        connection.seqByStream.set(message.streamId, current + 1);
-        return current;
-      },
-      false,
-    );
-    while (!source.done) {
-      const sealed = await noise.encrypt(
-        encodeMuxFrame(source.nextFrame()),
-        EMPTY_AD,
-      );
-      this.deliverBinary(connection, sealed);
-    }
-  }
-
-  private deliverBinary(connection: FakeConnection, bytes: Uint8Array): void {
-    if (connection.closed) {
-      return;
-    }
-    connection.socket.onmessage?.({ type: "binary", data: bytes });
-  }
-}
-
-/** One recorded call to a `TransportEvidenceReporter` method, keyed by name. */
 type RecordedEvidenceCall =
   | {
       readonly method: "sessionEstablished";
@@ -1193,9 +492,15 @@ function buildSessionOptions(
         kind: "ok" as const,
         grant: { grant: "grant-jws", expiresInSeconds: 300 },
       }),
-    bearer: () => lease,
+    hostToken: () => {
+      try {
+        return lease.getBearerToken();
+      } catch {
+        return null;
+      }
+    },
     auth,
-    sessionGrant: null,
+    door: null,
     clock: null,
     rpcRegistry: emptyRpcRegistry,
     streamRegistry: emptyStreamRegistry,
@@ -1210,7 +515,6 @@ function buildSessionOptions(
     // `HOST_STATUS_LIVENESS_PROBE`, a `host.status` registry and a matching
     // `relay.floorRpcManifest`.
     livenessProbe: null,
-    mintMemberCredential: null,
   };
 }
 
@@ -1396,7 +700,7 @@ describe("RemoteSession client identity", () => {
         ...buildSessionOptions(relay, lease, null),
         clientIdentity: {
           kind: "cli",
-          compatibilityEpoch: 2,
+          compatibilityEpoch: 3,
           appVersion: null,
         },
       });
@@ -1405,7 +709,7 @@ describe("RemoteSession client identity", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         expect(relay.openIdentities[0]).toEqual({
           kind: "cli",
-          compatibilityEpoch: 2,
+          compatibilityEpoch: 3,
         });
       } finally {
         session.close();
@@ -1490,7 +794,8 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         // The recovery presented the rejected bearer once, then the rotated
         // one - and never closed the session on the way.
-        expect(relay.openBearers).toEqual(["expired-token", "fresh-token"]);
+        expect(relay.openGrants).toEqual(["expired-token", "fresh-token"]);
+        expect(relay.openBearers).toEqual(["", ""]);
         expect(revalidateCalls).toBe(1);
         expect(session.isClosed()).toBe(false);
         expect(closedEvents).toBe(0);
@@ -1530,7 +835,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         // exactly once and stopped, rather than never being consulted.
         expect(revalidateCalls).toBe(1);
         expect(closedEvents).toBe(1);
-        expect(relay.openBearers).toEqual(["dead-token"]);
+        expect(relay.openGrants).toEqual(["dead-token"]);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
@@ -1572,7 +877,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         // exactly once and stopped, rather than never being consulted.
         expect(revalidateCalls).toBe(1);
         expect(closedEvents).toBe(1);
-        expect(relay.openBearers).toEqual(["demoted-token"]);
+        expect(relay.openGrants).toEqual(["demoted-token"]);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
@@ -1613,7 +918,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+        expect(relay.openGrants).toEqual(["valid-token", "valid-token"]);
         expect(revalidate).not.toHaveBeenCalled();
         expect(relay.errors).toEqual([]);
 
@@ -1674,7 +979,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         expect(revalidateCalls).toBe(1);
         // "network-error" leaves the bearer untouched - the redial presents the
         // same one, and this never counts toward the give-up bound.
-        expect(relay.openBearers).toEqual(["stale-token", "stale-token"]);
+        expect(relay.openGrants).toEqual(["stale-token", "stale-token"]);
         expect(session.isClosed()).toBe(false);
         await Promise.resolve();
         expect(rejections).toEqual([]);
@@ -1715,7 +1020,7 @@ describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
         session.start();
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
         // Degrades exactly like `auth: null`: terminal, no crash.
-        expect(relay.openBearers).toEqual(["dead-token"]);
+        expect(relay.openGrants).toEqual(["dead-token"]);
         expect(relay.errors).toEqual([]);
         await Promise.resolve();
         expect(rejections).toEqual([]);
@@ -1980,7 +1285,7 @@ describe("RemoteSession availability-recovered evidence", () => {
         // The second emission was a reconnect, not a terminal close.
         expect(session.isReady()).toBe(true);
         expect(closedEvents).toBe(0);
-        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+        expect(relay.openGrants).toEqual(["valid-token", "valid-token"]);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
@@ -2041,24 +1346,319 @@ describe("RemoteSession unary in flight at a connection drop", () => {
 describe("RemoteSession pending unary dispatch provenance", () => {
   async function readySession(
     relay: FakeRelayHost,
+    door: SessionDoorObserver | null,
+    auth: StreamAuthRevalidator | null,
   ): Promise<RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>> {
     applySilenceFloor(relay, ["worktree.getBinding"]);
     const lease = new MutableBearerLease("valid-token", "user-1");
     const session = new RemoteSession({
-      ...buildSessionOptions(relay, lease, null),
+      ...buildSessionOptions(relay, lease, auth),
       rpcRegistry: bindingOnlyRegistry(),
+      door,
     });
     session.start();
     await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
     return session;
   }
 
+  it.each([
+    {
+      reason: "keys_unavailable",
+      code: "NETWORK_ERROR",
+      retryable: true,
+      state: "keys-unavailable",
+    },
+    {
+      reason: "membership_removed",
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      retryable: false,
+      state: "membership-removed",
+    },
+    {
+      reason: "clock_skew",
+      code: "UNAUTHORIZED",
+      retryable: false,
+      state: "clock-skew",
+    },
+    {
+      reason: "enrolment_broken",
+      code: "UNAUTHORIZED",
+      retryable: false,
+      state: "enrolment-broken",
+    },
+    {
+      reason: "host_claimed",
+      code: "UNAUTHORIZED",
+      retryable: false,
+      state: "host-claimed",
+    },
+    {
+      reason: "future_door_reason",
+      code: "UNAUTHORIZED",
+      retryable: false,
+      state: "unrecognised-refusal",
+    },
+  ] as const)(
+    "records $reason from a relay unary error envelope",
+    async (testCase) => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = {
+        code: testCase.code,
+        message: "host refused the request",
+        retryable: testCase.retryable,
+        doorReason: testCase.reason,
+      };
+      const states: HostDoorStateKind[] = [];
+      const door: SessionDoorObserver = {
+        refused: (details) => {
+          const state = hostDoorStateOfRefusal(details);
+          if (state !== null) states.push(state);
+        },
+        admitted: () => undefined,
+      };
+      const session = await readySession(relay, door, null);
+      try {
+        const error = await sendBindingUnary(session);
+        expect(error).toBeInstanceOf(HostRpcError);
+        if (!(error instanceof HostRpcError))
+          throw new Error("expected the host's unary refusal");
+        expect(error.doorRefusal?.doorReason).toBe(testCase.reason);
+        expect(states).toEqual([testCase.state]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
+  it("keeps retryable TEAM_MEMBERSHIP_UNAVAILABLE out of door state", async () => {
+    const relay = new FakeRelayHost();
+    relay.unaryError = {
+      code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+      message: "membership check unavailable",
+      retryable: true,
+    };
+    const states: HostDoorStateKind[] = [];
+    const door: SessionDoorObserver = {
+      refused: (details) => {
+        const state = hostDoorStateOfRefusal(details);
+        if (state !== null) states.push(state);
+      },
+      admitted: () => undefined,
+    };
+    const revalidateForReconnect = vi.fn(() =>
+      Promise.resolve("rejected" as const),
+    );
+    const session = await readySession(relay, door, {
+      revalidateForReconnect,
+    });
+    try {
+      const error = await sendBindingUnary(session);
+      expect(error).toBeInstanceOf(RetryableTransportError);
+      if (!(error instanceof RetryableTransportError))
+        throw new Error("expected a retryable, pre-dispatch refusal");
+      expect(error.fatalDetails?.code).toBe("TEAM_MEMBERSHIP_UNAVAILABLE");
+      expect(error.fatalDetails?.retryable).toBe(true);
+      expect(states).toEqual([]);
+      expect(revalidateForReconnect).not.toHaveBeenCalled();
+      expect(session.isClosed()).toBe(false);
+      expect(session.terminalFatal()).toBeNull();
+    } finally {
+      session.close();
+    }
+  });
+
+  it("retries a retryable membership reply through the real session messenger", async () => {
+    const relay = new FakeRelayHost();
+    relay.unaryResponseQueue.push(
+      {
+        error: {
+          code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+          message: "membership check unavailable",
+          retryable: true,
+        },
+        result: null,
+      },
+      {
+        error: null,
+        result: { binding: null, missingWorktreePaths: [] },
+      },
+    );
+    const states: HostDoorStateKind[] = [];
+    const door: SessionDoorObserver = {
+      refused: (details) => {
+        const state = hostDoorStateOfRefusal(details);
+        if (state !== null) states.push(state);
+      },
+      admitted: () => undefined,
+    };
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const session = await readySession(relay, door, null);
+    const messenger = createRetryingMessenger(
+      new RemoteHostMessenger(session),
+      {
+        maxRetries: 1,
+        initialDelayMs: 0,
+        maxDelayMs: 0,
+        sleep: async () => undefined,
+        random: () => 0,
+      },
+    );
+    const options: HostRequestOptions = {
+      idempotencyKey: null,
+      authority: {
+        endpoint: { hostId: "host-1", websocketUrl: "wss://relay.test/attach" },
+        bearer: lease,
+        abortSignal: new AbortController().signal,
+      },
+      replayMustBeKeyed: false,
+      requiredHostMethodVersion: null,
+    };
+    try {
+      await expect(
+        messenger.request("worktree.getBinding", BINDING_PARAMS, options),
+      ).resolves.toEqual({ binding: null, missingWorktreePaths: [] });
+      await vi.waitFor(
+        () => expect(relay.unaryResponses).toHaveLength(2),
+        WAIT,
+      );
+      expect(relay.unaryRequests).toHaveLength(2);
+      expect(
+        relay.unaryResponses.map((response) => response.error?.code ?? null),
+      ).toEqual(["TEAM_MEMBERSHIP_UNAVAILABLE", null]);
+      expect(states).toEqual([]);
+      expect(session.isReady()).toBe(true);
+      expect(session.isClosed()).toBe(false);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("keeps an unmarked membership refusal a plain HostRpcError", async () => {
+    const relay = new FakeRelayHost();
+    relay.unaryError = {
+      code: "TEAM_MEMBERSHIP_UNAVAILABLE",
+      message: "membership check unavailable",
+    };
+    const states: HostDoorStateKind[] = [];
+    const door: SessionDoorObserver = {
+      refused: (details) => {
+        const state = hostDoorStateOfRefusal(details);
+        if (state !== null) states.push(state);
+      },
+      admitted: () => undefined,
+    };
+    const session = await readySession(relay, door, null);
+    try {
+      const error = await sendBindingUnary(session);
+      expect(error).toBeInstanceOf(HostRpcError);
+      expect(error).not.toBeInstanceOf(RetryableTransportError);
+      if (!(error instanceof HostRpcError))
+        throw new Error("expected the host's unary refusal");
+      expect(error.fatalDetails?.retryable).toBeUndefined();
+      expect(states).toEqual([]);
+      expect(session.isClosed()).toBe(false);
+    } finally {
+      session.close();
+    }
+  });
+
+  it.each([
+    { reason: "clock_skew", state: "clock-skew" },
+    { reason: "enrolment_broken", state: "enrolment-broken" },
+    { reason: "host_claimed", state: "host-claimed" },
+  ])(
+    "ends the relay session for $reason without revalidation",
+    async ({ reason, state }) => {
+      const relay = new FakeRelayHost();
+      const states: HostDoorStateKind[] = [];
+      const door: SessionDoorObserver = {
+        refused: (details) => {
+          const kind = hostDoorStateOfRefusal(details);
+          if (kind !== null) states.push(kind);
+        },
+        admitted: () => undefined,
+      };
+      const revalidateRefused = vi.fn(() =>
+        Promise.resolve("rejected" as const),
+      );
+      const auth: StreamAuthRevalidator & {
+        readonly revalidateRefused: typeof revalidateRefused;
+      } = {
+        revalidateForReconnect: revalidateRefused,
+        revalidateRefused,
+      };
+      const session = await readySession(relay, door, auth);
+      try {
+        await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, {
+          code: "UNAUTHORIZED",
+          reason: "host refusal",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          doorReason: reason,
+        });
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(revalidateRefused).not.toHaveBeenCalled();
+        expect(states).toEqual([state]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
+  it.each([
+    { code: "FORBIDDEN", state: null, retryable: false },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", state: "older-host", retryable: false },
+    { code: "TEAM_MEMBERSHIP_UNAVAILABLE", state: null, retryable: false },
+    { code: "INCOMPATIBLE", state: null, retryable: false },
+    { code: "REMOTE_ACCESS_OFF", state: null, retryable: false },
+    { code: "HOST_RESTARTING", state: null, retryable: false },
+    { code: "UNAUTHORIZED", state: null, retryable: true },
+    { code: "TEAM_MEMBERSHIP_REQUIRED", state: null, retryable: true },
+    { code: "TEAM_MEMBERSHIP_UNAVAILABLE", state: null, retryable: true },
+  ])(
+    "records the expected state for a reasonless relay fatal $code (retryable=$retryable)",
+    async ({ code, state, retryable }) => {
+      const relay = new FakeRelayHost();
+      const states: HostDoorStateKind[] = [];
+      const door: SessionDoorObserver = {
+        refused: (details) => {
+          const kind = hostDoorStateOfRefusal(details);
+          if (kind !== null) states.push(kind);
+        },
+        admitted: () => undefined,
+      };
+      const session = await readySession(relay, door, null);
+      try {
+        await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, {
+          code,
+          reason: "host refusal without a door reason",
+          ...(retryable ? { retryable: true } : {}),
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        });
+        if (retryable) {
+          await vi.waitFor(
+            () => expect(relay.openBearers.length).toBeGreaterThan(1),
+            WAIT,
+          );
+          expect(session.isClosed()).toBe(false);
+          expect(session.terminalFatal()).toBeNull();
+        } else {
+          await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        }
+        expect(states).toEqual(state === null ? [] : [state]);
+      } finally {
+        session.close();
+      }
+    },
+  );
+
   it(
     "marks the UNAUTHORIZED rejection a revoked peer gives a pending unary",
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
-      const session = await readySession(relay);
+      const session = await readySession(relay, null, null);
       try {
         const settled = sendBindingUnary(session);
         await vi.waitFor(
@@ -2085,7 +1685,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
-      const session = await readySession(relay);
+      const session = await readySession(relay, null, null);
       try {
         const settled = sendBindingUnary(session);
         await vi.waitFor(
@@ -2193,7 +1793,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
-      const session = await readySession(relay);
+      const session = await readySession(relay, null, null);
       try {
         const settled = sendBindingUnary(session);
         await vi.waitFor(
@@ -2243,7 +1843,7 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.skipUnaryAutoRespond = true;
-      const session = await readySession(relay);
+      const session = await readySession(relay, null, null);
       try {
         const settled = sendBindingUnary(session);
         await vi.waitFor(
@@ -2277,14 +1877,97 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     "leaves a host's own refusal unmarked",
     async () => {
       const relay = new FakeRelayHost();
-      relay.unaryError = { code: "FORBIDDEN", message: "not yours" };
-      const session = await readySession(relay);
+      relay.unaryError = {
+        code: "FORBIDDEN",
+        message: "not yours",
+        holders: undefined,
+      };
+      const session = await readySession(relay, null, null);
       try {
         const error = await sendBindingUnary(session);
 
         expect(error).toBeInstanceOf(HostRpcError);
         expect(error).toMatchObject({ code: "FORBIDDEN" });
         expect(mayHaveReachedHost(error)).toBe(false);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it.each(["FORBIDDEN", "E_HOST_UNSUPPORTED"])(
+    "marks the host's own %s answer as the target's",
+    async (code) => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = { code, message: "answered by the host" };
+      const session = await readySession(relay, null, null);
+      try {
+        const error = await sendBindingUnary(session);
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({ code });
+        expect(isTargetAnswer(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does not mark the refusal it remembers for the connection after the host answered E_HOST_UNSUPPORTED",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = {
+        code: "E_HOST_UNSUPPORTED",
+        message: "not served here",
+      };
+      const session = await readySession(relay, null, null);
+      try {
+        const answered = await sendBindingUnary(session);
+        const remembered = await sendBindingUnary(session);
+
+        expect(isTargetAnswer(answered)).toBe(true);
+        expect(remembered).toBeInstanceOf(HostRpcError);
+        expect(remembered).toMatchObject({ code: "E_HOST_UNSUPPORTED" });
+        expect(isTargetAnswer(remembered)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does not mark the refusal of a method version below the caller's floor",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.optionalRpcManifest = {
+        "epic.listTasks": { major: 1, minor: 5 },
+      };
+      const session = await readySession(relay, null, null);
+      try {
+        const error = await session
+          .sendUnary(
+            "worktree.getBinding",
+            BINDING_PARAMS,
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            { method: "epic.listTasks", version: { major: 1, minor: 6 } },
+          )
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+        expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(0);
       } finally {
         session.close();
       }
@@ -3117,7 +2800,7 @@ describe("RemoteSession dial-failure logging", () => {
   }
 
   it(
-    "preserves the legacy missing-bearer cause when client auth is unavailable",
+    "names a missing host token when the client has no token to present",
     async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const relay = new FakeRelayHost();
@@ -3128,7 +2811,7 @@ describe("RemoteSession dial-failure logging", () => {
         await vi.waitFor(
           () =>
             expect(sessionLines(warnSpy.mock.calls)).toContainEqual(
-              expect.stringContaining("missing-bearer"),
+              expect.stringContaining("missing-host-token"),
             ),
           WAIT,
         );
@@ -3824,6 +3507,10 @@ describe("RemoteSession absent optional method", () => {
           (error as HostRpcError).fatalDetails?.upgradeGuidance
             ?.hostShouldUpgrade,
         ).toBe(true);
+        // Raised here for a method the host never advertised, not the host's
+        // answer: nothing was sent.
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(0);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
@@ -3961,6 +3648,7 @@ describe("RemoteSession fallback degrade version anchoring", () => {
 
 describe("RemoteSession wake", () => {
   it("pulls a redial forward from an escalated backoff instead of waiting it out", async () => {
+    const finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     // Four failed opens escalate the armed backoff through 1s/2s/4s to the
@@ -3972,25 +3660,20 @@ describe("RemoteSession wake", () => {
     const session = buildSession(relay, lease, null);
     try {
       session.start();
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
-        timeout: 12_000,
-        interval: 50,
-      });
+      await advanceNoiseUntil(() => relay.openBearers.length === 4, 12_000, 50);
       // A beat for the 4th fatal's async round trip to land and the 8s
       // backoff to actually be armed before waking it.
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await advanceNoiseClock(300);
       session.wake("app-resumed", null);
       // The collapsed redial is a sub-second draw, so a budget well under
       // the armed tier's JITTERED minimum (8s halved, not 8s) is what makes
       // this an honest check rather than a race with the schedule.
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 2_500,
-        interval: 50,
-      });
+      await advanceNoiseUntil(() => session.isReady(), 2_500, 50);
       expect(relay.openBearers).toHaveLength(5);
       expect(relay.errors).toEqual([]);
     } finally {
       session.close();
+      await finishNoise();
     }
   }, 20_000);
 
@@ -4026,6 +3709,7 @@ describe("RemoteSession wake", () => {
   );
 
   it("a burst of wakes during an escalated backoff produces exactly one extra dial", async () => {
+    const finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     // Three failed opens escalate the armed backoff to the 4s step.
@@ -4036,26 +3720,21 @@ describe("RemoteSession wake", () => {
     const session = buildSession(relay, lease, null);
     try {
       session.start();
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(3), {
-        timeout: 8_000,
-        interval: 50,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await advanceNoiseUntil(() => relay.openBearers.length === 3, 8_000, 50);
+      await advanceNoiseClock(300);
       // Five wakes in a row - the app-switch-flapping case. The armed timer
       // carries ONE collapse, spent by the first of these; the rest find it
       // already spent and draw nothing, so no wake can outbid another.
       for (let i = 0; i < 5; i += 1) {
         session.wake(`app-resumed-${i}`, null);
       }
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 3_000,
-        interval: 50,
-      });
+      await advanceNoiseUntil(() => session.isReady(), 3_000, 50);
       // Exactly one extra dial, not five.
       expect(relay.openBearers).toHaveLength(4);
       expect(relay.errors).toEqual([]);
     } finally {
       session.close();
+      await finishNoise();
     }
   }, 15_000);
   it(
@@ -4153,6 +3832,7 @@ describe("RemoteSession wake", () => {
   );
 
   it("keeps its escalation after a wake-driven redial that also fails - wake never resets the attempt counter", async () => {
+    const finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     relay.decideOpen = (_bearer, openIndex) =>
@@ -4163,46 +3843,39 @@ describe("RemoteSession wake", () => {
     try {
       session.start();
       // Two failures escalate the armed backoff to the 2s step.
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
-        timeout: 6_000,
-        interval: 50,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await advanceNoiseUntil(() => relay.openBearers.length === 2, 6_000, 50);
+      await advanceNoiseClock(300);
       session.wake("app-resumed", null);
       // The woken redial (the third open) fails too - a real host outage,
       // not a resumed one. If `wake` had reset the attempt counter, THIS
       // failure would arm a fresh 1s backoff instead of continuing the
       // escalation to 4s.
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(3), {
-        timeout: 3_000,
-        interval: 50,
-      });
+      await advanceNoiseUntil(() => relay.openBearers.length === 3, 3_000, 50);
       const armedAt = Date.now();
       // Give a reset-attempt bug every chance to fire: a restarted schedule
       // arms the initial tier, whose jittered draw tops out at 1s, so its
       // redial would already have landed well inside this window. The
       // continued escalation's own jittered minimum sits above it.
-      await new Promise((resolve) => setTimeout(resolve, 1_800));
+      await advanceNoiseClock(1_800);
       expect(relay.openBearers).toHaveLength(3);
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 5_000,
-        interval: 50,
-      });
+      await advanceNoiseUntil(() => session.isReady(), 5_000, 50);
       expect(relay.openBearers).toHaveLength(4);
       expect(Date.now() - armedAt).toBeGreaterThanOrEqual(1_800);
       expect(relay.errors).toEqual([]);
     } finally {
       session.close();
+      await finishNoise();
     }
   }, 15_000);
 
   it("probes on the caller's deadline - a muted socket is dropped and re-dialed on the short probe, not the default one", async () => {
+    const finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     const session = buildSession(relay, lease, null);
     try {
       session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      await advanceNoiseUntil(() => session.isReady(), 10_000, 50);
       expect(relay.openBearers).toHaveLength(1);
       // The half-open shape an OS suspend leaves: sends go out, nothing
       // answers.
@@ -4216,16 +3889,15 @@ describe("RemoteSession wake", () => {
       // inside a second. Under the default 10s deadline nothing would have
       // moved yet - this window is what proves the caller's deadline was the
       // one armed.
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
-        timeout: 1_200,
-        interval: 25,
-      });
+      await advanceNoiseUntil(() => relay.openBearers.length === 2, 1_200, 25);
       expect(relay.errors).toEqual([]);
     } finally {
       session.close();
+      await finishNoise();
     }
   }, 10_000);
   it("a default-tuned wake joining an in-flight probe does not retract the arming wake's redial policy", async () => {
+    const finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     // Reach ready with the ladder escalated, exactly as the rung-skip test
@@ -4237,10 +3909,7 @@ describe("RemoteSession wake", () => {
     const session = buildSession(relay, lease, null);
     try {
       session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
+      await advanceNoiseUntil(() => session.isReady(), 8_000, 50);
       expect(relay.openBearers).toHaveLength(3);
       relay.answerPings = false;
       // The burst a real resume produces: the mobile resume arms the probe
@@ -4252,18 +3921,17 @@ describe("RemoteSession wake", () => {
         immediateRedialOnFailure: true,
       });
       session.wake("network-online", null);
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
-        timeout: 900,
-        interval: 25,
-      });
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      await advanceNoiseUntil(() => relay.openBearers.length === 4, 900, 25);
+      await advanceNoiseUntil(() => session.isReady(), 10_000, 50);
       expect(relay.errors).toEqual([]);
     } finally {
       session.close();
+      await finishNoise();
     }
   }, 15_000);
 
   it("a failed probe with immediateRedialOnFailure skips the armed backoff rung", async () => {
+    const finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     // Two failed opens escalate the ladder before the third is allowed to
@@ -4276,10 +3944,7 @@ describe("RemoteSession wake", () => {
     const session = buildSession(relay, lease, null);
     try {
       session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
+      await advanceNoiseUntil(() => session.isReady(), 8_000, 50);
       expect(relay.openBearers).toHaveLength(3);
       relay.answerPings = false;
       session.wake("app-resumed", {
@@ -4290,18 +3955,17 @@ describe("RemoteSession wake", () => {
       // (jittered floor 1s), and the latch pulls that redial to NOW. The
       // fourth open landing inside 900ms is therefore only reachable with
       // the rung skipped: 250ms (probe) + a same-tick redial.
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
-        timeout: 900,
-        interval: 25,
-      });
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      await advanceNoiseUntil(() => relay.openBearers.length === 4, 900, 25);
+      await advanceNoiseUntil(() => session.isReady(), 10_000, 50);
       expect(relay.errors).toEqual([]);
     } finally {
       session.close();
+      await finishNoise();
     }
   }, 15_000);
 
   it("a stronger poke UPGRADES an in-flight default arm - reverse order of the joined-burst case", async () => {
+    const finishNoise = beginFakeNoiseClock();
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     relay.decideOpen = (_bearer, openIndex) =>
@@ -4311,10 +3975,7 @@ describe("RemoteSession wake", () => {
     const session = buildSession(relay, lease, null);
     try {
       session.start();
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
-        timeout: 8_000,
-        interval: 50,
-      });
+      await advanceNoiseUntil(() => session.isReady(), 8_000, 50);
       expect(relay.openBearers).toHaveLength(3);
       relay.answerPings = false;
       // The online edge arms first: 10s deadline, no immediate redial. The
@@ -4326,14 +3987,12 @@ describe("RemoteSession wake", () => {
         timeoutMs: 250,
         immediateRedialOnFailure: true,
       });
-      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
-        timeout: 900,
-        interval: 25,
-      });
-      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      await advanceNoiseUntil(() => relay.openBearers.length === 4, 900, 25);
+      await advanceNoiseUntil(() => session.isReady(), 10_000, 50);
       expect(relay.errors).toEqual([]);
     } finally {
       session.close();
+      await finishNoise();
     }
   }, 15_000);
 
@@ -6967,7 +6626,7 @@ describe("RemoteSession per-stream inbound error routing", () => {
         // per-stream - if this stayed at 1 the production change had
         // regressed to the neighbour's per-stream route instead.
         await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
-        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+        expect(relay.openGrants).toEqual(["valid-token", "valid-token"]);
 
         // Neither logical stream was condemned - it is the SHARED CONNECTION
         // that dropped and redialled, not stream A specifically (which is
@@ -7084,7 +6743,11 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
     async () => {
       const relay = new FakeRelayHost();
       relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
-      relay.unaryError = { code: "WORKTREE_BUSY", message: "in use" };
+      relay.unaryError = {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders: undefined,
+      };
       const lease = new MutableBearerLease("token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -9129,7 +8792,7 @@ describe("RemoteSession clock-skew park", () => {
         // one has not re-attached even once.
         await new Promise((resolve) => setTimeout(resolve, 400));
         expect(session.isClosed()).toBe(false);
-        expect(relay.openBearers).toEqual(["clock-skewed-token"]);
+        expect(relay.openGrants).toEqual(["clock-skewed-token"]);
       } finally {
         session.close();
       }
@@ -9165,7 +8828,7 @@ describe("RemoteSession clock-skew park", () => {
         // wake, no new bearer.
         clock.recover();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(relay.openBearers).toEqual([
+        expect(relay.openGrants).toEqual([
           "clock-skewed-token",
           "clock-skewed-token",
         ]);
@@ -10160,8 +9823,6 @@ describe("RemoteSession host-dialer traffic accounting (protocol base class, tas
       unaryResponseMs: 330_000,
       clientIdentity: TEST_CLIENT_IDENTITY,
       livenessProbe: null,
-      // A host-to-host dialer holds no member credential to hand.
-      mintMemberCredential: null,
     });
   }
 
@@ -10600,7 +10261,11 @@ describe("RemoteSession probed silence verdict (D4)", () => {
       const relay = new FakeRelayHost();
       applySilenceFloor(relay, SILENCE_FLOOR_METHODS);
       relay.silentMethods = new Set(["worktree.getBinding"]);
-      relay.unaryError = { code: "WORKTREE_BUSY", message: "busy" };
+      relay.unaryError = {
+        code: "WORKTREE_BUSY",
+        message: "busy",
+        holders: undefined,
+      };
       const lease = new MutableBearerLease("valid-token", "user-1");
       const recorder = new RecordingEvidence();
       const session = buildProbedSession(
@@ -11030,7 +10695,7 @@ describe("RemoteSession sandbox session grant", () => {
       const lease = new MutableBearerLease("user-bearer-secret", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
-        sessionGrant: () => "session-grant-jws",
+        hostToken: () => "session-grant-jws",
       });
       try {
         session.start();
@@ -11041,24 +10706,6 @@ describe("RemoteSession sandbox session grant", () => {
           grant: "session-grant-jws",
         });
         expect(relay.openBearers).not.toContain("user-bearer-secret");
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "keeps presenting the user bearer, with no authz, to a personal host",
-    async () => {
-      const relay = new FakeRelayHost();
-      const lease = new MutableBearerLease("user-bearer", "user-1");
-      const session = buildSession(relay, lease, null);
-      try {
-        session.start();
-        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
-        expect(relay.openBearers[0]).toBe("user-bearer");
-        expect(relay.openAuthz[0] ?? null).toBeNull();
       } finally {
         session.close();
       }
@@ -11115,10 +10762,7 @@ describe("RemoteSession refused OPEN and browser jar payload", () => {
       try {
         session.start();
         browserSessions.sendClientFrame(cookieDelta);
-        await vi.waitFor(
-          () => expect(relay.openBearers).toEqual(["user-bearer"]),
-          WAIT,
-        );
+        await vi.waitFor(() => expect(relay.openBearers).toEqual([""]), WAIT);
 
         expect(
           relay.clientFrames.some(
@@ -11155,13 +10799,11 @@ describe("RemoteSession refused OPEN and browser jar payload", () => {
 
 /**
  * The no-progress bound counts an UNAUTHORIZED rejection whose revalidation
- * answered "rotated" as no progress when the credential the next attach will
- * present is the one just rejected. A session grant is not like a bearer: the
- * grant reader keeps returning the grant the host just refused, because the
- * fresh grant is minted only by the NEXT attach. So "unchanged" proves nothing
- * for a grant, and a sandbox session must keep reconnecting through it.
+ * answered "rotated" as no progress when the host token the next open will
+ * present is the one just rejected. The fingerprint is that token, so an
+ * unchanged one goes terminal instead of looping.
  */
-describe("RemoteSession no-progress UNAUTHORIZED bound by credential kind", () => {
+describe("RemoteSession no-progress UNAUTHORIZED bound", () => {
   const ROTATED: StreamAuthRevalidator = {
     revalidateForReconnect: () => Promise.resolve("rotated" as const),
   };
@@ -11183,36 +10825,7 @@ describe("RemoteSession no-progress UNAUTHORIZED bound by credential kind", () =
   }
 
   it(
-    "keeps reconnecting a session-grant session whose grant reader returns the rejected grant, after rotated revalidations past the bearer bound",
-    async () => {
-      const relay = new FakeRelayHost();
-      relay.decideOpen = () => ({
-        kind: "fatal",
-        details: unauthorizedDetails(),
-      });
-      const lease = new MutableBearerLease("user-bearer-secret", "user-1");
-      const session = new RemoteSession({
-        ...buildSessionOptions(relay, lease, ROTATED),
-        // The same grant every time: the next attach has not minted a new one.
-        sessionGrant: () => "session-grant-jws",
-      });
-      try {
-        session.start();
-        await untilPastTheBoundOrClosed(relay, session);
-
-        expect(session.isClosed()).toBe(false);
-        expect(relay.openBearers.length).toBeGreaterThanOrEqual(4);
-        // Every one of those opens carried the grant, never the user bearer.
-        expect(relay.openBearers.every((bearer) => bearer === "")).toBe(true);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "control: a bearer session whose bearer is unchanged still goes terminal after three rejected opens",
+    "a host-token session whose token is unchanged goes terminal after three rejected opens",
     async () => {
       const relay = new FakeRelayHost();
       relay.decideOpen = () => ({
@@ -11466,220 +11079,6 @@ describe("RemoteSession refused attach grant", () => {
         expect(session.isClosed()).toBe(false);
         expect(session.terminalFatal()).toBeNull();
         expect(counts.dials).toBe(0);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-});
-
-const MEMBER_HANDOFF: MemberCredentialHandoff = {
-  token: "member-token",
-  refreshToken: "member-refresh-token",
-  familyId: "family-1",
-  provisionedAt: "2026-10-19T00:00:00.000Z",
-};
-
-function buildMemberCredentialSession(
-  relay: FakeRelayHost,
-  mint: ((hostId: string) => Promise<MemberCredentialHandoff | null>) | null,
-): RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
-  applySilenceFloor(relay, SILENCE_FLOOR_METHODS);
-  const lease = new MutableBearerLease("token", "user-1");
-  return new RemoteSession({
-    ...buildSessionOptions(relay, lease, null),
-    rpcRegistry: silenceProbeRegistry(),
-    mintMemberCredential: mint,
-  });
-}
-
-function sendHostStatus(
-  session: RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>,
-): Promise<unknown> {
-  return session.sendUnary(
-    "host.status",
-    {},
-    null,
-    null,
-    null,
-    undefined,
-    false,
-    null,
-  );
-}
-
-/**
- * A team host spends only a member credential the client hands it after
- * `OPEN_ACK`, so nothing may run on the session before that frame: the
- * session holds its `ready` boundary (which is what releases parked callers
- * and re-opens subscriptions) until the credential frame is enqueued.
- */
-describe("RemoteSession member credential hand-off", () => {
-  it(
-    "enqueues the minted credential as the first client frame after OPEN_ACK, before any request parked ahead of the ack",
-    async () => {
-      const relay = new FakeRelayHost();
-      relay.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
-      // Hold the ack so the unary below is issued strictly BEFORE it arrives.
-      relay.stallOpens = true;
-      let releaseMint: (handoff: MemberCredentialHandoff | null) => void = () =>
-        undefined;
-      const minted = new Promise<MemberCredentialHandoff | null>((resolve) => {
-        releaseMint = resolve;
-      });
-      const mint = vi.fn((_hostId: string) => minted);
-      const session = buildMemberCredentialSession(relay, mint);
-      try {
-        session.start();
-        const pending = sendHostStatus(session);
-        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
-        await relay.releaseStalledOpens();
-
-        // The ack is in and the mint is outstanding: the session must NOT be
-        // ready, and nothing may have reached the wire behind the open.
-        await vi.waitFor(() => expect(mint).toHaveBeenCalledTimes(1), WAIT);
-        expect(mint).toHaveBeenCalledWith("host-1");
-        expect(session.isReady()).toBe(false);
-        expect(relay.credentialUpdates).toEqual([]);
-        expect(relay.unaryRequests).toEqual([]);
-
-        releaseMint(MEMBER_HANDOFF);
-        await expect(pending).resolves.toEqual({ ready: true });
-
-        const types = relay.clientFrames.map((frame) => frame.type);
-        const afterOpen = types.slice(types.indexOf(MuxFrameType.OPEN) + 1);
-        expect(afterOpen[0]).toBe(MuxFrameType.CREDENTIAL_UPDATE);
-        expect(relay.credentialUpdates).toEqual([
-          { bearer: null, memberCredential: MEMBER_HANDOFF },
-        ]);
-        expect(types.indexOf(MuxFrameType.CREDENTIAL_UPDATE)).toBeLessThan(
-          types.indexOf(MuxFrameType.REQUEST),
-        );
-        expect(relay.errors).toEqual([]);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it.each([
-    ["resolves null", "mint-unavailable", () => Promise.resolve(null)],
-    [
-      "throws",
-      "mint-failed",
-      () => Promise.reject(new Error("authn unreachable")),
-    ],
-  ])(
-    "a mint that %s sends no credential, warns once, and still opens the session",
-    async (_label, reason, mintBody) => {
-      const relay = new FakeRelayHost();
-      relay.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const mint = vi.fn((_hostId: string) => mintBody());
-      const session = buildMemberCredentialSession(relay, mint);
-      try {
-        session.start();
-        // The parked unary going out and resolving is the proof the open
-        // completed without the credential.
-        await expect(sendHostStatus(session)).resolves.toEqual({ ready: true });
-
-        expect(session.isReady()).toBe(true);
-        expect(mint).toHaveBeenCalledTimes(1);
-        const handoffWarnings = warnSpy.mock.calls.filter(
-          (call) =>
-            typeof call[0] === "string" &&
-            call[0].includes("member credential not handed:"),
-        );
-        expect(handoffWarnings).toHaveLength(1);
-        expect(handoffWarnings[0]?.[0]).toContain(reason);
-        expect(relay.credentialUpdates).toEqual([]);
-        expect(relay.errors).toEqual([]);
-      } finally {
-        warnSpy.mockRestore();
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "a credential that resolves after the host leg detached is carried by the redial's attach instead of minting again",
-    async () => {
-      const FIRST_HANDOFF: MemberCredentialHandoff = {
-        token: "first-member-token",
-        refreshToken: "first-member-refresh-token",
-        familyId: "family-first",
-        provisionedAt: "2026-10-19T01:00:00.000Z",
-      };
-      const relay = new FakeRelayHost();
-      relay.openAckCapabilities = [SESSION_CAPABILITY_MEMBER_CREDENTIAL];
-      let releaseFirstMint: (
-        handoff: MemberCredentialHandoff | null,
-      ) => void = () => undefined;
-      const firstMint = new Promise<MemberCredentialHandoff | null>(
-        (resolve) => {
-          releaseFirstMint = resolve;
-        },
-      );
-      const mint = vi
-        .fn((_hostId: string) =>
-          Promise.resolve<MemberCredentialHandoff | null>(null),
-        )
-        .mockImplementationOnce((_hostId: string) => firstMint);
-      const session = buildMemberCredentialSession(relay, mint);
-      try {
-        session.start();
-        await vi.waitFor(() => expect(mint).toHaveBeenCalledTimes(1), WAIT);
-        expect(session.isReady()).toBe(false);
-
-        // The host leg goes while the mint is outstanding, and the mint only
-        // settles afterwards: the credential has no live attach to ride.
-        relay.sendHostAttachment("host_detached");
-        releaseFirstMint(FIRST_HANDOFF);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        expect(session.isReady()).toBe(false);
-        expect(relay.credentialUpdates).toEqual([]);
-
-        // The redial's own ack carries the held credential and does not mint.
-        relay.sendHostAttachment("host_attached");
-        await expect(sendHostStatus(session)).resolves.toEqual({ ready: true });
-
-        expect(session.isReady()).toBe(true);
-        expect(relay.credentialUpdates).toEqual([
-          { bearer: null, memberCredential: FIRST_HANDOFF },
-        ]);
-        expect(mint).toHaveBeenCalledTimes(1);
-        const types = relay.clientFrames.map((frame) => frame.type);
-        const afterRedialOpen = types.slice(
-          types.lastIndexOf(MuxFrameType.OPEN) + 1,
-        );
-        expect(afterRedialOpen[0]).toBe(MuxFrameType.CREDENTIAL_UPDATE);
-        expect(afterRedialOpen).toContain(MuxFrameType.REQUEST);
-        expect(relay.errors).toEqual([]);
-      } finally {
-        session.close();
-      }
-    },
-    TEST_BUDGET_MS,
-  );
-
-  it(
-    "a personal host's openAck without the member capability mints nothing and sends no credential frame",
-    async () => {
-      const relay = new FakeRelayHost();
-      relay.openAckCapabilities = [];
-      const mint = vi.fn((_hostId: string) => Promise.resolve(MEMBER_HANDOFF));
-      const session = buildMemberCredentialSession(relay, mint);
-      try {
-        session.start();
-        await expect(sendHostStatus(session)).resolves.toEqual({ ready: true });
-
-        expect(session.isReady()).toBe(true);
-        expect(mint).not.toHaveBeenCalled();
-        expect(relay.credentialUpdates).toEqual([]);
-        expect(relay.errors).toEqual([]);
       } finally {
         session.close();
       }

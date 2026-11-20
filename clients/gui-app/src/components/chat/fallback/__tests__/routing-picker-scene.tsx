@@ -87,6 +87,12 @@ export function seedProviders(): void {
     accounts(
       [
         providerProfile({
+          profileId: "ambient",
+          kind: "ambient",
+          label: "Terminal account",
+          authenticated: true,
+        }),
+        providerProfile({
           profileId: TARGET.profileId ?? "target01-profile",
           kind: "managed",
           label: "Codex Team",

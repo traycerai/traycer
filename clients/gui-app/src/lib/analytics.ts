@@ -7,6 +7,7 @@ import {
 import { LAYOUT_VALUE_ENUM_MEMBERS } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
 import { isMobileApp } from "@/lib/mobile-app";
+import { ownValue } from "@/lib/own-value";
 
 export type AnalyticsSource =
   | "direct_ui"
@@ -3190,7 +3191,9 @@ function typedAnalyticsBlocker(error: unknown): AnalyticsBlocker | null {
     return null;
   }
   const code = error.code;
-  return typeof code === "string" ? (RPC_ERROR_BLOCKERS[code] ?? null) : null;
+  return typeof code === "string"
+    ? (ownValue(RPC_ERROR_BLOCKERS, code) ?? null)
+    : null;
 }
 
 export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {

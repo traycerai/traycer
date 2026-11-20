@@ -65,6 +65,7 @@ import {
   type CodexResetCreditActionRenderer,
   type CodexResetCredits,
 } from "@/components/settings/panels/codex-reset-credit-model";
+import { ownValue } from "@/lib/own-value";
 
 /**
  * Which surface a provider's detail is rendered on. Every window/bar draws
@@ -455,7 +456,10 @@ const CODEX_RATE_LIMIT_REACHED_LABELS: Record<string, string> = {
 };
 
 function formatRateLimitReachedType(value: string): string {
-  return CODEX_RATE_LIMIT_REACHED_LABELS[value] ?? titleCaseFromToken(value);
+  return (
+    ownValue(CODEX_RATE_LIMIT_REACHED_LABELS, value) ??
+    titleCaseFromToken(value)
+  );
 }
 
 /**

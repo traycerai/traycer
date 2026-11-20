@@ -4,13 +4,30 @@ import {
   type QueryObserverOptions,
 } from "@tanstack/react-query";
 import type { RpcErrorCode } from "@traycer/protocol/framework";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 export function hostFailure(code: RpcErrorCode, method: string): HostRpcError {
   return new HostRpcError({
     code,
     message: `${method} failed with ${code}`,
+    requestId: "req-test",
+    method,
+    fatalDetails: null,
+  });
+}
+
+/**
+ * The connection to the host dropped. It carries `RPC_ERROR`, as the real one
+ * does: only its class tells it from a server error.
+ */
+export function transportFailure(method: string): HostTransportFailureError {
+  return new HostTransportFailureError({
+    code: "RPC_ERROR",
+    message: `${method}: lost the connection to this computer`,
     requestId: "req-test",
     method,
     fatalDetails: null,

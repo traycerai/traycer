@@ -100,9 +100,12 @@ export async function openFrameCommentDraft(args: {
     ...anchor,
     selection,
     retargeted,
+    // Beside what the reader pressed, not what the comment anchors to: a
+    // script-built element is retargeted to a container that can span many
+    // screens.
     rect: frameCommentScreenRect(
       args.frame,
-      selection.textRange?.rects.at(0) ?? selection.element.box,
+      args.selection.textRange?.rects.at(0) ?? args.selection.element.box,
     ),
   };
   store.setDraft(args.epicId, draft);

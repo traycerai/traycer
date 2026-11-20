@@ -226,6 +226,18 @@ vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
   useTuiForkProfileSupported: () => tileMocks.forkProfileSupported,
 }));
 
+// The host is a lazy chunk that, once warmed by an earlier case, mounts in a
+// later test and needs a ThemeProvider this suite does not render.
+vi.mock(
+  "@/hooks/agent/use-terminal-tile-bootstrap",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/agent/use-terminal-tile-bootstrap")
+    >()),
+    TerminalXtermHost: () => null,
+  }),
+);
+
 // Capture fork-dialog open props; the dialog body is not under test here.
 vi.mock("../terminal-agent-fork-dialog", () => ({
   TerminalAgentForkDialog: (props: CapturedForkDialogProps) => {
