@@ -16,7 +16,10 @@ import {
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
-import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import {
+  NO_HOST_TOKEN_PROBE,
+  readDoorReason,
+} from "@traycer/protocol/framework/door-reason";
 import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
   getMemoizedStreamMethodSupport,
@@ -101,7 +104,6 @@ import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remot
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import {
   isReleasedHostTokenRefusal,
-  NO_HOST_TOKEN_PROBE,
   type ReleasedSignOn,
 } from "./released-sign-on";
 

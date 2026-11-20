@@ -27,11 +27,13 @@ import {
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
-import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import {
+  NO_HOST_TOKEN_PROBE,
+  readDoorReason,
+} from "@traycer/protocol/framework/door-reason";
 import {
   createReleasedHostMemory,
   isReleasedHostTokenRefusal,
-  NO_HOST_TOKEN_PROBE,
   type ReleasedHostMemory,
   type ReleasedUnaryCause,
   type ReleasedUnarySignOn,

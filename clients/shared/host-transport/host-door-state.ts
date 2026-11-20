@@ -151,6 +151,8 @@ const DOOR_REASON_STATES: Readonly<
   token_expired: null,
   not_admitted: null,
   session_revoked: null,
+  // Answered by the owner's sign-in on the next dial.
+  owner_sign_in: null,
 };
 
 export function hostRefusalOf(error: HostRpcError): FatalErrorDetails | null {

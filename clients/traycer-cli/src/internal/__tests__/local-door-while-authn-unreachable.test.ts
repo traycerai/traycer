@@ -1,3 +1,4 @@
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -5,7 +6,6 @@ import {
   hostStreamRpcRegistry,
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
-import { NO_HOST_TOKEN_PROBE } from "../../../../shared/host-transport/released-sign-on";
 import {
   createReleasedHostMemory,
   type ReleasedHostMemory,

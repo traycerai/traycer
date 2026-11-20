@@ -1,3 +1,4 @@
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
@@ -9,7 +10,6 @@ import {
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
-import { NO_HOST_TOKEN_PROBE } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { DEFAULT_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import {
   FakeNativeWebSocket,

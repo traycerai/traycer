@@ -1,3 +1,4 @@
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearerFor,
@@ -27,7 +28,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import type { IWebSocketFactory } from "../ws-factory";
 import {
-  NO_HOST_TOKEN_PROBE,
   signInForLocalRow,
   type ReleasedSignOnRow,
 } from "../released-sign-on";

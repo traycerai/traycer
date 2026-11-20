@@ -1,6 +1,6 @@
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import {
   createReleasedHostMemory,
-  NO_HOST_TOKEN_PROBE,
   type ReleasedHostMemory,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";

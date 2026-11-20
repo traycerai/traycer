@@ -15,11 +15,24 @@ export const HOST_DOOR_REASONS = [
   "membership_removed",
   "session_revoked",
   "host_claimed",
+  /**
+   * The open carried {@link NO_HOST_TOKEN_PROBE}, and this door (a personal
+   * computer's local door) takes its owner's sign-in now.
+   */
+  "owner_sign_in",
 ] as const;
 
 export type HostDoorReason = (typeof HOST_DOOR_REASONS)[number];
 
 const hostDoorReasonSchema = z.enum(HOST_DOOR_REASONS);
+
+/**
+ * Presented in place of a host-only token that cannot be had, never a
+ * credential. A released host refuses it as it refuses any host-only token; a
+ * current host names its reason, `owner_sign_in` only where that door takes the
+ * owner's sign-in.
+ */
+export const NO_HOST_TOKEN_PROBE = "no-host-only-token";
 
 /** Any non-empty string parses, so a newer reason reaches {@link readDoorReason}; an empty one fails the frame. */
 export const doorReasonWireFieldSchema = z.string().min(1).optional();

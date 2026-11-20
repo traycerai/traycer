@@ -141,14 +141,6 @@ export function isReleasedHostTokenRefusal(
 }
 
 /**
- * Presented in place of a host-only token that cannot be had, never a
- * credential: a released host refuses it as it refuses any host-only token,
- * and only that answer lets the sign-in follow. A current host, which every
- * team computer and sandbox is, refuses it naming its reason.
- */
-export const NO_HOST_TOKEN_PROBE = "no-host-only-token";
-
-/**
  * No host-only token can be presented to this machine's host: authn has no row
  * for this person, or it did not answer (`authnDidNotAnswer`) and none is held.
  */
