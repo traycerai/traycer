@@ -50,9 +50,11 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
+  personalHostScopeOverrides,
   resetEnvironmentSectionReads,
   windowHostRunsPersonal,
 } from "@/components/settings/__tests__/environment-section-reads-fixture";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 
 // A team offers every Environment page, so the cases below that are about
 // something else read the whole list.
@@ -259,6 +261,27 @@ describe("navigationSource, the Secrets row by the pick's source", () => {
       expect(history.indexOf(true)).toBeGreaterThan(history.lastIndexOf(false));
     },
   );
+
+  it("offers a Local computer's Secrets only while the window's host list names it", () => {
+    const unlisted: EnvironmentPick = {
+      kind: "local",
+      hostId: "host-b",
+      hostName: "New laptop",
+    };
+    recordNegotiatedHostMethods("host-b", [SECRETS_LIST]);
+
+    expect(mountSecretsRow(unlisted)().at(-1)).toBe(false);
+
+    cleanup();
+    personalHostScopeOverrides.current = {
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: "host-b" }),
+      ],
+    };
+
+    expect(mountSecretsRow(unlisted)().at(-1)).toBe(true);
+  });
 
   it("offers Personal's Secrets only after the window host's Personal read has answered", () => {
     windowHostRunsPersonal.current = null;

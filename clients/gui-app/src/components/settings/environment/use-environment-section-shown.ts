@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from "react";
+import { findHostOption } from "@/components/settings/host-scope/host-scope-model";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -17,7 +18,9 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
  * read that host, whose Secrets page needs `environment.secrets.list`. In a
  * build with a pool that method is the pool's, and the support read answers
  * for it. While the window's host is out, Personal reads the cloud, as its
- * page does.
+ * page does. A Local row reads its computer only while the window's host list
+ * names it, as `usePersonalHostScope` resolves it for the page: a computer
+ * the list has dropped, or not yet listed, draws nothing there.
  */
 function secretsServedOn(
   pick: EnvironmentPick,
@@ -44,7 +47,9 @@ export function useEnvironmentSectionShown(
   const pick = useEnvironmentPick();
   const windowHostRuns = useWindowHostRunsPersonal(windowScope);
   const secretsSupported = useHostMethodSupport(
-    pick.kind === "local" ? pick.hostId : windowScope.hostId,
+    pick.kind === "local"
+      ? (findHostOption(windowScope.hosts, pick.hostId)?.hostId ?? null)
+      : windowScope.hostId,
     "environment.secrets.list",
   );
   const secretsServed = secretsServedOn(pick, windowHostRuns, secretsSupported);
