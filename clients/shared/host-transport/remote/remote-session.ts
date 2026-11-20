@@ -19,6 +19,7 @@ import type {
   RemoteSessionOpenAuth,
 } from "@traycer/protocol/host-transport/remote/auth";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import {
   isReleasedHostTokenRefusal,
   type ReleasedSignOn,
@@ -269,6 +270,7 @@ function hostTokenOpenAuth(
 }
 
 function createHostTokenRemoteSessionAuth(
+  hostId: string,
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: SessionDoorObserver | null,
@@ -276,6 +278,7 @@ function createHostTokenRemoteSessionAuth(
 ): RemoteSessionAuth {
   if (releasedSignOn !== null)
     return createReleasedSignOnSessionAuth(
+      hostId,
       readHostToken,
       auth,
       door,
@@ -296,25 +299,32 @@ function createHostTokenRemoteSessionAuth(
 }
 
 /**
- * Every dial presents the host-only token first. A released host's typed refusal
- * of it makes the next dial present the sign-in, `authz: null`, as a released app
- * did; that connection's credential pushes carry the sign-in. The dial after it
- * starts on the token again, so an updated host is never handed the sign-in.
+ * A dial presents the host-only token first, unless this process remembers the
+ * host as released (`ReleasedHostMemory`). A released host's typed refusal of it
+ * makes the next dial present the sign-in, `authz: null`, as a released app did;
+ * that connection's credential pushes carry the sign-in. A host that names its
+ * reason is never handed the sign-in again.
  */
 function createReleasedSignOnSessionAuth(
+  hostId: string,
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: SessionDoorObserver | null,
   releasedSignOn: ReleasedSignOn,
 ): RemoteSessionAuth {
   const readSignIn = bearerReader(releasedSignOn.signIn);
+  const hosts = releasedSignOn.hosts;
   let plan: "host-token" | "sign-in-next" | "sign-in" = "host-token";
   let openAdmitted = false;
+  let signInFromMemory = false;
+  const named = (refusal: FatalErrorDetails): boolean =>
+    readDoorReason(refusal.doorReason) !== "absent";
   // Only a refusal of this dial's open switches to the sign-in: a current host
   // can end a session it admitted the same way. With no sign-in to present,
   // the refusal takes the host-only token's own path.
   const answersReleasedWay = (refusal: FatalErrorDetails): boolean =>
     isReleasedHostTokenRefusal(refusal) &&
+    !hosts.namedReason(hostId) &&
     (plan === "sign-in" || (!openAdmitted && readSignIn() !== null));
   const recoverSignIn = async (
     refusal: FatalErrorDetails,
@@ -354,13 +364,16 @@ function createReleasedSignOnSessionAuth(
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
       openAdmitted = false;
-      if (plan === "sign-in-next") {
+      signInFromMemory =
+        plan !== "sign-in-next" && hosts.opensReleasedWay(hostId);
+      if (plan === "sign-in-next" || signInFromMemory) {
         const signIn = readSignIn();
         if (signIn !== null) {
           plan = "sign-in";
           return { bearer: signIn, authz: null, fingerprint: signIn };
         }
       }
+      signInFromMemory = false;
       plan = "host-token";
       return hostTokenOpenAuth(readHostToken);
     },
@@ -369,6 +382,12 @@ function createReleasedSignOnSessionAuth(
     currentFingerprint: () =>
       plan === "host-token" ? readHostToken() : readSignIn(),
     revalidateForReconnect: (refusal) => {
+      // Remembered as released, now updated: the next dial presents the token.
+      if (signInFromMemory && named(refusal)) {
+        signInFromMemory = false;
+        plan = "host-token";
+        return Promise.resolve("rotated");
+      }
       if (answersReleasedWay(refusal)) {
         if (plan === "sign-in") return recoverSignIn(refusal);
         return answerHostTokenRefusal(refusal);
@@ -378,11 +397,15 @@ function createReleasedSignOnSessionAuth(
     door: {
       // Answered by the next dial, or reported once its recovery gives up.
       refused: (details) => {
-        if (answersReleasedWay(details)) return;
+        if (named(details)) hosts.refusedNamingReason(hostId);
+        if (answersReleasedWay(details) || (signInFromMemory && named(details)))
+          return;
         door?.refused(details);
       },
       admitted: () => {
         openAdmitted = true;
+        if (plan === "sign-in") hosts.signInAdmitted(hostId);
+        else hosts.hostTokenAdmitted(hostId);
         door?.admitted();
       },
     },
@@ -449,6 +472,7 @@ function toProtocolSessionOptions<
     ...coreOptions,
     ...clientWiring,
     auth: createHostTokenRemoteSessionAuth(
+      options.hostId,
       hostToken,
       auth,
       door,

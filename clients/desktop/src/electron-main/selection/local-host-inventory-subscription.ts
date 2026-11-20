@@ -8,6 +8,7 @@ import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-so
 import {
   hostTokenUnobtainable,
   releasedLocalSignOnFromRegistry,
+  processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   MINIMUM_HOST_VERSION,
@@ -494,6 +495,7 @@ export function createLocalHostInventoryStreamClient(deps: {
         recovery: null,
         hostTokenUnobtainable: () =>
           hostTokenUnobtainable(hostTokens, userId, endpoint.hostId),
+        hosts: processReleasedHosts,
       }),
       ...hostTokenSessionAuth(
         {

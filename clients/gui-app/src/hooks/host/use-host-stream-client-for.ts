@@ -52,6 +52,7 @@ import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
 import {
   opensReleasedWay,
   releasedSignOnForLocalRow,
+  processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
@@ -429,6 +430,7 @@ export function buildHostStreamClient(params: {
       params.bearer,
       params.auth,
       localTokens,
+      processReleasedHosts,
     ),
     // The user every owner builds this client for: the tile cache key, the
     // app-wide stream's effect dependency, the transport key at open.

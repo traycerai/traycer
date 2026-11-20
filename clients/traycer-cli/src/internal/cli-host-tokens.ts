@@ -28,6 +28,7 @@ import {
   hostTokenUnobtainable,
   releasedLocalSignOnFromRegistry,
   type ReleasedSignOn,
+  processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { config } from "../config";
 import {
@@ -363,6 +364,7 @@ export function cliReleasedSignOn(
       const id = hostId();
       return id !== null && tokens.hostTokenUnobtainable(id);
     },
+    hosts: processReleasedHosts,
   });
 }
 

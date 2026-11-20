@@ -35,6 +35,7 @@ import {
   type HostTokenStateSink,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import { decodeHostPublicKey } from "./noise-channel";
+import { processReleasedHosts } from "../released-sign-on";
 import {
   acquireRemoteSession,
   type RemoteSessionIdentity,
@@ -374,6 +375,7 @@ export function createRemoteHostTransport<
               recovery: options.auth,
               allowed: () => Promise.resolve(true),
               hostTokenUnobtainable: () => false,
+              hosts: processReleasedHosts,
             }
           : null,
         // The SAME read the grant provider above uses, now also reported to the

@@ -40,6 +40,7 @@ import { isPersonalRemoteHost } from "@traycer-clients/shared/host-client/person
 import {
   opensReleasedWay,
   releasedSignOnForLocalRow,
+  processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   DEFAULT_DIAL_TIMEOUT_MS,
@@ -404,6 +405,7 @@ export function openBrowserSessionsTransport(
       deps.bearer,
       null,
       hostTokens,
+      processReleasedHosts,
     ),
     userId,
     ...hostTokenSessionAuth(

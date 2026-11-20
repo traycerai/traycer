@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostDoorStateOfRefusal } from "../../host-door-state";
 import { resetNegotiatedManifests } from "../../negotiated-manifest-registry";
 import {
+  createReleasedHostMemory,
   opensReleasedWay,
   type ReleasedSignOn,
   type ReleasedSignOnRow,
@@ -144,6 +145,7 @@ function signOnFor(
         recovery: null,
         allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () => false,
+        hosts: createReleasedHostMemory(),
       }
     : null;
 }

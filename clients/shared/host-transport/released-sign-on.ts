@@ -36,7 +36,48 @@ export interface ReleasedSignOn {
    * with the sign-in, and so does this one.
    */
   readonly hostTokenUnobtainable: () => boolean;
+  /** What this process has seen of each host's answers; see {@link ReleasedHostMemory}. */
+  readonly hosts: ReleasedHostMemory;
 }
+
+/**
+ * Process memory only, per host id, never on disk and never keyed on a version.
+ * A host that refused the host-only token the released way and then admitted
+ * the sign-in is opened with the sign-in at once on later dials. That is
+ * forgotten the moment the host admits a host-only token or refuses anything
+ * naming its reason (it was updated). A host that has named a reason in this
+ * process is never handed the sign-in again.
+ */
+export interface ReleasedHostMemory {
+  readonly opensReleasedWay: (hostId: string) => boolean;
+  readonly namedReason: (hostId: string) => boolean;
+  readonly signInAdmitted: (hostId: string) => void;
+  readonly hostTokenAdmitted: (hostId: string) => void;
+  readonly refusedNamingReason: (hostId: string) => void;
+}
+
+export function createReleasedHostMemory(): ReleasedHostMemory {
+  const released = new Set<string>();
+  const current = new Set<string>();
+  return {
+    opensReleasedWay: (hostId) => released.has(hostId),
+    namedReason: (hostId) => current.has(hostId),
+    signInAdmitted: (hostId) => {
+      if (!current.has(hostId)) released.add(hostId);
+    },
+    hostTokenAdmitted: (hostId) => {
+      released.delete(hostId);
+    },
+    refusedNamingReason: (hostId) => {
+      released.delete(hostId);
+      current.add(hostId);
+    },
+  };
+}
+
+/** The memory every transport of this process shares. */
+export const processReleasedHosts: ReleasedHostMemory =
+  createReleasedHostMemory();
 
 /**
  * A released host (client level 2) reads a person's own sign-in on `open` and
@@ -116,6 +157,7 @@ export function releasedSignOnForLocalRow(
   signIn: BearerSourceProvider,
   recovery: StreamAuthRevalidator | null,
   tokens: TrackedHostTokens,
+  hosts: ReleasedHostMemory,
 ): ReleasedSignOn | null {
   return opensReleasedWayOnThisMachine(row, userId)
     ? {
@@ -124,6 +166,7 @@ export function releasedSignOnForLocalRow(
         allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () =>
           hostTokenUnobtainable(tokens, userId, hostId),
+        hosts,
       }
     : null;
 }
@@ -174,12 +217,14 @@ export function releasedLocalSignOnFromRegistry(deps: {
   readonly signIn: BearerSourceProvider;
   readonly recovery: StreamAuthRevalidator | null;
   readonly hostTokenUnobtainable: () => boolean;
+  readonly hosts: ReleasedHostMemory;
 }): ReleasedSignOn {
   const answered = new Map<string, boolean>();
   return {
     signIn: deps.signIn,
     recovery: deps.recovery,
     hostTokenUnobtainable: deps.hostTokenUnobtainable,
+    hosts: deps.hosts,
     allowed: async () => {
       const id = deps.hostId();
       const lease = deps.signIn();

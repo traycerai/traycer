@@ -23,6 +23,7 @@ import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
 import { resetNegotiatedStreamVersions } from "../negotiated-stream-version-registry";
 import { trackHostTokenMints } from "../../auth/host-token-lease";
 import {
+  createReleasedHostMemory,
   releasedSignOnForLocalRow,
   signInForLocalRow,
   type ReleasedSignOn,
@@ -114,6 +115,7 @@ function signOnFor(
     () => signIn,
     null,
     NO_MINTS,
+    createReleasedHostMemory(),
   );
 }
 
@@ -463,6 +465,7 @@ describe("released personal host, local stream", () => {
         () => signIn,
         recovery,
         NO_MINTS,
+        createReleasedHostMemory(),
       ),
       door,
     );

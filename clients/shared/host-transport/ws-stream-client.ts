@@ -547,6 +547,7 @@ export class WsStreamClient<
             recovery: releasedSignOn.recovery,
             allowed: releasedSignOn.allowed,
             hostTokenUnobtainable: releasedSignOn.hostTokenUnobtainable,
+            hosts: releasedSignOn.hosts,
           };
     const cloudAuthorized = options.cloudAuthorized;
     this.cloudAuthorized =
@@ -1893,8 +1894,8 @@ class StreamSession<
    */
   private probeNext = false;
   private probing = false;
-  /** A host answered the probe with its reason: a current host, never probed again. */
-  private probeAnsweredAsCurrent = false;
+  /** This dial presents the sign-in because the process remembers the host as released. */
+  private signInFromMemory = false;
   private credentialSocketSequence = 0;
   private openFrameToken: string | null = null;
   /**
@@ -2389,9 +2390,16 @@ class StreamSession<
       this.transitionTo("connecting", null, null);
     }
 
+    const released = this.config.releasedSignOn;
+    const signInNow = released?.signIn() ?? null;
+    this.signInFromMemory =
+      this.releasedPlan !== "sign-in-next" &&
+      signInNow !== null &&
+      released !== null &&
+      released.hosts.opensReleasedWay(selected.hostId);
     this.releasedPlan =
-      this.releasedPlan === "sign-in-next" &&
-      (this.config.releasedSignOn?.signIn() ?? null) !== null
+      signInNow !== null &&
+      (this.releasedPlan === "sign-in-next" || this.signInFromMemory)
         ? "sign-in"
         : "host-token";
     this.probing = this.probeNext && this.releasedPlan === "host-token";
@@ -2405,11 +2413,10 @@ class StreamSession<
     } catch (cause) {
       if (cause instanceof MissingBearerTokenForOpenFrameError) {
         this.transitionTo("reconnecting", null, null);
-        const released = this.config.releasedSignOn;
         if (
           this.releasedPlan === "host-token" &&
           released !== null &&
-          !this.probeAnsweredAsCurrent &&
+          !released.hosts.namedReason(selected.hostId) &&
           released.hostTokenUnobtainable() &&
           released.signIn() !== null
         ) {
@@ -2881,6 +2888,13 @@ class StreamSession<
       return;
     }
     this.openAcknowledged = true;
+    const admittedHostId = this.openFrameHostId;
+    const released = this.config.releasedSignOn;
+    if (released !== null && admittedHostId !== null) {
+      if (this.releasedPlan === "sign-in")
+        released.hosts.signInAdmitted(admittedHostId);
+      else released.hosts.hostTokenAdmitted(admittedHostId);
+    }
     this.supportsCredentialUpdate = ackParse.data.capabilities.includes(
       STREAM_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -3213,16 +3227,25 @@ class StreamSession<
     }
     const details = termParse.data.details;
     const releasedWay = this.answersReleasedWay(details);
+    const namedReason = readDoorReason(details.doorReason) !== "absent";
+    if (namedReason && this.openFrameHostId !== null)
+      this.config.releasedSignOn?.hosts.refusedNamingReason(
+        this.openFrameHostId,
+      );
     // The probe carried no credential of the person's: a current host's answer
     // to it is not theirs to see, and the dial goes on as with no token.
-    if (
-      this.probing &&
-      !releasedWay &&
-      readDoorReason(details.doorReason) !== "absent"
-    ) {
-      this.probeAnsweredAsCurrent = true;
+    if (this.probing && !releasedWay && namedReason) {
       this.teardownSocket(1000, "no-host-token-probe");
       this.dropAndReconnect(details);
+      return;
+    }
+    // A host remembered as released has been updated: the next dial presents
+    // the host-only token at once, and the door hears nothing of the sign-in.
+    if (this.signInFromMemory && namedReason) {
+      this.teardownSocket(1000, "released-host-updated");
+      this.resetForReconnect(null);
+      this.releasedPlan = "host-token";
+      this.connect();
       return;
     }
     // Answered by the sign-in, or reported once its recovery gives up.
@@ -3340,6 +3363,8 @@ class StreamSession<
       released !== null &&
       !this.usesSessionGrant &&
       isReleasedHostTokenRefusal(details) &&
+      (this.openFrameHostId === null ||
+        !released.hosts.namedReason(this.openFrameHostId)) &&
       (this.releasedPlan === "sign-in" ||
         (!this.openAcknowledged && released.signIn() !== null))
     );

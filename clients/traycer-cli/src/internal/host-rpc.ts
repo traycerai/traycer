@@ -509,6 +509,7 @@ async function requestWithHostToken<
               ? { bearer: signIn, recovery: releasedSignOn.recovery }
               : null;
           },
+          releasedHosts: releasedSignOn.hosts,
         }),
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),
