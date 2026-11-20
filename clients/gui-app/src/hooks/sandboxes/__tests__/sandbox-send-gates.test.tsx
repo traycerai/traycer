@@ -595,7 +595,7 @@ const QUOTED_CATALOGUE: SandboxCatalogue = {
   offeredAgents: ["codex"],
   providers: [
     {
-      provider: "tensorlake",
+      provider: "firecracker",
       os: ["linux"],
       shape: {
         cpuMin: 1,

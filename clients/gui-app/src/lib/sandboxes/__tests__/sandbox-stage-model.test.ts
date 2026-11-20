@@ -207,7 +207,7 @@ function catalogue(
   return {
     providers: [
       {
-        provider: "tensorlake",
+        provider: os === "windows" ? "gce-windows" : "firecracker",
         os: [os],
         shape: {
           cpuMin: 1,
@@ -414,7 +414,7 @@ describe("stageProviderForShape", () => {
     const [first] = catalogue(null, "linux").providers;
     const selected = {
       ...first,
-      provider: "daytona" as const,
+      provider: "eu-region-test-provider" as const,
       createBudgetMs: 480_000,
       regions: [
         {
