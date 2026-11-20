@@ -32,6 +32,7 @@ import {
 import { ChatMessage } from "@/components/chat/chat-message";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { LONG_PRESS_MS } from "@/hooks/ui/use-long-press";
+import type { BrowserSessionReference } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
 // The row sheet re-asserts the app theme where it portals; the provider is
@@ -116,6 +117,26 @@ function replying(
   reply: ChatBotPresentation["reply"],
 ): ChatBotPresentation {
   return { ...value, reply };
+}
+
+const BROWSER_SESSION: BrowserSessionReference = {
+  hostId: "host-1",
+  sessionId: "session-1",
+  tabId: "tab-1",
+  profile: "primary",
+};
+
+/** A presentation whose bot replies carry a turn receipt. */
+function receipting(): ChatBotPresentation {
+  return {
+    ...plain(null),
+    replyReceipt: () => ({
+      summary: "Used 5 tools",
+      startedAt: 0,
+      endedAt: 35_000,
+      open: vi.fn(),
+    }),
+  };
 }
 
 function memberPost(
@@ -220,6 +241,112 @@ describe("<ChatMessage /> a member's post in a bot channel on a touch screen", (
     await waitFor(() => {
       expect(screen.queryByTestId("bot-reply-sheet")).toBeNull();
     });
+  });
+
+  it("copies the post's text from the sheet, and gives up touch selection on the row that takes the long press", async () => {
+    const user = userEvent.setup();
+    const row = renderRow(memberPost(undefined), plain(vi.fn()));
+    expect(row.className).toContain("pointer-coarse:touch-chrome");
+
+    longPress(row, "touch");
+    await user.click(await screen.findByRole("button", { name: "Copy text" }));
+
+    expect(await navigator.clipboard.readText()).toBe(POST_TEXT);
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-reply-sheet")).toBeNull();
+    });
+  });
+
+  it("copies a bot's whole reply as its segments carry it, not the list's folded preview", async () => {
+    const user = userEvent.setup();
+    const first = "Both have owners:\n\n- **Emojis:** T244\n- **Unread:** T406";
+    const second = "Main has already put that choice to you.";
+    const reply: ChatMessageModel = {
+      ...makeMessage(1, "assistant"),
+      persistentMessageId: "reply-1",
+      content: "Both have owners: - **Emojis:** T244 - **Unr...",
+      segments: [
+        {
+          id: "message-1:a",
+          kind: "text",
+          markdown: first,
+          isStreaming: false,
+        },
+        {
+          id: "message-1:b",
+          kind: "text",
+          markdown: second,
+          isStreaming: false,
+        },
+      ],
+    };
+    mountRow(reply, receipting());
+
+    longPress(screen.getByTestId("bot-reply-row"), "touch");
+    await user.click(await screen.findByRole("button", { name: "Copy text" }));
+
+    expect(await navigator.clipboard.readText()).toBe(`${first}\n\n${second}`);
+  });
+
+  it("copies the text a browser session produced along with the rest of a bot's reply", async () => {
+    const user = userEvent.setup();
+    const first = "Opened a browser.";
+    const second = "The page is loaded.";
+    const reply: ChatMessageModel = {
+      ...makeMessage(1, "assistant"),
+      persistentMessageId: "reply-1",
+      segments: [
+        {
+          id: "message-1:a",
+          kind: "text",
+          markdown: first,
+          isStreaming: false,
+          browserSession: BROWSER_SESSION,
+        },
+        {
+          id: "message-1:b",
+          kind: "text",
+          markdown: second,
+          isStreaming: false,
+        },
+      ],
+    };
+    mountRow(reply, receipting());
+
+    longPress(screen.getByTestId("bot-reply-row"), "touch");
+    await user.click(await screen.findByRole("button", { name: "Copy text" }));
+
+    expect(await navigator.clipboard.readText()).toBe(`${first}\n\n${second}`);
+  });
+
+  it("offers Copy text on a bot's reply whose only text came from a browser session", async () => {
+    const user = userEvent.setup();
+    const only = "Opened a browser.";
+    const reply: ChatMessageModel = {
+      ...makeMessage(1, "assistant"),
+      persistentMessageId: "reply-1",
+      segments: [
+        {
+          id: "message-1:a",
+          kind: "text",
+          markdown: only,
+          isStreaming: false,
+          browserSession: BROWSER_SESSION,
+        },
+      ],
+    };
+    mountRow(reply, receipting());
+
+    longPress(screen.getByTestId("bot-reply-row"), "touch");
+    await user.click(await screen.findByRole("button", { name: "Copy text" }));
+
+    expect(await navigator.clipboard.readText()).toBe(only);
+  });
+
+  it("leaves a row with no sheet selectable by touch", () => {
+    const row = renderRow(memberPost(undefined), plain(null));
+
+    expect(row.className).not.toContain("touch-chrome");
   });
 
   it("opens the sheet on a pen's long press as on a finger's", async () => {
@@ -339,7 +466,7 @@ describe("<ChatMessage /> Reply on a touch screen", () => {
     };
   }
 
-  it("lists Reply and Create thread after Retry and Edit in the long-press sheet of a failed message", async () => {
+  it("lists Reply, Create thread and Copy text after Retry and Edit in the long-press sheet of a failed message", async () => {
     const row = renderRow(
       memberPost(OPEN_REQUEST),
       replying(
@@ -355,7 +482,7 @@ describe("<ChatMessage /> Reply on a touch screen", () => {
       within(sheet)
         .getAllByRole("button")
         .map((item) => item.textContent),
-    ).toEqual(["Retry", "Edit", "Reply", "Create thread"]);
+    ).toEqual(["Retry", "Edit", "Reply", "Create thread", "Copy text"]);
   });
 
   it("names the message in its box from the sheet's Reply, with the row's writer and text, and closes the sheet", async () => {

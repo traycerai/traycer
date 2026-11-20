@@ -1622,6 +1622,11 @@
  * and leaving desktop alone keeps chrome text selectable with a mouse. Never
  * put it on a surface whose text is CONTENT (chat messages, code blocks,
  * terminal output, diffs): those must stay selectable everywhere.
+ *
+ * One deliberate exception: a bot channel row that opens a sheet on a long
+ * press (`chat-bot-message.tsx`). Its hold and the system's hold to select
+ * are the same gesture, so the row gives up touch selection and its sheet
+ * offers "Copy text" instead.
  */
 @utility touch-chrome {
   -webkit-touch-callout: none;
