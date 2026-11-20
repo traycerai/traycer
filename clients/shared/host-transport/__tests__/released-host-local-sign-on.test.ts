@@ -23,13 +23,13 @@ import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
 import { resetNegotiatedStreamVersions } from "../negotiated-stream-version-registry";
 import { trackHostTokenMints } from "../../auth/host-token-lease";
 import {
+  createReleasedHostMemory,
   releasedSignOnForLocalRow,
   signInForLocalRow,
   type ReleasedHostMemory,
   type ReleasedSignOn,
   type ReleasedSignOnRow,
 } from "../released-sign-on";
-import * as releasedSignOnModule from "../released-sign-on";
 import {
   makeStubSocketFactory,
   StubStreamWebSocket,
@@ -94,21 +94,6 @@ function namedNotAdmitted(): {
   };
 }
 
-const inertReleasedHosts: ReleasedHostMemory = {
-  opensReleasedWay: (_userId: string, _hostId: string): boolean => false,
-  namedReason: (_hostId: string): boolean => false,
-  signInAdmitted: (_userId: string, _hostId: string): void => undefined,
-  hostTokenAdmitted: (_hostId: string): void => undefined,
-  refusedNamingReason: (_hostId: string): void => undefined,
-  forgetAll: (): void => undefined,
-};
-
-function freshHosts(): ReleasedHostMemory {
-  const create = releasedSignOnModule.createReleasedHostMemory;
-  if (typeof create !== "function") return inertReleasedHosts;
-  return create();
-}
-
 function readFrame(raw: string): Record<string, unknown> {
   const value: unknown = JSON.parse(raw);
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -148,7 +133,7 @@ function signOnFor(
     () => signIn,
     null,
     NO_MINTS,
-    freshHosts(),
+    createReleasedHostMemory(),
   );
 }
 
@@ -556,7 +541,7 @@ describe("released personal host, local stream", () => {
         () => signIn,
         recovery,
         NO_MINTS,
-        freshHosts(),
+        createReleasedHostMemory(),
       ),
       door,
     );
@@ -592,7 +577,7 @@ describe("released personal host, local stream", () => {
     const { factory, sockets } = makeStubSocketFactory();
     const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const hosts = freshHosts();
+    const hosts = createReleasedHostMemory();
     let rowAllows = true;
     const { door, refusals } = recordingDoor();
     const client = makeStreamClient(
@@ -636,7 +621,7 @@ describe("released personal host, local stream", () => {
   });
 
   it("does not present one person's remembered sign-in on another person's dial", async () => {
-    const hosts = freshHosts();
+    const hosts = createReleasedHostMemory();
     const first = makeStubSocketFactory();
     const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
@@ -696,7 +681,7 @@ describe("released personal host, local stream", () => {
   });
 
   it("asks the row again when the endpoint changes while the first answer is in flight", async () => {
-    const hosts = freshHosts();
+    const hosts = createReleasedHostMemory();
     const h1 = "remembered-host-1";
     const h2 = "remembered-host-2";
     hosts.signInAdmitted(USER_ID, h1);
@@ -976,7 +961,7 @@ describe("released personal host, local unary", () => {
 
   it("sends the sign-in on the first socket of a later call", async () => {
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const driven = startUnary(signIn, freshHosts());
+    const driven = startUnary(signIn, createReleasedHostMemory());
     try {
       await admitReleasedUnary(driven);
       driven.client.releaseIdleLocalSessions();
@@ -1000,7 +985,7 @@ describe("released personal host, local unary", () => {
 
   it("dials the host-only token after a remembered sign-in is refused by name", async () => {
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const driven = startUnary(signIn, freshHosts());
+    const driven = startUnary(signIn, createReleasedHostMemory());
     try {
       await admitReleasedUnary(driven);
       driven.client.releaseIdleLocalSessions();
@@ -1073,7 +1058,7 @@ describe("released personal host, local unary", () => {
   });
 
   it("shares one memory between a stream and a unary call", async () => {
-    const hosts = freshHosts();
+    const hosts = createReleasedHostMemory();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
     const { factory, sockets } = makeStubSocketFactory();

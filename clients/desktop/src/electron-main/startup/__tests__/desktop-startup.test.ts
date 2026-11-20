@@ -590,15 +590,6 @@ function readStartupFrame(raw: string): Record<string, unknown> {
   return frame;
 }
 
-function releaseStartupHost(): void {
-  const memory: {
-    readonly hostTokenAdmitted: (hostId: string) => void;
-    readonly forgetAll?: () => void;
-  } = processReleasedHosts;
-  memory.hostTokenAdmitted(RELEASED_HOST_ID);
-  memory.forgetAll?.();
-}
-
 function openStartupStream(): {
   readonly sockets: StubStreamWebSocket[];
 } {
@@ -695,7 +686,7 @@ async function firstStartupOpenToken(): Promise<unknown> {
 describe("released host memory across a desktop sign-out", () => {
   afterEach(() => {
     for (const client of startupClients.splice(0)) client.close("test-done");
-    releaseStartupHost();
+    processReleasedHosts.forgetAll();
     capturedAuthSessions.sessions.splice(0);
     resetNegotiatedStreamVersions();
     resetNegotiatedManifests();

@@ -52,15 +52,6 @@ function readFrame(raw: string): Record<string, unknown> {
   return frame;
 }
 
-function releaseRememberedHost(): void {
-  const memory: {
-    readonly hostTokenAdmitted: (hostId: string) => void;
-    readonly forgetAll?: () => void;
-  } = processReleasedHosts;
-  memory.hostTokenAdmitted(HOST_ID);
-  memory.forgetAll?.();
-}
-
 function openStream(): {
   readonly sockets: StubStreamWebSocket[];
   readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
@@ -163,7 +154,7 @@ function setSignedOut(): void {
 describe("released host memory across a gui sign-out", () => {
   afterEach(() => {
     for (const client of clients.splice(0)) client.close("test-done");
-    releaseRememberedHost();
+    processReleasedHosts.forgetAll();
     cleanup();
     setSignedOut();
     resetNegotiatedStreamVersions();

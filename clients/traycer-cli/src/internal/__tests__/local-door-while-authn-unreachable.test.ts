@@ -6,7 +6,10 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { NO_HOST_TOKEN_PROBE } from "../../../../shared/host-transport/released-sign-on";
-import * as releasedSignOn from "@traycer-clients/shared/host-transport/released-sign-on";
+import {
+  createReleasedHostMemory,
+  type ReleasedHostMemory,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import { WsStreamClient } from "../../../../shared/host-transport/ws-stream-client";
 import { resetNegotiatedManifests } from "../../../../shared/host-transport/negotiated-manifest-registry";
 import { resetNegotiatedStreamVersions } from "../../../../shared/host-transport/negotiated-stream-version-registry";
@@ -77,15 +80,18 @@ const harness = vi.hoisted(() => {
 });
 
 const releasedMemory = vi.hoisted(() => {
-  const blank = {
-    opensReleasedWay: (_userId: string, _hostId: string): boolean => false,
-    namedReason: (_hostId: string): boolean => false,
-    signInAdmitted: (_userId: string, _hostId: string): void => undefined,
-    hostTokenAdmitted: (_hostId: string): void => undefined,
-    refusedNamingReason: (_hostId: string): void => undefined,
-    forgetAll: (): void => undefined,
+  let current: ReleasedHostMemory | undefined;
+  return {
+    install(memory: ReleasedHostMemory): void {
+      current = memory;
+    },
+    read(): ReleasedHostMemory {
+      if (current === undefined) {
+        throw new Error("released host memory is not installed");
+      }
+      return current;
+    },
   };
-  return { current: blank };
 });
 
 vi.mock("@traycer-clients/shared/host-transport/released-sign-on", async (importOriginal) => {
@@ -97,20 +103,20 @@ vi.mock("@traycer-clients/shared/host-transport/released-sign-on", async (import
     ...actual,
     processReleasedHosts: {
       opensReleasedWay: (userId: string, hostId: string): boolean =>
-        releasedMemory.current.opensReleasedWay(userId, hostId),
+        releasedMemory.read().opensReleasedWay(userId, hostId),
       namedReason: (hostId: string): boolean =>
-        releasedMemory.current.namedReason(hostId),
+        releasedMemory.read().namedReason(hostId),
       signInAdmitted: (userId: string, hostId: string): void => {
-        releasedMemory.current.signInAdmitted(userId, hostId);
+        releasedMemory.read().signInAdmitted(userId, hostId);
       },
       hostTokenAdmitted: (hostId: string): void => {
-        releasedMemory.current.hostTokenAdmitted(hostId);
+        releasedMemory.read().hostTokenAdmitted(hostId);
       },
       refusedNamingReason: (hostId: string): void => {
-        releasedMemory.current.refusedNamingReason(hostId);
+        releasedMemory.read().refusedNamingReason(hostId);
       },
       forgetAll: (): void => {
-        releasedMemory.current.forgetAll();
+        releasedMemory.read().forgetAll();
       },
     },
   };
@@ -417,18 +423,7 @@ async function openStream(session: CliHostSession): Promise<void> {
 }
 
 beforeEach(() => {
-  let create: typeof releasedSignOn.createReleasedHostMemory | undefined;
-  try {
-    create = releasedSignOn.createReleasedHostMemory;
-  } catch (error: unknown) {
-    if (
-      !(error instanceof Error) ||
-      !error.message.includes('No "createReleasedHostMemory" export')
-    ) {
-      throw error;
-    }
-  }
-  if (typeof create === "function") releasedMemory.current = create();
+  releasedMemory.install(createReleasedHostMemory());
   harness.sockets.splice(0);
   harness.state.mode = "unavailable";
   harness.state.table = new Map();

@@ -53,15 +53,6 @@ function ownershipBody(owner: RowOwner): unknown {
   };
 }
 
-function releaseRememberedInventoryHost(): void {
-  const memory: {
-    readonly hostTokenAdmitted: (hostId: string) => void;
-    readonly forgetAll?: () => void;
-  } = processReleasedHosts;
-  memory.hostTokenAdmitted(RELEASED_HOST.hostId);
-  memory.forgetAll?.();
-}
-
 function installFetch(owner: RowOwner): void {
   vi.stubGlobal(
     "fetch",
@@ -171,7 +162,7 @@ describe("desktop inventory push against a released local host", () => {
   });
 
   afterEach(async () => {
-    releaseRememberedInventoryHost();
+    processReleasedHosts.forgetAll();
     for (const socket of FakeNativeWebSocket.instances) {
       socket.fireClose(1006, "test teardown");
     }

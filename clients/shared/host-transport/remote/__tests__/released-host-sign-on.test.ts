@@ -16,12 +16,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostDoorStateOfRefusal } from "../../host-door-state";
 import { resetNegotiatedManifests } from "../../negotiated-manifest-registry";
 import {
+  createReleasedHostMemory,
   opensReleasedWay,
-  type ReleasedHostMemory,
   type ReleasedSignOn,
   type ReleasedSignOnRow,
 } from "../../released-sign-on";
-import * as releasedSignOnModule from "../../released-sign-on";
 import { RemoteSession } from "../remote-session";
 import { emptyStreamRegistry, FakeRelayHost } from "./fake-relay-host";
 
@@ -86,21 +85,6 @@ function recordingDoor(): {
       admitted: () => undefined,
     },
   };
-}
-
-const inertReleasedHosts: ReleasedHostMemory = {
-  opensReleasedWay: (_userId: string, _hostId: string): boolean => false,
-  namedReason: (_hostId: string): boolean => false,
-  signInAdmitted: (_userId: string, _hostId: string): void => undefined,
-  hostTokenAdmitted: (_hostId: string): void => undefined,
-  refusedNamingReason: (_hostId: string): void => undefined,
-  forgetAll: (): void => undefined,
-};
-
-function freshHosts(): ReleasedHostMemory {
-  const create = releasedSignOnModule.createReleasedHostMemory;
-  if (typeof create !== "function") return inertReleasedHosts;
-  return create();
 }
 
 function namedNotAdmitted(): FatalErrorDetails {
@@ -179,7 +163,7 @@ function signOnFor(
         recovery: null,
         allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () => false,
-        hosts: freshHosts(),
+        hosts: createReleasedHostMemory(),
       }
     : null;
 }
@@ -372,7 +356,7 @@ describe("released personal host, remote door", () => {
   it("dials the host-only token when a remembered host's row no longer allows the sign-in", async () => {
     const relay = new FakeRelayHost();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const hosts = freshHosts();
+    const hosts = createReleasedHostMemory();
     let rowAllows = true;
     const { door } = recordingDoor();
     scriptHost(relay, { value: true });
