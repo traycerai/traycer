@@ -111,10 +111,7 @@ function scriptHost(relay: FakeRelayHost, released: { value: boolean }): void {
     if (authz === null && !released.value) {
       return { kind: "fatal", details: namedNotAdmitted() };
     }
-    if (
-      (bearer === SIGN_IN || bearer === ROTATED_SIGN_IN) &&
-      authz === null
-    ) {
+    if ((bearer === SIGN_IN || bearer === ROTATED_SIGN_IN) && authz === null) {
       return { kind: "ack" };
     }
     if (!released.value && isHostTokenAuthz(authz)) return { kind: "ack" };

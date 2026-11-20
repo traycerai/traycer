@@ -526,7 +526,10 @@ export class WsRpcClient<
           );
           continue;
         }
-        if (cause instanceof HostRpcError && this.ownerSignInRefusals.has(cause)) {
+        if (
+          cause instanceof HostRpcError &&
+          this.ownerSignInRefusals.has(cause)
+        ) {
           const authority = hostOptions.authority;
           const recovery = this.ownerSignInAuthorities.get(authority) ?? null;
           // Spent: a second refusal of this call's sign-in reaches the door.
@@ -602,7 +605,8 @@ export class WsRpcClient<
             hostOptions = { ...options, authority };
             continue;
           }
-          if (reason !== "owner_sign_in") this.releasedHosts.declineProbe(hostId);
+          if (reason !== "owner_sign_in")
+            this.releasedHosts.declineProbe(hostId);
           if (reason === "not_provisioned" && this.surfacesNotProvisioned)
             throw cause;
           throw noHostTokenError(this.requestIdProvider(), method);

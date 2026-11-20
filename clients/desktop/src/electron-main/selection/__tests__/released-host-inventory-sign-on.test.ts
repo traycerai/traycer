@@ -118,7 +118,8 @@ async function openInventory(owner: RowOwner): Promise<{
     appVersion: "1.0.0-test",
   });
   const stream = inventoryClient(endpoint, USER_A);
-  if (stream === null) throw new Error("local inventory stream client did not build");
+  if (stream === null)
+    throw new Error("local inventory stream client did not build");
   const statuses: string[] = [];
   const inventory = new HostInventoryStreamClient({
     wsStreamClient: stream,
@@ -139,9 +140,7 @@ async function openInventory(owner: RowOwner): Promise<{
 }
 
 async function refusedOpen(): Promise<FakeNativeWebSocket> {
-  await vi.waitFor(() =>
-    expect(FakeNativeWebSocket.instances).toHaveLength(1),
-  );
+  await vi.waitFor(() => expect(FakeNativeWebSocket.instances).toHaveLength(1));
   const socket = FakeNativeWebSocket.instances[0];
   if (socket === undefined) throw new Error("inventory socket missing");
   socket.fireOpen();
@@ -175,9 +174,10 @@ describe("desktop inventory push against a released local host", () => {
     const opened = await openInventory("personal");
     await refusedOpen();
     await vi.waitFor(() =>
-      expect(FakeNativeWebSocket.instances.length >= 2 || opened.statuses.includes("closed")).toBe(
-        true,
-      ),
+      expect(
+        FakeNativeWebSocket.instances.length >= 2 ||
+          opened.statuses.includes("closed"),
+      ).toBe(true),
     );
     expect(FakeNativeWebSocket.instances).toHaveLength(2);
     const signInSocket = FakeNativeWebSocket.instances[1];
@@ -248,7 +248,9 @@ describe("desktop inventory push against a released local host", () => {
     const dial = FakeNativeWebSocket.instances[0];
     if (dial === undefined) throw new Error("next person's socket missing");
     dial.fireOpen();
-    await vi.waitFor(() => expect(sentFramesOfKind(dial, "open")).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(dial, "open")).toHaveLength(1),
+    );
     expect(sentFramesOfKind(dial, "open")[0]?.token).toBe(HOST_TOKEN_B);
     dial.fireMessage(releasedRefusal());
     await vi.waitFor(() => {
@@ -334,7 +336,8 @@ async function openInventoryFor(input: {
     appVersion: "1.0.0-test",
   });
   const stream = inventoryClient(endpoint, input.userId);
-  if (stream === null) throw new Error("local inventory stream client did not build");
+  if (stream === null)
+    throw new Error("local inventory stream client did not build");
   const statuses: string[] = [];
   const inventory = new HostInventoryStreamClient({
     wsStreamClient: stream,

@@ -403,9 +403,12 @@ function doorHarness(): DoorHarness {
     frameTimeoutMs: 5_000,
     hostAttestationWindowMs: 0,
     evidence: NO_TRANSPORT_EVIDENCE,
-    hostBearerFor: hostTokenBearerFor(trackHostTokenMints(tokens), (hostId, kind) => {
-      states.push({ hostId, kind, detail: null });
-    }),
+    hostBearerFor: hostTokenBearerFor(
+      trackHostTokenMints(tokens),
+      (hostId, kind) => {
+        states.push({ hostId, kind, detail: null });
+      },
+    ),
     doorFor: (hostId) => ({
       refused: (details) => {
         refusals.push(details);

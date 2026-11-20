@@ -103,17 +103,26 @@ async function openFrame(
   socket: StubStreamWebSocket,
 ): Promise<Record<string, unknown>> {
   socket.fireOpen();
-  await vi.waitFor(() => expect(socket.textSent.length).toBeGreaterThan(0), WAIT);
+  await vi.waitFor(
+    () => expect(socket.textSent.length).toBeGreaterThan(0),
+    WAIT,
+  );
   return readFrame(socket.textSent[0]);
 }
 
 async function admitSignIn(): Promise<void> {
   const { sockets } = openStream();
-  await vi.waitFor(() => expect(sockets.length).toBeGreaterThanOrEqual(1), WAIT);
+  await vi.waitFor(
+    () => expect(sockets.length).toBeGreaterThanOrEqual(1),
+    WAIT,
+  );
   const refused = await openFrame(sockets[0]);
   expect(refused.token).toBe(HOST_TOKEN);
   sockets[0].fireText(releasedRefusal());
-  await vi.waitFor(() => expect(sockets.length).toBeGreaterThanOrEqual(2), WAIT);
+  await vi.waitFor(
+    () => expect(sockets.length).toBeGreaterThanOrEqual(2),
+    WAIT,
+  );
   const admitted = await openFrame(sockets[1]);
   expect(admitted.token).toBe(SIGN_IN);
   sockets[1].fireText({
@@ -121,12 +130,18 @@ async function admitSignIn(): Promise<void> {
     manifest: admitted.manifest,
     capabilities: ["credentialUpdate"],
   });
-  await vi.waitFor(() => expect(sockets[1].textSent.length).toBeGreaterThan(0), WAIT);
+  await vi.waitFor(
+    () => expect(sockets[1].textSent.length).toBeGreaterThan(0),
+    WAIT,
+  );
 }
 
 async function firstOpenToken(): Promise<unknown> {
   const { sockets } = openStream();
-  await vi.waitFor(() => expect(sockets.length).toBeGreaterThanOrEqual(1), WAIT);
+  await vi.waitFor(
+    () => expect(sockets.length).toBeGreaterThanOrEqual(1),
+    WAIT,
+  );
   const opened = await openFrame(sockets[0]);
   return opened.token;
 }

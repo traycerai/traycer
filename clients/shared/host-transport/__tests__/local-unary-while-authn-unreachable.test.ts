@@ -27,10 +27,7 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import type { IWebSocketFactory } from "../ws-factory";
-import {
-  signInForLocalRow,
-  type ReleasedSignOnRow,
-} from "../released-sign-on";
+import { signInForLocalRow, type ReleasedSignOnRow } from "../released-sign-on";
 import { WsRpcClient } from "../ws-rpc-client";
 import { echoRegistry } from "./__fixtures__/echo-registry";
 
@@ -110,9 +107,7 @@ function releasedRefusal(): {
   };
 }
 
-function namedRefusal(
-  doorReason: "not_admitted",
-): {
+function namedRefusal(doorReason: "not_admitted"): {
   readonly kind: "fatalError";
   readonly details: FatalErrorDetails;
 } {
@@ -129,9 +124,14 @@ function namedRefusal(
   };
 }
 
-function expiredJwt(nowMs: number): { readonly token: string; readonly expiresAtMs: number } {
+function expiredJwt(nowMs: number): {
+  readonly token: string;
+  readonly expiresAtMs: number;
+} {
   const expiresAtMs = nowMs - ELEVEN_MINUTES_MS;
-  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString(
+    "base64url",
+  );
   const payload = Buffer.from(
     JSON.stringify({ exp: Math.floor(expiresAtMs / 1000) }),
   ).toString("base64url");
@@ -235,7 +235,9 @@ interface DrivenCall {
   finished: boolean;
 }
 
-function requestEcho(client: WsRpcClient<typeof echoRegistry>): Promise<EchoResult> {
+function requestEcho(
+  client: WsRpcClient<typeof echoRegistry>,
+): Promise<EchoResult> {
   return client
     .request(
       "host.echo",
@@ -308,16 +310,15 @@ function driveCall(
   return driven;
 }
 
-async function openAndRead(socket: UnarySocket): Promise<Record<string, unknown>> {
+async function openAndRead(
+  socket: UnarySocket,
+): Promise<Record<string, unknown>> {
   socket.fireOpen();
   await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0), WAIT);
   return readFrame(socket.sent[0]);
 }
 
-function ackAndEcho(
-  socket: UnarySocket,
-  open: Record<string, unknown>,
-): void {
+function ackAndEcho(socket: UnarySocket, open: Record<string, unknown>): void {
   socket.fireMessage({
     kind: "openAck",
     manifest: open.manifest,
@@ -326,7 +327,10 @@ function ackAndEcho(
 }
 
 async function answerEcho(socket: UnarySocket): Promise<void> {
-  await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThanOrEqual(2), WAIT);
+  await vi.waitFor(
+    () => expect(socket.sent.length).toBeGreaterThanOrEqual(2),
+    WAIT,
+  );
   const request = readFrame(socket.sent[1]);
   socket.fireMessage({
     kind: "response",
@@ -390,12 +394,10 @@ describe("local unary while authn cannot mint", () => {
 
   it("opens a released host with the sign-in after the held expired token is refused", async () => {
     const expired = expiredJwt(Date.now());
-    const { source, tokens } = sourceOf(
-      [
-        { kind: "unavailable", detail: "authn offline" },
-        { kind: "unavailable", detail: "authn still offline" },
-      ],
-    );
+    const { source, tokens } = sourceOf([
+      { kind: "unavailable", detail: "authn offline" },
+      { kind: "unavailable", detail: "authn still offline" },
+    ]);
     await holdExpired(source, expired);
     await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, null);
     const driven = driveCall(tokens, PERSONAL_ROW);

@@ -538,7 +538,8 @@ export async function provisionInstalledHostCredential(
         return { kind: "unauthorized" };
       }
       const refusal =
-        mintRefusal ?? (admittedAfterNotAdmitted ? null : signInAfterNotAdmitted);
+        mintRefusal ??
+        (admittedAfterNotAdmitted ? null : signInAfterNotAdmitted);
       if (refusal !== null) return mintRefusalOutcome(refusal);
       if (mintUnavailable) {
         return { kind: "mint-unavailable" };

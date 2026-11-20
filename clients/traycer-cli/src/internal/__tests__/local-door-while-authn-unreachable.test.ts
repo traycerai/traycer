@@ -24,10 +24,7 @@ import type {
   WebSocketOpenEvent,
 } from "@traycer/protocol/host-transport/websocket";
 import { CLI_CLIENT_IDENTITY } from "../../cli-version";
-import {
-  openCliHostSession,
-  type CliHostSession,
-} from "../cli-host-tokens";
+import { openCliHostSession, type CliHostSession } from "../cli-host-tokens";
 import { callHostRpcAtEndpoint } from "../host-rpc";
 import type { HostAuth } from "../host-auth";
 
@@ -38,7 +35,12 @@ const ENDPOINT = { hostId: HOST_ID, websocketUrl: "ws://127.0.0.1:9/rpc" };
 const WAIT = { timeout: 2_000, interval: 10 };
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000;
 
-type DoorMode = "unavailable" | "unavailable-once" | "not-admitted" | "team" | "other-user";
+type DoorMode =
+  | "unavailable"
+  | "unavailable-once"
+  | "not-admitted"
+  | "team"
+  | "other-user";
 
 const harness = vi.hoisted(() => {
   class ScriptSocket implements StreamWebSocketLike {
@@ -94,38 +96,41 @@ const releasedMemory = vi.hoisted(() => {
   };
 });
 
-vi.mock("@traycer-clients/shared/host-transport/released-sign-on", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@traycer-clients/shared/host-transport/released-sign-on")
-    >();
-  return {
-    ...actual,
-    processReleasedHosts: {
-      opensReleasedWay: (userId: string, hostId: string): boolean =>
-        releasedMemory.read().opensReleasedWay(userId, hostId),
-      namedReason: (hostId: string): boolean =>
-        releasedMemory.read().namedReason(hostId),
-      signInAdmitted: (userId: string, hostId: string): void => {
-        releasedMemory.read().signInAdmitted(userId, hostId);
+vi.mock(
+  "@traycer-clients/shared/host-transport/released-sign-on",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/released-sign-on")
+      >();
+    return {
+      ...actual,
+      processReleasedHosts: {
+        opensReleasedWay: (userId: string, hostId: string): boolean =>
+          releasedMemory.read().opensReleasedWay(userId, hostId),
+        namedReason: (hostId: string): boolean =>
+          releasedMemory.read().namedReason(hostId),
+        signInAdmitted: (userId: string, hostId: string): void => {
+          releasedMemory.read().signInAdmitted(userId, hostId);
+        },
+        hostTokenAdmitted: (hostId: string): void => {
+          releasedMemory.read().hostTokenAdmitted(hostId);
+        },
+        refusedNamingReason: (hostId: string): void => {
+          releasedMemory.read().refusedNamingReason(hostId);
+        },
+        declineProbe: (hostId: string): void => {
+          releasedMemory.read().declineProbe(hostId);
+        },
+        probeDeclined: (hostId: string): boolean =>
+          releasedMemory.read().probeDeclined(hostId),
+        forgetAll: (): void => {
+          releasedMemory.read().forgetAll();
+        },
       },
-      hostTokenAdmitted: (hostId: string): void => {
-        releasedMemory.read().hostTokenAdmitted(hostId);
-      },
-      refusedNamingReason: (hostId: string): void => {
-        releasedMemory.read().refusedNamingReason(hostId);
-      },
-      declineProbe: (hostId: string): void => {
-        releasedMemory.read().declineProbe(hostId);
-      },
-      probeDeclined: (hostId: string): boolean =>
-        releasedMemory.read().probeDeclined(hostId),
-      forgetAll: (): void => {
-        releasedMemory.read().forgetAll();
-      },
-    },
-  };
-});
+    };
+  },
+);
 
 vi.mock("../../../../shared/host-transport/whatwg-ws-factory", () => ({
   createWhatwgWebSocketFactory: () => ({
@@ -229,7 +234,10 @@ function installFetch(): void {
       const url = new URL(requestUrl(input));
       const method = init?.method ?? "GET";
       if (url.pathname === "/api/v3/hosts" && method === "GET") {
-        if (harness.state.mode === "team" || harness.state.mode === "other-user") {
+        if (
+          harness.state.mode === "team" ||
+          harness.state.mode === "other-user"
+        ) {
           return jsonResponse(ownershipBody(), 200);
         }
         return jsonResponse({ message: "missing" }, 404);
@@ -243,9 +251,7 @@ function installFetch(): void {
           harness.state.hung += 1;
           return new Promise<Response>(() => undefined);
         }
-        if (
-          harness.state.mode === "unavailable"
-        ) {
+        if (harness.state.mode === "unavailable") {
           return jsonResponse({ message: "offline" }, 503);
         }
         return jsonResponse({ message: "missing" }, 404);
@@ -255,19 +261,25 @@ function installFetch(): void {
   );
 }
 
-function expiredJwt(nowMs: number): { readonly token: string; readonly expiresAtMs: number } {
+function expiredJwt(nowMs: number): {
+  readonly token: string;
+  readonly expiresAtMs: number;
+} {
   const expiresAtMs = nowMs - ELEVEN_MINUTES_MS;
-  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString(
+    "base64url",
+  );
   const payload = Buffer.from(
     JSON.stringify({ exp: Math.floor(expiresAtMs / 1000) }),
   ).toString("base64url");
   return { token: `${header}.${payload}.`, expiresAtMs };
 }
 
-function hold(token: { readonly token: string; readonly expiresAtMs: number }): void {
-  harness.state.table = new Map([
-    [USER_ID, new Map([[HOST_ID, token]])],
-  ]);
+function hold(token: {
+  readonly token: string;
+  readonly expiresAtMs: number;
+}): void {
+  harness.state.table = new Map([[USER_ID, new Map([[HOST_ID, token]])]]);
 }
 
 function readObject(raw: string): Record<string, unknown> {
@@ -293,7 +305,10 @@ function openToken(socket: InstanceType<typeof harness.ScriptSocket>): unknown {
 async function socketAt(
   index: number,
 ): Promise<InstanceType<typeof harness.ScriptSocket>> {
-  await vi.waitFor(() => expect(harness.sockets.length).toBeGreaterThan(index), WAIT);
+  await vi.waitFor(
+    () => expect(harness.sockets.length).toBeGreaterThan(index),
+    WAIT,
+  );
   const socket = harness.sockets[index];
   if (socket === undefined) throw new Error("socket missing");
   return socket;
@@ -362,7 +377,10 @@ async function admitStatus(
     manifest: open.manifest,
     optionalManifest: open.optionalManifest,
   });
-  await vi.waitFor(() => expect(socket.textSent.length).toBeGreaterThanOrEqual(2), WAIT);
+  await vi.waitFor(
+    () => expect(socket.textSent.length).toBeGreaterThanOrEqual(2),
+    WAIT,
+  );
   const request = socket.textSent
     .map((line) => readObject(line))
     .find((frame) => frame.kind === "request");
@@ -397,7 +415,8 @@ async function openStream(session: CliHostSession): Promise<void> {
     hostId: HOST_ID,
     endpoint: () => ENDPOINT,
     bearer: session.tokens.streamBearer(HOST_ID),
-    presentsHeldPastExpiry: () => session.tokens.presentsHeldPastExpiry(HOST_ID),
+    presentsHeldPastExpiry: () =>
+      session.tokens.presentsHeldPastExpiry(HOST_ID),
     releasedSignOn: session.releasedSignOn,
     userId: USER_ID,
     auth: session.tokens.streamRecovery(HOST_ID),

@@ -14,7 +14,8 @@ import type {
 } from "../../ipc-contracts/window-types";
 import type { HostTokensBridgeSurface } from "../../ipc-contracts/host-token-types";
 import { createDesktopHostTokenSource } from "../../renderer-shell/desktop-host-tokens";
-import { hostTokenBearer,
+import {
+  hostTokenBearer,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 

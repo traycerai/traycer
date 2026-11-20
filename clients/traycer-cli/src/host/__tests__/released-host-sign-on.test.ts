@@ -92,38 +92,41 @@ const releasedMemory = vi.hoisted(() => {
   };
 });
 
-vi.mock("@traycer-clients/shared/host-transport/released-sign-on", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@traycer-clients/shared/host-transport/released-sign-on")
-    >();
-  return {
-    ...actual,
-    processReleasedHosts: {
-      opensReleasedWay: (userId: string, hostId: string): boolean =>
-        releasedMemory.read().opensReleasedWay(userId, hostId),
-      namedReason: (hostId: string): boolean =>
-        releasedMemory.read().namedReason(hostId),
-      signInAdmitted: (userId: string, hostId: string): void => {
-        releasedMemory.read().signInAdmitted(userId, hostId);
+vi.mock(
+  "@traycer-clients/shared/host-transport/released-sign-on",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/released-sign-on")
+      >();
+    return {
+      ...actual,
+      processReleasedHosts: {
+        opensReleasedWay: (userId: string, hostId: string): boolean =>
+          releasedMemory.read().opensReleasedWay(userId, hostId),
+        namedReason: (hostId: string): boolean =>
+          releasedMemory.read().namedReason(hostId),
+        signInAdmitted: (userId: string, hostId: string): void => {
+          releasedMemory.read().signInAdmitted(userId, hostId);
+        },
+        hostTokenAdmitted: (hostId: string): void => {
+          releasedMemory.read().hostTokenAdmitted(hostId);
+        },
+        refusedNamingReason: (hostId: string): void => {
+          releasedMemory.read().refusedNamingReason(hostId);
+        },
+        declineProbe: (hostId: string): void => {
+          releasedMemory.read().declineProbe(hostId);
+        },
+        probeDeclined: (hostId: string): boolean =>
+          releasedMemory.read().probeDeclined(hostId),
+        forgetAll: (): void => {
+          releasedMemory.read().forgetAll();
+        },
       },
-      hostTokenAdmitted: (hostId: string): void => {
-        releasedMemory.read().hostTokenAdmitted(hostId);
-      },
-      refusedNamingReason: (hostId: string): void => {
-        releasedMemory.read().refusedNamingReason(hostId);
-      },
-      declineProbe: (hostId: string): void => {
-        releasedMemory.read().declineProbe(hostId);
-      },
-      probeDeclined: (hostId: string): boolean =>
-        releasedMemory.read().probeDeclined(hostId),
-      forgetAll: (): void => {
-        releasedMemory.read().forgetAll();
-      },
-    },
-  };
-});
+    };
+  },
+);
 
 vi.mock("../../../../shared/host-transport/whatwg-stream-ws-factory", () => ({
   createWhatwgStreamWebSocketFactory: () => ({

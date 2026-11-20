@@ -903,7 +903,10 @@ describe("released personal host, local unary", () => {
       const rotated = driven.sockets[2];
       if (rotated === undefined) throw new Error("rotated dial missing");
       rotated.fireOpen();
-      await vi.waitFor(() => expect(rotated.sent.length).toBeGreaterThan(0), WAIT);
+      await vi.waitFor(
+        () => expect(rotated.sent.length).toBeGreaterThan(0),
+        WAIT,
+      );
       const open = readFrame(rotated.sent[0]);
       expect(open.token).toBe(ROTATED_SIGN_IN);
       rotated.fireMessage({
@@ -981,7 +984,10 @@ describe("released personal host, local unary", () => {
       const socket = driven.sockets[before];
       if (socket === undefined) throw new Error("remembered dial missing");
       socket.fireOpen();
-      await vi.waitFor(() => expect(socket.sent.length).toBeGreaterThan(0), WAIT);
+      await vi.waitFor(
+        () => expect(socket.sent.length).toBeGreaterThan(0),
+        WAIT,
+      );
       expect(readFrame(socket.sent[0]).token).toBe(SIGN_IN);
       expect(driven.refusals).toEqual([]);
       void again;
@@ -1018,7 +1024,10 @@ describe("released personal host, local unary", () => {
       const updated = driven.sockets[before + 1];
       if (updated === undefined) throw new Error("token redial missing");
       updated.fireOpen();
-      await vi.waitFor(() => expect(updated.sent.length).toBeGreaterThan(0), WAIT);
+      await vi.waitFor(
+        () => expect(updated.sent.length).toBeGreaterThan(0),
+        WAIT,
+      );
       expect(readFrame(updated.sent[0]).token).toBe(HOST_TOKEN);
       expect(driven.refusals).toEqual([]);
       const open = readFrame(updated.sent[0]);
@@ -1040,7 +1049,10 @@ describe("released personal host, local unary", () => {
         result: { echoed: "hi" },
         error: null,
       });
-      expect(await again).toEqual({ kind: "fulfilled", value: { echoed: "hi" } });
+      expect(await again).toEqual({
+        kind: "fulfilled",
+        value: { echoed: "hi" },
+      });
       driven.client.releaseIdleLocalSessions();
       const heldAt = driven.sockets.length;
       const held = requestEcho(driven.client, signIn);
@@ -1131,7 +1143,10 @@ describe("released personal host, local unary", () => {
       expect(driven.refusals).toEqual([]);
       const before = sockets.length;
       sockets[1].fireClose(1006, "drop");
-      await vi.waitFor(() => expect(sockets.length).toBeGreaterThan(before), WAIT);
+      await vi.waitFor(
+        () => expect(sockets.length).toBeGreaterThan(before),
+        WAIT,
+      );
       const redial = await openFrame(sockets[before]);
       expect(redial.token).toBe(HOST_TOKEN);
       expect(streamDoor.refusals).toEqual([]);
@@ -1154,7 +1169,10 @@ function driveUnaryRefresh(
   readonly sockets: UnarySocket[];
   readonly refusals: FatalErrorDetails[];
   readonly settled: Promise<
-    | { readonly kind: "fulfilled"; readonly value: { readonly echoed: string } }
+    | {
+        readonly kind: "fulfilled";
+        readonly value: { readonly echoed: string };
+      }
     | { readonly kind: "rejected"; readonly error: unknown }
   >;
   finished: boolean;
@@ -1180,7 +1198,11 @@ function driveUnaryRefresh(
     hostAttestationWindowMs: 0,
     evidence: NO_TRANSPORT_EVIDENCE,
     hostBearerFor: () => Promise.resolve(hostToken),
-    releasedSignOnFor: signInForLocalRow(() => PERSONAL_ROW, recovery, NO_MINTS),
+    releasedSignOnFor: signInForLocalRow(
+      () => PERSONAL_ROW,
+      recovery,
+      NO_MINTS,
+    ),
     doorFor: () => door,
   });
   const driven = {
@@ -1323,7 +1345,10 @@ async function admitReleasedUnary(driven: {
     manifest: open.manifest,
     optionalManifest: open.optionalManifest,
   });
-  await vi.waitFor(() => expect(second.sent.length).toBeGreaterThanOrEqual(2), WAIT);
+  await vi.waitFor(
+    () => expect(second.sent.length).toBeGreaterThanOrEqual(2),
+    WAIT,
+  );
   const request = readFrame(second.sent[1]);
   second.fireMessage({
     kind: "response",

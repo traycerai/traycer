@@ -292,18 +292,21 @@ function createHostTokenRemoteSessionAuth(
       door,
       releasedSignOn,
     );
-  return { grantProvider, auth: {
-    missingOpenAuthCause: "missing-host-token",
-    readOpenAuth: () => hostTokenOpenAuth(readHostToken),
-    readCredentialUpdateBearer: readHostToken,
-    currentFingerprint: readHostToken,
-    // A wrapper over nothing would turn "no revalidator" into an endless retry.
-    revalidateForReconnect:
-      auth === null || auth === undefined
-        ? null
-        : (refusal) => revalidateStream(auth, refusal),
-    ...(door === null ? {} : { door }),
-  } };
+  return {
+    grantProvider,
+    auth: {
+      missingOpenAuthCause: "missing-host-token",
+      readOpenAuth: () => hostTokenOpenAuth(readHostToken),
+      readCredentialUpdateBearer: readHostToken,
+      currentFingerprint: readHostToken,
+      // A wrapper over nothing would turn "no revalidator" into an endless retry.
+      revalidateForReconnect:
+        auth === null || auth === undefined
+          ? null
+          : (refusal) => revalidateStream(auth, refusal),
+      ...(door === null ? {} : { door }),
+    },
+  };
 }
 
 /**

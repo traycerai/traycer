@@ -120,7 +120,10 @@ async function tokensFor(
   hostId: string,
   outcomes: readonly HostTokenMintOutcome[],
   held: { readonly token: string; readonly expiresAtMs: number } | null,
-): Promise<{ readonly source: HostTokenSource; readonly mintCalls: () => number }> {
+): Promise<{
+  readonly source: HostTokenSource;
+  readonly mintCalls: () => number;
+}> {
   const queue = [...outcomes];
   let mintCalls = 0;
   const source = createHostTokenSource({
@@ -178,7 +181,11 @@ async function unverifiedTokens(
   };
 }
 
-function openClient(hostId: string, source: HostTokenSource, owner: HostDirectoryEntry["owner"]) {
+function openClient(
+  hostId: string,
+  source: HostTokenSource,
+  owner: HostDirectoryEntry["owner"],
+) {
   const provider = newProvider();
   signIn(provider, USER_A, SIGN_IN_TOKEN);
   const target = targetFor(hostId, owner);
@@ -222,9 +229,13 @@ async function socketCounted(count: number): Promise<FakeNativeWebSocket> {
   return FakeNativeWebSocket.instances[count - 1];
 }
 
-async function readOpen(socket: FakeNativeWebSocket): Promise<Record<string, unknown>> {
+async function readOpen(
+  socket: FakeNativeWebSocket,
+): Promise<Record<string, unknown>> {
   socket.fireOpen();
-  await vi.waitFor(() => expect(sentFramesOfKind(socket, "open")).toHaveLength(1));
+  await vi.waitFor(() =>
+    expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
+  );
   return sentFramesOfKind(socket, "open")[0];
 }
 
@@ -430,7 +441,9 @@ describe("local stream while authn cannot mint", () => {
     second.fireMessage(openAckFrame([], null));
     await settle();
     expect(hostDoorStateFor(hostId)?.kind ?? null).not.toBe("token-expired");
-    expect(hostDoorStateFor(hostId)?.kind ?? null).not.toBe("token-unavailable");
+    expect(hostDoorStateFor(hostId)?.kind ?? null).not.toBe(
+      "token-unavailable",
+    );
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);
@@ -680,7 +693,9 @@ describe("local stream while authn cannot mint", () => {
     expect(sentTokens()).toEqual([expired.token, SIGN_IN_TOKEN]);
     expect(heard).toEqual([]);
     expect(hostDoorStateFor(hostId)?.kind ?? null).not.toBe("token-expired");
-    expect(hostDoorStateFor(hostId)?.kind ?? null).not.toBe("token-unavailable");
+    expect(hostDoorStateFor(hostId)?.kind ?? null).not.toBe(
+      "token-unavailable",
+    );
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);

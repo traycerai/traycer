@@ -428,8 +428,7 @@ describe("host-token lease after a user era changes", () => {
     };
     const bearerFor = hostTokenBearerFor(
       trackHostTokenMints(tokens),
-      (_refusedHostId, state) =>
-      states.push(state),
+      (_refusedHostId, state) => states.push(state),
     );
     const pending = bearerFor(hostId, signInLease);
     await started.promise;

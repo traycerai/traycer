@@ -338,16 +338,19 @@ vi.mock("@traycer/protocol/config/data-root", async (importOriginal) => {
     }),
   };
 });
-vi.mock("@traycer/protocol/config/data-root-default-check", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@traycer/protocol/config/data-root-default-check")
-    >();
-  return {
-    ...actual,
-    inspectDefaultDataRoot: () => ({ kind: "none" as const }),
-  };
-});
+vi.mock(
+  "@traycer/protocol/config/data-root-default-check",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer/protocol/config/data-root-default-check")
+      >();
+    return {
+      ...actual,
+      inspectDefaultDataRoot: () => ({ kind: "none" as const }),
+    };
+  },
+);
 vi.mock("../../auth/file-token-store", () => ({
   FileTokenStore: class {
     constructor() {
