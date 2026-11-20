@@ -68,6 +68,9 @@ import "@/index.css";
  * `window.__hoverCardAgentsProbe.ready` gates it.
  */
 
+/** The fixture never removes a row. */
+const NO_ROW_GONE = (): boolean => false;
+
 const EPIC_ID = "fixture-epsilon";
 const HOST_ID = "test-local-host";
 
@@ -353,6 +356,7 @@ function AgentRows(): ReactNode {
             scrollElement={scrollElement}
             regionRef={regionRef}
             renderRow={renderAgentRow}
+            isRowGone={NO_ROW_GONE}
           />
         </HoverCardGroup>
       </div>
