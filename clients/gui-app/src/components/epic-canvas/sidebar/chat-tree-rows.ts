@@ -301,6 +301,27 @@ export function flattenChatTreeRows(
   return rows;
 }
 
+/**
+ * Whether two summaries of the same chat say the same thing. A list rebuilt
+ * with equal content must leave its rows as they were: the row model keeps
+ * the previous rows only when nothing they draw changed, and re-renders until
+ * it does. `identity` is not compared because the row key already carries it.
+ */
+function sameCloudChat(a: CloudChatSummary, b: CloudChatSummary): boolean {
+  if (a === b) return true;
+  const bEntries = Object.entries(b);
+  const bValues = new Map(bEntries);
+  const aEntries = Object.entries(a);
+  return (
+    aEntries.length === bEntries.length &&
+    aEntries.every(
+      ([field, value]) =>
+        field === "identity" ||
+        (bValues.has(field) && Object.is(value, bValues.get(field))),
+    )
+  );
+}
+
 function sameRow(a: ChatTreeRow, b: ChatTreeRow): boolean {
   if (
     a.kind !== b.kind ||
@@ -316,7 +337,7 @@ function sameRow(a: ChatTreeRow, b: ChatTreeRow): boolean {
     return false;
   }
   if (a.kind === "cloud" && b.kind === "cloud") {
-    return a.chat === b.chat && a.expansionId === b.expansionId;
+    return a.expansionId === b.expansionId && sameCloudChat(a.chat, b.chat);
   }
   if (a.kind === "pending" && b.kind === "pending") return a.name === b.name;
   return true;
@@ -331,7 +352,7 @@ export function stabilizeChatTreeRows(
   previous: readonly ChatTreeRow[],
   next: readonly ChatTreeRow[],
 ): readonly ChatTreeRow[] {
-  if (previous.length === 0) return next;
+  if (previous.length === 0) return next.length === 0 ? previous : next;
   const previousByKey = new Map<string, ChatTreeRow>();
   for (const row of previous) previousByKey.set(row.key, row);
   let changed = previous.length !== next.length;

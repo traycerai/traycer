@@ -39,6 +39,7 @@ import {
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import { SingleCloudChatTree } from "@/components/epic-canvas/sidebar/__tests__/cloud-chat-tree";
 import {
   ChatTreeSurfaceContext,
   type ChatTreeSurface,
@@ -72,6 +73,12 @@ import { TaskHostsViewContext } from "@/hooks/sandboxes/use-chat-sandbox-row-lin
 // serving witness is served. The plan carries a pool throughout, so a null
 // witness is the negotiated absence (a pool whose handshake lacks
 // `chat.serving.subscribe`), the case a no-pool build shares.
+vi.mock("@tanstack/react-virtual", async (importOriginal) =>
+  (await import("@/__tests__/chat-tree-virtual-layout")).mockReactVirtual(
+    importOriginal,
+  ),
+);
+
 vi.mock(
   "@traycer-clients/shared/host-client/host-rpc-routing",
   async (importOriginal) => {
@@ -560,15 +567,7 @@ describe("EpicSidebarCloudChatRow", () => {
     // only the inactive styling arm, so the active chat's own sidebar row sat
     // unhighlighted while every tree row lit up via the same selectors.
     function renderRow(): void {
-      render(
-        <EpicSidebarCloudChatRow
-          chat={CHAT}
-          {...LEAF_ROW}
-          tabId="tab-1"
-          depth={0}
-          selectionMode={false}
-        />,
-      );
+      render(<SingleCloudChatTree chat={CHAT} tabId="tab-1" />);
     }
 
     function rowButton(): HTMLElement {

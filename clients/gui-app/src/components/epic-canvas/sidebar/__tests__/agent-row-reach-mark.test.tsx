@@ -92,6 +92,14 @@ const hostState = vi.hoisted(() => {
   };
 });
 
+// jsdom lays nothing out: the chat tree is virtualised, so its rows come
+// from the shared layout stand-in (every row fits, at its estimate).
+vi.mock("@tanstack/react-virtual", async (importOriginal) =>
+  (await import("@/__tests__/chat-tree-virtual-layout")).mockReactVirtual(
+    importOriginal,
+  ),
+);
+
 vi.mock(
   "@/hooks/host/use-host-directory-list-query",
   async (importOriginal) => {
