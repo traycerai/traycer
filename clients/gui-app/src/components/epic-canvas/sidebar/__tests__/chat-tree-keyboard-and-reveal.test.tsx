@@ -272,9 +272,12 @@ describe("a focused row that scrolls out", () => {
     focus(button);
     // Focus also opens the row's hover card, whose hold would keep the row
     // without the focus pin. Escape closes it and leaves focus on the row.
+    const card = (): Element | null =>
+      document.querySelector('[data-slot="hover-card-content"]');
+    expect(card(), "the focus opened the row's card").not.toBeNull();
     await setup().keyboard("{Escape}");
     await waitFor(() => {
-      expect(screen.queryByTestId("hover-card-content")).toBeNull();
+      expect(card()).toBeNull();
     });
 
     chatTreeLayout.scrollTo(0);
