@@ -6,6 +6,7 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { NO_HOST_TOKEN_PROBE } from "../../../../shared/host-transport/released-sign-on";
+import * as releasedSignOn from "@traycer-clients/shared/host-transport/released-sign-on";
 import { WsStreamClient } from "../../../../shared/host-transport/ws-stream-client";
 import { resetNegotiatedManifests } from "../../../../shared/host-transport/negotiated-manifest-registry";
 import { resetNegotiatedStreamVersions } from "../../../../shared/host-transport/negotiated-stream-version-registry";
@@ -73,6 +74,46 @@ const harness = vi.hoisted(() => {
     hung: 0,
   };
   return { ScriptSocket, sockets, state };
+});
+
+const releasedMemory = vi.hoisted(() => {
+  const blank = {
+    opensReleasedWay: (_userId: string, _hostId: string): boolean => false,
+    namedReason: (_hostId: string): boolean => false,
+    signInAdmitted: (_userId: string, _hostId: string): void => undefined,
+    hostTokenAdmitted: (_hostId: string): void => undefined,
+    refusedNamingReason: (_hostId: string): void => undefined,
+    forgetAll: (): void => undefined,
+  };
+  return { current: blank };
+});
+
+vi.mock("@traycer-clients/shared/host-transport/released-sign-on", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/released-sign-on")
+    >();
+  return {
+    ...actual,
+    processReleasedHosts: {
+      opensReleasedWay: (userId: string, hostId: string): boolean =>
+        releasedMemory.current.opensReleasedWay(userId, hostId),
+      namedReason: (hostId: string): boolean =>
+        releasedMemory.current.namedReason(hostId),
+      signInAdmitted: (userId: string, hostId: string): void => {
+        releasedMemory.current.signInAdmitted(userId, hostId);
+      },
+      hostTokenAdmitted: (hostId: string): void => {
+        releasedMemory.current.hostTokenAdmitted(hostId);
+      },
+      refusedNamingReason: (hostId: string): void => {
+        releasedMemory.current.refusedNamingReason(hostId);
+      },
+      forgetAll: (): void => {
+        releasedMemory.current.forgetAll();
+      },
+    },
+  };
 });
 
 vi.mock("../../../../shared/host-transport/whatwg-ws-factory", () => ({
@@ -376,6 +417,18 @@ async function openStream(session: CliHostSession): Promise<void> {
 }
 
 beforeEach(() => {
+  let create: typeof releasedSignOn.createReleasedHostMemory | undefined;
+  try {
+    create = releasedSignOn.createReleasedHostMemory;
+  } catch (error: unknown) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.includes('No "createReleasedHostMemory" export')
+    ) {
+      throw error;
+    }
+  }
+  if (typeof create === "function") releasedMemory.current = create();
   harness.sockets.splice(0);
   harness.state.mode = "unavailable";
   harness.state.table = new Map();
@@ -446,11 +499,7 @@ describe("CLI local doors while authn cannot mint", () => {
     opened.session.dispose();
     const start = harness.sockets.length;
     const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
-    const unaryProbe = await socketAt(start);
-    const unaryProbed = await readOpen(unaryProbe);
-    expect(unaryProbed.token).toBe(NO_HOST_TOKEN_PROBE);
-    unaryProbe.fireFrame(releasedRefusal());
-    const unary = await socketAt(start + 1);
+    const unary = await socketAt(start);
     const open = await readOpen(unary);
     expect(open.token).toBe(SIGN_IN);
     await admitStatus(unary, open);

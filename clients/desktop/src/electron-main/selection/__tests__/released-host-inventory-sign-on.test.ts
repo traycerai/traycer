@@ -14,11 +14,15 @@ import {
   settle,
   signIn,
   USER_A,
+  USER_B,
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { createLocalHostInventoryStreamClient } from "../local-host-inventory-subscription";
 
 const SIGN_IN_TOKEN = "main-sign-in-token";
+const SIGN_IN_B = "main-sign-in-token-b";
 const HOST_TOKEN = "main-host-token";
+const HOST_TOKEN_B = "main-host-token-b";
 const RELEASED_HOST = { ...mockLocalHostEntry, version: "1.5.4" };
 
 type RowOwner = "personal" | "team";
@@ -47,6 +51,15 @@ function ownershipBody(owner: RowOwner): unknown {
           },
     ],
   };
+}
+
+function releaseRememberedInventoryHost(): void {
+  const memory: {
+    readonly hostTokenAdmitted: (hostId: string) => void;
+    readonly forgetAll?: () => void;
+  } = processReleasedHosts;
+  memory.hostTokenAdmitted(RELEASED_HOST.hostId);
+  memory.forgetAll?.();
 }
 
 function installFetch(owner: RowOwner): void {
@@ -158,6 +171,7 @@ describe("desktop inventory push against a released local host", () => {
   });
 
   afterEach(async () => {
+    releaseRememberedInventoryHost();
     for (const socket of FakeNativeWebSocket.instances) {
       socket.fireClose(1006, "test teardown");
     }
@@ -198,4 +212,147 @@ describe("desktop inventory push against a released local host", () => {
     expect(sentTokens()).toEqual([HOST_TOKEN]);
     opened.close();
   });
+
+  it("keeps the next person's sign-in off a host the previous person admitted", async () => {
+    const first = await openInventoryFor({
+      userId: USER_A,
+      signInToken: SIGN_IN_TOKEN,
+      hostToken: HOST_TOKEN,
+      rowOwnerId: USER_A,
+    });
+    await refusedOpen();
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances.length).toBeGreaterThanOrEqual(2),
+    );
+    const admitted = FakeNativeWebSocket.instances[1];
+    if (admitted === undefined) throw new Error("sign-in socket missing");
+    admitted.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(admitted, "open")).toHaveLength(1),
+    );
+    const open = sentFramesOfKind(admitted, "open")[0];
+    if (open === undefined) throw new Error("sign-in open missing");
+    expect(open.token).toBe(SIGN_IN_TOKEN);
+    admitted.fireMessage(
+      JSON.stringify({
+        kind: "openAck",
+        manifest: open.manifest,
+        capabilities: ["credentialUpdate"],
+      }),
+    );
+    await vi.waitFor(() => expect(first.statuses).toContain("open"));
+    first.close();
+    await settle();
+    FakeNativeWebSocket.instances.length = 0;
+
+    const second = await openInventoryFor({
+      userId: USER_B,
+      signInToken: SIGN_IN_B,
+      hostToken: HOST_TOKEN_B,
+      rowOwnerId: USER_A,
+    });
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(1),
+    );
+    const dial = FakeNativeWebSocket.instances[0];
+    if (dial === undefined) throw new Error("next person's socket missing");
+    dial.fireOpen();
+    await vi.waitFor(() => expect(sentFramesOfKind(dial, "open")).toHaveLength(1));
+    expect(sentFramesOfKind(dial, "open")[0]?.token).toBe(HOST_TOKEN_B);
+    expect(sentTokens()).not.toContain(SIGN_IN_B);
+    dial.fireMessage(releasedRefusal());
+    await settle();
+    await vi.waitFor(() =>
+      expect(
+        FakeNativeWebSocket.instances.length >= 2 ||
+          second.statuses.includes("closed"),
+      ).toBe(true),
+    );
+    expect(sentTokens()).not.toContain(SIGN_IN_B);
+    expect(sentTokens()[0]).toBe(HOST_TOKEN_B);
+    second.close();
+  });
 });
+
+async function openInventoryFor(input: {
+  readonly userId: string;
+  readonly signInToken: string;
+  readonly hostToken: string;
+  readonly rowOwnerId: string;
+}): Promise<{
+  readonly statuses: string[];
+  readonly close: () => void;
+}> {
+  vi.stubGlobal(
+    "fetch",
+    async (request: RequestInfo | URL): Promise<Response> => {
+      const url = new URL(requestUrl(request));
+      if (url.pathname === "/api/v3/hosts") {
+        return new Response(
+          JSON.stringify({
+            hosts: [
+              {
+                hostId: RELEASED_HOST.hostId,
+                owner: { kind: "user", id: input.rowOwnerId },
+                kind: "personal",
+                remoteAccess: false,
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("unexpected", { status: 500 });
+    },
+  );
+  const provider = newProvider();
+  signIn(provider, input.userId, input.signInToken);
+  const hostTokens = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () =>
+      Promise.resolve({ kind: "unavailable", detail: "authn offline" }),
+    signIn: (userId) => (userId === input.userId ? input.signInToken : null),
+    now: () => Date.now(),
+  });
+  const websocketUrl = RELEASED_HOST.websocketUrl;
+  if (websocketUrl === null) {
+    throw new Error("the mock local host has no websocket URL");
+  }
+  await hostTokens.adopt(
+    input.userId,
+    RELEASED_HOST.hostId,
+    { token: input.hostToken, expiresAtMs: Date.now() + 60_000 },
+    hostTokens.era(input.userId),
+  );
+  const endpoint = {
+    hostId: RELEASED_HOST.hostId,
+    websocketUrl,
+    version: RELEASED_HOST.version,
+  };
+  const inventoryClient = createLocalHostInventoryStreamClient({
+    authnBaseUrl: "https://authn.test",
+    hostTokens,
+    localHost: () => endpoint,
+    bearer: liveBearer(provider),
+    appVersion: "1.0.0-test",
+  });
+  const stream = inventoryClient(endpoint, input.userId);
+  if (stream === null) throw new Error("local inventory stream client did not build");
+  const statuses: string[] = [];
+  const inventory = new HostInventoryStreamClient({
+    wsStreamClient: stream,
+    callbacks: {
+      onSnapshot: () => undefined,
+      onConnectionStatus: (status) => {
+        statuses.push(status);
+      },
+    },
+  });
+  return {
+    statuses,
+    close: () => {
+      inventory.close();
+      stream.close("test complete");
+    },
+  };
+}

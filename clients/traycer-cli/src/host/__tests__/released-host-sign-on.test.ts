@@ -1,4 +1,5 @@
 import { NO_HOST_TOKEN_PROBE } from "@traycer-clients/shared/host-transport/released-sign-on";
+import * as releasedSignOn from "@traycer-clients/shared/host-transport/released-sign-on";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import type { HostPidMetadata } from "../pid-metadata";
@@ -71,6 +72,46 @@ const harness = vi.hoisted(() => {
   }
 
   return { ScriptSocket, sockets, listeners, state, wake };
+});
+
+const releasedMemory = vi.hoisted(() => {
+  const blank = {
+    opensReleasedWay: (_userId: string, _hostId: string): boolean => false,
+    namedReason: (_hostId: string): boolean => false,
+    signInAdmitted: (_userId: string, _hostId: string): void => undefined,
+    hostTokenAdmitted: (_hostId: string): void => undefined,
+    refusedNamingReason: (_hostId: string): void => undefined,
+    forgetAll: (): void => undefined,
+  };
+  return { current: blank };
+});
+
+vi.mock("@traycer-clients/shared/host-transport/released-sign-on", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@traycer-clients/shared/host-transport/released-sign-on")
+    >();
+  return {
+    ...actual,
+    processReleasedHosts: {
+      opensReleasedWay: (userId: string, hostId: string): boolean =>
+        releasedMemory.current.opensReleasedWay(userId, hostId),
+      namedReason: (hostId: string): boolean =>
+        releasedMemory.current.namedReason(hostId),
+      signInAdmitted: (userId: string, hostId: string): void => {
+        releasedMemory.current.signInAdmitted(userId, hostId);
+      },
+      hostTokenAdmitted: (hostId: string): void => {
+        releasedMemory.current.hostTokenAdmitted(hostId);
+      },
+      refusedNamingReason: (hostId: string): void => {
+        releasedMemory.current.refusedNamingReason(hostId);
+      },
+      forgetAll: (): void => {
+        releasedMemory.current.forgetAll();
+      },
+    },
+  };
 });
 
 vi.mock("../../../../shared/host-transport/whatwg-stream-ws-factory", () => ({
@@ -411,6 +452,18 @@ async function probe(
 }
 
 beforeEach(() => {
+  let create: typeof releasedSignOn.createReleasedHostMemory | undefined;
+  try {
+    create = releasedSignOn.createReleasedHostMemory;
+  } catch (error: unknown) {
+    if (
+      !(error instanceof Error) ||
+      !error.message.includes('No "createReleasedHostMemory" export')
+    ) {
+      throw error;
+    }
+  }
+  if (typeof create === "function") releasedMemory.current = create();
   harness.sockets.splice(0);
   harness.listeners.clear();
   harness.state.table = new Map();
@@ -430,7 +483,7 @@ describe("CLI credential probe against a released host", () => {
     expect(outcome).toEqual({ kind: "active", minted: true });
     expect(tokens[0]).toBe(HOST_TOKEN);
     expect(firstSignIn).toBeGreaterThan(0);
-    expect(tokens[firstSignIn + 1]).toBe(HOST_TOKEN);
+    expect(tokens[firstSignIn + 1]).toBe(SIGN_IN);
     expect(tokens[tokens.length - 1]).toBe(SIGN_IN);
     expect(
       tokens.every((token) => token === HOST_TOKEN || token === SIGN_IN),
@@ -464,7 +517,7 @@ describe("CLI credential probe against a released host", () => {
     expect(outcome).toEqual({ kind: "active", minted: true });
     expect(tokens[0]).toBe(HOST_TOKEN);
     expect(firstSignIn).toBeGreaterThan(0);
-    expect(tokens[firstSignIn + 1]).toBe(HOST_TOKEN);
+    expect(tokens[firstSignIn + 1]).toBe(SIGN_IN);
     expect(tokens[tokens.length - 1]).toBe(SIGN_IN);
     expect(provisionFrames()).toHaveLength(1);
   }, 30_000);

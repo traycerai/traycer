@@ -686,7 +686,7 @@ describe("local stream while authn cannot mint", () => {
     clearHostDoorState(hostId);
   });
 
-  it("sends only the placeholder to a current team host when the session is unverified and no token is held", async () => {
+  it("sends only the placeholder when a current host names the refusal and the session is unverified", async () => {
     const hostId = "local-unverified-team-host";
     clearHostDoorState(hostId);
     const { source, signInReads, mintCalls } = await unverifiedTokens(

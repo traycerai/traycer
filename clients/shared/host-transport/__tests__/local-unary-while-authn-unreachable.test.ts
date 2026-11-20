@@ -610,7 +610,7 @@ describe("local unary while authn cannot mint", () => {
     expect(driven.refusals).toEqual([]);
   });
 
-  it("sends only the placeholder to a current team host when the session is unverified and no token is held", async () => {
+  it("sends only the placeholder when a current host names the refusal and the session is unverified", async () => {
     const { tokens, mintCalls } = await unverifiedSource(null);
     const driven = driveCall(tokens, null);
     clients.push(driven.client);

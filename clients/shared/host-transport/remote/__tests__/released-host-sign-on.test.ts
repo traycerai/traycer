@@ -16,11 +16,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostDoorStateOfRefusal } from "../../host-door-state";
 import { resetNegotiatedManifests } from "../../negotiated-manifest-registry";
 import {
-  createReleasedHostMemory,
   opensReleasedWay,
+  type ReleasedHostMemory,
   type ReleasedSignOn,
   type ReleasedSignOnRow,
 } from "../../released-sign-on";
+import * as releasedSignOnModule from "../../released-sign-on";
 import { RemoteSession } from "../remote-session";
 import { emptyStreamRegistry, FakeRelayHost } from "./fake-relay-host";
 
@@ -87,18 +88,51 @@ function recordingDoor(): {
   };
 }
 
+const inertReleasedHosts: ReleasedHostMemory = {
+  opensReleasedWay: (_userId: string, _hostId: string): boolean => false,
+  namedReason: (_hostId: string): boolean => false,
+  signInAdmitted: (_userId: string, _hostId: string): void => undefined,
+  hostTokenAdmitted: (_hostId: string): void => undefined,
+  refusedNamingReason: (_hostId: string): void => undefined,
+  forgetAll: (): void => undefined,
+};
+
+function freshHosts(): ReleasedHostMemory {
+  const create = releasedSignOnModule.createReleasedHostMemory;
+  if (typeof create !== "function") return inertReleasedHosts;
+  return create();
+}
+
+function namedNotAdmitted(): FatalErrorDetails {
+  return {
+    code: "UNAUTHORIZED",
+    reason: "current-host-refusal",
+    doorReason: "not_admitted",
+    retryable: false,
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+}
+
 /**
  * A released host refuses a host-only token and admits a sign-in with `authz`
- * null. A current host admits the host-only token. A sign-in is admitted in
- * either mode, so a client that presents one is visible on the recorded opens.
+ * null. A current host admits the host-only token and refuses a sign-in by
+ * name.
  */
 function scriptHost(relay: FakeRelayHost, released: { value: boolean }): void {
   relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
   relay.decideOpen = (_grant, openIndex) => {
     const bearer = relay.openBearers[openIndex] ?? "";
     const authz = relay.openAuthz[openIndex];
-    if (bearer === SIGN_IN && authz === null) return { kind: "ack" };
-    if (bearer === ROTATED_SIGN_IN && authz === null) return { kind: "ack" };
+    if (authz === null && !released.value) {
+      return { kind: "fatal", details: namedNotAdmitted() };
+    }
+    if (
+      (bearer === SIGN_IN || bearer === ROTATED_SIGN_IN) &&
+      authz === null
+    ) {
+      return { kind: "ack" };
+    }
     if (!released.value && isHostTokenAuthz(authz)) return { kind: "ack" };
     return { kind: "fatal", details: releasedRefusal() };
   };
@@ -145,7 +179,7 @@ function signOnFor(
         recovery: null,
         allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () => false,
-        hosts: createReleasedHostMemory(),
+        hosts: freshHosts(),
       }
     : null;
 }
@@ -279,15 +313,95 @@ describe("released personal host, remote door", () => {
       }, WAIT);
       const laterBearers = relay.openBearers.slice(opensBeforeDrop);
       const laterAuthz = relay.openAuthz.slice(opensBeforeDrop);
-      expect(laterBearers).toEqual([""]);
-      expect(laterAuthz.every((authz) => isHostTokenAuthz(authz))).toBe(true);
+      expect(laterBearers).toEqual([SIGN_IN, ""]);
+      expect(laterAuthz[0]).toBeNull();
+      expect(isHostTokenAuthz(laterAuthz[1])).toBe(true);
       signIn.rotate(ROTATED_SIGN_IN);
       session.notifyBearerRotated();
       await vi.waitFor(
         () => expect(credentialBearers(relay)).toEqual([HOST_TOKEN]),
         WAIT,
       );
+      const afterUpdate = relay.openBearers.length;
+      relay.dropCurrentConnection();
+      await vi.waitFor(
+        () => expect(relay.openBearers.length).toBeGreaterThan(afterUpdate),
+        WAIT,
+      );
+      expect(relay.openBearers[afterUpdate]).toBe("");
+      expect(relay.openBearers.slice(afterUpdate)).not.toContain(SIGN_IN);
+      expect(relay.openAuthz[afterUpdate]).toEqual({
+        v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
+        grant: HOST_TOKEN,
+      });
       expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+
+  it("dials the sign-in first when a released connection drops", async () => {
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door, refusals } = recordingDoor();
+    scriptHost(relay, { value: true });
+    const session = openSession(
+      relay,
+      signIn,
+      signOnFor(PERSONAL_ROW, signIn),
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+      const before = relay.openBearers.length;
+      relay.dropCurrentConnection();
+      await vi.waitFor(
+        () => expect(relay.openBearers.length).toBeGreaterThan(before),
+        WAIT,
+      );
+      expect(relay.openBearers[before]).toBe(SIGN_IN);
+      expect(relay.openAuthz[before]).toBeNull();
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+
+  it("dials the host-only token when a remembered host's row no longer allows the sign-in", async () => {
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const hosts = freshHosts();
+    let rowAllows = true;
+    const { door } = recordingDoor();
+    scriptHost(relay, { value: true });
+    const session = openSession(
+      relay,
+      signIn,
+      {
+        signIn: () => signIn,
+        recovery: null,
+        allowed: () => Promise.resolve(rowAllows),
+        hostTokenUnobtainable: () => false,
+        hosts,
+      },
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+      rowAllows = false;
+      const before = relay.openBearers.length;
+      relay.dropCurrentConnection();
+      await vi.waitFor(
+        () => expect(relay.openBearers.length).toBeGreaterThan(before),
+        WAIT,
+      );
+      expect(relay.openBearers[before]).toBe("");
+      expect(relay.openBearers.slice(before)).not.toContain(SIGN_IN);
+      expect(isHostTokenAuthz(relay.openAuthz[before])).toBe(true);
     } finally {
       session.close();
     }
