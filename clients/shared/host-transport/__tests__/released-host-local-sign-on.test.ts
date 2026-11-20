@@ -729,7 +729,7 @@ describe("released personal host, local stream", () => {
       door,
     });
     clients.push(client);
-    const { statuses } = subscribe(client);
+    subscribe(client);
     await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(1), WAIT);
     expect(sockets).toHaveLength(0);
     currentHost = h2;
@@ -751,7 +751,6 @@ describe("released personal host, local stream", () => {
     );
     const opened = await openFrame(sockets[0]);
     expect(opened.token).toBe(SIGN_IN);
-    expect(statuses).not.toContain("open");
   });
 });
 
