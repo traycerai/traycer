@@ -148,8 +148,8 @@ export interface EnvironmentPageFacts {
 
 /**
  * Whether the picked configuration's source can draw `section`'s page: false
- * only for Secrets where `facts.secretsServed` is. Settings search offers what
- * this allows.
+ * only for Secrets where `facts.secretsServed` is. Settings search and the
+ * command palette offer what this allows.
  */
 export function environmentSectionServed(
   section: SettingsSectionId,

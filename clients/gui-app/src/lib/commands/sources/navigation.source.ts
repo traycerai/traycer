@@ -6,13 +6,16 @@
  *     shortcut even though the palette row opens a section picker)
  *
  * Settings sub-page: one row per section this build offers
- * (`visibleSettingsSections`), with the current section filtered
- * out on `/settings/<id>` routes.
+ * (`visibleSettingsSections`) and the picked configuration's source
+ * can draw (`useEnvironmentSectionFilters().served`, as search
+ * filters), with the current section filtered out on
+ * `/settings/<id>` routes.
  *
  * Runs as a `ReactCommandSource` so the Open-Settings chord
  * refreshes live when the user rebinds `app.settings.open`.
  */
 import { useMemo } from "react";
+import { useEnvironmentSectionFilters } from "@/components/settings/environment/use-environment-section-filters";
 import {
   SETTINGS_SECTION_GROUPS,
   visibleSettingsSections,
@@ -76,16 +79,18 @@ const OPEN_EPICS_ITEM: CommandItem = {
 const SETTINGS_SUBPAGE: CommandSubpage = {
   id: "nav:settings",
   title: "Open settings",
-  useItems: (ctx: CommandContext) =>
-    useMemo<ReadonlyArray<CommandItem>>(
+  useItems: (ctx: CommandContext) => {
+    const sectionShown = useEnvironmentSectionFilters().served;
+    return useMemo<ReadonlyArray<CommandItem>>(
       () =>
         visibleSettingsSections().flatMap((section) =>
-          ctx.pathname !== `/settings/${section.id}`
+          ctx.pathname !== `/settings/${section.id}` && sectionShown(section.id)
             ? [buildSectionItem(section)]
             : [],
         ),
-      [ctx.pathname],
-    ),
+      [ctx.pathname, sectionShown],
+    );
+  },
 };
 
 function buildSettingsEntryItem(

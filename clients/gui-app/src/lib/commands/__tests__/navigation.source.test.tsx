@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup } from "@testing-library/react";
 const soundtrackOfferedMock = vi.hoisted(() => ({ value: false }));
 
 vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
@@ -7,8 +7,28 @@ vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
   soundtrackOffered: () => soundtrackOfferedMock.value,
 }));
 
-import { navigationSource } from "@/lib/commands/sources/navigation.source";
-import type { CommandContext, CommandItem } from "@/lib/commands/types";
+// The settings sub-page draws by the Environment pick's source: the window's
+// host, through the scope, and whether it runs Personal.
+vi.mock(
+  "@/components/settings/host-scope/use-host-scope",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).personalHostScopeModule,
+);
+vi.mock(
+  "@/components/settings/personal/use-window-host-runs-personal",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).windowHostRunsPersonalModule,
+);
+
+import type { CommandItem } from "@/lib/commands/types";
+import {
+  captureRoot,
+  mountSettingsSubpage,
+} from "@/lib/commands/__tests__/settings-subpage-fixture";
 import {
   SETTINGS_SECTIONS,
   visibleSettingsSections,
@@ -16,66 +36,37 @@ import {
 import { setMobileApp } from "@/lib/mobile-app";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  resetEnvironmentSectionReads,
+  windowHostRunsPersonal,
+} from "@/components/settings/__tests__/environment-section-reads-fixture";
 
-function ctx(pathname: string): CommandContext {
-  return {
-    pathname,
-    router: {
-      getPathname: () => pathname,
-      navigateHome: () => undefined,
-      navigateSettings: () => undefined,
-      navigateToEpic: () => undefined,
-      navigateToEpicTab: () => undefined,
-      navigateToEpicList: () => undefined,
-      navigateSettingsSection: () => undefined,
-      navigateToTabIntent: () => undefined,
-      goBack: () => undefined,
-      goForward: () => undefined,
-      isHistoryNavAvailable: () => false,
-      canGoBack: () => false,
-      canGoForward: () => false,
-    },
-    activeTabId: null,
-    activeEpicId: null,
-    focusedComposerKind: null,
-    targetGroupId: null,
-  };
-}
-
-function captureRoot(pathname: string): ReadonlyArray<CommandItem> {
-  let captured: ReadonlyArray<CommandItem> = [];
-  function Probe() {
-    captured = navigationSource.useItems(ctx(pathname));
-    return null;
-  }
-  render(<Probe />);
-  return captured;
-}
+// A team offers every Environment page, so the cases below that are about
+// something else read the whole list.
+const TEAM_PICK: EnvironmentPick = { kind: "team", environmentId: "env-team" };
 
 function captureSettingsSubpage(pathname: string): ReadonlyArray<CommandItem> {
-  const root = captureRoot(pathname);
-  const entry = root.find((i) => i.id === "nav:settings");
-  if (entry === undefined || entry.subpage === null) {
-    throw new Error("settings sub-page entry missing");
-  }
-  const subpage = entry.subpage;
-  let captured: ReadonlyArray<CommandItem> = [];
-  function Probe() {
-    captured = subpage.useItems(ctx(pathname));
-    return null;
-  }
-  render(<Probe />);
-  return captured;
+  return mountSettingsSubpage(pathname).latest();
 }
 
 describe("navigationSource", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useSettingsEnvironmentPickStore.setState({ pick: TEAM_PICK });
   });
 
   afterEach(() => {
     cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
+    resetNegotiatedManifests();
+    resetEnvironmentSectionReads();
     soundtrackOfferedMock.value = false;
     setMobileApp(false);
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
@@ -200,5 +191,82 @@ describe("navigationSource", () => {
     expect(badgeOf("agents")).toBe("Environment");
     expect(badgeOf("devices")).toBe("Account");
     expect(badgeOf("worktrees")).toBe("Host");
+  });
+});
+
+describe("navigationSource, the Secrets row by the pick's source", () => {
+  const SECRETS_ROW = "nav:settings/secrets";
+  const SECRETS_LIST = "environment.secrets.list";
+  const LOCAL_PICK: EnvironmentPick = {
+    kind: "local",
+    hostId: "host-a",
+    hostName: "Old laptop",
+  };
+
+  afterEach(() => {
+    cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
+    resetNegotiatedManifests();
+    resetEnvironmentSectionReads();
+  });
+
+  /** Whether the settings sub-page offers Secrets, at each render so far. */
+  function mountSecretsRow(
+    pick: EnvironmentPick,
+  ): () => ReadonlyArray<boolean> {
+    useSettingsEnvironmentPickStore.setState({ pick });
+    const subpage = mountSettingsSubpage("/");
+    return () => subpage.offered(SECRETS_ROW);
+  }
+
+  it.each([
+    {
+      name: "Personal on a host that runs it",
+      pick: { kind: "personal" },
+      runs: true,
+    },
+    { name: "Local", pick: LOCAL_PICK, runs: false },
+  ] as const)(
+    "$name: offers Secrets once the host serves the list, never before, and never withdraws it",
+    ({ pick, runs }) => {
+      windowHostRunsPersonal.current = runs;
+      const offered = mountSecretsRow(pick);
+
+      expect(offered().at(-1)).toBe(false);
+
+      act(() => {
+        recordNegotiatedHostMethods("host-a", ["environment.status"]);
+      });
+
+      expect(offered().at(-1)).toBe(false);
+
+      act(() => {
+        recordNegotiatedHostMethods("host-a", [
+          "environment.status",
+          SECRETS_LIST,
+        ]);
+      });
+
+      const history = offered();
+      expect(history.at(-1)).toBe(true);
+      expect(history.indexOf(true)).toBeGreaterThan(history.lastIndexOf(false));
+    },
+  );
+
+  it("offers Personal's Secrets only after the window host's Personal read has answered", () => {
+    windowHostRunsPersonal.current = null;
+    recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
+    const offered = mountSecretsRow({ kind: "personal" });
+
+    expect(offered().at(-1)).toBe(false);
+  });
+
+  it("offers Secrets on the cloud road, whatever the window's host serves", () => {
+    windowHostRunsPersonal.current = false;
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+
+    expect(mountSecretsRow({ kind: "personal" })().at(-1)).toBe(true);
+    cleanup();
+    expect(mountSecretsRow(TEAM_PICK)().at(-1)).toBe(true);
   });
 });

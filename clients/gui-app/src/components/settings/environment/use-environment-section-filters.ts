@@ -47,7 +47,7 @@ function secretsServedOn(
 export interface EnvironmentSectionFilters {
   /** The Environment group's rows (`environmentSectionShown`). */
   readonly shown: (section: SettingsSectionId) => boolean;
-  /** Settings search (`environmentSectionServed`). */
+  /** Settings search and the command palette (`environmentSectionServed`). */
   readonly served: (section: SettingsSectionId) => boolean;
 }
 
