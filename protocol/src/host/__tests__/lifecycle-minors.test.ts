@@ -1,7 +1,7 @@
 /**
  * Schema + version-negotiation tests for the lifecycle protocol minors:
  * `terminal.subscribe@1.6` viewer intent, `terminal.subscribe@1.7` viewer
- * frame, `WORKTREE_BUSY` holders,
+ * frame, `terminal.subscribe@1.8` viewers set, `WORKTREE_BUSY` holders,
  * `worktree.delete@1.1` stopOwners, `worktree.deleteByPath@1.1`, and the
  * submit-time workspace intent on `agent.tui.promptSubmitted@1.1`.
  *
@@ -27,8 +27,11 @@ import {
   terminalSubscribeClientFrameSchemaV17,
   terminalSubscribeOpenRequestSchema,
   terminalSubscribeOpenRequestSchemaV16,
+  terminalSubscribeServerFrameSchemaV15,
+  terminalSubscribeServerFrameSchemaV18,
   terminalSubscribeV16,
   terminalSubscribeV17,
+  terminalSubscribeV18,
 } from "@traycer/protocol/host/terminal/subscribe";
 import {
   worktreeDeleteRequestSchema,
@@ -212,8 +215,8 @@ describe("WORKTREE_BUSY typed holders", () => {
 });
 
 describe("terminal.subscribe@1.6 viewer intent", () => {
-  it("is registered at minor 6, below the latest minor 7", () => {
-    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
+  it("is registered at minor 6, below the latest minor 8", () => {
+    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(8);
     expect(
       hostStreamRpcRegistry["terminal.subscribe"][1].versions[6].contract
         .schemaVersion,
@@ -260,9 +263,9 @@ describe("terminal.subscribe@1.7 viewer frame", () => {
     viewer,
   });
 
-  it("is registered as latest minor 7", () => {
+  it("is registered at minor 7, below the latest minor 8", () => {
     const line = hostStreamRpcRegistry["terminal.subscribe"][1];
-    expect(line.latestMinor).toBe(7);
+    expect(line.latestMinor).toBe(8);
     expect(line.versions[7].contract.schemaVersion).toEqual({
       major: 1,
       minor: 7,
@@ -330,6 +333,146 @@ describe("terminal.subscribe@1.7 viewer frame", () => {
       rows: 24,
     });
     expect(parsed.viewer).toBe("presentation");
+  });
+});
+
+describe("terminal.subscribe@1.8 viewers frame", () => {
+  const sessionId = "s1";
+  const session = {
+    sessionId,
+    scope: { kind: "independent" as const },
+    sessionKind: "terminal" as const,
+    cwd: "/workspace/project",
+    shellCommand: "zsh",
+    shellArgs: [] as const,
+    cols: 80,
+    rows: 24,
+    status: "running" as const,
+    exitCode: null,
+    exitReason: null,
+    createdAt: 1,
+    title: null,
+    activeProcessName: null,
+    currentCwd: "/workspace/project",
+  };
+  const viewersFrame = {
+    kind: "viewers" as const,
+    hasBinaryPayload: false as const,
+    sessionId,
+    viewers: [{ userId: "member-a" }, { userId: "member-b" }],
+  };
+  const v15Frames = [
+    {
+      kind: "snapshot" as const,
+      hasBinaryPayload: false as const,
+      sessionId,
+      session,
+      scrollback: "",
+      ackCreditSupported: true,
+    },
+    {
+      kind: "data" as const,
+      hasBinaryPayload: false as const,
+      sessionId,
+      chunk: "hello",
+    },
+    {
+      kind: "resized" as const,
+      hasBinaryPayload: false as const,
+      sessionId,
+      cols: 100,
+      rows: 30,
+    },
+    {
+      kind: "exit" as const,
+      hasBinaryPayload: false as const,
+      sessionId,
+      exitCode: 0,
+    },
+    {
+      kind: "actionAck" as const,
+      hasBinaryPayload: false as const,
+      sessionId,
+      clientActionId: "a1",
+      action: "write" as const,
+      status: "accepted" as const,
+      reason: null,
+      code: null,
+    },
+    {
+      kind: "pong" as const,
+      hasBinaryPayload: false as const,
+    },
+    {
+      kind: "binarySnapshot" as const,
+      hasBinaryPayload: true as const,
+      sessionId,
+      session,
+    },
+    {
+      kind: "binaryData" as const,
+      hasBinaryPayload: true as const,
+      sessionId,
+    },
+    {
+      kind: "sessionUpdated" as const,
+      hasBinaryPayload: false as const,
+      sessionId,
+      session,
+    },
+  ];
+
+  it("is registered as latest minor 8, with V17 untouched below it", () => {
+    const line = hostStreamRpcRegistry["terminal.subscribe"][1];
+    expect(line.latestMinor).toBe(8);
+    expect(line.versions[8].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 8,
+    });
+    expect(line.versions[8].contract).toBe(terminalSubscribeV18);
+    expect(line.versions[7].contract).toBe(terminalSubscribeV17);
+    expect(line.versions[7].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 7,
+    });
+  });
+
+  it("parses a viewers frame", () => {
+    expect(terminalSubscribeServerFrameSchemaV18.parse(viewersFrame)).toEqual(
+      viewersFrame,
+    );
+    expect(
+      terminalSubscribeServerFrameSchemaV18.parse({
+        ...viewersFrame,
+        viewers: [],
+      }),
+    ).toEqual({ ...viewersFrame, viewers: [] });
+  });
+
+  it("reuses the 1.7 open-request and client-frame schemas", () => {
+    const line = hostStreamRpcRegistry["terminal.subscribe"][1];
+    expect(line.versions[8].contract.openRequestSchema).toBe(
+      line.versions[7].contract.openRequestSchema,
+    );
+    expect(line.versions[8].contract.clientFrameSchema).toBe(
+      line.versions[7].contract.clientFrameSchema,
+    );
+  });
+
+  it("parses every V15 frame", () => {
+    expect(v15Frames).toHaveLength(
+      terminalSubscribeServerFrameSchemaV15.options.length,
+    );
+    for (const frame of v15Frames) {
+      expect(terminalSubscribeServerFrameSchemaV18.parse(frame)).toEqual(frame);
+      expect(terminalSubscribeServerFrameSchemaV15.parse(frame)).toEqual(frame);
+    }
+  });
+
+  it("is rejected by the V15 server frame schema", () => {
+    expect(
+      terminalSubscribeServerFrameSchemaV15.safeParse(viewersFrame).success,
+    ).toBe(false);
   });
 });
 

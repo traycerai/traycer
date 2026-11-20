@@ -94,6 +94,8 @@ export interface NewConversationModalDraftPatch {
    * this device, like the stage it restores; absent on any other draft.
    */
   readonly returnedSandbox?: StoredReturnedSandbox;
+  /** Local to this device: a draft without it whose settings are set counts as chosen and never moves. */
+  readonly accountFollowsDefault?: true;
 }
 
 /**
@@ -156,6 +158,8 @@ interface NewConversationModalStore {
    * re-dirty the row the collector is about to mark clean and loop it forever.
    */
   readonly setNewChatOwnerHostId: (epicId: string, hostId: string) => void;
+  /** Local and non-dirtying: nothing is published. */
+  readonly setAccountFollowsDefault: (epicId: string, follows: boolean) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
   readonly addResolvedFolders: (
@@ -311,6 +315,26 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             draftPatchesByEpicId: {
               ...state.draftPatchesByEpicId,
               [epicId]: { ...current, epicTitle },
+            },
+          };
+        });
+      },
+      setAccountFollowsDefault: (epicId, follows) => {
+        set((state) => {
+          const current = state.draftPatchesByEpicId[epicId];
+          if (
+            current === undefined ||
+            (current.accountFollowsDefault === true) === follows
+          ) {
+            return state;
+          }
+          const { accountFollowsDefault: _previous, ...rest } = current;
+          return {
+            draftPatchesByEpicId: {
+              ...state.draftPatchesByEpicId,
+              [epicId]: follows
+                ? { ...rest, accountFollowsDefault: true }
+                : rest,
             },
           };
         });
@@ -503,8 +527,12 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             ownerHostId: parseNullableId(raw.ownerHostId),
           };
           const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
-          draftPatchesByEpicId[epicId] =
+          const withSandbox =
             returnedSandbox === null ? patch : { ...patch, returnedSandbox };
+          draftPatchesByEpicId[epicId] =
+            raw.accountFollowsDefault === true
+              ? { ...withSandbox, accountFollowsDefault: true }
+              : withSandbox;
         }
         return { ...currentState, draftPatchesByEpicId };
       },
@@ -606,7 +634,7 @@ export function newChatDraftRememberSynced(
       draftPatchesByEpicId: {
         ...state.draftPatchesByEpicId,
         [found.epicId]: {
-          ...current,
+          ...withoutOwnEchoProofWhenClamped(current, hostRevision),
           // Never backward. This field IS the frontier
           // `applyNewChatHostDocument` fences on, and the store cannot check
           // the ordering of what reaches it: the session's held revision is
@@ -678,7 +706,10 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
       draftPatchesByEpicId: {
         ...state.draftPatchesByEpicId,
         [epicId]: {
-          ...dropReturnedSandboxOnNewLine(current, document.draftId),
+          ...keptAccountProvenance(
+            dropReturnedSandboxOnNewLine(current, document.draftId),
+            document,
+          ),
           content: document.portable.content,
           selection: document.portable.selection,
           settings: runSettingsFromDraftEcho(
@@ -699,6 +730,42 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
     };
   });
   return contentLands;
+}
+
+/** An acknowledgement older than the held revision means a newer write came first, so the provenance loses its proof. */
+function withoutOwnEchoProofWhenClamped(
+  current: NewConversationModalDraftPatch,
+  hostRevision: number,
+): NewConversationModalDraftPatch {
+  if (
+    current.accountFollowsDefault !== true ||
+    hostRevision >= current.hostRevision
+  ) {
+    return current;
+  }
+  const { accountFollowsDefault: _dropped, ...rest } = current;
+  return rest;
+}
+
+/**
+ * Only this window's own write echoing back keeps the provenance. A newer revision
+ * is another writer's, and a cloud head (revision 0) proves nothing: equal values
+ * are not an own echo.
+ */
+function keptAccountProvenance(
+  current: NewConversationModalDraftPatch,
+  document: DraftDocument,
+): NewConversationModalDraftPatch {
+  if (current.accountFollowsDefault !== true) return current;
+  if (
+    current.draftId === document.draftId &&
+    document.revision > 0 &&
+    current.hostRevision === document.revision
+  ) {
+    return current;
+  }
+  const { accountFollowsDefault: _dropped, ...rest } = current;
+  return rest;
 }
 
 /** Another draft line's text does not inherit this line's destination. */

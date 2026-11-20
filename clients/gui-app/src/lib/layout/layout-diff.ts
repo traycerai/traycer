@@ -654,8 +654,8 @@ function regionStyleChanges(
 }
 
 function isRegionValueKey(key: string): key is RegionValueKey {
-  return layoutRegionIds().some(
-    (region) => key in PRESET_VALUES.default[region],
+  return layoutRegionIds().some((region) =>
+    Object.hasOwn(PRESET_VALUES.default[region], key),
   );
 }
 

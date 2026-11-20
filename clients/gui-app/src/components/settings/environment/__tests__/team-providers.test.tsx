@@ -9,22 +9,30 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import type { EnvironmentProfileRecords } from "@traycer-clients/shared/host-client/profile-record-actions";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
+import { cloudProviderKeyKeys } from "@/lib/query-keys/cloud-provider-key-keys";
 import {
   registerDetailsProvider,
   type DetailsProvider,
 } from "@/lib/settings-details-entry";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import type { ConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { providerState, reachableHost } from "./mcp-skills-test-support";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   mountTeamPage,
+  mountVerifiedTeamProvidersPage,
   personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
+  type TeamPageHarness,
 } from "./team-configuration-test-support";
 import {
   profile,
@@ -41,9 +49,13 @@ import {
   handlers,
 } from "./team-providers-test-support";
 
+const apiKeyPageHost = vi.hoisted((): { hostId: string | null } => ({
+  hostId: null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
@@ -59,6 +71,9 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
     hostId === null ? null : requireTeamHostClient(),
 }));
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => apiKeyPageHost.hostId,
+}));
 vi.mock("@/components/settings/secrets/secret-row", () => ({
   SecretRow: () => null,
 }));
@@ -66,18 +81,53 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => () => Promise.resolve(),
 }));
 
+function seedLegacyProviderRecords(
+  harness: TeamPageHarness,
+  source: ConfigurationSource,
+): void {
+  if (source.kind !== "pool") {
+    throw new Error("Legacy provider records require a pool source.");
+  }
+  const viewerId = useAuthStore.getState().contextMetadata?.userId ?? "";
+  const queryKey = cloudProviderKeyKeys.records(
+    viewerId,
+    harness.auth.getIdentityGeneration(),
+    source.environmentId,
+  );
+  harness.queryClient.setQueryDefaults(queryKey, { staleTime: Infinity });
+  harness.queryClient.setQueryData<EnvironmentProfileRecords>(queryKey, {
+    profileSyncEnabled: false,
+    providers: [],
+    providerKeys: [],
+  });
+}
+
 afterEach(() => {
   cleanup();
   resetTeamPageHarness();
+  resetNegotiatedManifests();
+  apiKeyPageHost.hostId = null;
   useSettingsEnvironmentPickStore.setState({ pick: null });
   setSystemTabModalApi(null);
+  vi.restoreAllMocks();
+});
+
+afterAll(() => {
+  vi.doUnmock("@/lib/host");
+  vi.doUnmock("@/lib/host/runtime");
+  vi.doUnmock("@/hooks/chats/use-cloud-chat-queries");
+  vi.doUnmock("@/hooks/host/use-host-client-for-host-id");
+  vi.doUnmock("@/hooks/host/use-addressable-host-id");
+  vi.doUnmock("@/components/settings/secrets/secret-row");
+  vi.doUnmock("@/lib/links/open-link");
 });
 
 describe("TeamProviders items", () => {
   it("shows every provider and follows the first configured row until a click", async () => {
     const setSection = vi.fn<(section: SettingsSectionId) => void>();
     publishSettingsApi(setSection);
-    const harness = mountTeamPage(poolSource("editor"), {
+    const source = poolSource("editor");
+    const harness = mountTeamPage(source, {
       ...handlers(() => []),
       "environment.plans.list": () => ({
         plans: [
@@ -94,6 +144,7 @@ describe("TeamProviders items", () => {
         removed: [],
       }),
     });
+    seedLegacyProviderRecords(harness, source);
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     expect(
@@ -110,7 +161,7 @@ describe("TeamProviders items", () => {
     await waitFor(() => {
       expect(railButton("Codex").getAttribute("aria-current")).toBe("true");
     });
-    expect(screen.getByRole("combobox", { name: "Linked plan" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Linked plan" })).toBeNull();
     expect(railPieces("Codex")).toEqual({ title: "Codex", subtitle: null });
     expect(railPieces("Cursor")).toEqual({ title: "Cursor", subtitle: "key" });
     expect(
@@ -205,13 +256,15 @@ describe("TeamProviders items", () => {
   });
 
   it("puts a Personal provider with a live key and no profiles in the configured group", async () => {
-    const harness = mountTeamPage(personalPoolSource(), {
+    const source = personalPoolSource();
+    const harness = mountTeamPage(source, {
       ...handlers(() => []),
       "environment.secrets.list": () => ({
         secrets: [cursorKey],
         removed: [],
       }),
     });
+    seedLegacyProviderRecords(harness, source);
     render(<TeamProviders />, { wrapper: harness.Wrapper });
 
     const rail = await screen.findByRole("navigation", {
@@ -286,12 +339,16 @@ describe("TeamProviders items", () => {
     expect(railButton("Claude Code").getAttribute("aria-current")).toBe("true");
   });
 
-  it("orders Plans & limits as Plans, Profiles, then rate limits", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
+  it("orders Plans & limits as Profiles, then rate limits", async () => {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
       ...handlers(() => [cursorProfile("Cursor Work", 1)]),
       "environment.secrets.list": () => ({
         secrets: [cursorKey],
         removed: [],
+      }),
+      "providers.list": () => ({
+        providers: [cursorProviderListRow()],
+        native: null,
       }),
     });
     render(<TeamProviders />, { wrapper: harness.Wrapper });
@@ -302,19 +359,15 @@ describe("TeamProviders items", () => {
     expect(screen.queryByRole("heading", { name: "Key" })).toBeNull();
     expect(screen.queryByText("CURSOR_API_KEY")).toBeNull();
     const panel = screen.getByRole("tabpanel");
-    const labels = ["Plans", "Profiles", "Rate limits"].map((name) =>
+    const labels = ["Profiles", "Rate limits"].map((name) =>
       within(panel).getByRole("heading", { name }),
     );
     expect(
       labels[0]?.compareDocumentPosition(labels[1] ?? labels[0]) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      labels[1]?.compareDocumentPosition(labels[2] ?? labels[1]) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
     expect(within(panel).queryByRole("region", { name: "Key" })).toBeNull();
-    expect(within(panel).getByRole("region", { name: "Plans" })).toBeTruthy();
+    expect(within(panel).queryByRole("region", { name: "Plans" })).toBeNull();
     expect(harness.paramsOf("environment.secrets.list").length).toBeGreaterThan(
       0,
     );
@@ -542,16 +595,25 @@ describe("TeamProviders items", () => {
     );
     const unregister = registerDetailsProvider("env_override", provider);
     try {
-      const harness = mountTeamPage(
-        poolSource("viewer"),
-        handlers(() => [
+      const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
+        ...handlers(() => [
           profile(true, 4),
           envOverride("https://old.example", 7),
         ]),
-      );
+        "providers.list": () => ({
+          providers: [
+            providerState("claude-code", { mcp: false, skills: false }),
+          ],
+          native: null,
+        }),
+      });
       render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-      expect(await screen.findByText("On")).toBeTruthy();
+      expect(
+        await screen.findByRole("switch", {
+          name: "Allow agents to use Work",
+        }),
+      ).toBeTruthy();
       const profileCombobox = screen.queryByRole("combobox", {
         name: "Profile",
       });

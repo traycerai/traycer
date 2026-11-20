@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { ChatRecordSummaryV14 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV15 } from "@traycer/protocol/host/epic/chat-records";
 import type {
   RecordListRecencyPatch,
   RecordListStamp,
@@ -13,11 +13,15 @@ import {
   useRecordListStreamStamp,
 } from "@/hooks/chats/use-record-list-stamp";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import { hostSupportsPublicationRedirectRevision } from "@/hooks/chats/use-chat-publication-targets";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projection-helpers";
+import {
+  GUI_PROJECTS_EPIC_DOC_REPLICA,
+  isChatVisibleToUser,
+} from "@/stores/epics/open-epic/projection-helpers";
 
 /**
  * What the cache holds for one `epic.listChatRecords` answer: the rows, plus
@@ -28,8 +32,11 @@ import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projecti
  * answer is applied. `null` when no session existed to read at dispatch.
  */
 interface ChatRecordListAnswer {
+  readonly publicationRedirectRevision: string | null;
+  readonly publicationRedirectRevisionSupported: boolean;
+  readonly answerSequence: number;
   /**
-   * The `@1.4` row, NOT the base one and not an older minor's. A narrower row
+   * The `@1.5` row, NOT the base one and not an older minor's. A narrower row
    * is assignable to this in the wrong direction, so typing it down is a
    * silent narrowing rather than a type error, and each dropped field fails
    * somewhere different:
@@ -45,6 +52,8 @@ interface ChatRecordListAnswer {
    *  - without `evicted` (the `@1.4` field), a chat whose records the host
    *    dropped opens its tile on that host, which no longer holds them,
    *    instead of on the server pool.
+   *  - without `starterUserId` (the `@1.5` field), a chat on a team's
+   *    computer never says who started it.
    *
    * A host on an older minor upgrades with `head` absent, which the head
    * plane treats as "nothing to say about the head" rather than as a
@@ -54,7 +63,7 @@ interface ChatRecordListAnswer {
    * `unchanged` arm. Distinct from `[]`, which is the positive claim that
    * this epic has no chats and retracts everything the fence allows.
    */
-  readonly chats: readonly ChatRecordSummaryV14[] | null;
+  readonly chats: readonly ChatRecordSummaryV15[] | null;
   /**
    * What the `unchanged` arm carried instead of rows: the recency facts a
    * QUIET write moved since the stamp this request sent. Empty on the
@@ -287,9 +296,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
         snapshotIncompleteSeq: state.chatSnapshotIncompleteSeq,
       };
     },
-    mapResponse: ({ response, requestContext }) => {
+    mapResponse: ({ response, requestContext, queryClient, queryKey }) => {
       const context = requestContext ?? null;
       return {
+        publicationRedirectRevision: response.publicationRedirectRevision,
+        publicationRedirectRevisionSupported:
+          hostSupportsPublicationRedirectRevision(hostId) ?? false,
+        answerSequence:
+          (queryClient.getQueryState(queryKey)?.dataUpdateCount ?? 0) + 1,
         // `unchanged` maps to `null`, never to `[]`. An empty array is not the
         // neutral value here: the store merges omissions against the dispatch
         // fence, so an empty answer RETRACTS every row that landed before it.
@@ -319,12 +333,64 @@ export function useEpicSyncChatRecords(epicId: string): void {
   );
 
   const answer = query.data ?? null;
-  const recordListAuthoritative =
-    query.isSuccess ||
-    (query.isError && query.error.code === "E_HOST_UNSUPPORTED");
+  const recordListUnsupported =
+    query.isError && query.error.code === "E_HOST_UNSUPPORTED";
+  const recordListAuthoritative = query.isSuccess || recordListUnsupported;
+  const recordListFailed = query.isError && !recordListAuthoritative;
+  // Snapshot and unchanged answers settle negotiated support (@1.5 and older
+  // are false). Unsupported settles false and authorizes doc-only IDs. Other
+  // failures keep negotiated or last-known support for this viewer, using legacy
+  // false if neither is known, so the failed-list gate can read known IDs. A
+  // viewer reset alone leaves support null until that viewer's first terminal
+  // answer settles it.
+  useEffect(() => {
+    if (recordListFailed || recordListAuthoritative) {
+      store?.getState().setChatRecordListFailed(recordListFailed);
+    }
+    if ((recordListFailed || recordListUnsupported) && store !== null) {
+      const state = store.getState();
+      state.recordChatPublicationRedirectRevision(
+        state.chatPublicationRedirectRevision,
+        recordListUnsupported
+          ? false
+          : (hostSupportsPublicationRedirectRevision(hostId) ??
+              state.chatPublicationRedirectRevisionSupported ??
+              false),
+        state.chatRecordListAnswerSequence,
+        null,
+      );
+    }
+  }, [
+    recordListFailed,
+    recordListAuthoritative,
+    recordListUnsupported,
+    hostId,
+    store,
+  ]);
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;
     if (answer !== null) {
+      store
+        .getState()
+        .recordChatPublicationRedirectRevision(
+          answer.publicationRedirectRevision,
+          recordListUnsupported
+            ? false
+            : answer.publicationRedirectRevisionSupported,
+          answer.answerSequence,
+          answer.chats === null
+            ? null
+            : answer.chats
+                .filter((row) =>
+                  isChatVisibleToUser(
+                    row.origin,
+                    row.ownerUserId,
+                    viewerUserId,
+                    viewerUserId,
+                  ),
+                )
+                .map((row) => row.chatId),
+        );
       if (answer.chats !== null) {
         // The fence is used as captured. It was read from THIS store, because
         // the generation is in the cache key - see `ChatRecordListAnswer`.
@@ -356,7 +422,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
       stamp.hold(answer.listStamp, answer.snapshotIncompleteSeqAtDispatch);
     }
     store.getState().markChatRecordListAuthoritative();
-  }, [answer, recordListAuthoritative, stamp, store]);
+  }, [
+    answer,
+    recordListAuthoritative,
+    recordListUnsupported,
+    stamp,
+    store,
+    viewerUserId,
+  ]);
 }
 
 /**

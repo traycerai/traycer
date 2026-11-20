@@ -38,6 +38,8 @@ async function requestInvitations<T>(
           },
           body:
             environmentId === null ? null : JSON.stringify({ environmentId }),
+          // Carries a credential: never follow a redirect.
+          redirect: "manual",
           signal: abort.signal,
         },
       ),

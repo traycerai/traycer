@@ -51,25 +51,27 @@ function renderPeople(entries: ReadonlyArray<CollaboratorEntry>) {
   return { view };
 }
 
-describe("a collaborator stored on the retired viewer role", () => {
-  it("is not listed as having access, and has no role control", () => {
+describe("a collaborator stored on the viewer role", () => {
+  it("is listed as an Editor, and has no role control beside the other editor", () => {
     const { view } = renderPeople([
       userEntry("user-1", "Ada Owner", "owner"),
       userEntry("user-2", "Priya Editor", "editor"),
-      userEntry("user-3", "Vic Retired", "viewer"),
+      userEntry("user-3", "Vic Viewer", "viewer"),
     ]);
 
-    expect(view.directUsers.map((row) => row.userId)).toEqual([
-      "user-1",
-      "user-2",
+    expect(view.directUsers.map((row) => [row.userId, row.role])).toEqual([
+      ["user-1", "owner"],
+      ["user-2", "editor"],
+      ["user-3", "editor"],
     ]);
     const list = screen.getByTestId("epic-sharing-people-list");
-    // The one owner is the last owner and the editor has no second role to
-    // move to, so neither row offers a role menu a retired row could share.
+    expect(within(list).getByText("Vic Viewer")).toBeTruthy();
+    // The one owner is the last owner and an editor has no second role to move
+    // to, so no row offers a role menu.
     expect(within(list).queryByTestId("collaborator-role-select")).toBeNull();
   });
 
-  it("is dropped from a shared team too, so no team is listed on it", () => {
+  it("is listed on a shared team as an Editor", () => {
     const view = projectCollaborators([
       {
         role: "viewer",
@@ -90,8 +92,20 @@ describe("a collaborator stored on the retired viewer role", () => {
       },
     ]);
 
-    expect(view.teams).toEqual([]);
-    expect(view.ownerTeam).toBeNull();
-    expect(view.flatRows).toEqual([]);
+    expect(view.teams.map((team) => [team.teamId, team.role])).toEqual([
+      ["team-1", "editor"],
+    ]);
+    expect(view.flatRows.map((row) => [row.userId, row.role])).toEqual([
+      ["user-9", "editor"],
+    ]);
+  });
+
+  it("is dropped, with every other row, only when its role is one nothing recognises", () => {
+    const view = projectCollaborators([
+      userEntry("user-1", "Ada Owner", "owner"),
+      userEntry("user-4", "Newer Role", "supervisor" as "editor"),
+    ]);
+
+    expect(view.directUsers.map((row) => row.userId)).toEqual(["user-1"]);
   });
 });

@@ -11,7 +11,7 @@ import { buildAgentTitleFromHookCommand } from "../agent-title-from-hook";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
 import { noopLogger } from "../../logger";
-import { callHostRpcFastFail } from "../../internal/host-rpc";
+import { callAgentHostRpcFastFail } from "../../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
 
 const loggerMock = vi.hoisted(() => ({
@@ -34,11 +34,11 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpcFastFail: vi.fn(),
+    callAgentHostRpcFastFail: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpcFastFail);
+const rpcMock = vi.mocked(callAgentHostRpcFastFail);
 
 function makeRuntime(): RuntimeContext {
   return {

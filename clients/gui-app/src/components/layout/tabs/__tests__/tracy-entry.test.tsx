@@ -10,9 +10,9 @@
  * real protocol schemas do not load in this suite's jsdom).
  */
 import {
-  PLAIN_BOT_ID,
-  mascotPathsAt,
-  renderedMascotPaths,
+  drawsColouredMascot,
+  expectedTracyGlyph,
+  renderedTracyGlyphs,
 } from "@/components/bots/__tests__/mascot-drawing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -385,6 +385,13 @@ const ENVIRONMENTS: typeof scripted.environments = [
   { environmentId: TEAM_ENV, label: "Acme", ownerKind: "organization" },
 ];
 
+/** The entry draws the one-colour Tracy glyph at 16px and no coloured mascot. */
+function expectEntryDrawsTracyGlyph(entry: HTMLElement): void {
+  const [icon] = within(entry).getAllByTestId("tracy-entry-icon");
+  expect(renderedTracyGlyphs(icon)).toEqual([expectedTracyGlyph(16)]);
+  expect(drawsColouredMascot(icon)).toBe(false);
+}
+
 function tracyIsMainBot(): void {
   scripted.list = {
     bots: [
@@ -580,9 +587,7 @@ describe("the fixed Tracy entry - top strip", () => {
 
     expect(entry.textContent).toContain("Tracy");
     expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
-    expect(
-      renderedMascotPaths(within(entry).getAllByTestId("tracy-entry-icon")[0]),
-    ).toEqual(mascotPathsAt(PLAIN_BOT_ID, false, 16));
+    expectEntryDrawsTracyGlyph(entry);
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -1275,9 +1280,7 @@ describe("the fixed Tracy entry - a default channel with any title", () => {
     expect(entry.textContent).toContain("Tracy");
     expect(entry.textContent).not.toContain("Release Notes");
     expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
-    expect(
-      renderedMascotPaths(within(entry).getAllByTestId("tracy-entry-icon")[0]),
-    ).toEqual(mascotPathsAt(PLAIN_BOT_ID, false, 16));
+    expectEntryDrawsTracyGlyph(entry);
 
     await userEvent.hover(entry);
     const body = await screen.findByTestId("tracy-entry-hover-body");
@@ -1361,9 +1364,7 @@ describe("the fixed Tracy entry - vertical strip", () => {
     expect(
       within(entry).getAllByTestId("tracy-entry-icon").length,
     ).toBeGreaterThan(0);
-    expect(
-      renderedMascotPaths(within(entry).getAllByTestId("tracy-entry-icon")[0]),
-    ).toEqual(mascotPathsAt(PLAIN_BOT_ID, false, 16));
+    expectEntryDrawsTracyGlyph(entry);
     expect(entry.getAttribute("aria-label")).toBe("Tracy");
     expect(
       home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,

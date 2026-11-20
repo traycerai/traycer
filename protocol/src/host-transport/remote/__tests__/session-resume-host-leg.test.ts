@@ -820,7 +820,6 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
       appVersion: "0.0.0-test",
     },
     livenessProbe: config.livenessProbe,
-    mintMemberCredential: null,
   });
   opened.push(session);
   const ticks: number[] = [];

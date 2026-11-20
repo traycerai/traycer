@@ -12,9 +12,11 @@ import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import type {
   EnvironmentConfigurationItem,
+  EnvironmentConfigurationItemsResponse,
   EnvironmentConfigurationItemWriteResponse,
 } from "@traycer/protocol/host/environment/configuration-contracts";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import { ITEM_ROUTE_KINDS } from "@traycer-clients/shared/environment/authn-environment-schemas";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { toast } from "sonner";
 import {
@@ -52,9 +54,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const useHostScope = () => hostScopeFixture({ host: null });
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => null,
-}));
+
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 import { StoragePolicySection } from "@/components/settings/panels/storage-policy-section";
 import { StorageSettingsPanel } from "@/components/settings/environment/storage-settings-panel";
@@ -117,6 +118,7 @@ const OTHER_TEAM_DESCRIPTOR: EnvironmentDescriptorV11 = {
 
 const host = {
   teamRole: "admin" as EnvironmentDescriptorV11["effectiveRole"],
+  environmentListFails: false,
   items: [] as EnvironmentConfigurationItem[],
   teamItems: [] as EnvironmentConfigurationItem[],
   readFails: false,
@@ -156,25 +158,54 @@ function snapshotItem(
 }
 
 function renderSection(ui: ReactNode): void {
+  const itemReads = new Map<
+    string,
+    {
+      readonly answer: Promise<EnvironmentConfigurationItemsResponse>;
+      remainingPages: number;
+    }
+  >();
   harness = mountTeamPage(poolSource("owner"), {
-    "environment.list": () => ({
-      environments: [
-        descriptor("owner"),
-        { ...TEAM_DESCRIPTOR, effectiveRole: host.teamRole },
-        OTHER_TEAM_DESCRIPTOR,
-      ],
-    }),
-    "environment.configuration.items": (params) => {
-      if (host.readFails) throw new Error("read refused");
-      if (host.read !== null) return host.read(params.environmentId);
+    "environment.list": () => {
+      if (host.environmentListFails)
+        throw new Error("Could not read environment list");
       return {
-        items: params.environmentId === TEAM_ENV ? host.teamItems : host.items,
+        environments: [
+          descriptor("owner"),
+          { ...TEAM_DESCRIPTOR, effectiveRole: host.teamRole },
+          OTHER_TEAM_DESCRIPTOR,
+        ],
       };
+    },
+    "environment.configuration.items": (params) => {
+      const environmentId = params.environmentId;
+      let batch = itemReads.get(environmentId);
+      if (batch === undefined) {
+        batch = {
+          answer: (async () => {
+            if (host.readFails) throw new Error("read refused");
+            if (host.read !== null) return host.read(environmentId);
+            return {
+              items: environmentId === TEAM_ENV ? host.teamItems : host.items,
+            };
+          })(),
+          remainingPages: ITEM_ROUTE_KINDS.length,
+        };
+        itemReads.set(environmentId, batch);
+      }
+      batch.remainingPages -= 1;
+      if (batch.remainingPages === 0) itemReads.delete(environmentId);
+      return batch.answer;
     },
     [PUT]: () =>
       host.put === null
         ? Promise.resolve({ outcome: "saved", revision: 1 })
         : host.put(),
+  });
+  useAuthStore.setState({
+    shareableTeams: [
+      { teamId: "team-1", slug: "handle-acme", avatarUrl: null },
+    ],
   });
   render(
     <>
@@ -305,6 +336,7 @@ describe("<StoragePolicySection />", () => {
     resetNegotiatedManifests();
     recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [PUT]);
     host.teamRole = "admin";
+    host.environmentListFails = false;
     host.items = [];
     host.teamItems = [];
     host.readFails = false;
@@ -1416,25 +1448,25 @@ describe("<StoragePolicySection />", () => {
     },
   );
 
-  it("renders nothing on a host that does not advertise the item write", async () => {
+  it("keeps saving the policy when the host does not advertise item writes", async () => {
     renderSection(PERSONAL_SECTION);
-    await chatsSwitch();
+    await settled();
 
-    // The same host, renegotiated without the write: the section goes, so its
-    // absence is the gate's answer and not a read still in flight.
     act(() => {
-      recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
-        "environment.list",
-        "environment.configuration.items",
-      ]);
+      recordNegotiatedHostMethods(mockLocalHostEntry.hostId, []);
     });
+    await userEvent.click(await chatsSwitch());
 
     await waitFor(() => {
-      expect(within(document.body).queryByTestId("storage-policy")).toBeNull();
+      expectPut(
+        PERSONAL_ENV,
+        { chats: false, idleTaskDays: null, archivedChatHours: 4 },
+        null,
+      );
     });
   });
 
-  it("disables every control after a retired viewer role is decoded, even with a loaded policy", async () => {
+  it("gives a Viewer disabled controls and sends no write, even with a loaded policy", async () => {
     host.teamRole = "viewer";
     host.teamItems = [
       storageItem({ chats: false, idleTaskDays: 14, archivedChatHours: 24 }, 3),
@@ -1457,38 +1489,76 @@ describe("<StoragePolicySection />", () => {
     expect(harness?.paramsOf(PUT)).toEqual([]);
   });
 
-  it("reads and writes the picked team's environment, not Personal's", async () => {
-    host.items = [
-      storageItem(
-        { chats: false, idleTaskDays: null, archivedChatHours: 720 },
-        9,
-      ),
-    ];
+  it("disables storage policy controls after the cached Admin role read fails", async () => {
+    host.teamRole = "admin";
     host.teamItems = [
-      storageItem({ chats: true, idleTaskDays: 7, archivedChatHours: null }, 2),
-      snapshotItem({ quietChatDays: 30 }, 6),
+      storageItem({ chats: true, idleTaskDays: 14, archivedChatHours: 24 }, 3),
     ];
-    const pick: EnvironmentPick = { kind: "team", environmentId: TEAM_ENV };
-    renderSection(<StoragePolicySection pick={pick} />);
+    renderSection(
+      <StoragePolicySection pick={{ kind: "team", environmentId: TEAM_ENV }} />,
+    );
+
     await settled();
-    expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
+    const control = await chatsSwitch();
+    const listQuery = harness?.queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => query.queryKey.includes("environment.list"));
+    if (harness === null || listQuery === undefined)
+      throw new Error("environment list was not read");
 
-    await userEvent.click(await chatsSwitch());
-
-    await waitFor(() => {
-      expectPut(
-        TEAM_ENV,
-        { chats: false, idleTaskDays: 7, archivedChatHours: null },
-        2,
-      );
+    host.environmentListFails = true;
+    await act(async () => {
+      await harness?.queryClient.invalidateQueries({
+        queryKey: listQuery.queryKey,
+      });
     });
 
-    expect(snapshotsSelect().textContent).toContain("After 30 days");
-    pickOption(snapshotsSelect(), "Never");
-    await waitFor(() => {
-      expectSnapshotPut(TEAM_ENV, { quietChatDays: null }, 6);
-    });
+    await waitFor(() => expect(listQuery.state.status).toBe("error"));
+    expect(control.hasAttribute("disabled")).toBe(true);
+    expect(idleTasksSelect().hasAttribute("disabled")).toBe(true);
+    expect(archivedChatsSelect().hasAttribute("disabled")).toBe(true);
   });
+
+  it.each(["admin", "editor"] as const)(
+    "reads and writes the picked team's environment for a team %s, not Personal's",
+    async (role) => {
+      host.teamRole = role;
+      host.items = [
+        storageItem(
+          { chats: false, idleTaskDays: null, archivedChatHours: 720 },
+          9,
+        ),
+      ];
+      host.teamItems = [
+        storageItem(
+          { chats: true, idleTaskDays: 7, archivedChatHours: null },
+          2,
+        ),
+        snapshotItem({ quietChatDays: 30 }, 6),
+      ];
+      const pick: EnvironmentPick = { kind: "team", environmentId: TEAM_ENV };
+      renderSection(<StoragePolicySection pick={pick} />);
+      await settled();
+      expect((await chatsSwitch()).getAttribute("aria-checked")).toBe("true");
+
+      await userEvent.click(await chatsSwitch());
+
+      await waitFor(() => {
+        expectPut(
+          TEAM_ENV,
+          { chats: false, idleTaskDays: 7, archivedChatHours: null },
+          2,
+        );
+      });
+
+      expect(snapshotsSelect().textContent).toContain("After 30 days");
+      pickOption(snapshotsSelect(), "Never");
+      await waitFor(() => {
+        expectSnapshotPut(TEAM_ENV, { quietChatDays: null }, 6);
+      });
+    },
+  );
 });
 
 describe("<StorageSettingsPanel />", () => {

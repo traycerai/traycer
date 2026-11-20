@@ -100,6 +100,7 @@ button,a,summary{font:inherit}
 section{min-height:140px;padding:12px 16px;border-top:1px solid #ddd}
 #deep,#marked,#top{display:block;margin:0;padding:12px 16px;background:#e8eef8}
 #fresh{margin:0;padding:12px 16px;background:#f4f0e6}
+#tall{height:1600px;background:#eef4e8}
 .rows{margin:0;padding:0;list-style:none}
 .rows li{margin:0;padding:0;font-size:12px;line-height:14px}
 </style>`;
@@ -140,7 +141,7 @@ function pageDocument(body: string): string {
 }
 
 const PAGE_HTML = pageDocument(
-  `<p id="top" data-tid="top">On the entry page.</p>${PAGE_CONTROLS}${sections}`,
+  `<p id="top" data-tid="top">On the entry page.</p>${PAGE_CONTROLS}${sections}<div id="tall"></div>`,
 );
 const DETAIL_HTML = pageDocument(
   `${PAGE_CONTROLS}<p id="marked" data-tid="marked">Marked on the detail page.</p>`,

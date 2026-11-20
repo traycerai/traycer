@@ -3,7 +3,9 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
+import type { ModelProviderAuthAction } from "@traycer/protocol/host/provider-native-schemas";
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
+import type { ModelProviderAuthVariables } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { modelProvidersQueryKeys } from "@/lib/query-keys/model-providers-query-keys";
 import { queryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -69,6 +71,12 @@ function wrapper(client: QueryClient) {
   };
 }
 
+function actionReader(
+  action: ModelProviderAuthAction,
+): (target: ModelProviderAuthVariables["action"]) => ModelProviderAuthAction {
+  return (_target) => action;
+}
+
 beforeEach(() => {
   // Hoisted state is shared across every test in the file; without this a host
   // id or a queued response from one leaks into the next, and the failure shows
@@ -88,9 +96,10 @@ describe("model provider auth invalidation", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
     hostMocks.request.mockResolvedValue({ result: { kind: "done" } });
 
-    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
-      wrapper: wrapper(client),
-    });
+    const { result } = renderHook(
+      () => useProvidersModelProviderAuth(null, null),
+      { wrapper: wrapper(client) },
+    );
     result.current.mutate({
       providerId: "opencode",
       action: { action: "disconnect", modelProviderId: "huggingface" },
@@ -154,20 +163,28 @@ describe("model provider auth invalidation", () => {
       },
     });
 
-    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
-      wrapper: wrapper(client),
-    });
+    const { result } = renderHook(
+      () =>
+        useProvidersModelProviderAuth(
+          actionReader({
+            action: "createCustom",
+            modelProviderId: "myprovider",
+            name: "My AI Provider",
+            baseUrl: "https://api.myprovider.com/v1",
+            models: [{ id: "a", name: "A" }],
+            headers: [],
+            key: "synthetic-model-provider-key",
+            env: [],
+          }),
+          null,
+        ),
+      { wrapper: wrapper(client) },
+    );
     result.current.mutate({
       providerId: "opencode",
       action: {
         action: "createCustom",
         modelProviderId: "myprovider",
-        name: "My AI Provider",
-        baseUrl: "https://api.myprovider.com/v1",
-        models: [{ id: "a", name: "A" }],
-        headers: [],
-        key: "sk-live-123",
-        env: [],
       },
     });
 
@@ -200,12 +217,26 @@ describe("model provider auth invalidation", () => {
       return Promise.resolve({ result: { kind: "done" } });
     });
 
-    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
-      wrapper: wrapper(client),
-    });
+    const { result } = renderHook(
+      () =>
+        useProvidersModelProviderAuth(
+          actionReader({
+            action: "startOauth",
+            modelProviderId: "openai",
+            methodIndex: 0,
+            inputs: {},
+          }),
+          null,
+        ),
+      { wrapper: wrapper(client) },
+    );
     result.current.mutate({
       providerId: "opencode",
-      action: { action: "disconnect", modelProviderId: "openai" },
+      action: {
+        action: "startOauth",
+        modelProviderId: "openai",
+        methodIndex: 0,
+      },
     });
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -240,16 +271,25 @@ describe("model provider auth invalidation", () => {
       },
     });
 
-    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
-      wrapper: wrapper(client),
-    });
+    const { result } = renderHook(
+      () =>
+        useProvidersModelProviderAuth(
+          actionReader({
+            action: "startOauth",
+            modelProviderId: "openai",
+            methodIndex: 0,
+            inputs: {},
+          }),
+          null,
+        ),
+      { wrapper: wrapper(client) },
+    );
     result.current.mutate({
       providerId: "opencode",
       action: {
         action: "startOauth",
         modelProviderId: "openai",
         methodIndex: 0,
-        inputs: {},
       },
     });
 
@@ -277,9 +317,12 @@ describe("model provider auth invalidation", () => {
     const remove = vi.spyOn(client, "removeQueries");
     hostMocks.request.mockResolvedValue({ result: { kind: "done" } });
 
-    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
-      wrapper: wrapper(client),
-    });
+    const { result } = renderHook(
+      () => useProvidersModelProviderAuth(null, null),
+      {
+        wrapper: wrapper(client),
+      },
+    );
     result.current.mutate({
       providerId: "opencode",
       action: { action: "disconnect", modelProviderId: "huggingface" },
@@ -314,9 +357,12 @@ describe("model provider auth invalidation", () => {
     const reset = vi.spyOn(client, "resetQueries");
     hostMocks.request.mockResolvedValue({ result: { kind: "done" } });
 
-    const { result } = renderHook(() => useProvidersModelProviderAuth(), {
-      wrapper: wrapper(client),
-    });
+    const { result } = renderHook(
+      () => useProvidersModelProviderAuth(null, null),
+      {
+        wrapper: wrapper(client),
+      },
+    );
     result.current.mutate({
       providerId: "claude-code",
       action: { action: "disconnect", modelProviderId: "openai" },

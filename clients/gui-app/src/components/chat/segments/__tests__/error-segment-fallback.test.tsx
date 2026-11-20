@@ -446,6 +446,7 @@ function renderErrorRowWithFallbackAttempt(row: ErrorRowShape) {
           value={{
             chatId: FALLBACK_LIVE_GATE_CHAT_ID,
             hostId: FALLBACK_LIVE_GATE_HOST_ID,
+            payerHostId: FALLBACK_LIVE_GATE_HOST_ID,
           }}
         >
           <ErrorSegment
@@ -721,6 +722,7 @@ describe("ErrorSegment failed-turn card, through the transcript row", () => {
             value={{
               chatId: FALLBACK_LIVE_GATE_CHAT_ID,
               hostId: FALLBACK_LIVE_GATE_HOST_ID,
+              payerHostId: FALLBACK_LIVE_GATE_HOST_ID,
             }}
           >
             <ErrorSegment
@@ -829,6 +831,7 @@ describe("ErrorSegment failed-turn card, through the transcript row", () => {
             value={{
               chatId: FALLBACK_LIVE_GATE_CHAT_ID,
               hostId: FALLBACK_LIVE_GATE_HOST_ID,
+              payerHostId: FALLBACK_LIVE_GATE_HOST_ID,
             }}
           >
             <ErrorSegment
@@ -889,6 +892,7 @@ describe("ErrorSegment across the settle: the settled card takes the row's actio
             value={{
               chatId: FALLBACK_LIVE_GATE_CHAT_ID,
               hostId: FALLBACK_LIVE_GATE_HOST_ID,
+              payerHostId: FALLBACK_LIVE_GATE_HOST_ID,
             }}
           >
             <ErrorSegment

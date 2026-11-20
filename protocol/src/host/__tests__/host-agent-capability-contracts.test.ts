@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import { upgradeResponseToVersion } from "@traycer/protocol/framework/versioned-rpc";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { agentArchiveV10 } from "@traycer/protocol/host/agent/archive";
 import {
@@ -9,6 +10,7 @@ import {
   HOST_FILE_TRANSFER_UNREADABLE_MESSAGE_MAX_LENGTH,
   hostAgentCreateFromRemoteSenderV10,
   hostAgentCreateFromRemoteSenderV11,
+  hostAgentCreateFromRemoteSenderV12,
   hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
   hostFileCopyCancelV10,
   hostFileCopyFailureSchema,
@@ -523,11 +525,15 @@ describe("host-agent capability contracts", () => {
       ).toEqual(v10Request);
       expect(
         hostRpcRegistry["host.agent.createFromRemoteSender"][1].latestMinor,
-      ).toBe(1);
+      ).toBe(2);
       expect(
         hostRpcRegistry["host.agent.createFromRemoteSender"][1].versions[1]
           .contract,
       ).toBe(hostAgentCreateFromRemoteSenderV11);
+      expect(
+        hostRpcRegistry["host.agent.createFromRemoteSender"][1].versions[2]
+          .contract,
+      ).toBe(hostAgentCreateFromRemoteSenderV12);
     });
 
     it("takes a TUI sender's launch tuple and refuses a GUI-only harness there", () => {
@@ -589,6 +595,120 @@ describe("host-agent capability contracts", () => {
           warnings: [],
         }).agentId,
       ).toBe("child-1");
+    });
+
+    describe("v1.2 admission", () => {
+      const CREATED_RECORD = {
+        taskId: "epic-1",
+        chatId: "child-1",
+        ownerUserId: "user-1",
+        ownerHostId: "host-b",
+        tenantKind: "chat",
+        createdAt: 1_700_000_000_000,
+        visibility: "private",
+        metadataRevision: 3,
+        title: null,
+        isTitleEditedByUser: false,
+        parentChatId: null,
+        isArchived: false,
+        archiveChangedAt: null,
+        runSettingsSummary: null,
+        metadataUpdatedAt: 1_700_000_000_500,
+        roleClaims: [],
+        head: null,
+      } as const;
+      const V11 = { major: 1, minor: 1 } as const;
+      const V12 = { major: 1, minor: 2 } as const;
+
+      it("parses an admitted reply with its record and a pending reply", () => {
+        const schema = hostAgentCreateFromRemoteSenderV12.responseSchema;
+        expect(
+          schema.parse({
+            agentId: "child-1",
+            warnings: [],
+            admission: { status: "admitted", record: CREATED_RECORD },
+          }).admission,
+        ).toEqual({ status: "admitted", record: CREATED_RECORD });
+        expect(
+          schema.parse({
+            agentId: "child-1",
+            warnings: [],
+            admission: { status: "pending" },
+          }).admission,
+        ).toEqual({ status: "pending" });
+      });
+
+      const VALID_HEAD = {
+        headSha256: "a".repeat(64),
+        throughRecordSeq: 4,
+        publishedAt: 1_700_000_000_400,
+      } as const;
+
+      it("parses an admitted record that carries a valid head", () => {
+        const record = { ...CREATED_RECORD, head: VALID_HEAD };
+        expect(
+          hostAgentCreateFromRemoteSenderV12.responseSchema.parse({
+            agentId: "child-1",
+            warnings: [],
+            admission: { status: "admitted", record },
+          }).admission,
+        ).toEqual({ status: "admitted", record });
+      });
+
+      it.each([
+        ["head.publishedAt -1", { head: { ...VALID_HEAD, publishedAt: -1 } }],
+        ["head.publishedAt 0.5", { head: { ...VALID_HEAD, publishedAt: 0.5 } }],
+        ["createdAt 0.5", { createdAt: 0.5 }],
+        ["metadataUpdatedAt -1", { metadataUpdatedAt: -1 }],
+        ["archiveChangedAt 0.5", { archiveChangedAt: 0.5 }],
+      ])("refuses an admitted reply whose record has %s", (_name, override) => {
+        expect(
+          hostAgentCreateFromRemoteSenderV12.responseSchema.safeParse({
+            agentId: "child-1",
+            warnings: [],
+            admission: {
+              status: "admitted",
+              record: { ...CREATED_RECORD, ...override },
+            },
+          }).success,
+        ).toBe(false);
+      });
+
+      it("refuses an admitted reply that carries no record", () => {
+        expect(
+          hostAgentCreateFromRemoteSenderV12.responseSchema.safeParse({
+            agentId: "child-1",
+            warnings: [],
+            admission: { status: "admitted" },
+          }).success,
+        ).toBe(false);
+      });
+
+      it("reads admission null on an old owner's v1.1 reply upgraded through the registry", () => {
+        const v11Reply =
+          hostAgentCreateFromRemoteSenderV11.responseSchema.parse({
+            agentId: "child-1",
+            warnings: ["w"],
+          });
+        expect(
+          upgradeResponseToVersion(
+            hostRpcRegistry["host.agent.createFromRemoteSender"],
+            V11,
+            V12,
+            v11Reply,
+          ),
+        ).toEqual({ agentId: "child-1", warnings: ["w"], admission: null });
+      });
+
+      it("drops admission when an old caller parses a v1.2 reply with its v1.1 schema", () => {
+        expect(
+          hostAgentCreateFromRemoteSenderV11.responseSchema.parse({
+            agentId: "child-1",
+            warnings: [],
+            admission: { status: "admitted", record: CREATED_RECORD },
+          }),
+        ).toEqual({ agentId: "child-1", warnings: [] });
+      });
     });
   });
 });

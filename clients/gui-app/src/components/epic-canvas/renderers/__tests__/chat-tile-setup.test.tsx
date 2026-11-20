@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { isValidElement, type ReactNode } from "react";
 import type { ExternalToast } from "sonner";
 
 vi.mock(
@@ -59,17 +59,10 @@ vi.mock("sonner", () => ({
 }));
 
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  ChatEvent,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/schemas";
 import type { RestorableSetupInterruption } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import {
-  createChatSessionStore,
-  type ChatSessionStoreHandle,
-} from "@/stores/chats/chat-session-store";
-import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -85,16 +78,16 @@ import {
   resetRetainedDraftToastsForTests,
   retainedDraftToastCountForTests,
 } from "@/lib/toast/retained-draft-toasts";
-import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import {
+  CHAT_ID,
+  EPIC_ID,
+  OWNER_ID,
+  createHarness,
+  emitSnapshot,
+  type ChatTileHarness,
+} from "./chat-tile-test-support";
 
-const EPIC_ID = "epic-x";
-const CHAT_ID = "chat-x";
-const OWNER_ID = "owner-x";
-
-interface Harness {
-  readonly handle: ChatSessionStoreHandle;
-  readonly callbacks: () => ChatStreamCallbacks;
-}
+type Harness = ChatTileHarness;
 
 /**
  * A last-copy notice is rendered as an element so its whitespace survives, so
@@ -102,42 +95,11 @@ interface Harness {
  */
 function toastText(message: unknown): string {
   if (typeof message === "string") return message;
-  const children = (message as { props?: { children?: unknown } } | null)?.props
-    ?.children;
-  return typeof children === "string" ? children : "";
-}
-
-function createHarness(): Harness {
-  let callbacks: ChatStreamCallbacks | null = null;
-  const handle = createChatSessionStore({
-    environment: CHAT_STORE_TEST_ENVIRONMENT,
-    hostId: "host-a",
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    userId: OWNER_ID,
-    onAuthError: null,
-    onProviderAuthError: null,
-    wakeTransport: null,
-    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
-    streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
-      callbacks = nextCallbacks;
-      return {
-        sendAction: () => undefined,
-        sameTurnSteeringProtocolSupported: () => true,
-        draftBlobBridgeSupported: () => true,
-        requestTranscriptRange: () => undefined,
-        requestResnapshot: () => undefined,
-        close: () => undefined,
-      };
-    },
-  });
-  return {
-    handle,
-    callbacks: () => {
-      if (callbacks === null) throw new Error("expected callbacks");
-      return callbacks;
-    },
-  };
+  if (isValidElement<{ children: ReactNode | undefined }>(message)) {
+    const children = message.props.children;
+    return typeof children === "string" ? children : "";
+  }
+  return "";
 }
 
 /**
@@ -186,53 +148,6 @@ function chatEvent(
     metadata,
     ...overrides,
   };
-}
-
-function emitSnapshot(
-  callbacks: ChatStreamCallbacks,
-  events: ReadonlyArray<ChatEvent>,
-  messages: ReadonlyArray<Message>,
-): void {
-  callbacks.onConnectionStatus("open", null, null, null);
-  callbacks.onSnapshot({
-    kind: "snapshot",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    snapshot: {
-      chat: {
-        id: CHAT_ID,
-        parentId: null,
-        userId: OWNER_ID,
-        hostId: "test-host",
-        title: "Setup Chat",
-        createdAt: 0,
-        updatedAt: 0,
-        isTitleEditedByUser: false,
-        settings: null,
-        activeSessionChain: null,
-        claudePendingWakes: [],
-        messages: [...messages],
-        events: [...events],
-        archivedAt: null,
-        pinnedUserProviderHandle: null,
-        lastDeliveredRolesDigest: null,
-      },
-      access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
-      queue: { status: "idle", items: [] },
-      runStatus: "idle",
-      activeTurn: null,
-      pendingApprovals: [],
-      pendingInterviews: [],
-      pendingFileEditApprovals: [],
-      accumulatedFileChanges: [],
-      managedCommands: [],
-      heldUpdates: [],
-      portForwards: [],
-      worktreeBinding: null,
-      missingWorktreePaths: [],
-    },
-  });
 }
 
 /**
@@ -959,6 +874,64 @@ describe("useChatSetupFailureRestoreDriver", () => {
 });
 
 describe("<ChatTileErrorNoticeToasts />", () => {
+  it("passes one removed-profile warning to the toast layer for both rejection frames", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+    render(<ChatTileErrorNoticeToasts handle={harness.handle} />);
+
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "prompt" }],
+        },
+      ],
+    };
+    act(() => {
+      sendTestMessage(harness, content);
+    });
+    const pending = harness.handle.store.getState().pendingUserMessages.at(0);
+    if (pending === undefined) throw new Error("expected pending user message");
+
+    act(() => {
+      harness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId: pending.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason: "That profile no longer exists. Choose a profile.",
+        code: "removed-by-person",
+        backgroundStopTaskIds: [],
+        token: null,
+      });
+    });
+
+    expect(sonnerToastWarning).toHaveBeenCalledTimes(1);
+    expect(toastText(sonnerToastWarning.mock.calls[0][0])).toBe("Was removed");
+
+    act(() => {
+      harness.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        notice: {
+          code: "removed-by-person",
+          message: "That profile no longer exists. Choose a profile.",
+          severity: "warning",
+          clientActionId: pending.clientActionId,
+        },
+      });
+    });
+
+    expect(sonnerToastWarning).toHaveBeenCalledTimes(1);
+    expect(toastText(sonnerToastWarning.mock.calls[0][0])).toBe("Was removed");
+  });
+
   it("keeps warning severity and reports with fixed chat context", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), [], []);

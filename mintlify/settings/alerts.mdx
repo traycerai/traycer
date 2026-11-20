@@ -1,35 +1,54 @@
 ---
 title: "Alerts"
-description: "Open your OS notification settings, turn on push notifications in the mobile app and choose which kinds reach this phone."
+description: "Choose which kinds of notification interrupt you on this computer or phone, pick a chime for each, and open your OS notification settings."
 ---
 
-**Alerts** decides how this app alerts you. It sits in the **Application** group of [Settings](/settings), after [Sounds](/settings/sounds).
+**Alerts** decides what interrupts you on this computer or phone. It sits in the **Application** group of [Settings](/settings), so it applies to notifications from every host, and each computer and phone keeps its own choices.
 
-Which events create a notification in the first place is set per host, in Host › [Notifications](/settings/notifications). For what notifications are and where they appear, see [Notifications](/concepts/notifications).
+Every notification still appears in the notification center and counts as unread, whatever you choose here. For what notifications are and where they appear, see [Notifications](/concepts/notifications).
 
-## System
+## Notifications
 
-**OS notifications** (desktop app): banners and badges are set in your operating system. Click **Open Settings** to open your OS notification settings for Traycer.
+One row for each kind of notification:
 
-## This Phone
-
-**Push notifications** (mobile app) shows whether this phone can receive a host's notifications:
-
-- If you haven't been asked yet, tap **Enable**.
-- If they are turned off for Traycer, tap **Open Settings** to turn them back on in the phone's Settings app. The phone only asks once, so this is the way back after you declined.
-- When they are on, the row reads **On**.
-
-Once they are on, a switch for each kind of notification chooses which ones reach this phone. All four are on to begin with. Turning one off stops that kind from reaching this phone only; other phones and the desktop app are unaffected, and the notification still appears in the app.
-
-| Switch | Covers |
+| Kind | Covers |
 | --- | --- |
 | **Needs action** | Approvals and interviews. |
 | **Failure** | Errored turns, stalls, crashes, and rate limits. |
 | **Done** | Completed or intentionally stopped turns. |
 | **Info** | Sharing, comments, access changes, and other informational notifications. |
 
-A kind a host does not create never reaches the phone, whatever its switch says; see [Events](#events).
+### Notify
 
-## Events
+On a computer, the **Notify** switch chooses whether that kind interrupts you there: a message inside the app while a Traycer window has focus, and a system notification while none does. **Needs action**, **Failure** and **Done** are on to begin with; **Info** is off.
 
-**Notification events** chooses which events create a notification, per host. Click **Open Notifications** to go to Host › [Notifications](/settings/notifications) for the host selected in Settings.
+Turning a kind off affects this computer only. Your phone and other computers keep their own switches.
+
+### Push
+
+In the mobile app the switch is **Push**: whether that kind reaches this phone as a push notification. Turning one off also stops its message inside the app while the app is open. All four are on to begin with. Turning one off affects this phone only; other phones and the desktop app are unaffected.
+
+The switches move only while push notifications are on; see [System](#system).
+
+### Chime
+
+**Chime** picks the sound for that kind. Choosing a sound plays it, so you can try each one. A kind plays its chime while a Traycer window has focus, and only while its **Notify** or **Push** switch is on.
+
+| Kind | Default sound |
+| --- | --- |
+| **Needs action** | Orbit |
+| **Failure** | Rift |
+| **Done** | Prism |
+| **Info** | Ember |
+
+The sounds are Classic, Prism, Ripple, Ember, Orbit, Rift, Coin, Bloop, Cuckoo, Ta-da and Beacon. Choose **None** to keep that kind silent.
+
+## System
+
+**OS notifications** (desktop app): banners and badges are set in your operating system. Click **Open Settings** to open your OS notification settings for Traycer.
+
+**Push notifications** (mobile app) shows whether this phone can receive notifications:
+
+- If you haven't been asked yet, tap **Enable**.
+- If they are turned off for Traycer, tap **Open Settings** to turn them back on in the phone's Settings app. The phone only asks once, so this is the way back after you declined.
+- When they are on, the row reads **On**.

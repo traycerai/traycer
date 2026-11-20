@@ -89,7 +89,8 @@ export interface StripSlot {
   readonly isMergeTarget: boolean;
   /**
    * The section a sectioned strip holds the item in, `null` for a strip with
-   * none. A drag moves an item among the slots of its own lane only.
+   * none. A drag reorders an item among the slots of its own lane only; it
+   * splits with a slot of any lane.
    */
   readonly lane: string | null;
   /** The tab group the item is in, `null` for an ungrouped item. */
@@ -121,6 +122,12 @@ export interface StripGroupExtent {
 
 export interface StripDragGeometry {
   readonly slots: ReadonlyArray<StripSlot>;
+  /**
+   * The slots of the strip's other lanes, where they are drawn: the dragged
+   * item is never placed among them, but it can split with one. Empty for a
+   * strip with no lanes.
+   */
+  readonly otherLaneSlots: ReadonlyArray<StripSlot>;
   readonly groups: ReadonlyArray<StripGroupExtent>;
   /** The gap between neighbouring items or groups of the strip. */
   readonly runGap: number;
@@ -598,9 +605,37 @@ function splitCandidate(
 }
 
 /**
+ * The mergeable slot of another lane the dragged centre is on, or null. The
+ * whole slot splits: the dragged tab cannot be placed beside it, so it has no
+ * quarter that keeps or passes. The dragged tab takes the pair's side nearer
+ * its own lane, as with a neighbour it approaches.
+ */
+function otherLaneSplitCandidate(
+  geometry: StripDragGeometry,
+  contentOrigin: number,
+  centre: number,
+): SplitCandidateResult | null {
+  const source = geometry.slots[geometry.sourceIndex];
+  const slot = geometry.otherLaneSlots.find((candidate) => {
+    const start = contentOrigin + candidate.contentStart;
+    return (
+      candidate.isMergeTarget &&
+      centre >= start &&
+      centre < start + candidate.extent
+    );
+  });
+  return slot === undefined
+    ? null
+    : {
+        slot,
+        side: slot.contentStart > source.contentStart ? "left" : "right",
+      };
+}
+
+/**
  * The group whose block, or chip and tabs, the dragged centre is inside: what
  * is drawn on screen, which does not move as the tabs slide. Only the dragged
- * tab's own section counts; the pointer can stray past it, but the tab cannot.
+ * tab's own section counts: the tab leaves it to split, never to be placed.
  */
 function groupAt(
   geometry: StripDragGeometry,
@@ -734,7 +769,8 @@ export function resolveStripDragState(
     canSplit,
   });
   const candidate = canSplit
-    ? splitCandidate(laidOut, targetIndex, draggedCentre)
+    ? (splitCandidate(laidOut, targetIndex, draggedCentre) ??
+      otherLaneSplitCandidate(geometry, contentOrigin, draggedCentre))
     : null;
   if (candidate !== null) {
     return {
@@ -796,8 +832,21 @@ export function laneSlotsOf(
 }
 
 /**
+ * The slots of every lane but the source item's, as measured; none for a
+ * source in no lane.
+ */
+export function otherLaneSlotsOf(
+  slots: ReadonlyArray<StripSlot>,
+  sourceItemId: string,
+): ReadonlyArray<StripSlot> {
+  const lane = slots.find((slot) => slot.itemId === sourceItemId)?.lane ?? null;
+  return lane === null ? [] : slots.filter((slot) => slot.lane !== lane);
+}
+
+/**
  * The viewport range, along the main axis, of the source's lane, which the
- * dragged item never leaves; `null` when the source is in no lane.
+ * dragged item stays in unless it can split with a slot of another lane;
+ * `null` when the source is in no lane.
  */
 export function laneBoundsOf(
   geometry: StripDragGeometry,
@@ -843,5 +892,11 @@ export function remapGeometryToSlots(
     (slot) => slot.itemId === sourceItemId,
   );
   if (sourceIndex < 0) return null;
-  return { ...geometry, slots: laneSlots, groups, sourceIndex };
+  return {
+    ...geometry,
+    slots: laneSlots,
+    otherLaneSlots: otherLaneSlotsOf(slots, sourceItemId),
+    groups,
+    sourceIndex,
+  };
 }

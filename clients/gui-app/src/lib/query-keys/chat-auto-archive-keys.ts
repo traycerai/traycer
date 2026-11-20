@@ -9,7 +9,13 @@ import type { MutationScope } from "@tanstack/react-query";
  */
 export const chatAutoArchiveMutationKeys = {
   set: () => ["chatAutoArchive.set"] as const,
+  setTeam: (teamId: string) => ["chatAutoArchive.setTeam", teamId] as const,
 };
+
+/** Saves queue: last write wins on the server. */
+export function teamChatAutoArchiveWriteScope(teamId: string): MutationScope {
+  return { id: `chatAutoArchive.setTeam:${teamId}` };
+}
 
 /**
  * The save queue, ONE for the whole app rather than one per host, for the

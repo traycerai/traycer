@@ -19,7 +19,12 @@ import {
   installHostConnectionRegistrySource,
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type HostRequestOptions,
+  type RequestOfMethod,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -27,6 +32,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   buildUsageSummaryRequest,
   useUsageSummaryForClient,
@@ -94,6 +100,108 @@ describe("useHostQuery auth readiness", () => {
       expect(rendered.result.current.data?.ready).toBe(true);
     });
     expect(fixture.requestCount.value).toBe(1);
+  });
+
+  it("silently cancels a floor-refused read and refetches it on host recovery", async () => {
+    class FloorThenRecoverMessenger extends MockHostMessenger<HostRpcRegistry> {
+      floorBlocked = true;
+      readonly attemptedMethods: string[] = [];
+
+      override request<Method extends keyof HostRpcRegistry & string>(
+        method: Method,
+        params: RequestOfMethod<HostRpcRegistry, Method>,
+        options: HostRequestOptions,
+      ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+        this.attemptedMethods.push(method);
+        if (this.floorBlocked) {
+          return Promise.reject(
+            new HostBelowMinimumError({
+              requestId: `floor-refused-${String(this.attemptedMethods.length)}`,
+              method,
+            }),
+          );
+        }
+        return super.request(method, params, options);
+      }
+    }
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: 0, gcTime: 0 },
+      },
+    });
+    const messenger = new FloorThenRecoverMessenger({
+      registry: hostRpcRegistry,
+      requestId: () => "floor-recovery-request",
+      handlers: { "host.status": () => STATUS_RESPONSE },
+    });
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-floor-recovery",
+      }),
+    );
+    const requester = client.createRequester(mockLocalHostEntry);
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const rendered = renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: requester,
+          method: "host.status",
+          params: {},
+          options: null,
+        }),
+      { wrapper: Wrapper },
+    );
+
+    try {
+      await waitFor(() => {
+        expect(messenger.attemptedMethods).toEqual(["host.status"]);
+        expect(rendered.result.current.fetchStatus).toBe("idle");
+      });
+      const query = queryForMethod(queryClient, "host.status");
+      expect(rendered.result.current.error).toBeNull();
+      expect(rendered.result.current.isError).toBe(false);
+      expect(rendered.result.current.data).toBeUndefined();
+      expect(query.state).toMatchObject({
+        status: "pending",
+        fetchStatus: "idle",
+        error: null,
+        data: undefined,
+      });
+
+      messenger.floorBlocked = false;
+      act(() => {
+        client.invalidateHostScopeUnannounced(mockLocalHostEntry.hostId);
+      });
+
+      await waitFor(() => {
+        expect(rendered.result.current.data).toEqual(STATUS_RESPONSE);
+      });
+      expect(messenger.attemptedMethods).toEqual([
+        "host.status",
+        "host.status",
+      ]);
+      expect(messenger.calls).toHaveLength(1);
+    } finally {
+      rendered.unmount();
+      client.dispose();
+      queryClient.clear();
+    }
   });
 
   it("gives usage summary its extended budget and TanStack cancellation signal", async () => {

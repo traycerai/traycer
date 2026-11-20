@@ -1,9 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
 import { HostOverviewSettingsCardSlot } from "@/components/settings/panels/host-overview-settings-card";
+import { NO_RECEIPT } from "@/components/settings/panels/__tests__/ownership-receipt-fixture";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -58,19 +60,32 @@ const BINDING: EnvironmentHostBinding = {
 const { client } = buildEnvironmentClient({ hostId: "host-a", handlers: {} });
 
 function mount(usable: boolean, hostId: string | null): void {
+  mountWatching(usable, hostId, () => undefined);
+}
+
+/** The slot mounted with an `onReturn`; the answer re-renders it with a new `usable`. */
+function mountWatching(
+  usable: boolean,
+  hostId: string | null,
+  onReturn: () => void,
+): (usable: boolean) => void {
   const queryClient = new QueryClient();
-  render(
+  const slot = (isUsable: boolean): ReactNode => (
     <QueryClientProvider client={queryClient}>
       <HostOverviewSettingsCardSlot
         client={client}
         hostId={hostId}
         hostName="A computer"
-        usable={usable}
+        usable={isUsable}
         owner={null}
         isLocalMachine={false}
+        receipt={NO_RECEIPT}
+        onReturn={onReturn}
       />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(slot(usable));
+  return (next) => view.rerender(slot(next));
 }
 
 beforeEach(() => {
@@ -134,6 +149,41 @@ describe("<HostOverviewSettingsCardSlot />", () => {
     expect(screen.queryByText("Personal")).toBeNull();
     expect(screen.queryByText("Runs Personal")).toBeNull();
     expect(screen.queryByText("Runs the team's settings.")).toBeNull();
+  });
+
+  it("calls onReturn when the card shows again after the host was away, not when it first shows", () => {
+    reads.status.data = environmentStatusFixture({});
+    reads.binding.query.data = BINDING;
+    const onReturn = vi.fn<() => void>();
+
+    const setUsable = mountWatching(true, "host-a", onReturn);
+    expect(screen.getByText("Personal")).toBeTruthy();
+    expect(onReturn).not.toHaveBeenCalled();
+
+    setUsable(false);
+    expect(screen.queryByText("Personal")).toBeNull();
+    expect(onReturn).not.toHaveBeenCalled();
+
+    setUsable(true);
+    expect(screen.getByText("Personal")).toBeTruthy();
+    expect(onReturn).toHaveBeenCalledOnce();
+  });
+
+  it("calls onReturn when the card shows again after a failed read", () => {
+    reads.status.data = environmentStatusFixture({});
+    reads.binding.query.data = BINDING;
+    const onReturn = vi.fn<() => void>();
+    const setUsable = mountWatching(true, "host-a", onReturn);
+
+    reads.status.isError = true;
+    setUsable(true);
+    expect(screen.queryByText("Personal")).toBeNull();
+    expect(onReturn).not.toHaveBeenCalled();
+
+    reads.status.isError = false;
+    setUsable(true);
+    expect(screen.getByText("Personal")).toBeTruthy();
+    expect(onReturn).toHaveBeenCalledOnce();
   });
 
   it("keeps a skeleton while either supported read is pending", () => {

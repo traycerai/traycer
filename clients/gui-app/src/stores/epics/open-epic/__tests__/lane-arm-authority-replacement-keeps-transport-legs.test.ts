@@ -94,8 +94,8 @@ function statusSnapshot(authorityEpoch: string): EpicStatusSnapshotFrame {
     authorityEpoch,
     securityEpoch: 1,
     // EDITOR: this suite's write-gate assertions are incidental to its real
-    // subject (the transport legs and the pill), but a viewer role would
-    // still shut writes for a second, unrelated reason.
+    // subject (the transport legs and the pill), but a role that grants no
+    // write access would still shut writes for a second, unrelated reason.
     permissionRole: "editor",
     cloudSyncStatus: "connected",
     // The durability leg, and it has to be STATED. This lane reports

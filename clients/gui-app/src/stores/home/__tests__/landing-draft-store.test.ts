@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setMobileApp } from "@/lib/mobile-app";
 import {
+  adoptLandingDraft,
   applyLandingDraftDesktopProjection,
   emptyLandingDraftWorkspaceSnapshot,
   EMPTY_LANDING_DRAFT_CONTENT,
   LANDING_DRAFT_PERSIST_KEY,
   mergeLandingDraftWorkspaceFolders,
+  resumableLandingDraftId,
   removeLandingDraftWorkspaceFolder,
   setLandingDraftDesktopProjectionBridge,
   setLandingDraftWorkspacePrimary,
@@ -13,6 +15,13 @@ import {
   freshLandingMirrorState,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
+import { collectDraftMirrorDirtyWrites } from "@/lib/drafts/draft-mirror-coordinator";
+import { isRecord } from "@/lib/editor/prosemirror-json";
+import {
+  RAW_TERMINAL_CHOSEN_DRAFT_ID,
+  RAW_TERMINAL_FOLLOWS_DRAFT_ID,
+  rawTerminalLandingProjection,
+} from "./raw-terminal-landing-projection";
 import * as landingImageGc from "@/lib/composer/landing-image-gc";
 import * as landingImageMove from "@/lib/composer/landing-image-move";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -143,6 +152,7 @@ function resetStore(): void {
   useLandingDraftStore.setState({
     drafts: [],
     activeDraftId: null,
+    resumeDraftId: null,
   });
   useWorkspaceFoldersStore.setState({ byHost: {} });
   useSettingsStore.setState({
@@ -171,6 +181,17 @@ function emptyWindowSnapshot(
     activeLandingDraftId: null,
     ...patch,
   };
+}
+
+function carriesAccountFollowsDefault(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => carriesAccountFollowsDefault(entry));
+  }
+  if (!isRecord(value)) return false;
+  if (Object.hasOwn(value, "accountFollowsDefault")) return true;
+  return Object.values(value).some((entry) =>
+    carriesAccountFollowsDefault(entry),
+  );
 }
 
 function worktreeIntentEntry(workspacePath: string) {
@@ -1524,6 +1545,135 @@ describe("useLandingDraftStore", () => {
     },
   );
 
+  it("projects raw Terminal and the provenance bit, and a bit-only inbound change lands", () => {
+    const patches: DesktopPerWindowStatePatch[] = [];
+    setLandingDraftDesktopProjectionBridge({
+      update: (patch) => {
+        patches.push(patch);
+        return Promise.resolve();
+      },
+      flush: () => Promise.resolve(),
+      dispose: () => undefined,
+    });
+
+    const followsId = useLandingDraftStore
+      .getState()
+      .createDraftWithId(RAW_TERMINAL_FOLLOWS_DRAFT_ID, HAIKU_SETTINGS);
+    useLandingDraftStore
+      .getState()
+      .setDraftAccountFollowsDefault(followsId, true);
+    const chosenId = useLandingDraftStore
+      .getState()
+      .createDraftWithId(RAW_TERMINAL_CHOSEN_DRAFT_ID, HAIKU_SETTINGS);
+
+    const stored = useLandingDraftStore.getState().drafts;
+    const followsTouchedAt = stored.find(
+      (draft) => draft.id === followsId,
+    )?.lastTouchedAt;
+    const chosenTouchedAt = stored.find(
+      (draft) => draft.id === chosenId,
+    )?.lastTouchedAt;
+    if (followsTouchedAt === undefined || chosenTouchedAt === undefined) {
+      throw new Error("the desktop projection omitted a draft");
+    }
+    const outbound = patches.at(-1)?.landingDrafts ?? [];
+    expect(outbound).toEqual(
+      rawTerminalLandingProjection({ followsTouchedAt, chosenTouchedAt }),
+    );
+
+    const activeLandingDraftId = patches.at(-1)?.activeLandingDraftId ?? null;
+    applyLandingDraftDesktopProjection(
+      emptyWindowSnapshot({
+        landingDrafts: outbound,
+        activeLandingDraftId,
+      }),
+    );
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === followsId)?.accountFollowsDefault,
+    ).toBe(true);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === followsId)?.settings?.profileId,
+    ).toBeNull();
+
+    const echoed = useLandingDraftStore.getState().drafts;
+    applyLandingDraftDesktopProjection(
+      emptyWindowSnapshot({
+        landingDrafts: outbound,
+        activeLandingDraftId,
+      }),
+    );
+    expect(useLandingDraftStore.getState().drafts).toBe(echoed);
+
+    const withoutBit = outbound.map((draft) => {
+      if (draft.id !== followsId) return draft;
+      const { accountFollowsDefault: _bit, ...rest } = draft;
+      return rest;
+    });
+    applyLandingDraftDesktopProjection(
+      emptyWindowSnapshot({
+        landingDrafts: withoutBit,
+        activeLandingDraftId,
+      }),
+    );
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === followsId)?.accountFollowsDefault,
+    ).toBe(false);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === chosenId)?.accountFollowsDefault,
+    ).toBe(false);
+
+    applyLandingDraftDesktopProjection(
+      emptyWindowSnapshot({
+        landingDrafts: outbound,
+        activeLandingDraftId,
+      }),
+    );
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === followsId)?.accountFollowsDefault,
+    ).toBe(true);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === chosenId)?.accountFollowsDefault,
+    ).toBe(false);
+
+    setLandingDraftDesktopProjectionBridge(null);
+  });
+
+  it("publishes a landing draft without accountFollowsDefault", () => {
+    const id = useLandingDraftStore.getState().createDraft(HAIKU_SETTINGS);
+    useLandingDraftStore.getState().setDraftAccountFollowsDefault(id, true);
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(id, textContent("hello"), null);
+    adoptLandingDraft(id, HOST_A);
+
+    const row = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === id);
+    if (row === undefined) throw new Error("the landing draft is gone");
+    expect(row.accountFollowsDefault).toBe(true);
+
+    const entry = collectDraftMirrorDirtyWrites(HOST_A).find(
+      (candidate) => candidate.write.draftId === id,
+    );
+    if (entry === undefined) throw new Error("expected a landing host write");
+    if (entry.write.kind !== "landing") {
+      throw new Error("expected a landing host write");
+    }
+    expect(carriesAccountFollowsDefault(entry.write)).toBe(false);
+  });
+
   it("drops an inbound draft whose doc `content` is not an array (malformed)", () => {
     // A corrupted snapshot: doc-typed but `content` is not an array. The inbound
     // guard must reject it, not let `draftTabName` walk a non-array and throw at
@@ -2000,22 +2150,95 @@ describe("useLandingDraftStore", () => {
       setMobileApp(false);
     });
 
-    it("never mints a second draft in the mobile app, even over real content", () => {
+    // A draft open on another device, mirrored here: an open row this device
+    // never minted, so it never moves the resume draft.
+    function installMirroredOpenDraft(id: string, lastTouchedAt: number): void {
+      useLandingDraftStore.getState().installLandingDraft({
+        id,
+        content: textContent("typed on the other device"),
+        selection: null,
+        lastTouchedAt,
+        settings: null,
+        composerMode: "chat",
+        workspace: emptyLandingDraftWorkspaceSnapshot(),
+        closed: false,
+        returnedSandbox: null,
+        namedHostId: null,
+        durability: "saved",
+      });
+    }
+
+    it("resumes the device's own draft over a newer open draft mirrored from another device", () => {
       setMobileApp(true);
-      const { createDraft, setDraftContent } = useLandingDraftStore.getState();
-      const first = createDraft(null);
-      setDraftContent(first, textContent("half-typed task"), null);
-      // The phone's one stable composer: New task lands back on it.
-      const again = createDraft(null);
-      expect(again).toBe(first);
-      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
-      expect(useLandingDraftStore.getState().activeDraftId).toBe(first);
+      const { createDraft, setResumeDraft } = useLandingDraftStore.getState();
+      const own = createDraft(null);
+      setResumeDraft(own);
+      installMirroredOpenDraft("mirrored", Date.now() + 60_000);
+
+      expect(resumableLandingDraftId()).toBe(own);
     });
 
-    it("returns the newest draft on a lastTouchedAt tie (later entry wins)", () => {
+    it("resumes the draft the person opened by hand", () => {
       setMobileApp(true);
-      const { createDraft, createDraftWithId } =
+      const { createDraftWithId, openDraft } = useLandingDraftStore.getState();
+      createDraftWithId("older", null);
+      createDraftWithId("newer", null);
+
+      openDraft("older");
+
+      expect(resumableLandingDraftId()).toBe("older");
+    });
+
+    it("resumes nothing while no resume draft is set, though open drafts exist", () => {
+      setMobileApp(true);
+      installMirroredOpenDraft("mirrored", Date.now());
+
+      expect(resumableLandingDraftId()).toBeNull();
+    });
+
+    it("resumes nothing once the resume draft is closed or deleted", () => {
+      setMobileApp(true);
+      const { createDraft, setResumeDraft, closeDraft, deleteDraft } =
         useLandingDraftStore.getState();
+      const closing = createDraft(null);
+      setResumeDraft(closing);
+      closeDraft(closing);
+      expect(resumableLandingDraftId()).toBeNull();
+
+      const deleting = createDraft(null);
+      setResumeDraft(deleting);
+      expect(resumableLandingDraftId()).toBe(deleting);
+      deleteDraft(deleting);
+      expect(resumableLandingDraftId()).toBeNull();
+    });
+
+    it("moves the resume draft to the fork when it named the source", () => {
+      setMobileApp(true);
+      const { createDraft, setResumeDraft, forkDraft } =
+        useLandingDraftStore.getState();
+      const source = createDraft(null);
+      setResumeDraft(source);
+
+      expect(forkDraft(source, "fork")).toBe(true);
+
+      expect(useLandingDraftStore.getState().resumeDraftId).toBe("fork");
+    });
+
+    it("leaves the resume draft alone when forking a draft it did not name", () => {
+      setMobileApp(true);
+      const { createDraft, setResumeDraft, forkDraft } =
+        useLandingDraftStore.getState();
+      const resume = createDraft(null);
+      const other = createDraft(null);
+      setResumeDraft(resume);
+
+      forkDraft(other, "fork");
+
+      expect(useLandingDraftStore.getState().resumeDraftId).toBe(resume);
+    });
+
+    it("outside the mobile app resumes the newest open draft, the later entry winning a lastTouchedAt tie", () => {
+      const { createDraftWithId } = useLandingDraftStore.getState();
       // Restore paths can stamp several drafts within one millisecond;
       // drafts are append-ordered, so the later entry is the newer one.
       createDraftWithId("restored-older", null);
@@ -2024,9 +2247,21 @@ describe("useLandingDraftStore", () => {
         .getState()
         .drafts.map((draft) => ({ ...draft, lastTouchedAt: 1_000 }));
       useLandingDraftStore.setState({ drafts: sameStamp });
-      const reused = createDraft(null);
-      expect(reused).toBe("restored-newer");
+
+      expect(resumableLandingDraftId()).toBe("restored-newer");
+    });
+
+    it("mints a second draft in the mobile app too", () => {
+      setMobileApp(true);
+      const { createDraft, setDraftContent } = useLandingDraftStore.getState();
+      const first = createDraft(null);
+      setDraftContent(first, textContent("half-typed task"), null);
+
+      const second = createDraft(null);
+
+      expect(second).not.toBe(first);
       expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
+      expect(useLandingDraftStore.getState().activeDraftId).toBe(second);
     });
 
     it("still honors explicit restore ids in the mobile app", () => {

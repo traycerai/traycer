@@ -102,7 +102,9 @@ function restartPayload(
 
 function tree(node: ReactNode): ReactNode {
   return (
-    <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: "host-1" }}>
+    <ChatTranscriptProvider
+      value={{ chatId: CHAT_ID, hostId: "host-1", payerHostId: "host-1" }}
+    >
       <EpicSessionContext.Provider value={epicHandle}>
         <TabHostProvider hostId="host-1">
           <TooltipProvider>{node}</TooltipProvider>

@@ -293,15 +293,16 @@ describe("per-pack RPC contracts", () => {
     },
     {
       method: "providers.usePackVersion",
-      // 1.1 opened for the typed `macos-ineligible` arm; 1.0 is frozen at the
-      // three-code response and stays registered unchanged.
-      latestMinor: 1,
+      // 1.1 opened for the typed `macos-ineligible` arm and 1.2 for the
+      // stated `policy`; 1.0 is frozen at the three-code response and stays
+      // registered unchanged.
+      latestMinor: 2,
       requestSchema: providersUsePackVersionRequestSchema,
       responseSchema: providersUsePackVersionResponseSchemaV10,
     },
     {
       method: "providers.setPackPolicy",
-      latestMinor: 0,
+      latestMinor: 1,
       requestSchema: providersSetPackPolicyRequestSchema,
       responseSchema: providersSetPackPolicyResponseSchema,
     },

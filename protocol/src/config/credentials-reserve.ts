@@ -85,10 +85,14 @@ export class CredentialsReserve {
   private filling = false;
   private refillRequested = false;
   private disposed = false;
+  /** Ends the lock wait of the fill in flight. */
+  private fillWait: AbortController | null = null;
 
   constructor(
     private readonly credentialsPath: string,
     private readonly lockPath: string,
+    private readonly lockWaitMs: number,
+    private readonly lockPollIntervalMs: number,
   ) {
     this.replenish();
   }
@@ -97,6 +101,7 @@ export class CredentialsReserve {
     this.active += 1;
     this.generation += 1;
     this.refillRequested = false;
+    this.fillWait?.abort();
   }
 
   end(refill: boolean): void {
@@ -107,6 +112,7 @@ export class CredentialsReserve {
   dispose(): void {
     this.disposed = true;
     this.generation += 1;
+    this.fillWait?.abort();
   }
 
   async probe(interrupted: (() => boolean) | null): Promise<boolean> {
@@ -151,10 +157,13 @@ export class CredentialsReserve {
     }
     this.filling = true;
     const generation = this.generation;
+    const wait = new AbortController();
+    this.fillWait = wait;
     setImmediate(() => {
       void withCredentialsWrites(undefined, () =>
-        this.fill(generation),
+        this.fill(generation, wait.signal),
       ).finally(() => {
+        if (this.fillWait === wait) this.fillWait = null;
         this.filling = false;
         if (this.refillRequested) {
           this.refillRequested = false;
@@ -164,30 +173,45 @@ export class CredentialsReserve {
     });
   }
 
-  private async fill(generation: number): Promise<void> {
+  /** The pieces absent or short; `null` when `interrupted` during the scan. */
+  private async missingPieces(
+    interrupted: () => boolean,
+  ): Promise<number[] | null> {
+    const missing: number[] = [];
+    for (let index = 0; index < PIECE_COUNT; index += 1) {
+      if (interrupted()) return null;
+      const piece = await statExistingPiece(
+        `${this.credentialsPath}.reserve.${index}`,
+      );
+      if (interrupted()) return null;
+      if (piece === null || piece.size !== PIECE_BYTES) missing.push(index);
+    }
+    return missing;
+  }
+
+  private async fill(generation: number, wait: AbortSignal): Promise<void> {
     const interrupted = (): boolean =>
       this.disposed || this.active !== 0 || generation !== this.generation;
     try {
-      if (interrupted()) return;
-      const missing: number[] = [];
-      for (let index = 0; index < PIECE_COUNT; index += 1) {
-        if (interrupted()) return;
-        const piece = await statExistingPiece(
-          `${this.credentialsPath}.reserve.${index}`,
-        );
-        if (interrupted()) return;
-        if (piece === null || piece.size !== PIECE_BYTES) missing.push(index);
-      }
-      if (missing.length === 0 || interrupted()) return;
+      // A full reserve takes no lock.
+      const beforeLock = await this.missingPieces(interrupted);
+      if (beforeLock === null || beforeLock.length === 0) return;
+      // Waits out a holder rather than giving up: no later event would
+      // request this fill again. No write of this store awaits it, but while
+      // it waits it competes for the lock with every other waiter.
       await withCredentialsLock(
         {
           lockPath: this.lockPath,
           reason: "credentials-reserve",
-          waitMs: 0,
-          pollIntervalMs: 25,
-          signal: null,
+          waitMs: this.lockWaitMs,
+          pollIntervalMs: this.lockPollIntervalMs,
+          signal: wait,
         },
         async () => {
+          // Scanned again under the lock: the holder waited out may have
+          // released pieces, or another store may have filled them.
+          const missing = await this.missingPieces(interrupted);
+          if (missing === null || missing.length === 0) return;
           if (interrupted() || !(await this.probe(interrupted))) return;
           for (const index of missing) {
             if (interrupted()) return;

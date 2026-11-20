@@ -16,7 +16,11 @@ import { useVoiceAvailabilityQuery } from "../use-voice-availability-query";
 const HOST_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 type Availability =
-  | { readonly kind: "ok"; readonly available: boolean }
+  | {
+      readonly kind: "ok";
+      readonly available: boolean;
+      readonly voiceSelection: null;
+    }
   | { readonly kind: "unauthorized" };
 
 const fake = vi.hoisted(() => ({
@@ -63,7 +67,11 @@ function wrapper(props: { readonly children: ReactNode }): ReactNode {
 beforeEach(() => {
   queryClient = new QueryClient();
   fake.getVoiceAvailability.mockReset();
-  fake.getVoiceAvailability.mockResolvedValue({ kind: "ok", available: true });
+  fake.getVoiceAvailability.mockResolvedValue({
+    kind: "ok",
+    available: true,
+    voiceSelection: null,
+  });
   bindFreshAuth(HOST_ID);
   useAuthStore.setState({
     status: "signed-in",
@@ -84,14 +92,14 @@ describe("useVoiceAvailabilityQuery", () => {
       () => useVoiceAvailabilityQuery(true),
       { wrapper },
     );
-    await waitFor(() => expect(result.current.data).toBe(true));
+    await waitFor(() => expect(result.current.data?.available).toBe(true));
 
     bindFreshAuth(HOST_ID);
     rerender();
     bindFreshAuth(HOST_ID);
     rerender();
 
-    expect(result.current.data).toBe(true);
+    expect(result.current.data?.available).toBe(true);
     expect(fake.getVoiceAvailability).toHaveBeenCalledTimes(1);
   });
 
@@ -100,7 +108,9 @@ describe("useVoiceAvailabilityQuery", () => {
     const first = renderHook(() => useVoiceAvailabilityQuery(true), {
       wrapper,
     });
-    await waitFor(() => expect(first.result.current.data).toBe(true));
+    await waitFor(() =>
+      expect(first.result.current.data?.available).toBe(true),
+    );
     const signedIn = useAuthStore.getState();
     first.unmount();
 
@@ -109,7 +119,7 @@ describe("useVoiceAvailabilityQuery", () => {
     const held = renderHook(() => useVoiceAvailabilityQuery(true), {
       wrapper,
     });
-    expect(held.result.current.data).toBe(true);
+    expect(held.result.current.data?.available).toBe(true);
     expect(fake.getVoiceAvailability).toHaveBeenCalledTimes(1);
     held.unmount();
 
@@ -137,17 +147,20 @@ describe("useVoiceAvailabilityQuery", () => {
     await waitFor(() =>
       expect(fake.getVoiceAvailability).toHaveBeenCalledTimes(2),
     );
-    await waitFor(() => expect(again.result.current.data).toBe(true));
+    await waitFor(() =>
+      expect(again.result.current.data?.available).toBe(true),
+    );
   });
 
   it("reads again when a dormant mint invalidates every availability entry", async () => {
     const { result } = renderHook(() => useVoiceAvailabilityQuery(true), {
       wrapper,
     });
-    await waitFor(() => expect(result.current.data).toBe(true));
+    await waitFor(() => expect(result.current.data?.available).toBe(true));
     fake.getVoiceAvailability.mockResolvedValue({
       kind: "ok",
       available: false,
+      voiceSelection: null,
     });
 
     await act(async () => {
@@ -156,7 +169,7 @@ describe("useVoiceAvailabilityQuery", () => {
       });
     });
 
-    await waitFor(() => expect(result.current.data).toBe(false));
+    await waitFor(() => expect(result.current.data?.available).toBe(false));
     expect(fake.getVoiceAvailability).toHaveBeenCalledTimes(2);
   });
 });

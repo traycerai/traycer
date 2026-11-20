@@ -2101,59 +2101,73 @@ describe("NotificationsPopover", () => {
     expect(useNotificationsPopoverStore.getState().unreadOnly).toBe(false);
   });
 
-  it("inserts temporal separators only when the calendar group changes", async () => {
-    const now = Date.now();
-    const today = now - 60_000;
-    const yesterday = startOfLocalDay(now) - DAY_MS / 2;
-    const earlier = startOfLocalDay(now) - 3 * DAY_MS;
+  describe("temporal separators by calendar group", () => {
+    // Pinned to local noon: in the first minute of a real local day
+    // `now - 60_000` lands yesterday and the Today separator is dropped.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 9, 15, 12, 0, 0));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-    applyHostSnapshot(
-      [
-        hostDone("today", today, null),
-        hostDone("yesterday", yesterday, null),
-        hostDone("earlier", earlier, null),
-      ],
-      { unreadCount: 3, attentionCount: 0 },
-    );
+    it("inserts temporal separators only when the calendar group changes", async () => {
+      const now = Date.now();
+      const today = now - 60_000;
+      const yesterday = startOfLocalDay(now) - DAY_MS / 2;
+      const earlier = startOfLocalDay(now) - 3 * DAY_MS;
 
-    const captured: TargetCapture = {
-      epicId: null,
-      tabId: null,
-      focusArtifactId: null,
-      focusThreadId: null,
-    };
-    const { router } = buildRouterWithCapture(captured, () => undefined);
-    renderRouter(router);
+      applyHostSnapshot(
+        [
+          hostDone("today", today, null),
+          hostDone("yesterday", yesterday, null),
+          hostDone("earlier", earlier, null),
+        ],
+        { unreadCount: 3, attentionCount: 0 },
+      );
 
-    const separators = await screen.findAllByTestId(
-      "notification-temporal-separator",
-    );
-    expect(separators.map((node) => node.textContent)).toEqual([
-      "Today",
-      "Yesterday",
-      "Earlier",
-    ]);
+      const captured: TargetCapture = {
+        epicId: null,
+        tabId: null,
+        focusArtifactId: null,
+        focusThreadId: null,
+      };
+      const { router } = buildRouterWithCapture(captured, () => undefined);
+      renderRouter(router);
 
-    // Only one separator per group boundary - three groups → three labels.
-    expect(separators).toHaveLength(3);
+      // The list's first commit is drawn from the clock's earlier real-time
+      // sample, where every row is Earlier; Today exists once it re-samples.
+      await screen.findByText("Today", {
+        selector: '[data-testid="notification-temporal-separator"]',
+      });
+      const separators = screen.getAllByTestId(
+        "notification-temporal-separator",
+      );
+      expect(separators.map((node) => node.textContent)).toEqual([
+        "Today",
+        "Yesterday",
+        "Earlier",
+      ]);
 
-    // Desktop-pass subordination: micro/muted sentence case, not overline caps.
-    for (const separator of separators) {
-      expect(separator.className).toContain("text-micro");
-      expect(separator.className).toContain("sticky");
-      expect(separator.className).toContain("top-5");
-      expect(separator.className).toContain("bg-popover");
-      expect(separator.className).not.toContain("uppercase");
-      expect(separator.className).not.toContain("font-semibold");
-      expect(separator.className).not.toContain("text-overline");
-    }
-    const recentHeader = screen.getByText("Recent activity");
-    expect(recentHeader.className).toContain("text-overline");
-    expect(recentHeader.className).toContain("uppercase");
-    expect(recentHeader.className).toContain("font-semibold");
-    expect(recentHeader.className).toContain("sticky");
-    expect(recentHeader.className).toContain("top-0");
-    expect(recentHeader.className).toContain("bg-popover");
+      // Desktop-pass subordination: micro/muted sentence case, not overline caps.
+      for (const separator of separators) {
+        expect(separator.className).toContain("text-micro");
+        expect(separator.className).toContain("sticky");
+        expect(separator.className).toContain("top-5");
+        expect(separator.className).toContain("bg-popover");
+        expect(separator.className).not.toContain("uppercase");
+        expect(separator.className).not.toContain("font-semibold");
+        expect(separator.className).not.toContain("text-overline");
+      }
+      const recentHeader = screen.getByText("Recent activity");
+      expect(recentHeader.className).toContain("text-overline");
+      expect(recentHeader.className).toContain("uppercase");
+      expect(recentHeader.className).toContain("font-semibold");
+      expect(recentHeader.className).toContain("sticky");
+      expect(recentHeader.className).toContain("top-0");
+      expect(recentHeader.className).toContain("bg-popover");
+    });
   });
 
   it("renders failed host outcomes and stalled rows as failure severity", async () => {
@@ -2472,7 +2486,7 @@ describe("NotificationsPopover", () => {
     fireEvent.click(settings);
 
     expect(navigated).toBe(true);
-    expect(useSettingsSectionStore.getState().section).toBe("notifications");
+    expect(useSettingsSectionStore.getState().section).toBe("alerts");
     await waitFor(() => {
       expect(router.state.location.search).toMatchObject({
         settingsOverlay: true,

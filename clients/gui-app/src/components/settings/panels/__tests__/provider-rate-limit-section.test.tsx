@@ -257,7 +257,6 @@ describe("ProviderRateLimitForProvider", () => {
           section: "providers",
           pick: PERSONAL_PICK,
           state: { kind: "unknown" },
-          line: null,
           hostName: "Studio",
           localOverrides: NO_OVERRIDES,
           hostId: "host-1",

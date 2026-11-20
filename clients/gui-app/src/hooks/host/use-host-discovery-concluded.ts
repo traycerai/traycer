@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { useHostBinding } from "@/lib/host";
+import type { HostDirectoryService } from "@/lib/host/host-directory-service";
 
 /**
  * Whether an attempt to read the host registry has CONCLUDED for this window.
@@ -38,6 +39,30 @@ import { useHostBinding } from "@/lib/host";
  * the pairing a caller gating on both would need in order to wait forever.
  */
 export function useHostDiscoveryConcluded(): boolean {
+  return useDirectoryFlag(concludedOf);
+}
+
+/**
+ * Whether discovery concluded on a FAILURE to read this account's host list
+ * (`HostDirectoryService.hasFailedDiscovery()`): the registry read failed, or
+ * the fleet a listing triggered could not be read. Subscribed the same way,
+ * for the same reason, and `false` before a binding exists.
+ */
+export function useHostDiscoveryFailed(): boolean {
+  return useDirectoryFlag(failedOf);
+}
+
+function concludedOf(directory: HostDirectoryService): boolean {
+  return directory.hasConcludedDiscovery();
+}
+
+function failedOf(directory: HostDirectoryService): boolean {
+  return directory.hasFailedDiscovery();
+}
+
+function useDirectoryFlag(
+  read: (directory: HostDirectoryService) => boolean,
+): boolean {
   const binding = useHostBinding();
   const directory = binding?.directory ?? null;
   const subscribe = useCallback(
@@ -55,8 +80,8 @@ export function useHostDiscoveryConcluded(): boolean {
     [directory],
   );
   const getSnapshot = useCallback(
-    () => (directory === null ? false : directory.hasConcludedDiscovery()),
-    [directory],
+    () => (directory === null ? false : read(directory)),
+    [directory, read],
   );
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);

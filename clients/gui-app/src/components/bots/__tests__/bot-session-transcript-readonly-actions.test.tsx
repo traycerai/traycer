@@ -47,6 +47,7 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
+  useHostDirectoryEntryForHostId: () => null,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
@@ -96,6 +97,10 @@ vi.mock("@/hooks/chats/use-chat-feedback-draft", () => ({
     isPending: false,
     data: undefined,
   }),
+  useChatFeedbackDraftDecisionState: () => ({
+    isPending: false,
+    settled: null,
+  }),
   useChatFeedbackDraftPreviewQuery: () => ({ data: undefined }),
 }));
 // `LiveMcpApp`'s own host boundary (the `scope !== null` branch, which
@@ -129,6 +134,10 @@ import {
   installLegendListViewportMetrics,
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
+import {
+  PENDING,
+  SOURCE,
+} from "@/components/bots/__tests__/bot-feedback-draft-card-test-support";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
@@ -268,6 +277,23 @@ function transcriptSession(
   return handle;
 }
 
+/** A trunk session whose reply carries the bot-row feedback draft projection. */
+function projectedDraftSession(chatId: string): ChatSessionStoreHandle {
+  const { handle } = scriptedSession(chatId, [
+    sessionPrompt(`${chatId}-prompt`, 1_000),
+    {
+      ...botReply({
+        messageId: `${chatId}-turn`,
+        text: "Drafted feedback for Traycer.",
+        timestamp: 1_200,
+      }),
+      feedbackDraft: { source: SOURCE, draft: PENDING },
+    },
+  ]);
+  handle.store.setState({ transcriptBaselineEpoch: 0, connectionEpoch: 0 });
+  return handle;
+}
+
 function mountSession(): void {
   render(
     <StrictMode>
@@ -286,6 +312,7 @@ function mountSession(): void {
                 <BotSessionView
                   botId={BOT_ID}
                   hostId={HOST_ID}
+                  boundHostId={null}
                   botTitle="Release Bot"
                   session={{ chatId: TRUNK_ID, threadId: null, landOn: null }}
                   threads={[]}
@@ -348,5 +375,27 @@ describe("a feedback draft's tool call, in a read-only bot session", () => {
     expect(within(view()).getByText("This session is read-only.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+  });
+});
+
+describe("a bot row's feedback draft projection, in a read-only bot session", () => {
+  beforeEach(() => {
+    mocks.sessions[TRUNK_ID] = projectedDraftSession(TRUNK_ID);
+  });
+
+  // The read-only session view mounts no bot presentation, so no feedback
+  // action is reachable; a change that mounts one must gate the card on
+  // ChatStatusReadOnlyContext.
+  it("mounts no feedback card and offers no Send, Skip or Retry", async () => {
+    mountSession();
+    await settleLegendList();
+
+    expect(
+      within(view()).getByText("Drafted feedback for Traycer."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Feedback for Traycer/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
   });
 });

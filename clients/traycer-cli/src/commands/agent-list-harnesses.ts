@@ -8,7 +8,7 @@ import {
   type GuiHarnessOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
-  callHostRpc,
+  callAgentHostRpc,
   parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
@@ -18,7 +18,7 @@ import type { CommandFn } from "../runner/runner";
 export function buildAgentListHarnessesCommand(): CommandFn {
   return async () => {
     const result = await toAgentCliError(
-      callHostRpc(
+      callAgentHostRpc(
         "agent.gui.listHarnesses",
         parseUserInput(listGuiHarnessesRequestSchema, {}),
       ),

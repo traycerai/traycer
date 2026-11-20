@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@/lib/host";
+import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 const HOST_LIST_METHOD = "environment.host.list";
@@ -50,6 +51,17 @@ export const CONFIGURATION_ITEM_READS = [
   "environment.plans.list",
 ] as const;
 
+/**
+ * authn moves the revision on every committed change, a secret's and an applied
+ * hold's included; a hold proposed or discarded commits nothing.
+ */
+export const REVISION_MOVED_READS = [
+  ...CONFIGURATION_ITEM_READS,
+  ...SECRET_READS,
+  "environment.review",
+  "environment.notices",
+] as const;
+
 /** Focus and stale-write recovery also refresh independent receipt/room state. */
 export const CONFIGURATION_READS = [
   ...CONFIGURATION_ITEM_READS,
@@ -58,6 +70,8 @@ export const CONFIGURATION_READS = [
   "environment.configuration.guide.get",
   "environment.secrets.list",
   "environment.secrets.versions",
+  "environment.review",
+  "environment.notices",
 ] as const;
 
 /**
@@ -97,6 +111,7 @@ export function configurationReadMatches(
   reads: ReadonlyArray<keyof HostRpcRegistry & string>,
 ): boolean {
   return (
+    (queryKey[0] === "cloud-provider-keys" && queryKey[3] === environmentId) ||
     hostQueryKeys.matchesMethodOnAnyHost(queryKey, ENVIRONMENT_LIST_METHOD) ||
     [HOST_LIST_METHOD, ...reads].some(
       (method) => readEnvironmentId(queryKey, method) === environmentId,

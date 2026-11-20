@@ -1,4 +1,7 @@
-import type { SandboxControlFailure } from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  SANDBOX_OUT_OF_CREDITS,
+  type SandboxControlFailure,
+} from "@traycer-clients/shared/host-client/sandbox-control";
 import {
   SANDBOX_REFUSAL_CODE_BUSY,
   SANDBOX_REFUSAL_CODE_ENVIRONMENT_NOT_FOUND,
@@ -17,9 +20,14 @@ import {
 } from "@traycer/protocol/host/sandbox-control";
 import { formatCreditsRequired } from "@/lib/sandboxes/sandbox-pricing";
 import {
+  TEAM_CREDITS_DONT_COVER_AN_HOUR,
+  teamSandboxOutOfCreditsLine,
+} from "@/lib/sandboxes/sandbox-strings";
+import {
   SANDBOX_CREATE_ENVIRONMENT_UNAVAILABLE_LINE,
   sandboxNotAMemberLine,
 } from "@/components/hosts/sandbox-create-model";
+import { ownValue } from "@/lib/own-value";
 
 /** Keep the control-plane refusal available to the row and its diagnostics. */
 export class SandboxOperationError extends Error {
@@ -129,7 +137,7 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
       return insufficientCreditCopy(failure);
     case SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED:
       return (
-        SHAPE_REASON_COPY[failure.reason ?? ""] ??
+        ownValue(SHAPE_REASON_COPY, failure.reason ?? "") ??
         "That size is outside what's offered."
       );
     // The server names the team and its admins; its sentence is the copy.
@@ -140,6 +148,32 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
     default:
       return REFUSAL_COPY.get(failure.code) ?? "Traycer refused that request.";
   }
+}
+
+/** Where ownership is unknown, nobody can buy and there is no name. */
+export interface SandboxFailureReader {
+  readonly buysTeamCredits: boolean;
+  readonly teamName: string | null;
+}
+
+/** Someone who cannot buy the credits is never told to add them. */
+export function sandboxFailureMessageFor(
+  failure: SandboxControlFailure,
+  message: string,
+  reader: SandboxFailureReader,
+): string {
+  if (reader.buysTeamCredits || failure.kind !== "refused") return message;
+  if (failure.code === SANDBOX_REFUSAL_CODE_FROZEN) {
+    return reader.teamName !== null && reader.teamName.length > 0
+      ? teamSandboxOutOfCreditsLine(reader.teamName)
+      : SANDBOX_OUT_OF_CREDITS;
+  }
+  const teamCreditRefusal =
+    failure.code === SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT &&
+    failure.creditSource === "team" &&
+    failure.reason !== "unverified" &&
+    failure.reason !== "unsupported-subscription";
+  return teamCreditRefusal ? TEAM_CREDITS_DONT_COVER_AN_HOUR : message;
 }
 
 /**

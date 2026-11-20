@@ -875,6 +875,20 @@ export function useEpicChatRecordListAuthoritative(): boolean {
   return useEpicStore((s) => s.chatRecordListAuthoritative);
 }
 
+export function useEpicChatRecordListFailed(): boolean {
+  return useEpicStore((s) => s.chatRecordListFailed);
+}
+
+export function useEpicChatPublicationRedirectRevision(): string | null {
+  return useEpicStore((s) => s.chatPublicationRedirectRevision);
+}
+
+export function useEpicChatPublicationRedirectRevisionSupported():
+  | boolean
+  | null {
+  return useEpicStore((s) => s.chatPublicationRedirectRevisionSupported);
+}
+
 export function useEpicTuiAgentRecordListAuthoritative(): boolean {
   return useEpicStore((s) => s.tuiAgentRecordListAuthoritative);
 }
@@ -2833,6 +2847,20 @@ export function useArtifactById(id: string | null): ArtifactProjection | null {
     if (Object.hasOwn(s.artifacts.byId, id)) return s.artifacts.byId[id];
     return null;
   });
+}
+
+/**
+ * Whether an artifact is one loose file and not a folder. A loose HTML page
+ * carries the same kind as an HTML folder, so its change is that one file's
+ * own and never a folder of files. False outside an open epic.
+ */
+export function useIsLooseFileArtifact(id: string): boolean {
+  return useMaybeEpicStore(
+    (s) =>
+      Object.hasOwn(s.artifacts.byId, id) &&
+      s.artifacts.byId[id].layout === "file",
+    false,
+  );
 }
 
 /**

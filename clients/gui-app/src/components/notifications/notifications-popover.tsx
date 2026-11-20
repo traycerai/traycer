@@ -566,10 +566,12 @@ export function NotificationsPopover(
     [categories, toggleCategory],
   );
 
+  // Alerts, not the host's Notifications page: what a person reaches for from
+  // the bell is which kinds interrupt them, and that is this device's setting.
   const handleOpenSettings = useCallback(() => {
     onNavigate();
     openSettings({
-      section: "notifications",
+      section: "alerts",
       resetToGeneral: false,
       tab: null,
       draft: null,

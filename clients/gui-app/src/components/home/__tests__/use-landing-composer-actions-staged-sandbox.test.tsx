@@ -20,6 +20,8 @@ import {
   RetryableTransportError,
   type RequiredHostMethodVersion,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import {
   installHostDirectoryRows,
@@ -32,6 +34,12 @@ import {
 import type { ImageReclaimOutcome } from "@/lib/composer/landing-image-store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import {
+  createLandingAttachmentFixture,
+  landingTeamEnvironment,
+  type LandingAttachmentFixture,
+} from "./landing-attachment-fixture";
 import { toast } from "sonner";
 import { wasEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
 import {
@@ -112,6 +120,7 @@ const landingMocks = vi.hoisted(() => ({
       list: (): Promise<readonly []> => Promise.resolve([]),
       onChange: () => ({ dispose: () => undefined }),
     },
+    auth: null as LandingAttachmentFixture["auth"] | null,
     hostClient: {
       createRequesterForHostId: (hostId: string) => ({
         /**
@@ -326,6 +335,7 @@ const imageStoreMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/composer/landing-image-store", () => ({
+  onLandingImagesDeleted: vi.fn(),
   sha256Hex: async (bytes: ImageBytes): Promise<string> => {
     const digest = await crypto.subtle.digest("SHA-256", bytes);
     return Array.from(new Uint8Array(digest), (byte) =>
@@ -352,6 +362,7 @@ registerExtraImageRootSource({ hashes: () => [...composerLiveImageRoots] });
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
 const TEST_HOST_ID = "host-landing";
 const PLACEMENT_HOST_ID = "host-placement";
+let attachmentFixture: LandingAttachmentFixture;
 
 const ACME_OWNER = { teamId: "t1", slug: "acme" } as const;
 
@@ -466,7 +477,14 @@ function newQueryClient(): QueryClient {
 }
 
 describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    attachmentFixture = await createLandingAttachmentFixture({
+      userId: "user-landing",
+      token: "landing-token-a",
+      hostId: TEST_HOST_ID,
+      teamEnvironments: [landingTeamEnvironment("team-9")],
+    });
+    landingMocks.binding.auth = attachmentFixture.auth;
     usePendingSandboxSendStore.setState({ sends: {} });
     useStagedSandboxStore.setState({ bySurface: {} });
     __resetTabNavigationControllerForTesting();
@@ -558,6 +576,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     cleanup();
+    attachmentFixture.dispose();
     useAuthStore.getState().setSignedOut();
     resetNegotiatedManifests();
     resetHostDirectoryRows();
@@ -769,6 +788,14 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         usePendingSandboxSendStore.getState().sends[send.id]?.epicConfirmed,
       ).toBe(true);
     });
+    expect(attachmentFixture.authnCalls).toEqual([
+      { kind: "list", bearer: "landing-token-a" },
+      {
+        kind: "attach",
+        bearer: "landing-token-a",
+        request: { taskId: send.epicId, environmentId: "env-team-9" },
+      },
+    ]);
     queryClient.clear();
   });
 
@@ -1859,6 +1886,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         method: "epic.attachEnvironment",
         mayHaveDispatched: false,
       }),
+      [],
     ],
     [
       "a recoverable sign-in check",
@@ -1869,11 +1897,12 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         method: "epic.attachEnvironment",
         fatalDetails: null,
       }),
+      [errorToast(NOT_SENT_LINE)],
     ],
   ] as const)(
-    "says nothing and saves no draft when the attachment is silent and nothing was returned (%s)",
-    async (_label, error) => {
-      expect(await toastsFromRefusal("nowhere", error)).toEqual([]);
+    "%s and saves no draft when no sandbox was returned",
+    async (_label, error, expectedToasts) => {
+      expect(await toastsFromRefusal("nowhere", error)).toEqual(expectedToasts);
       expect(useLandingDraftStore.getState().drafts).toEqual([]);
     },
   );
@@ -1903,15 +1932,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     const { refuseAttach, queryClient } = await startSendWithHeldAttach();
     const sendBefore = onlyPendingSend();
     useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
-    act(() => {
-      useAuthStore
-        .getState()
-        .setSignedIn(
-          { userId: "other-user", userName: "Other", email: "o@example.com" },
-          { userId: "other-user", username: "Other" },
-          [],
-        );
-    });
+    await switchToOtherLandingAccount();
     const shownBefore = toastLog.length;
     await refuseAttach(attachBusy());
     await refusalSettled(queryClient);
@@ -1997,15 +2018,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
 
   it("says nothing when the account changed during the wait", async () => {
     const { refuseAttach, queryClient } = await startSendWithHeldAttach();
-    act(() => {
-      useAuthStore
-        .getState()
-        .setSignedIn(
-          { userId: "other-user", userName: "Other", email: "o@example.com" },
-          { userId: "other-user", username: "Other" },
-          [],
-        );
-    });
+    await switchToOtherLandingAccount();
     const shownBefore = toastLog.length;
     await refuseAttach(attachBusy());
     await refusalSettled(queryClient);
@@ -2027,16 +2040,17 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
 
   it.each([
     [
-      "an aborted request",
+      "an aborted request stays silent",
       new HostRequestAbortedError({
         message: "authority replaced",
         requestId: "request-attach-abort",
         method: "epic.attachEnvironment",
         mayHaveDispatched: false,
       }),
+      [],
     ],
     [
-      "a recoverable sign-in check",
+      "a recoverable sign-in check reports the caller's existing line",
       new HostRpcError({
         code: "UNAUTHORIZED",
         message: "token refresh in flight",
@@ -2044,11 +2058,14 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         method: "epic.attachEnvironment",
         fatalDetails: null,
       }),
+      [errorToast(BACK_IN_COMPOSER_LINE)],
     ],
   ] as const)(
-    "says nothing from the attachment for %s, the message back in the composer",
-    async (_label, error) => {
-      expect(await toastsFromRefusal("composer", error)).toEqual([]);
+    "%s when the message is back in the composer",
+    async (_label, error, expectedToasts) => {
+      expect(await toastsFromRefusal("composer", error)).toEqual(
+        expectedToasts,
+      );
     },
   );
 
@@ -2263,6 +2280,24 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     },
   );
 
+  it("shows the host update title and returns the message when the attachment is refused below the minimum", async () => {
+    const { refuseAttach, queryClient } = await startSendWithHeldAttach();
+
+    await refuseAttach(
+      new HostBelowMinimumError({
+        requestId: "request-attach-floor",
+        method: "epic.attachEnvironment",
+      }),
+    );
+    await refusalSettled(queryClient);
+
+    expect(toastLog.map(({ message }) => message)).toContain(
+      HOST_UPDATE_SKEW_COPY.title,
+    );
+    expectMessageBackUnsent();
+    queryClient.clear();
+  });
+
   it("deletes nothing when the account changes while the task's agents are being read", async () => {
     const reads = new Map<string, Deferred<unknown>>();
     landingMocks.readRequest.mockImplementation((_hostId, method) => {
@@ -2380,17 +2415,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     });
     const send = onlyPendingSend();
 
-    act(() => {
-      useAuthStore.getState().setSignedIn(
-        {
-          userId: "other-user",
-          userName: "Other",
-          email: "other@example.com",
-        },
-        { userId: "other-user", username: "Other" },
-        [],
-      );
-    });
+    await switchToOtherLandingAccount();
     await act(async () => {
       attach.reject(attachBusy());
       await attach.promise.catch(() => undefined);
@@ -2720,9 +2745,26 @@ function queryClientWrapper(
 ): (props: { readonly children: ReactNode }) => ReactNode {
   return function QueryClientWrapper(props: { readonly children: ReactNode }) {
     return (
-      <QueryClientProvider client={queryClient}>
-        {props.children}
-      </QueryClientProvider>
+      <RunnerHostProvider runnerHost={attachmentFixture.runnerHost}>
+        <QueryClientProvider client={queryClient}>
+          {props.children}
+        </QueryClientProvider>
+      </RunnerHostProvider>
     );
   };
+}
+
+async function switchToOtherLandingAccount(): Promise<void> {
+  await attachmentFixture.signInAs("other-user", "other-user-token");
+  act(() => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "other-user",
+        userName: "Other",
+        email: "other@example.com",
+      },
+      { userId: "other-user", username: "Other" },
+      [],
+    );
+  });
 }

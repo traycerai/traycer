@@ -157,6 +157,7 @@ function mountSession(): void {
               <BotSessionView
                 botId={BOT_ID}
                 hostId={HOST_ID}
+                boundHostId={null}
                 botTitle="Release Bot"
                 session={{ chatId: TRUNK_ID, threadId: null, landOn: null }}
                 threads={[]}
