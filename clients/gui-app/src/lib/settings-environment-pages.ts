@@ -135,7 +135,7 @@ function sectionHiddenByPick(
 
 /**
  * What the picked configuration's source can draw, beyond what its kind
- * decides (`useEnvironmentSectionFilters` reads them).
+ * decides (`useEnvironmentSectionShown` reads them).
  *
  * `secretsServed`: Secrets is offered where its page can draw — on the cloud,
  * and on a host that advertises `environment.secrets.list`. False while the
@@ -147,33 +147,18 @@ export interface EnvironmentPageFacts {
 }
 
 /**
- * Whether the picked configuration's source can draw `section`'s page: false
- * only for Secrets where `facts.secretsServed` is. Settings search and the
- * command palette offer what this allows.
- */
-export function environmentSectionServed(
-  section: SettingsSectionId,
-  facts: EnvironmentPageFacts,
-): boolean {
-  return pageIdForSection(section) !== "secrets" || facts.secretsServed;
-}
-
-/**
- * Whether the Environment group shows `section`'s row under `pick`: what the
- * source can draw (`environmentSectionServed`), less the pages the pick's kind
- * does not offer. A section that is not one of the registry's pages is shown
- * under every pick; the retired ones (`RETIRED_SETTINGS_SECTION_IDS`) are
- * never offered.
+ * Whether Settings offers `section` under `pick`, in the Environment group's
+ * rows and in search. A section that is not one of the registry's pages is
+ * offered under every pick; the retired ones (`RETIRED_SETTINGS_SECTION_IDS`)
+ * are never offered.
  */
 export function environmentSectionShown(
   pick: EnvironmentPick,
   section: SettingsSectionId,
   facts: EnvironmentPageFacts,
 ): boolean {
-  return (
-    !sectionHiddenByPick(pick, section) &&
-    environmentSectionServed(section, facts)
-  );
+  if (sectionHiddenByPick(pick, section)) return false;
+  return pageIdForSection(section) !== "secrets" || facts.secretsServed;
 }
 
 /**

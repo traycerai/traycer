@@ -3,7 +3,6 @@ import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-
 import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
-  environmentSectionServed,
   environmentSectionShown,
   type EnvironmentPageFacts,
   type EnvironmentPick,
@@ -12,7 +11,7 @@ import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 /**
- * The facts the section filters need under the current pick, read on
+ * The facts `environmentSectionShown` needs under the current pick, read on
  * the road `PersonalPageFrame` sends each page down: a team, and Personal on
  * a window whose host does not run it, read the cloud; Personal on a host
  * that runs it, and a Local row, read that host, whose Secrets page needs
@@ -44,25 +43,15 @@ function secretsServedOn(
   return secretsSupported === true;
 }
 
-export interface EnvironmentSectionFilters {
-  /** The Environment group's rows (`environmentSectionShown`). */
-  readonly shown: (section: SettingsSectionId) => boolean;
-  /** Settings search and the command palette (`environmentSectionServed`). */
-  readonly served: (section: SettingsSectionId) => boolean;
-}
-
-/** Both of Settings' section filters under the current pick. */
-export function useEnvironmentSectionFilters(): EnvironmentSectionFilters {
+/** `environmentSectionShown` under the current pick, for the rows and search. */
+export function useEnvironmentSectionShown(): (
+  section: SettingsSectionId,
+) => boolean {
   const pick = useEnvironmentPick();
   const facts = useEnvironmentPageFacts();
-  const shown = useCallback(
+  return useCallback(
     (section: SettingsSectionId) =>
       environmentSectionShown(pick, section, facts),
     [pick, facts],
   );
-  const served = useCallback(
-    (section: SettingsSectionId) => environmentSectionServed(section, facts),
-    [facts],
-  );
-  return useMemo(() => ({ shown, served }), [shown, served]);
 }

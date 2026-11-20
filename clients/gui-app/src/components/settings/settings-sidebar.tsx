@@ -41,7 +41,7 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
-import { useEnvironmentSectionFilters } from "@/components/settings/environment/use-environment-section-filters";
+import { useEnvironmentSectionShown } from "@/components/settings/environment/use-environment-section-shown";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -92,7 +92,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // section.
   const sections = visibleSettingsSections();
   // The pick hides the pages its source does not offer.
-  const environmentSections = useEnvironmentSectionFilters();
+  const environmentSectionShown = useEnvironmentSectionShown();
   // The Guide group leaves the rail once every Getting started step is done.
   const guideComplete = useGettingStartedGuideIsComplete();
   const groups = guideComplete
@@ -125,7 +125,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
       <SettingsSearch
         query={query}
         onQueryChange={setQuery}
-        sectionShown={environmentSections.served}
+        sectionShown={environmentSectionShown}
       />
       {/* The results took this space. Keeping the section list under them
           would put two competing lists in one column, and the top one already
@@ -167,7 +167,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 {sections.map((section, index) =>
                   section.group === group.id &&
                   (group.id !== "personal" ||
-                    environmentSections.shown(section.id)) ? (
+                    environmentSectionShown(section.id)) ? (
                     <SettingsSidebarItem
                       key={section.id}
                       section={section}

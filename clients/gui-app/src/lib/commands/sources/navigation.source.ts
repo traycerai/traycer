@@ -6,16 +6,15 @@
  *     shortcut even though the palette row opens a section picker)
  *
  * Settings sub-page: one row per section this build offers
- * (`visibleSettingsSections`) and the picked configuration's source
- * can draw (`useEnvironmentSectionFilters().served`, as search
- * filters), with the current section filtered out on
- * `/settings/<id>` routes.
+ * (`visibleSettingsSections`) and the Environment pick offers
+ * (`useEnvironmentSectionShown`, as the rail and search filter), with
+ * the current section filtered out on `/settings/<id>` routes.
  *
  * Runs as a `ReactCommandSource` so the Open-Settings chord
  * refreshes live when the user rebinds `app.settings.open`.
  */
 import { useMemo } from "react";
-import { useEnvironmentSectionFilters } from "@/components/settings/environment/use-environment-section-filters";
+import { useEnvironmentSectionShown } from "@/components/settings/environment/use-environment-section-shown";
 import {
   SETTINGS_SECTION_GROUPS,
   visibleSettingsSections,
@@ -80,7 +79,7 @@ const SETTINGS_SUBPAGE: CommandSubpage = {
   id: "nav:settings",
   title: "Open settings",
   useItems: (ctx: CommandContext) => {
-    const sectionShown = useEnvironmentSectionFilters().served;
+    const sectionShown = useEnvironmentSectionShown();
     return useMemo<ReadonlyArray<CommandItem>>(
       () =>
         visibleSettingsSections().flatMap((section) =>
