@@ -52,6 +52,7 @@ const discovery = vi.hoisted(() => ({ concluded: false }));
 
 vi.mock("@/hooks/host/use-host-discovery-concluded", () => ({
   useHostDiscoveryConcluded: () => discovery.concluded,
+  useHostDiscoveryFailed: () => false,
 }));
 
 // `traycer host status` is a CLI subprocess read. Stubbing the query rather

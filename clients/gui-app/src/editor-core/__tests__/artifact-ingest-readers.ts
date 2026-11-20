@@ -13,6 +13,7 @@ import {
 } from "@tiptap/y-tiptap";
 import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { createIsolatedMarked } from "@/lib/markdown/isolated-marked";
 import { artifactDocumentBundle } from "../artifact-document-bundle";
 
 /**
@@ -110,8 +111,11 @@ const hostExtensions: AnyExtension[] = [
   TableKit,
   Image,
 ];
+// Its own `marked`: the module singleton would carry these tokenizers into every
+// later file this worker runs.
 const hostManager = new MarkdownManager({
   extensions: hostExtensions,
+  marked: createIsolatedMarked(),
   markedOptions: { gfm: true, breaks: true, pedantic: false },
 });
 

@@ -14,6 +14,7 @@ export type {
   RemoteSessionAuth,
   RemoteSessionAuthRecoveryOutcome,
   RemoteSessionOpenAuth,
+  SessionDoorObserver,
 } from "./auth";
 export type {
   AttachGrant,

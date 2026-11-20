@@ -594,7 +594,15 @@ describe("credentials mutation store", () => {
     it.skipIf(!canForceCommitFailure)(
       "a failed conditional delete stays quarantined until a drain lands it",
       async () => {
-        const store = makeStore(refreshStub(rotateOk).fn);
+        // The failed delete arms the store's own retry drain, which takes the
+        // same lock as the drains below. It is parked so that only this
+        // case's drains run.
+        const held = holdContinuationRetries(PRODUCTION_CONTINUATION_RETRY_MS);
+        const store = makeStoreTimed(
+          refreshStub(rotateOk).fn,
+          500,
+          PRODUCTION_CONTINUATION_RETRY_MS,
+        );
         await seedSignedIn(store);
         const qPath = quarantinePath(credentialsPath);
         // Pre-armed record (exactly as the register-before-attempt leaves
@@ -606,6 +614,7 @@ describe("credentials mutation store", () => {
         chmodSync(workDir, 0o500);
         const failed = await store.signOutIfToken(CREDS.token, null);
         expect(failed.outcome).toBe("commit-failed");
+        expect(held.heldCount()).toBe(1);
         // Still durable, still suppressed, drain still failing.
         expect(await readCredentialsFile(credentialsPath)).toEqual(CREDS);
         expect(await store.read()).toBeNull();

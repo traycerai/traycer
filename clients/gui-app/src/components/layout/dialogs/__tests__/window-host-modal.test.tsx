@@ -1,4 +1,39 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+const appVersion = vi.hoisted((): { current: string | null } => ({
+  current: null,
+}));
+vi.mock("@/lib/app-version", () => ({
+  getClientAppVersion: () => appVersion.current,
+  getClientAppVersionLabel: () => "v0.0.0",
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
+const olderHostUpdate = vi.hoisted(() => ({
+  update: vi.fn(),
+  pending: false,
+  remotePending: false,
+  failure: null as {
+    readonly message: string;
+    readonly code: string | null;
+  } | null,
+}));
+vi.mock("@/hooks/host/use-older-host-update", () => ({
+  useOlderHostUpdate: () => olderHostUpdate,
+}));
+vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
+  useHostProvisioningProgress: () => null,
+}));
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -11,10 +46,19 @@ import {
 } from "@/components/layout/dialogs/window-host-modal";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { olderHostUpdateVariant } from "@/lib/host/window-narration";
 
 afterEach(() => {
   cleanup();
   useDesktopDialogStore.setState({ reportIssueAvailable: false });
+});
+
+beforeEach(() => {
+  appVersion.current = null;
+  olderHostUpdate.update = vi.fn();
+  olderHostUpdate.pending = false;
+  olderHostUpdate.remotePending = false;
+  olderHostUpdate.failure = null;
 });
 
 function buildProgress(overrides: Partial<HostProgressView>): HostProgressView {
@@ -39,7 +83,6 @@ function baseProps(
     bootBody: null,
     onRetry: null,
     retryPending: false,
-    onUpdateHost: null,
     onOpenSettings: () => undefined,
     // The DIALOG ignores this - it keeps its own right-aligned footer - and
     // this base describes a settled ∅, which is never settings-only anyway.
@@ -124,7 +167,6 @@ describe("<WindowHostModal />", () => {
           isTargetHost: true,
           detail,
         },
-        onUpdateHost: () => undefined,
       }),
     );
     const body = screen.getByTestId("window-host-modal-incompatible-detail");
@@ -133,14 +175,14 @@ describe("<WindowHostModal />", () => {
     expect(body.textContent).toContain("protocol-major-behind");
   });
 
-  it("update-host: the Update host button is present when onUpdateHost is a function", () => {
+  it("update-host: Update now is present for a host behind this app and runs the update hook", () => {
+    appVersion.current = "1.5.0";
     const detail: SelectionIncompatibility = {
       code: "protocol-major-behind",
       hostVersion: "1.0.0",
       minSupportedVersion: "1.2.0",
       clientCompatibility: null,
     };
-    const onUpdateHost = vi.fn();
     renderModal(
       baseProps({
         variant: {
@@ -149,19 +191,15 @@ describe("<WindowHostModal />", () => {
           isTargetHost: true,
           detail,
         },
-        onUpdateHost,
       }),
     );
     const button = screen.getByTestId("window-host-modal-update-host");
+    expect(button.textContent).toBe("Update now");
     fireEvent.click(button);
-    expect(onUpdateHost).toHaveBeenCalledTimes(1);
+    expect(olderHostUpdate.update).toHaveBeenCalledTimes(1);
   });
 
-  it("update-host: a NON-target incompatible host explains why it cannot be updated here", () => {
-    // Arm 2 of `deriveNoHostVariant`. The action is withheld upstream because
-    // this machine's provisioning cannot fix another machine's host - so the
-    // copy has to say that, or the card reads as "update the host" beside no
-    // button, which is an unexplained gap rather than an honest absence.
+  it("update-host: a remote host gets the remote description", () => {
     const detail: SelectionIncompatibility = {
       code: "protocol-major-behind",
       hostVersion: "1.0.0",
@@ -176,23 +214,19 @@ describe("<WindowHostModal />", () => {
           isTargetHost: false,
           detail,
         },
-        onUpdateHost: null,
       }),
     );
     const description = screen.getByTestId("window-host-modal-description");
-    expect(description.textContent).toContain("Another host on this account");
-    expect(description.textContent).toContain("can't be updated from here");
-    // And it must NOT still tell the reader to do the thing there is no
-    // control for.
-    expect(description.textContent).not.toContain(
-      "Update the host to continue",
+    expect(description.textContent).toBe(
+      "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.",
     );
   });
 
-  it("update-host: the Update host button is absent when onUpdateHost is null", () => {
+  it("update-host: Update now is absent when this app is the outdated leg", () => {
+    appVersion.current = "1.0.0";
     const detail: SelectionIncompatibility = {
       code: "protocol-major-behind",
-      hostVersion: "1.0.0",
+      hostVersion: "9.9.9",
       minSupportedVersion: "1.2.0",
       clientCompatibility: null,
     };
@@ -204,10 +238,71 @@ describe("<WindowHostModal />", () => {
           isTargetHost: true,
           detail,
         },
-        onUpdateHost: null,
       }),
     );
     expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+  });
+
+  it("older-host cover: an unknown host version is Host update needed, with Update now and no host-version line", () => {
+    appVersion.current = "1.0.0";
+    renderModal(
+      baseProps({
+        variant: olderHostUpdateVariant("host-a", true, null),
+      }),
+    );
+
+    expect(screen.getByTestId("window-host-modal-title").textContent).toBe(
+      "Host update needed",
+    );
+    expect(
+      screen.getByTestId("window-host-modal-update-host").textContent,
+    ).toBe("Update now");
+    const detail = screen.getByTestId("window-host-modal-incompatible-detail");
+    expect(detail.textContent).toContain("Reason: older-host");
+    expect(detail.textContent).toContain("Minimum supported: 2.0.0");
+    expect(detail.textContent).not.toContain("Host version:");
+  });
+
+  it("older-host cover: a newer host version still offers Update now", () => {
+    appVersion.current = "1.0.0";
+    renderModal(
+      baseProps({
+        variant: olderHostUpdateVariant("host-a", true, "9.9.9"),
+      }),
+    );
+
+    expect(screen.getByTestId("window-host-modal-title").textContent).toBe(
+      "Host update needed",
+    );
+    expect(
+      screen.getByTestId("window-host-modal-update-host").textContent,
+    ).toBe("Update now");
+    expect(screen.queryByText("Your app is too old")).toBeNull();
+  });
+
+  it("older-host cover: a remote pending update replaces Update now", () => {
+    olderHostUpdate.remotePending = true;
+    const props = baseProps({
+      variant: olderHostUpdateVariant("host-a", true, "1.5.4"),
+    });
+    renderModal(props);
+
+    expect(screen.queryByTestId("window-host-modal-update-host")).toBeNull();
+    expect(screen.getByText("Update pending")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Applied on this host's next check-in — within ~10 minutes, and only when no sessions are running.",
+      ),
+    ).toBeTruthy();
+
+    olderHostUpdate.remotePending = false;
+    cleanup();
+    renderModal(props);
+
+    expect(
+      screen.getByTestId("window-host-modal-update-host").textContent,
+    ).toBe("Update now");
+    expect(screen.queryByText("Update pending")).toBeNull();
   });
 
   it("renders heading and percent - never the byte count or the lane's message - in window-host-modal-progress when progress is set and bootBody is null", () => {
@@ -286,10 +381,6 @@ describe("<WindowHostModal /> update-client (epoch rejection)", () => {
         isTargetHost: true,
         requirement: { ...requirement, ...overrides },
       },
-      // The narrator withholds this on the update-client arm; passed as `null`
-      // here so the assertion below is about the COMPONENT's own refusal to
-      // draw a host action, not about the caller happening not to supply one.
-      onUpdateHost: null,
     });
   }
 

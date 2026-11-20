@@ -20,6 +20,9 @@ const HOST_ID = "host-1";
 
 const mocks = vi.hoisted(() => ({
   request: vi.fn(),
+  signInRecordingService: {
+    recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+  },
 }));
 
 // The real hook resolves the tab's host through the directory, which this
@@ -41,11 +44,16 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
     request: mocks.request,
   }),
 }));
+vi.mock("@/lib/host", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host")>();
+  return { ...actual, useAuthService: () => mocks.signInRecordingService };
+});
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
     useHostBinding: () => ({ hostClient: { id: "real-client" } }),
+    useAuthService: () => mocks.signInRecordingService,
   };
 });
 vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({

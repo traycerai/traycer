@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { MoveSheet } from "@/components/settings/move-sheet";
+import { MoveProgressDialog } from "@/components/settings/move/move-progress-dialog";
 import { RetrospectiveSession } from "@/components/settings/move/retrospective-session";
-import { isReviewV11 } from "@/components/settings/move/review-v11";
 import { statusPlanesSupported } from "@/components/settings/move/status-planes-supported";
 import { planesHaveSharedUnrecorded } from "@/components/settings/move/status-planes";
 import { useThisComputer } from "@/components/settings/move/this-computer";
@@ -12,13 +12,15 @@ import {
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
+import type { RetrospectiveSheetTarget } from "@/stores/settings/retrospective-sheet-store";
+import { TeamEnvironmentReviewSession } from "@/components/settings/move/team-environment-review-session";
 
 /**
  * The environment sheets, mounted once for the whole app rather than inside
  * Settings: the retrospective sheet has to open by itself on the first launch
- * after the update, whatever the window shows, and both it and the move sheet
- * are opened from outside Settings too (the Start toast, the retrospective
- * sheet's `Move to Personal`).
+ * after the update, whatever the window shows, and the move sheet is opened
+ * from outside Settings too (the Start toast's move invitation, the
+ * retrospective sheet's `Move to Personal`).
  */
 export function EnvironmentSheetsHost(): ReactNode {
   return (
@@ -26,6 +28,7 @@ export function EnvironmentSheetsHost(): ReactNode {
       <RetrospectiveShowOnce />
       <RetrospectiveSheetFromStore />
       <MoveSheet />
+      <MoveProgressDialog />
     </>
   );
 }
@@ -63,13 +66,14 @@ function RetrospectiveShowOnce(): ReactNode {
     enabled,
   );
   const statusData = enabled ? status.data : null;
-  const reviewData = enabled ? review.data : null;
+  // Decided on the host's own record of the sheet, never before it answers.
+  const reviewData =
+    enabled && review.data?.recorded === true ? review.data : null;
   const decided = statusData !== null && reviewData !== null;
   const due =
     statusData !== null &&
     reviewData !== null &&
     planesHaveSharedUnrecorded(statusData.planes) &&
-    isReviewV11(reviewData) &&
     reviewData.shownAt === null;
   const { hostId, hostName } = computer;
   useEffect(() => {
@@ -83,11 +87,38 @@ function RetrospectiveSheetFromStore(): ReactNode {
   const target = useRetrospectiveSheetStore((state) => state.target);
   const open = useRetrospectiveSheetStore((state) => state.open);
   const closeSheet = useRetrospectiveSheetStore((state) => state.closeSheet);
-  const hostId = target === null ? null : target.hostId;
-  const named = useHostClientForHostId(hostId);
-  // `null` resolves the window's following client, which is not the target.
-  const client = hostId === null ? null : named;
-  if (target === null || client === null) return null;
+  if (target === null) return null;
+  const onOpenChange = (next: boolean): void => {
+    if (!next) closeSheet();
+  };
+  if ("environmentId" in target) {
+    return (
+      <TeamEnvironmentReviewSession
+        key={target.opening}
+        target={target}
+        open={open}
+        onOpenChange={onOpenChange}
+      />
+    );
+  }
+  return (
+    <HostRetrospectiveSheet
+      target={target}
+      open={open}
+      onOpenChange={onOpenChange}
+    />
+  );
+}
+
+function HostRetrospectiveSheet(props: {
+  readonly target: RetrospectiveSheetTarget;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const { target } = props;
+  const hostId = target.hostId;
+  const client = useHostClientForHostId(hostId);
+  if (client === null) return null;
   return (
     <RetrospectiveSession
       key={target.hostId}
@@ -96,11 +127,9 @@ function RetrospectiveSheetFromStore(): ReactNode {
       stopClient={client}
       stopHostId={target.hostId}
       hostName={target.hostName}
-      open={open}
+      open={props.open}
       held={null}
-      onOpenChange={(next) => {
-        if (!next) closeSheet();
-      }}
+      onOpenChange={props.onOpenChange}
     />
   );
 }

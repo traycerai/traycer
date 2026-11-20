@@ -3,13 +3,18 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useState, type ReactNode } from "react";
 import type { TeamComputer } from "@traycer-clients/shared/host-client/team-computers";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useCanEditConfiguration } from "@/components/settings/environment/configuration-source";
+import {
+  mayChangeConfiguration,
+  useCanEditConfiguration,
+  useConfigurationSource,
+} from "@/components/settings/environment/configuration-source";
 import {
   usePickedTeamHandle,
   usePickedTeamLabel,
 } from "@/components/settings/environment/team-pick-label";
 import { useTeamComputers } from "@/hooks/auth/use-team-computers";
 import { AddComputerDialog } from "./add-computer-dialog";
+import { ClaimRunningWork } from "./claim-running-work";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,13 +23,6 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 export function TeamComputersSection(props: {
   readonly environmentId: string;
@@ -39,18 +37,20 @@ export function TeamComputersSection(props: {
 }
 
 function TeamComputers(props: { readonly environmentId: string }): ReactNode {
-  const { read, setBotHost, claim } = useTeamComputers(props.environmentId);
+  const { read, claim } = useTeamComputers(props.environmentId);
   const canEdit = useCanEditConfiguration();
+  const source = useConfigurationSource();
+  const mayClaim =
+    source.kind === "pool" &&
+    source.environmentId === props.environmentId &&
+    mayChangeConfiguration(source.effectiveRole);
   const teamName = usePickedTeamLabel(props.environmentId) ?? "this team";
   const teamHandle = usePickedTeamHandle(props.environmentId);
   const [claiming, setClaiming] = useState<TeamComputer | null>(null);
   const computers = (read.data ?? []).filter(
     (host) => host.hostKind === "personal",
   );
-  const botHost = (read.data ?? []).find(
-    (host) => host.holdsBotSlot && !host.purgePending,
-  );
-  const busy = setBotHost.isPending || claim.isPending;
+  const busy = claim.isPending;
   let contents: ReactNode;
   if (read.isPending) {
     contents = (
@@ -65,41 +65,30 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
       </p>
     );
   } else {
-    contents = (
-      <>
-        <TeamBotHostPicker
-          computers={computers}
-          botHost={botHost ?? null}
-          canEdit={canEdit}
-          busy={busy}
-          onChoose={(host) =>
-            setBotHost.mutate({
-              hostId: host.hostId,
-              sharingGeneration: host.sharingGeneration,
-            })
-          }
-        />
-        {computers.length === 0 ? (
-          <p className="text-ui-sm text-muted-foreground">
-            This team has no computers.
-          </p>
-        ) : (
-          <ul className="flex min-w-0 flex-col gap-3">
-            {computers.map((host) => (
-              <TeamComputerRow
-                key={host.hostId}
-                host={host}
-                busy={busy}
-                onClaim={() => {
-                  claim.reset();
-                  setClaiming(host);
-                }}
-              />
-            ))}
-          </ul>
-        )}
-      </>
-    );
+    contents =
+      computers.length === 0 ? (
+        <p className="text-ui-sm text-muted-foreground">
+          This team has no computers.
+        </p>
+      ) : (
+        <ul className="flex min-w-0 flex-col gap-3">
+          {computers.map((host) => (
+            <TeamComputerRow
+              key={host.hostId}
+              host={host}
+              busy={busy}
+              onClaim={
+                mayClaim
+                  ? () => {
+                      claim.reset();
+                      setClaiming(host);
+                    }
+                  : null
+              }
+            />
+          ))}
+        </ul>
+      );
   }
   return (
     <section
@@ -142,11 +131,6 @@ function TeamComputers(props: { readonly environmentId: string }): ReactNode {
         </div>
       </div>
       {contents}
-      {setBotHost.error !== null ? (
-        <p role="alert" className="text-ui-sm text-destructive">
-          {setBotHost.error.message}
-        </p>
-      ) : null}
       <TeamComputerClaimDialog
         computer={claiming}
         pending={claim.isPending}
@@ -185,6 +169,10 @@ function TeamComputerClaimDialog(props: {
             This computer will become yours. The team will lose access to it.
           </DialogDescription>
         </DialogHeader>
+        <ClaimRunningWork
+          hostId={props.computer?.hostId ?? null}
+          environmentId={props.computer?.environmentId ?? null}
+        />
         {props.failure !== null ? (
           <p role="alert" className="text-ui-sm text-destructive">
             {props.failure}
@@ -221,84 +209,28 @@ function TeamComputerClaimDialog(props: {
   );
 }
 
-function TeamBotHostPicker(props: {
-  readonly computers: readonly TeamComputer[];
-  readonly botHost: TeamComputer | null;
-  readonly canEdit: boolean;
-  readonly busy: boolean;
-  readonly onChoose: (host: TeamComputer) => void;
-}): ReactNode {
-  const selected = props.computers.find(
-    (host) => host.hostId === props.botHost?.hostId,
-  );
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div>
-        <p className="text-ui-sm font-medium">Run the team's bots on</p>
-        <p className="text-ui-xs text-muted-foreground">
-          {props.botHost?.hostName ?? "No bot computer chosen"}
-        </p>
-      </div>
-      <Select
-        value={selected?.hostId ?? ""}
-        disabled={
-          !props.canEdit ||
-          props.busy ||
-          props.computers.every((host) => host.purgePending)
-        }
-        onValueChange={(hostId) => {
-          const host = props.computers.find((row) => row.hostId === hostId);
-          if (host !== undefined && !host.purgePending && !host.holdsBotSlot)
-            props.onChoose(host);
-        }}
-      >
-        <SelectTrigger
-          size="sm"
-          className="w-full sm:w-auto"
-          aria-label="Bot host"
-        >
-          <SelectValue placeholder="Choose a computer" />
-        </SelectTrigger>
-        <SelectContent>
-          {props.computers.map((host) => (
-            <SelectItem
-              key={host.hostId}
-              value={host.hostId}
-              disabled={host.purgePending}
-            >
-              {host.hostName ?? "Unnamed computer"}
-              {host.holdsBotSlot ? " · Current bot computer" : ""}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
-
 function TeamComputerRow(props: {
   readonly host: TeamComputer;
   readonly busy: boolean;
-  readonly onClaim: () => void;
+  readonly onClaim: (() => void) | null;
 }): ReactNode {
   return (
     <li className="flex flex-wrap items-center justify-between gap-2">
       <span className="min-w-0 break-words text-ui-sm">
         {props.host.hostName ?? "Unnamed computer"}
         {props.host.purgePending ? " · Unavailable" : null}
-        {!props.host.purgePending && props.host.holdsBotSlot
-          ? " · Runs the team's bots"
-          : null}
       </span>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={props.busy || props.host.purgePending}
-        onClick={props.onClaim}
-      >
-        Claim this computer
-      </Button>
+      {props.onClaim !== null ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={props.busy || props.host.purgePending}
+          onClick={props.onClaim}
+        >
+          Claim this computer
+        </Button>
+      ) : null}
     </li>
   );
 }

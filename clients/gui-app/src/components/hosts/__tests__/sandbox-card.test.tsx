@@ -904,7 +904,7 @@ describe("facts as the scope resolves them", () => {
     ]);
   });
 
-  it("control: shows a frozen row when the host list says frozen, whatever the summary says", () => {
+  it("keeps a frozen row's payer unknown when the creator-less summary has no environment", () => {
     const sandbox = resolvedSandbox({
       listed: { state: "suspended", frozen: true },
       summaryFrozen: false,
@@ -913,13 +913,11 @@ describe("facts as the scope resolves them", () => {
 
     renderCard(sandbox);
 
-    expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Your credits ran out/,
-    );
+    expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
 
-  it("control: falls back to the summary's frozen flag when the host list carries no sandbox facts", () => {
+  it("keeps a frozen summary's payer unknown when the host list carries no sandbox facts", () => {
     const sandbox = resolvedSandbox({ listed: null, summaryFrozen: true });
     // The builder's fallback, not a hand-written prop.
     expect(sandbox.frozen).toBe(true);
@@ -927,9 +925,7 @@ describe("facts as the scope resolves them", () => {
 
     renderCard(sandbox);
 
-    expect(screen.getByTestId("sandbox-card-state-line").textContent).toMatch(
-      /^Your credits ran out/,
-    );
+    expect(screen.queryByTestId("sandbox-card-state-line")).toBeNull();
     expect(actionTestIds()).toEqual(["sandbox-card-destroy"]);
   });
 });

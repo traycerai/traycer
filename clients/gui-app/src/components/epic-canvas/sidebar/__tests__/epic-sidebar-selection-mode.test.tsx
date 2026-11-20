@@ -133,6 +133,10 @@ interface TestState {
    * states no number.
    */
   chatRecordListAuthoritative: boolean;
+  chatRecordListFailed: boolean;
+  chatPublicationRedirectRevision: string | null;
+  chatPublicationRedirectRevisionSupported: boolean | null;
+  readonly publicationTargetArgs: Mock;
   /** The terminal twin: `epic.listTuiAgents` has answered. */
   tuiAgentRecordListAuthoritative: boolean;
   /** Whether the session's host serves Deleted artifacts. */
@@ -261,6 +265,10 @@ const testState = vi.hoisted<TestState>(() => ({
   sessionReady: true,
   snapshotLoaded: true,
   chatRecordListAuthoritative: true,
+  chatRecordListFailed: false,
+  chatPublicationRedirectRevision: null,
+  chatPublicationRedirectRevisionSupported: null,
+  publicationTargetArgs: vi.fn(),
   tuiAgentRecordListAuthoritative: true,
   deletedArtifactsAvailable: false,
   activeArtifactId: null,
@@ -765,7 +773,17 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
 // (or an in-flight request) produces, so this suite exercises the degraded
 // path the fold is specified to tolerate.
 vi.mock("@/hooks/chats/use-chat-publication-targets", () => ({
-  useChatPublicationTargets: () => ({ data: undefined, isError: false }),
+  useChatPublicationTargets: (args: {
+    readonly chatIds: readonly string[];
+    readonly chatIdsAuthoritative: boolean;
+    readonly chatRecordListFailed: boolean;
+    readonly publicationRedirectRevision: string | null;
+    readonly publicationRedirectRevisionSupported: boolean | null;
+    readonly recordListStore: unknown;
+  }) => {
+    testState.publicationTargetArgs(args);
+    return { data: undefined, isError: false };
+  },
   publicationTargetMap: () => new Map<string, string>(),
 }));
 
@@ -808,6 +826,8 @@ vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => testState.activeHostClient,
+  // A local chat row asks whether a team owns its host; no sign-in, no read.
+  useHostBinding: () => null,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
@@ -1218,6 +1238,13 @@ vi.mock("@/lib/epic-selectors", () => ({
   // LOCAL tree, and the section hides itself when the cloud list has nothing
   // to add - which, with no host client bound here, it never does.
   useEpicChatIds: () => [],
+  useEpicChatRecordListAuthoritative: () =>
+    testState.chatRecordListAuthoritative,
+  useEpicChatRecordListFailed: () => testState.chatRecordListFailed,
+  useEpicChatPublicationRedirectRevision: () =>
+    testState.chatPublicationRedirectRevision,
+  useEpicChatPublicationRedirectRevisionSupported: () =>
+    testState.chatPublicationRedirectRevisionSupported,
   useEpicChatIdsNamedByCloudRows: () => [],
   useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
@@ -1278,6 +1305,12 @@ function fakeEpicStoreState() {
     // predates the delete disclosure's readiness read, which is the settled
     // state every count assertion here is about.
     chatRecordListAuthoritative: testState.chatRecordListAuthoritative,
+    chatPublicationRedirectRevision: testState.chatPublicationRedirectRevision,
+    chatPublicationRedirectRevisionSupported:
+      testState.chatPublicationRedirectRevisionSupported,
+    chatPublicationTargetCoverage: [],
+    chatRecordListAnswerSequence: 0,
+    recordChatPublicationRedirectRevision: () => undefined,
     tuiAgentRecordListAuthoritative: testState.tuiAgentRecordListAuthoritative,
     // The list's sort-clock override reads the record heads, which these
     // fixtures still publish none of, so the override stays empty and every
@@ -1285,6 +1318,7 @@ function fakeEpicStoreState() {
     // so the real `useEpicNodeHostIds`/`useSurfaceHostPin` selector can see
     // this task's GUI hosts alongside `tuiAgents`' TUI ones.
     chatRecordHeads: {},
+    chatRecordStarters: {},
     chats: {
       allIds: chatRecords.map((record) => record.id),
       byId: Object.fromEntries(
@@ -1517,6 +1551,10 @@ describe("epic sidebar selection mode", () => {
     testState.sessionReady = true;
     testState.snapshotLoaded = true;
     testState.chatRecordListAuthoritative = true;
+    testState.chatRecordListFailed = false;
+    testState.publicationTargetArgs.mockClear();
+    testState.chatPublicationRedirectRevision = null;
+    testState.chatPublicationRedirectRevisionSupported = null;
     testState.tuiAgentRecordListAuthoritative = true;
     testState.deletedArtifactsAvailable = false;
     testState.activeArtifactId = null;
@@ -1592,6 +1630,57 @@ describe("epic sidebar selection mode", () => {
     expect(
       useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
     ).toBeUndefined();
+  });
+
+  it("forwards the redirect revision and record-list readiness to targets", () => {
+    testState.chatRecordListAuthoritative = false;
+    testState.chatRecordListFailed = false;
+    const rendered = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />,
+    );
+    expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        publicationRedirectRevision: null,
+        publicationRedirectRevisionSupported: null,
+        chatIdsAuthoritative: false,
+        chatRecordListFailed: false,
+      }),
+    );
+
+    testState.chatRecordListFailed = true;
+    rendered.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        publicationRedirectRevision: null,
+        publicationRedirectRevisionSupported: null,
+        chatIdsAuthoritative: false,
+        chatRecordListFailed: true,
+      }),
+    );
+
+    testState.chatRecordListAuthoritative = true;
+    testState.chatRecordListFailed = false;
+    rendered.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        publicationRedirectRevision: null,
+        publicationRedirectRevisionSupported: null,
+        chatIdsAuthoritative: true,
+        chatRecordListFailed: false,
+      }),
+    );
+
+    testState.chatPublicationRedirectRevision = "redirect-r7";
+    testState.chatPublicationRedirectRevisionSupported = true;
+    rendered.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(testState.publicationTargetArgs).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        publicationRedirectRevision: "redirect-r7",
+        publicationRedirectRevisionSupported: true,
+        chatIdsAuthoritative: true,
+        chatRecordListFailed: false,
+      }),
+    );
   });
 
   it("scrolls to and flash-highlights a requested artifact row", async () => {

@@ -1,10 +1,8 @@
 import { useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EnvironmentSecretsCreateResponse } from "@traycer/protocol/host/environment-schemas";
+import type { AuthnSecretsCreateResponse } from "@traycer-clients/shared/environment/configuration-secrets";
 import { SecretIntakeFields } from "@/components/settings/secrets/secret-intake-fields";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
-import { custodySentence } from "@/components/settings/environment/mcp-skills-copy";
 import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -47,8 +45,7 @@ import {
 } from "@/lib/sandboxes/secret-verify-copy";
 import {
   PROVIDER_KEYS_LINE,
-  SECRET_SAVED_OFFLINE,
-  SECRETS_NEED_UPDATED_HOST,
+  secretCustodySentence,
 } from "@/lib/sandboxes/secrets-page-copy";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
@@ -61,8 +58,8 @@ import { cn } from "@/lib/utils";
  * once more before Save. API keys and database logins are offered; a
  * provider's key is set on that provider's page, which the picker points to, and
  * SSH, the cloud and certificate kinds have no row. A kind no protocol of
- * which is brokered is greyed with the catalogue's own line. A value a
- * Variables row refused arrives as `prefill`, its name and value filled in.
+ * which is brokered is greyed with the catalogue's own line. A name and
+ * value the caller already has arrive as `prefill`, filled in.
  *
  * The typed value lives in this component's state only: Verify and Save read
  * it when their request is dispatched, so it reaches no query or mutation
@@ -94,26 +91,18 @@ const NOTE_TONE: Readonly<Record<SecretVerifyLine["tone"], string>> = {
 };
 
 function errorText(error: unknown, fallback: string): string {
-  if (error instanceof HostMethodVersionUnsatisfiedError) {
-    return SECRETS_NEED_UPDATED_HOST;
-  }
   return error instanceof Error && error.message.length > 0
     ? error.message
     : fallback;
 }
 
 function createOutcomeNote(
-  outcome: EnvironmentSecretsCreateResponse,
+  outcome: AuthnSecretsCreateResponse,
   form: SecretFormState,
 ): SecretVerifyLine | null {
   switch (outcome.outcome) {
     case "created":
       return null;
-    case "pending":
-      return {
-        tone: "success",
-        text: SECRET_SAVED_OFFLINE,
-      };
     case "refused":
       return {
         tone: "warning",
@@ -204,7 +193,7 @@ function Custody(): ReactNode {
         className="max-w-[72ch] text-ui-xs text-muted-foreground"
         data-testid="secret-custody-sentence"
       >
-        {custodySentence(personal, name)}
+        {secretCustodySentence(personal, name)}
       </p>
       <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
     </div>
@@ -249,23 +238,18 @@ function prefilledForm(
     : { ...form, name: prefill.name, value: prefill.value };
 }
 
-/** A named kind opens its form; a carried-in value opens an API key's. */
 function initialStepOf(
   initialKind: DesktopSecretKind | undefined,
   prefill: SecretPrefill | null,
 ): Step {
-  if (initialKind !== undefined) {
-    return { kind: "form", form: prefilledForm(initialKind, prefill) };
-  }
-  return prefill === null
+  return initialKind === undefined
     ? PICK
-    : { kind: "form", form: prefilledForm("api_key", prefill) };
+    : { kind: "form", form: prefilledForm(initialKind, prefill) };
 }
 
 export function AddSecretDialog(props: {
   readonly open: boolean;
   readonly initialKind?: DesktopSecretKind;
-  /** A name and value carried in from a refused variable, or `null`. */
   readonly prefill: SecretPrefill | null;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;
@@ -445,22 +429,7 @@ export function AddSecretDialog(props: {
             </Button>
           </DialogFooter>
         ) : null}
-        {step.kind === "confirm" && saveNote?.tone === "success" ? (
-          // Saved and waiting to reach the account: one more Save would be a
-          // second secret, so only Done is offered.
-          <DialogFooter>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => close(false)}
-              data-testid="secret-save-done"
-            >
-              Done
-            </Button>
-          </DialogFooter>
-        ) : null}
-        {step.kind === "confirm" && saveNote?.tone !== "success" ? (
+        {step.kind === "confirm" ? (
           <DialogFooter>
             <Button
               type="button"

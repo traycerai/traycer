@@ -254,6 +254,7 @@ export function Fixture() {
           taskId={EPIC_ID}
           epicId={EPIC_ID}
           hostId={null}
+          payerHostId={null}
           messages={[]}
           transcriptWindow={transcriptWindow}
           onVisibleOrdinalRangeChange={() => undefined}
@@ -269,6 +270,7 @@ export function Fixture() {
           systemOverlayActive={false}
           scrollRequest={null}
           onScrollRequestSettled={null}
+          onReaderMoved={null}
           composerOverlayHeight={0}
           subagentDrillIn={subagentDrillIn}
         />

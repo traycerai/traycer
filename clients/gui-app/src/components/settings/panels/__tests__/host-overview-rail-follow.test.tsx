@@ -12,6 +12,7 @@ import {
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
 import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
+import { NO_RECEIPT } from "@/components/settings/panels/__tests__/ownership-receipt-fixture";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -33,7 +34,6 @@ vi.mock(
       thisComputerUnread: false,
       collisions: [],
       retry: () => undefined,
-      reread: () => undefined,
     }),
   }),
 );
@@ -118,6 +118,7 @@ function mount(status: EnvironmentStatusResponseV11): void {
         binding={BINDING}
         owner={null}
         isLocalMachine={false}
+        receipt={NO_RECEIPT}
       />
     </QueryClientProvider>,
   );

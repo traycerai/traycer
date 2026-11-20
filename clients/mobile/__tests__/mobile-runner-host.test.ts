@@ -7,12 +7,13 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { PluginListenerHandle } from "@capacitor/core";
+import type { HttpOptions, PluginListenerHandle } from "@capacitor/core";
 import type {
   DeviceFlowResult,
+  StoredCredentials,
   SystemSuspendCause,
 } from "@traycer-clients/shared/platform/runner-host";
-import { MobileRunnerHost } from "../src/mobile-runner-host";
+import { MobileRunnerHost, type FleetHostRow } from "../src/mobile-runner-host";
 import { MobileSandboxArtifacts } from "../src/sandbox-artifacts-plugin";
 import {
   MobileVoiceAudio,
@@ -36,6 +37,7 @@ import {
 
 const nativeMocks = vi.hoisted(() => ({
   browserOpen: vi.fn(),
+  httpRequests: new Array<HttpOptions>(),
   storageKeys: vi.fn(),
   storageGet: vi.fn(),
   storageSet: vi.fn(),
@@ -121,6 +123,18 @@ vi.mock("@capacitor/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@capacitor/core")>();
   return {
     ...actual,
+    CapacitorHttp: {
+      ...actual.CapacitorHttp,
+      request: async (options: HttpOptions) => {
+        nativeMocks.httpRequests.push(options);
+        return {
+          status: 302,
+          data: "",
+          headers: {},
+          url: options.url,
+        };
+      },
+    },
     Capacitor: {
       ...actual.Capacitor,
       getPlatform: () => capacitorEventMocks.platform,
@@ -290,6 +304,35 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     canCopyImages: true,
     // The Android back adapter has its own suite (`system-back.test.ts`);
     // `null` is every other platform's answer.
+    systemBack: null,
+    statusBarTap: null,
+    deviceDictation: null,
+    voiceAudio: null,
+  });
+}
+
+function runnerWithFleet(
+  fleetHostIds: (
+    stored: StoredCredentials | null,
+  ) => Promise<readonly FleetHostRow[] | null>,
+): MobileRunnerHost {
+  return new MobileRunnerHost({
+    signInUrl: "http://localhost:32352/sign-in",
+    authnBaseUrl: "http://localhost:32350",
+    hostLabel: "test-slot",
+    relayBaseUrl: "ws://localhost:8787/attach",
+    serverBaseUrl: "http://localhost:5010",
+    sandboxControlUnavailableReason: null,
+    fleetHostIds,
+    pushRegistration: null,
+    openPushSettings: null,
+    returnScheme: null,
+    authSheet: null,
+    linkCodeScanner: null,
+    deviceDescriber: null,
+    linkLoginDeepLinks: null,
+    fileSave: null,
+    canCopyImages: true,
     systemBack: null,
     statusBarTap: null,
     deviceDictation: null,
@@ -608,6 +651,7 @@ describe("MobileRunnerHost", () => {
     capacitorEventMocks.holdNetworkSeed = false;
     capacitorEventMocks.pendingSeedReleases.length = 0;
     nativeMocks.storage.clear();
+    nativeMocks.httpRequests.length = 0;
     nativeMocks.storageKeys.mockImplementation(async () => ({
       value: [...nativeMocks.storage.keys()],
     }));
@@ -637,6 +681,52 @@ describe("MobileRunnerHost", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("sends each bot setup write through native HTTP with redirects disabled", async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => {
+      throw new Error("the patched fetch must not carry bot setup writes");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const host = runner(null);
+
+    await expect(
+      host.updateBotRunSettings("bearer-1", {
+        botId: "bot-1",
+        harness: "claude",
+        model: "model-1",
+        effort: null,
+        profile: null,
+      }),
+    ).resolves.toMatchObject({ kind: "unavailable" });
+    await expect(
+      host.updateBotReplyMode("bearer-1", {
+        botId: "bot-1",
+        replyMode: "thread",
+      }),
+    ).resolves.toMatchObject({ kind: "unavailable" });
+    await expect(
+      host.deleteBot("bearer-1", { botId: "bot-1" }),
+    ).resolves.toMatchObject({
+      kind: "unavailable",
+    });
+    await expect(
+      host.registerSlackApp("bearer-1", {
+        botId: "bot-1",
+        appId: "A07K2M9QX4T",
+        clientId: "123.456",
+        clientSecret: "client-secret",
+        signingSecret: "signing-secret",
+      }),
+    ).resolves.toMatchObject({ kind: "network-error" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(nativeMocks.httpRequests).toHaveLength(4);
+    for (const request of nativeMocks.httpRequests) {
+      expect(request.disableRedirects).toBe(true);
+      expect(request.method).toBe("POST");
+      expect(request.responseType).toBe("text");
+    }
   });
 
   it("treats an absent secure-storage key as a signed-out session", async () => {
@@ -689,6 +779,65 @@ describe("MobileRunnerHost", () => {
       { present: true, userId: "user-1", revision: 1 },
       { present: true, userId: "user-1", revision: 2 },
     ]);
+  });
+
+  it("refreshHostFleet publishes the fleet it read and reports published", async () => {
+    const host = runnerWithFleet(() =>
+      Promise.resolve([
+        { hostId: "fleet-host", sandbox: false, teamOwned: true },
+      ]),
+    );
+
+    await expect(host.refreshHostFleet()).resolves.toEqual({
+      kind: "published",
+    });
+
+    expect(host.selectionFleet.snapshot().hosts).toEqual([
+      { hostId: "fleet-host", kind: "remote", teamOwned: true },
+    ]);
+  });
+
+  it("refreshHostFleet reports unavailable, and publishes nothing, when the fleet read fails", async () => {
+    const host = runnerWithFleet(() => Promise.resolve(null));
+    const published = vi.spyOn(host.selectionFleet, "publish");
+
+    await expect(host.refreshHostFleet()).resolves.toEqual({
+      kind: "unavailable",
+    });
+
+    expect(published).not.toHaveBeenCalled();
+  });
+
+  it("refreshHostFleet reports unavailable instead of rejecting when the fleet read throws", async () => {
+    const host = runnerWithFleet(() => Promise.reject(new Error("offline")));
+
+    await expect(host.refreshHostFleet()).resolves.toEqual({
+      kind: "unavailable",
+    });
+  });
+
+  it("refreshHostFleet reports superseded, and publishes nothing, when the identity changes during the read", async () => {
+    // The host's own start-up read (signed out) is held alongside this one.
+    const reads: ((rows: readonly FleetHostRow[]) => void)[] = [];
+    const host = runnerWithFleet(
+      () =>
+        new Promise<readonly FleetHostRow[]>((resolve) => {
+          reads.push(resolve);
+        }),
+    );
+    const published = vi.spyOn(host.selectionFleet, "publish");
+
+    const refreshed = host.refreshHostFleet();
+    await vi.waitFor(() => {
+      expect(reads).toHaveLength(2);
+    });
+    host.selectionIdentity.set("user-2");
+    for (const finishRead of reads) {
+      finishRead([{ hostId: "fleet-host", sandbox: false, teamOwned: false }]);
+    }
+
+    await expect(refreshed).resolves.toEqual({ kind: "superseded" });
+    expect(published).not.toHaveBeenCalled();
   });
 
   it("exposes the sandbox-control unavailable reason it was given, and null when it was given none", () => {

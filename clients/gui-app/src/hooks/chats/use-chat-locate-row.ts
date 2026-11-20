@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useChatServingHostId } from "@/lib/chats/chat-serving-witness";
@@ -70,18 +71,28 @@ export interface ChatLocateRowArgs {
  * - `waiting`: nothing usable yet - disabled, in flight, or answered in an
  *   epoch this window has left (the key change re-asks).
  * - `found`: the ordinal, in this window's epoch.
- * - `missing`: settled without a row - `found: false`, or the RPC rejected
- *   (`E_HOST_UNSUPPORTED` included). Final for this target and epoch until
+ * - `missing`: settled without a row. Final for this target and epoch until
  *   it is asked again: while a new ask is in flight the earlier miss is not
- *   its answer, and it reads `waiting`.
+ *   its answer, and it reads `waiting`. `cause` says how it settled: the
+ *   host answered that it has no such row (`absent`), the host does not
+ *   locate rows at all (`unsupported`, `E_HOST_UNSUPPORTED`), which says
+ *   nothing about the row, or the RPC was rejected otherwise (`failed`).
  */
 export type ChatLocateRowAnswer =
   | { readonly status: "waiting" }
   | { readonly status: "found"; readonly ordinal: number }
-  | { readonly status: "missing" };
+  | {
+      readonly status: "missing";
+      readonly cause: "absent" | "unsupported" | "failed";
+    };
 
 const WAITING: ChatLocateRowAnswer = { status: "waiting" };
-const MISSING: ChatLocateRowAnswer = { status: "missing" };
+const ABSENT: ChatLocateRowAnswer = { status: "missing", cause: "absent" };
+const UNSUPPORTED: ChatLocateRowAnswer = {
+  status: "missing",
+  cause: "unsupported",
+};
+const FAILED: ChatLocateRowAnswer = { status: "missing", cause: "failed" };
 
 /**
  * {@link useChatLocateRow}, keeping the difference between "not answered yet"
@@ -137,12 +148,18 @@ export function useChatLocateRowAnswer(
   });
   if (target === null) return WAITING;
   const data = query.data;
-  if (data === undefined) return query.isError ? MISSING : WAITING;
+  if (data === undefined) {
+    if (!query.isError) return WAITING;
+    return query.error instanceof HostRpcError &&
+      query.error.code === "E_HOST_UNSUPPORTED"
+      ? UNSUPPORTED
+      : FAILED;
+  }
   // A miss stands only once no new ask is in flight: a reader mounted to ask
   // again finds the earlier miss still cached while its own request runs. (A
   // rejection needs no such guard: asking again puts the query back to
   // pending, out of its error.)
-  if (!data.found) return query.isFetching ? WAITING : MISSING;
+  if (!data.found) return query.isFetching ? WAITING : ABSENT;
   // The epoch check, and it is load-bearing rather than belt-and-braces: the
   // cache key above stops a SUPERSEDED answer being re-served, and this stops an
   // in-flight one landing after the re-base that voided it. Falling back to

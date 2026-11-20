@@ -396,7 +396,6 @@ const RESTING: RestingChatSandbox = {
     displayName: "e2e-sbx",
   }),
   configuration: { kind: "personal" },
-  wakeChangesPayer: false,
 };
 
 const SETTINGS: ChatRunSettings = {

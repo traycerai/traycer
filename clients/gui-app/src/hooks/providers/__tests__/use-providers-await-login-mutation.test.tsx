@@ -2,7 +2,10 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { ProviderMutationCliStateV21 } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderLoginProfileOutcome,
+  ProviderMutationCliStateV21,
+} from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-schemas";
 import {
   HostRequestAbortedError,
@@ -13,7 +16,20 @@ import {
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { AuthService } from "@/lib/auth/auth-service";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
+  noAnswerReply,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  type SignInRequestFetchHarness,
+  type SignInRequestFetchReply,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -26,6 +42,16 @@ const mocks = vi.hoisted(() => ({
   tabHostId: vi.fn<() => string | null>(),
 }));
 
+let authServiceForTest: AuthService | null = null;
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
+
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({
     requestWithResponseTimeout: mocks.requestWithResponseTimeout,
@@ -34,6 +60,14 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => mocks.tabHostId(),
 }));
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
 
 // A spy, so a test can see whether a failed await raised the "Couldn't confirm
 // sign-in." toast. Everything else the module exports stays real.
@@ -46,15 +80,54 @@ vi.mock("@/lib/host-error-toast", async (importOriginal) => {
 import {
   useProvidersAwaitLogin,
   useProvidersAwaitLoginForClient,
+  type AwaitLoginAnswer,
   type AwaitLoginVariables,
 } from "@/hooks/providers/use-providers-await-login-mutation";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
+
+beforeEach(() => {
+  activeSignInFetch = installSignInRequestFetchHarness();
+  authServiceForTest = signInRequestAuthService(activeSignInFetch.client);
+});
+
+afterEach(() => {
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
+});
 
 type ProvidersListResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.list"
 >;
+type AwaitLoginResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.awaitLogin"
+>;
 type ProviderListEntry = ProvidersListResponse["providers"][number];
+
+function unfinishedAwaitAnswer(): AwaitLoginResponse {
+  return {
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+    signInRequest: SIGN_IN_REQUEST_FIXTURE,
+  };
+}
+
+function ordinaryAwaitAnswer(): AwaitLoginResponse {
+  return {
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+  };
+}
 
 // The real @2.1 echo shape: `loginCapability` is PRESENT but frozen at v4.0,
 // which has no `terminalLogin` key at all - not `null`, genuinely absent.
@@ -229,6 +302,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -287,6 +361,7 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -329,12 +404,220 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(queryClient.getQueryState(guiKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(tuiKey)?.isInvalidated).toBe(true);
+  });
+});
+
+describe("useProvidersAwaitLogin sign-in request recording", () => {
+  beforeEach(() => {
+    mocks.tabHostId.mockReturnValue(HOST_ID);
+  });
+  afterEach(() => {
+    cleanup();
+    mocks.requestWithResponseTimeout.mockReset();
+    mocks.tabHostId.mockReset();
+  });
+
+  it("records a matching 200 receipt before awaiting again with its operation id", async () => {
+    mocks.requestWithResponseTimeout
+      .mockResolvedValueOnce(unfinishedAwaitAnswer())
+      .mockResolvedValueOnce(ordinaryAwaitAnswer());
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(2);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    expect(answer).toEqual({
+      ...ordinaryAwaitAnswer(),
+      signInRecordingEnded: null,
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenNthCalledWith(
+      1,
+      "providers.awaitLogin",
+      { providerId: "copilot", profileId: null },
+      expect.any(Number),
+    );
+    expect(mocks.requestWithResponseTimeout).toHaveBeenNthCalledWith(
+      2,
+      "providers.awaitLogin",
+      {
+        providerId: "copilot",
+        profileId: null,
+        recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+      },
+      expect.any(Number),
+    );
+  });
+
+  const RECORDING_END_CASES = [
+    {
+      name: "a 403",
+      reply: FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+      reason: "forbidden",
+    },
+    {
+      name: "a 404",
+      reply: ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+      reason: "unavailable",
+    },
+    { name: "no answer", reply: noAnswerReply(), reason: "unavailable" },
+    {
+      name: "a 401",
+      reply: UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+      reason: "session-ended",
+    },
+  ] satisfies ReadonlyArray<{
+    readonly name: string;
+    readonly reply: SignInRequestFetchReply;
+    readonly reason: "forbidden" | "unavailable" | "session-ended";
+  }>;
+
+  it.each(RECORDING_END_CASES)(
+    "returns the unfinished answer after $name",
+    async (testCase) => {
+      mocks.requestWithResponseTimeout.mockResolvedValueOnce(
+        unfinishedAwaitAnswer(),
+      );
+      const fetchHarness = activeSignInFetch;
+      if (fetchHarness === null)
+        throw new Error("sign-in request fetch harness is missing");
+      fetchHarness.enqueue(testCase.reply);
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(() => useProvidersAwaitLogin(), {
+        wrapper,
+      });
+
+      let answer: AwaitLoginAnswer | undefined;
+      await act(async () => {
+        answer = await result.current.mutateAsync({
+          request: { providerId: "copilot", profileId: null },
+          signal: undefined,
+          readsProfileOutcome: false,
+        });
+      });
+
+      expect(answer).toEqual({
+        ...unfinishedAwaitAnswer(),
+        signInRecordingEnded: testCase.reason,
+      });
+      expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+      expect(mocks.requestWithResponseTimeout).toHaveBeenCalledWith(
+        "providers.awaitLogin",
+        { providerId: "copilot", profileId: null },
+        expect.any(Number),
+      );
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("ends on a duplicate id without sending another await", async () => {
+    mocks.requestWithResponseTimeout.mockResolvedValueOnce(
+      unfinishedAwaitAnswer(),
+    );
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY);
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(answer).toEqual({
+      ...unfinishedAwaitAnswer(),
+      signInRecordingEnded: "already-recorded",
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends when the computer asks again for the recorded id after a 200", async () => {
+    mocks.requestWithResponseTimeout
+      .mockResolvedValueOnce(unfinishedAwaitAnswer())
+      .mockResolvedValueOnce(unfinishedAwaitAnswer());
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(answer).toEqual({
+      ...unfinishedAwaitAnswer(),
+      signInRecordingEnded: "already-recorded",
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(2);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older computer's await unchanged and makes no recording call", async () => {
+    mocks.requestWithResponseTimeout.mockResolvedValueOnce(
+      ordinaryAwaitAnswer(),
+    );
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(answer).toEqual({
+      ...ordinaryAwaitAnswer(),
+      signInRecordingEnded: null,
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledWith(
+      "providers.awaitLogin",
+      { providerId: "copilot", profileId: null },
+      expect.any(Number),
+    );
+    expect(
+      mocks.requestWithResponseTimeout.mock.calls[0]?.[1],
+    ).not.toHaveProperty("recordedOperationId");
+    expect(fetchHarness.fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -374,6 +657,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -405,6 +689,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -433,6 +718,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -463,6 +749,7 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
       result.current.mutate({
         request: { providerId: "copilot", profileId: null },
         signal: undefined,
+        readsProfileOutcome: false,
       });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -671,6 +958,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const first = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: firstAttempt.signal,
+      readsProfileOutcome: false,
     });
     const firstOutcome = trackOutcome(first);
     await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
@@ -695,6 +983,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const second = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: secondAttempt.signal,
+      readsProfileOutcome: false,
     });
     // Before the fix this attached to attempt one's in-flight request and no
     // second dispatch ever reached the host.
@@ -734,6 +1023,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const first = startWait(result.current.mutateAsync, {
       request: firstRequest,
       signal: undefined,
+      readsProfileOutcome: false,
     });
     await expect(firstArrival).resolves.toEqual(firstRequest);
 
@@ -742,6 +1032,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const second = startWait(result.current.mutateAsync, {
       request: secondRequest,
       signal: undefined,
+      readsProfileOutcome: false,
     });
     await expect(secondArrival).resolves.toEqual(secondRequest);
     expect(awaitDispatches(messenger)).toHaveLength(2);
@@ -772,6 +1063,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const wait = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: attempt.signal,
+      readsProfileOutcome: false,
     });
     const outcome = trackOutcome(wait);
     await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
@@ -806,6 +1098,7 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
     const wait = startWait(result.current.mutateAsync, {
       request: AWAIT_REQUEST,
       signal: liveAttempt.signal,
+      readsProfileOutcome: false,
     });
     await expect(wait).rejects.toBeInstanceOf(HostRpcError);
 
@@ -818,4 +1111,242 @@ describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordin
       "Couldn't confirm sign-in.",
     );
   });
+});
+
+// Invalidation does not fetch with no observer, so the list hook stays mounted.
+describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
+  type AwaitLoginResponse = ResponseOfMethod<
+    HostRpcRegistry,
+    "providers.awaitLogin"
+  >;
+
+  function awaitBody(
+    outcome: ProviderLoginProfileOutcome | null,
+    state: ProviderMutationCliStateV21 | null,
+  ): AwaitLoginResponse {
+    return {
+      state,
+      existingProfileId: null,
+      codeRejected: false,
+      refusal: null,
+      installation: null,
+      profileOutcome: outcome,
+    };
+  }
+
+  function useListAndAwait(client: HostClient<HostRpcRegistry>) {
+    const list = useProvidersListForClient(client, {
+      enabled: true,
+      subscribed: true,
+    });
+    const awaitLogin = useProvidersAwaitLoginForClient({
+      client,
+      getCacheHostId: () => HOST_ID,
+    });
+    return { list, awaitLogin };
+  }
+
+  function readingClient(answer: AwaitLoginResponse): {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly reads: () => number;
+  } {
+    let reads = 0;
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "providers.list": () => {
+          reads += 1;
+          return seededProvidersList();
+        },
+        "providers.awaitLogin": () => answer,
+      },
+    });
+    return { client, reads: () => reads };
+  }
+
+  const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+    HOST_ID,
+    "providers.list",
+    { native: null },
+  );
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function settleMount(input: {
+    readonly outcome: ProviderLoginProfileOutcome | null;
+    readonly state: ProviderMutationCliStateV21 | null;
+  }) {
+    const { client, reads } = readingClient(
+      awaitBody(input.outcome, input.state),
+    );
+    const { queryClient, wrapper } = makeWrapper();
+    const { result } = renderHook(() => useListAndAwait(client), { wrapper });
+    await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
+    const mountReads = reads();
+    expect(mountReads).toBe(1);
+    return { reads, mountReads, queryClient, result };
+  }
+
+  function recordCallerRead(input: {
+    readonly reads: () => number;
+    readonly queryClient: QueryClient;
+    readonly readsProfileOutcome: boolean;
+    readonly mutate: (
+      variables: AwaitLoginVariables,
+      options: { readonly onSuccess: () => void },
+    ) => void;
+  }): {
+    readonly readsWhenCallerRan: () => number;
+    readonly fetchStatus: () => string;
+  } {
+    let readsWhenCallerRan = 0;
+    let fetchStatusWhenCallerRan = "";
+    act(() => {
+      input.mutate(
+        {
+          request: { providerId: "copilot", profileId: null },
+          signal: undefined,
+          readsProfileOutcome: input.readsProfileOutcome,
+        },
+        {
+          onSuccess: () => {
+            readsWhenCallerRan = input.reads();
+            fetchStatusWhenCallerRan =
+              input.queryClient.getQueryState(listKey)?.fetchStatus ?? "absent";
+          },
+        },
+      );
+    });
+    return {
+      readsWhenCallerRan: () => readsWhenCallerRan,
+      fetchStatus: () => fetchStatusWhenCallerRan,
+    };
+  }
+
+  it("reads providers.list once when profileOutcome is null and state is present", async () => {
+    const { reads, mountReads, queryClient, result } = await settleMount({
+      outcome: null,
+      state: v21Echo({}),
+    });
+    const caller = recordCallerRead({
+      reads,
+      queryClient,
+      readsProfileOutcome: false,
+      mutate: (variables, options) => {
+        result.current.awaitLogin.mutate(variables, options);
+      },
+    });
+    await waitFor(() =>
+      expect(caller.readsWhenCallerRan()).toBe(mountReads + 1),
+    );
+    expect(caller.fetchStatus()).toBe("idle");
+    expect(reads()).toBe(mountReads + 1);
+  });
+
+  it("reads providers.list no further time when profileOutcome and state are both null", async () => {
+    const { reads, mountReads, queryClient, result } = await settleMount({
+      outcome: null,
+      state: null,
+    });
+    act(() => {
+      result.current.awaitLogin.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.awaitLogin.isSuccess).toBe(true));
+    expect(reads()).toBe(mountReads);
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+  });
+
+  it.each(["signed-in", "already-signed-in"] as const)(
+    "reads providers.list once, finished before the caller, when state is null and the outcome is %s",
+    async (kind) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome: { kind, profileId: "work" },
+        state: null,
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() =>
+        expect(caller.readsWhenCallerRan()).toBe(mountReads + 1),
+      );
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(mountReads + 1);
+    },
+  );
+
+  it.each(["signed-in", "already-signed-in"] as const)(
+    "reads providers.list once, not twice, when state is present and the outcome is %s",
+    async (kind) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome: { kind, profileId: "work" },
+        state: v21Echo({}),
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() =>
+        expect(caller.readsWhenCallerRan()).toBe(mountReads + 1),
+      );
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(mountReads + 1);
+    },
+  );
+
+  it.each([
+    {
+      name: "waiting-for-profile",
+      outcome: { kind: "waiting-for-profile" },
+    },
+    { name: "account-mismatch", outcome: { kind: "account-mismatch" } },
+    { name: "account-unproven", outcome: { kind: "account-unproven" } },
+    {
+      name: "target-refused",
+      outcome: { kind: "target-refused", reason: "offer-refused" },
+    },
+    {
+      name: "staged-for-leave",
+      outcome: { kind: "staged-for-leave", profileId: "work" },
+    },
+  ] satisfies readonly {
+    readonly name: string;
+    readonly outcome: ProviderLoginProfileOutcome;
+  }[])(
+    "does not reread providers.list for the no-state $name outcome",
+    async ({ outcome }) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome,
+        state: null,
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() => {
+        expect(result.current.awaitLogin.isSuccess).toBe(true);
+        expect(caller.readsWhenCallerRan()).toBe(mountReads);
+      });
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(1);
+    },
+  );
 });

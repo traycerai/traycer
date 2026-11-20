@@ -42,6 +42,14 @@ export const RPC_ERROR_CODES = [
   "host-left-environment",
   "profile-account-changed",
   "signed-out-by-person",
+  // Additive: an old peer narrows it to RPC_ERROR, keeping status and message.
+  "removed-by-person",
+  // An Add or re-sign-in named an account the environment holds. Additive and
+  // degrade-safe: old peers narrow the unknown code to RPC_ERROR, keeping
+  // status and message.
+  "environment-managed",
+  // A served legacy key mutation requires the client's direct-to-broker flow.
+  "update-required",
   "SENDER_TUI_UNSUPPORTED",
   // Caller-supplied input is structurally valid but semantically rejected
   // (e.g. minting the reserved `traycer:system` agent id). Additive and
@@ -109,6 +117,9 @@ export const RPC_ERROR_CODES = [
   "E_ENVIRONMENT_SEAT_WITHOUT_WRITE",
   "E_HOST_IS_SANDBOX",
   "E_HOST_IN_ANOTHER_TEAM",
+  // No move waiting, or the request names another target. The app draws its own
+  // line, so no message text is contract. Same additive degrade as E_INVALID_ARGUMENT.
+  "E_MOVE_NOT_AWAITING",
   // A keyed unary was refused before resolver dispatch because the bounded
   // replay cache had no safe slot. The command definitely did not run and may
   // retry with the SAME key once capacity returns. This meaning is part of the
@@ -299,14 +310,6 @@ export const RPC_ERROR_CODES = [
   // `staleWrite` says who and the current revision; the page re-reads and
   // says "changed on <host> just now". Additive, as above.
   "ENVIRONMENT_WRITE_STALE",
-  // `providers.link`: the harness has no sign-in the
-  // environment can hold, so the profile stays on this host; the Link dialog
-  // says "On <host> only." and nothing more. Additive, as above.
-  "PROVIDER_LINK_NOT_OFFERED",
-  // `providers.link`: Traycer is not reachable (or the host is not set up
-  // yet), so nothing can be linked now; the dialog says "Connect to Traycer
-  // to link this profile." Additive, as above.
-  "PROVIDER_LINK_UNAVAILABLE",
   // ─── Same principal ─────────────────────────────────────────────────────
   //
   // The two hosts belong to different owners (a person and a team, or two
@@ -329,6 +332,19 @@ export const RPC_ERROR_CODES = [
   // written or queued; each question is answered on its own instead.
   // Additive, as above.
   "E_BOT_ANSWER_SETS_UNSUPPORTED",
+  // `bot.conversation.send` carried a member's answer, or a card's answers,
+  // to a question someone else had already settled. Nothing was written. The
+  // settlement that beat it reaches the client on the chat's stream, which
+  // nothing orders against this reply, so the card waits for it rather than
+  // say the send failed: sending again would be refused again. Additive, as
+  // above: a host that predates it refuses with RPC_ERROR.
+  "E_BOT_QUESTION_ALREADY_SETTLED",
+  // `bot.conversation.send` named the message it replies to (`replyTo`) for a
+  // bot whose bound host has not said it takes it (`BOT_HOST_TAKES_REPLIES`):
+  // a host that predates it would take the message as an ordinary post and
+  // drop what it replies to. Nothing was written or queued. Additive, as
+  // above.
+  "E_BOT_REPLIES_UNSUPPORTED",
   // ─── Evicted chats ──────────────────────────────────────────────────────
   //
   // A host dropped a chat's records once the cloud held them, and could not

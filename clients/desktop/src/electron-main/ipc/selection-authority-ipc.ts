@@ -1,9 +1,4 @@
-import { onMainLocalAdmissionInvalidated } from "../selection/local-admission-invalidation";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
-import { createLocalOpenAuth } from "@traycer-clients/shared/host-transport/create-local-open-auth";
-import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
-import { mintHostCredentialViaHttp } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
-import { CURRENT_CLIENT_COMPATIBILITY_EPOCH } from "@traycer/protocol/framework/index";
 /**
  * Desktop IPC binding for the selection authority (P1.1), following the
  * ownership-claim pattern (`ownership-ipc.ts` + `electron-preload/
@@ -65,6 +60,7 @@ import {
 } from "./registered-hosts-broadcast";
 import { onHostControllerStatusBroadcast } from "./host-controller-status-broadcast";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import type { FleetRefreshOutcome } from "@traycer-clients/shared/platform/runner-host";
 
 const authorityLog: AuthorityLog = {
   debug: (message, detail) => {
@@ -147,40 +143,12 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
   const localHostEndpoint = (): LocalHostEndpoint | null => {
     const snapshot = bridge.options.host.getSnapshot();
     if (snapshot === null || snapshot.websocketUrl === null) return null;
-    return { hostId: snapshot.hostId, websocketUrl: snapshot.websocketUrl };
+    return {
+      hostId: snapshot.hostId,
+      websocketUrl: snapshot.websocketUrl,
+      version: snapshot.version,
+    };
   };
-  const localOpenAuth = createLocalOpenAuth({
-    authnBaseUrl: bridge.options.authnBaseUrl,
-    cloudAuthorized: () => bridge.authSession.get().verified,
-    webSocketFactory: createWhatwgStreamWebSocketFactory(),
-    clientIdentity: {
-      kind: "desktop",
-      compatibilityEpoch: CURRENT_CLIENT_COMPATIBILITY_EPOCH,
-      appVersion: app.getVersion(),
-    },
-    clock: null,
-    mintMemberCredential: async (hostId, bearer, signal) => {
-      const result = await mintHostCredentialViaHttp(
-        bridge.options.authnBaseUrl,
-        bearer.getBearerToken(),
-        { hostId, hostLabel: null, platform: null },
-        signal,
-      );
-      if (result.kind !== "ok") return null;
-      return {
-        token: result.response.token,
-        refreshToken: result.response.refreshToken,
-        familyId: result.response.familyId,
-        provisionedAt: result.response.provisionedAt,
-      };
-    },
-    onMemberCredentialAdopted: () => undefined,
-  });
-  const detachAdmissionInvalidation = onMainLocalAdmissionInvalidated(
-    (hostId) => {
-      localOpenAuth.invalidateHost(hostId, null);
-    },
-  );
   let inventoryBearer: MutableBearerLease | null = null;
   const localInventory = startLocalHostInventorySubscription({
     localHost: localHostEndpoint,
@@ -209,12 +177,12 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
       };
     },
     openStreamClient: createLocalHostInventoryStreamClient({
-      localOpenAuth,
+      hostTokens: bridge.hostTokens,
       localHost: localHostEndpoint,
       appVersion: app.getVersion(),
       bearer: () => {
-        // Preserve one lease across same-user rotations. The admission barrier
-        // keys on that lease and fences a different account during its mint.
+        // Who is signed in, one lease per account. The stream reads only its
+        // identity and sends that person's host-only token, never this one.
         const snapshot = bridge.authSession.get();
         const token = snapshot.token;
         const userId = snapshot.profile?.userId ?? null;
@@ -251,7 +219,6 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
   void fleet.refresh();
 
   bridge.disposeFns.push(() => {
-    detachAdmissionInvalidation();
     localInventory.dispose();
     engine.dispose();
     fleet.dispose();
@@ -304,7 +271,7 @@ function registerFleetRefresh(
 ): void {
   bridge.handleInvoke(
     SelectionAuthorityChannels.invoke.refreshFleet,
-    (): Promise<void> => fleet.refresh(),
+    (): Promise<FleetRefreshOutcome> => fleet.refresh(),
   );
 }
 

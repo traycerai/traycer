@@ -1,9 +1,14 @@
+import {
+  configurationRoleOf,
+  mayChangeConfiguration,
+} from "@/components/settings/environment/configuration-source";
 import { TeamReadFailed } from "@/components/settings/environment/team-read-failed";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
-import { useTeamComputerTransfer } from "@/hooks/environment/use-team-computer-transfer";
+import { TeamGiveDialog } from "@/components/settings/panels/team-give-dialog";
+import { useMayChangeTeamConfiguration } from "@/hooks/environment/use-may-change-team-configuration";
+import { ClaimRunningWork } from "@/components/settings/team/claim-running-work";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
-import { TEAM_TRANSFER_DISCLOSURE } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -62,6 +67,22 @@ import {
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
+/** A give whose start answered: the team it names and the line its receipt shows. */
+export interface StartedGive {
+  readonly teamId: string;
+  readonly line: string;
+}
+
+/**
+ * The give and claim receipt line. It is held above the card, because the owner
+ * change restarts the computer and the card unmounts while the host is away.
+ */
+export interface OwnershipReceipt {
+  readonly line: string | null;
+  readonly show: (line: string) => void;
+  readonly giveStarted: (give: StartedGive) => void;
+}
+
 /** The named host's settings place, above the Overview's tabs. */
 export function HostOverviewSettingsCard(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -71,10 +92,10 @@ export function HostOverviewSettingsCard(props: {
   readonly binding: EnvironmentHostBinding | null;
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
+  readonly receipt: OwnershipReceipt;
 }): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
-  const [ownershipReceipt, setOwnershipReceipt] = useState<string | null>(null);
   const hostIds = useMemo(() => [props.hostId], [props.hostId]);
   const statusVersion =
     useHostNegotiatedMethodVersions(hostIds, "environment.status").get(
@@ -109,7 +130,7 @@ export function HostOverviewSettingsCard(props: {
             />
           }
         />
-        <TransferReceipt value={ownershipReceipt} />
+        <TransferReceipt value={props.receipt.line} />
       </>
     );
   }
@@ -129,9 +150,9 @@ export function HostOverviewSettingsCard(props: {
           binding={props.binding}
           fallback={model.kind === "team" ? model : null}
           isLocalMachine={props.isLocalMachine}
-          onClaimed={setOwnershipReceipt}
+          onClaimed={props.receipt.show}
         />
-        <TransferReceipt value={ownershipReceipt} />
+        <TransferReceipt value={props.receipt.line} />
       </>
     );
   }
@@ -156,7 +177,7 @@ export function HostOverviewSettingsCard(props: {
             />
           }
         />
-        <TransferReceipt value={ownershipReceipt} />
+        <TransferReceipt value={props.receipt.line} />
       </>
     );
   }
@@ -176,9 +197,11 @@ export function HostOverviewSettingsCard(props: {
               client={props.client}
               hostId={props.hostId}
               hostName={props.hostName}
-              isLocalMachine={props.isLocalMachine}
               owner={props.owner}
-              onTransferred={setOwnershipReceipt}
+              currentEnvironmentId={
+                props.binding?.environment.environmentId ?? null
+              }
+              receipt={props.receipt}
               value={model.value}
               options={model.options}
               onChoose={(option) => {
@@ -202,7 +225,7 @@ export function HostOverviewSettingsCard(props: {
         open={stopOpen}
         onOpenChange={setStopOpen}
       />
-      <TransferReceipt value={ownershipReceipt} />
+      <TransferReceipt value={props.receipt.line} />
     </>
   );
 }
@@ -266,6 +289,7 @@ function ClaimLocalTeamComputer(props: {
   readonly hostName: string;
   readonly onClaimed: (receipt: string) => void;
 }): ReactNode {
+  const mayClaim = useMayChangeTeamConfiguration(props.environmentId);
   const [open, setOpen] = useState(false);
   const mutation = useTeamComputerClaim(props.environmentId, () => {
     props.onClaimed(
@@ -273,6 +297,7 @@ function ClaimLocalTeamComputer(props: {
     );
     setOpen(false);
   });
+  if (!mayClaim) return null;
   return (
     <>
       <Button
@@ -299,6 +324,10 @@ function ClaimLocalTeamComputer(props: {
               This computer will become yours. The team will lose access to it.
             </DialogDescription>
           </DialogHeader>
+          <ClaimRunningWork
+            hostId={props.hostId}
+            environmentId={props.environmentId}
+          />
           {mutation.isError ? (
             <p role="alert" className="text-ui-sm text-destructive">
               {mutation.error.message}
@@ -374,20 +403,16 @@ function EnvironmentSourceControl(
     readonly client: HostClient<HostRpcRegistry>;
     readonly hostId: string;
     readonly hostName: string;
-    readonly isLocalMachine: boolean;
     readonly owner: HostOwnerPrincipal | null;
-    readonly onTransferred: (receipt: string) => void;
+    readonly currentEnvironmentId: string | null;
+    readonly receipt: OwnershipReceipt;
   },
 ): ReactNode {
-  const bindVersion = useHostMethodSchemaVersion(
+  const planVersion = useHostMethodSchemaVersion(
     props.hostId,
-    "environment.host.bind",
+    "environment.move.plan",
   );
-  const mayTransfer =
-    props.isLocalMachine &&
-    props.owner?.kind === "user" &&
-    bindVersion?.major === 1 &&
-    bindVersion.minor >= 1;
+  const mayTransfer = props.owner?.kind === "user" && planVersion?.major === 2;
   return mayTransfer ? (
     <TeamEnvironmentSourceControl {...props} />
   ) : (
@@ -404,25 +429,18 @@ function TeamEnvironmentSourceControl(
     readonly client: HostClient<HostRpcRegistry>;
     readonly hostId: string;
     readonly hostName: string;
-    readonly onTransferred: (receipt: string) => void;
+    readonly currentEnvironmentId: string | null;
+    readonly receipt: OwnershipReceipt;
   },
 ): ReactNode {
-  const environments = useEnvironmentListQuery(props.client, true);
+  const environments = useEnvironmentListQuery(true);
   const teams = (environments.data?.environments ?? []).filter(
-    (environment) => environment.ownerKind === "organization",
+    (environment) =>
+      environment.ownerKind === "organization" &&
+      mayChangeConfiguration(configurationRoleOf(environment)),
   );
   const [selected, setSelected] = useState<EnvironmentDescriptorV11 | null>(
     null,
-  );
-  const mutation = useTeamComputerTransfer(
-    props.client,
-    props.hostId,
-    (team) => {
-      props.onTransferred(
-        `${props.hostName} now belongs to ${team.label}. Any member of the team can claim it as their own.`,
-      );
-      setSelected(null);
-    },
   );
   return (
     <>
@@ -435,68 +453,35 @@ function TeamEnvironmentSourceControl(
       <EnvironmentSourceSelect
         {...props}
         teams={teams}
-        onChooseTeam={(team) => {
-          mutation.reset();
-          setSelected(team);
-        }}
+        onChooseTeam={setSelected}
       />
-      <Dialog
-        open={selected !== null}
-        onOpenChange={(open) => {
-          if (!open && !mutation.isPending) setSelected(null);
-        }}
-      >
-        <DialogContent className="w-full sm:max-w-prose">
-          <DialogHeader>
-            <DialogTitle>
-              Use {props.hostName} for {selected?.label}?
-            </DialogTitle>
-            <DialogDescription>
-              The team will own this computer. Any member of the team can claim
-              it as their own. Traycer restarts once on this computer.
-            </DialogDescription>
-          </DialogHeader>
-          <ul className="list-disc space-y-2 pl-5 text-ui-sm">
-            {TEAM_TRANSFER_DISCLOSURE.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-          {mutation.isError ? (
-            <p role="alert" className="text-ui-sm text-destructive">
-              {mutation.error.message}
-            </p>
-          ) : null}
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={mutation.isPending}
-              onClick={() => setSelected(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={mutation.isPending || selected === null}
-              onClick={() => {
-                if (selected === null) return;
-                mutation.mutate(selected);
-              }}
-            >
-              {mutation.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="team-computer-transfer-progress"
-                  variant={undefined}
-                />
-              ) : null}
-              Confirm at this computer
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {selected === null ? null : (
+        <TeamGiveDialog
+          key={selected.environmentId}
+          client={props.client}
+          hostId={props.hostId}
+          hostName={props.hostName}
+          currentEnvironmentId={props.currentEnvironmentId}
+          team={selected}
+          onClose={() => setSelected(null)}
+          onStarted={(team) => {
+            props.receipt.giveStarted({
+              teamId: team.ownerId,
+              line: givenLine(props.hostName, team),
+            });
+          }}
+          onGiven={(team) => {
+            props.receipt.show(givenLine(props.hostName, team));
+            setSelected(null);
+          }}
+        />
+      )}
     </>
   );
+}
+
+function givenLine(hostName: string, team: EnvironmentDescriptorV11): string {
+  return `${hostName} now belongs to ${team.label}. Any Admin or Editor of the team can claim it as their own.`;
 }
 
 function EnvironmentSourceSelect(
@@ -666,6 +651,9 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly usable: boolean;
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
+  readonly receipt: OwnershipReceipt;
+  /** The card shows again after a time it could not: the host is back. */
+  readonly onReturn: () => void;
 }): ReactNode {
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const status = useEnvironmentStatusRead(
@@ -684,7 +672,7 @@ export function HostOverviewSettingsCardSlot(props: {
     props.hostId,
     props.usable && bindingSupport === true,
   );
-  if (
+  const hidden =
     !props.usable ||
     props.client === null ||
     props.hostId === null ||
@@ -692,10 +680,14 @@ export function HostOverviewSettingsCardSlot(props: {
     status.isError ||
     (bindingSupport === false && binding.kind !== "own_settings") ||
     binding.kind === "failed" ||
-    (binding.kind === "binding" && binding.query.isError)
-  ) {
-    return null;
-  }
+    (binding.kind === "binding" && binding.query.isError);
+  const wasHidden = useRef(hidden);
+  const { onReturn } = props;
+  useEffect(() => {
+    if (wasHidden.current && !hidden) onReturn();
+    wasHidden.current = hidden;
+  }, [hidden, onReturn]);
+  if (hidden) return null;
   return (
     <HostOverviewSettingsCard
       key={JSON.stringify([props.hostId, userId])}
@@ -706,6 +698,7 @@ export function HostOverviewSettingsCardSlot(props: {
       binding={binding.kind === "binding" ? (binding.query.data ?? null) : null}
       owner={props.owner}
       isLocalMachine={props.isLocalMachine}
+      receipt={props.receipt}
     />
   );
 }

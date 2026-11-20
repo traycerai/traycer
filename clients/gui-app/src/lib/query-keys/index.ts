@@ -26,10 +26,12 @@ export {
 } from "@/lib/query-keys/runner-mutation-keys";
 export { configMutationKeys } from "@/lib/query-keys/config-mutation-keys";
 export { environmentMutationKeys } from "@/lib/query-keys/environment-mutation-keys";
+export { environmentQueryKeys } from "@/lib/query-keys/environment-query-keys";
 export { autoModeMutationKeys } from "@/lib/query-keys/auto-mode-mutation-keys";
 export {
   chatAutoArchiveMutationKeys,
   chatAutoArchiveWriteScope,
+  teamChatAutoArchiveWriteScope,
 } from "@/lib/query-keys/chat-auto-archive-keys";
 export { hostMaintenanceMutationKeys } from "@/lib/query-keys/host-maintenance-mutation-keys";
 export { epicMutationKeys } from "@/lib/query-keys/epic-mutation-keys";
@@ -50,6 +52,7 @@ export { resourcesMutationKeys } from "@/lib/query-keys/resources-mutation-keys"
 export { chatContinueMutationKeys } from "@/lib/query-keys/chat-continue-mutation-keys";
 export { chatHydrateMutationKeys } from "@/lib/query-keys/chat-hydrate-mutation-keys";
 export { feedbackDraftMutationKeys } from "@/lib/query-keys/feedback-draft-mutation-keys";
+export { feedbackDraftQueryKeys } from "@/lib/query-keys/feedback-draft-query-keys";
 export { draftsMutationKeys } from "@/lib/query-keys/drafts-mutation-keys";
 export { chatFallbackMutationKeys } from "@/lib/query-keys/chat-fallback-mutation-keys";
 export { managedCommandMutationKeys } from "@/lib/query-keys/managed-command-mutation-keys";

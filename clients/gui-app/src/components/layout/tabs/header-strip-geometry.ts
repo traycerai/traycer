@@ -19,6 +19,7 @@ import {
 import type { RectLike } from "@/components/epic-canvas/dnd/dnd";
 import {
   laneSlotsOf,
+  otherLaneSlotsOf,
   type StripDragGeometry,
   type StripGroupExtent,
   type StripSlot,
@@ -314,6 +315,7 @@ export function measureHeaderStripGeometry(input: {
   const origin = axis.mainStart(stripRect) - axis.scrollOffset(strip);
   return {
     slots,
+    otherLaneSlots: otherLaneSlotsOf(stripSlots, input.stripItemId),
     groups: readHeaderStripGroups(axis, stripSlots, input.stripItemId),
     runGap: mainAxisGap(strip, axis),
     sourceIndex,

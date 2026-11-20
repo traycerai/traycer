@@ -36,6 +36,7 @@ export async function readHostOwnershipViaHttp(
           Authorization: `Bearer ${bearer}`,
           Accept: "application/json",
         },
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,

@@ -32,6 +32,10 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import {
+  awaitLoginTestAnswer,
+  type AwaitLoginTestAnswer,
+} from "./provider-profile-login-flow-test-support";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { appLogger } from "@/lib/logger";
 import {
@@ -73,13 +77,10 @@ type CancelLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.cancelLogin"
 >;
-type AwaitLoginResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "providers.awaitLogin"
->;
-type SubmitLoginCodeRequest = RequestOfMethod<
-  HostRpcRegistry,
-  "providers.submitLoginCode"
+type AwaitLoginResponse = AwaitLoginTestAnswer;
+type SubmitLoginCodeRequest = Omit<
+  RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">,
+  "code"
 >;
 type SubmitLoginCodeResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -149,10 +150,10 @@ function projectedCompletionWith(
 ): AwaitLoginResponse {
   const state = PROJECTED_KIMI_AWAIT_LOGIN.state;
   if (state === null) throw new Error("the fixture carries a state");
-  return {
+  return awaitLoginTestAnswer({
     ...PROJECTED_KIMI_AWAIT_LOGIN,
     state: { ...state, providerId, profiles: [...profiles] },
-  };
+  });
 }
 
 function queryClientWrapper(): (props: {
@@ -180,7 +181,7 @@ function LoginFlowHarness(props: {
   readonly awaitLoginImpl: (
     variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
-  readonly onFailed: (message: string) => void;
+  readonly onFailed: (message: string, hostSentence: boolean) => void;
 }): ReactNode {
   const startLogin: StartLoginMutation = useMutation<
     StartLoginResponse,
@@ -244,6 +245,7 @@ function LoginFlowHarness(props: {
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode: () => undefined,
     touchLogin,
     ensurePack,
     failureMessages: { notStarted: NOT_STARTED, notFinished: NOT_FINISHED },
@@ -281,8 +283,10 @@ function renderFlow(options: {
   readonly awaitLoginImpl: (
     variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
-}): { readonly onFailed: Mock<(message: string) => void> } {
-  const onFailed = vi.fn<(message: string) => void>();
+}): {
+  readonly onFailed: Mock<(message: string, hostSentence: boolean) => void>;
+} {
+  const onFailed = vi.fn<(message: string, hostSentence: boolean) => void>();
   render(<LoginFlowHarness {...options} onFailed={onFailed} />, {
     wrapper: queryClientWrapper(),
   });
@@ -315,7 +319,7 @@ function succeededEvents(): readonly unknown[] {
 describe("useProviderProfileLoginFlow - Kimi ambient reconnect over a projected completion", () => {
   it("settles a projected `authenticated` completion as a signed-in reconnect", async () => {
     const awaitLoginImpl = vi.fn((_variables: AwaitLoginVariables) =>
-      Promise.resolve(PROJECTED_KIMI_AWAIT_LOGIN),
+      Promise.resolve(awaitLoginTestAnswer(PROJECTED_KIMI_AWAIT_LOGIN)),
     );
     const { onFailed } = renderFlow({
       providerId: "kimi",
@@ -343,7 +347,7 @@ describe("useProviderProfileLoginFlow - Kimi ambient reconnect over a projected 
 
   it("does not read the RAW `configured` completion as signed in: the GUI adds no lift of its own", async () => {
     const awaitLoginImpl = vi.fn((_variables: AwaitLoginVariables) =>
-      Promise.resolve(RAW_KIMI_AWAIT_LOGIN),
+      Promise.resolve(awaitLoginTestAnswer(RAW_KIMI_AWAIT_LOGIN)),
     );
     const { onFailed } = renderFlow({
       providerId: "kimi",
@@ -432,7 +436,7 @@ describe("useProviderProfileLoginFlow - the profile classifier over a projected 
 
     await waitFor(() => expect(flowState()).toBe("failed"));
     expect(screen.getByTestId("flow-message").textContent).toBe(NOT_FINISHED);
-    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED);
+    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED, false);
     expect(succeededEvents()).toHaveLength(0);
   });
 
@@ -452,7 +456,7 @@ describe("useProviderProfileLoginFlow - the profile classifier over a projected 
     });
 
     await waitFor(() => expect(flowState()).toBe("failed"));
-    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED);
+    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED, false);
     expect(succeededEvents()).toHaveLength(0);
   });
 
@@ -466,11 +470,12 @@ describe("useProviderProfileLoginFlow - the profile classifier over a projected 
       existingProfileId: null,
       startLoginImpl: () =>
         Promise.resolve(startedAnswer({ profileId: "p-1" })),
-      awaitLoginImpl: () => Promise.resolve(PROJECTED_KIMI_AWAIT_LOGIN),
+      awaitLoginImpl: () =>
+        Promise.resolve(awaitLoginTestAnswer(PROJECTED_KIMI_AWAIT_LOGIN)),
     });
 
     await waitFor(() => expect(flowState()).toBe("failed"));
-    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED);
+    expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED, false);
     expect(succeededEvents()).toHaveLength(0);
   });
 });

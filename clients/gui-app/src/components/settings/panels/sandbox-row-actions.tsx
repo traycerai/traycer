@@ -89,8 +89,9 @@ const DIALOG_OF: Partial<Record<SandboxRowAction, RowDialog>> = {
 interface SandboxRowActionsProps {
   readonly summary: SandboxSummary;
   readonly configuration: SandboxPageConfiguration;
+  readonly credits: SandboxPageConfiguration | null;
   readonly unreachable: boolean;
-  readonly frozenNeedsOwnCredits: boolean;
+  readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }
 
@@ -133,6 +134,7 @@ export function SandboxRowActions(props: SandboxRowActionsProps): ReactNode {
       <SandboxFailedRowActions
         summary={props.summary}
         configuration={props.configuration}
+        credits={props.credits}
       />
     );
   }
@@ -177,7 +179,7 @@ function SandboxLifecycleRowActions(
   const actions = sandboxRowActions({
     summary,
     unreachable: props.unreachable,
-    frozenNeedsOwnCredits: props.frozenNeedsOwnCredits,
+    frozenOffersAddCredits: props.frozenOffersAddCredits,
     settingsFailed: props.settingsFailed,
   });
   const primary = useSandboxSettingsPrimaryAction(summary, actions.primary);
@@ -214,8 +216,6 @@ function SandboxLifecycleRowActions(
   const immediate: Partial<Record<SandboxRowAction, () => void>> = {
     resume: () => wake("resume"),
     start: () => wake("start"),
-    // The row states the payer consequence before this action.
-    "resume-paying": () => wake("resume"),
     "add-credits": () =>
       void openLink(
         sandboxAddCreditsUrl(runnerHost.signInUrl, configuration),
@@ -333,7 +333,7 @@ function SandboxLifecycleRowActions(
       <SandboxOperationFailure
         sandboxId={summary.id}
         name={summary.displayName}
-        configuration={configuration}
+        configuration={props.credits ?? undefined}
         operation={shownOperation}
         busy={busy}
         onRetry={(pressed) => {

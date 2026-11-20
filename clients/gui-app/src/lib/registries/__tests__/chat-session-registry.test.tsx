@@ -1,11 +1,22 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostListItemToDirectoryEntry,
   type RemoteHostDirectoryEntry,
@@ -14,7 +25,10 @@ import type {
   HostConnectivity,
   HostListItem,
 } from "@traycer/protocol/host/host-status";
-import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type {
+  IStreamSession,
+  StreamCloseReason,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostRpcRegistry,
@@ -24,7 +38,38 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import {
+  poolEntry,
+  teamSandboxEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { claudeChatSessionAnchorSchema } from "@traycer/protocol/persistence/epic/senders";
+import {
+  providersPreviewProfileMoveRequestSchema,
+  providersPreviewProfileMoveResponseSchema,
+  type ProvidersPreviewProfileMoveRequest,
+} from "@traycer/protocol/host/profile-move-schemas";
+import {
+  chatAccountWaitSchema,
+  type LastFailedAttempt,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  providersListResponseSchema,
+  type ProvidersListResponse,
+} from "@traycer/protocol/host/provider-schemas";
+import { AccountWaitSurface } from "@/components/chat/fallback/account-wait-card";
+import { useChatAccountWait } from "@/components/chat/fallback/use-chat-account-wait";
+import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  pinProfile,
+  providerState,
+  removedEntry,
+} from "@/components/providers/__tests__/profile-pin-fixtures";
 import type {
   ChatSessionState,
   ChatStreamClientHandle,
@@ -40,11 +85,41 @@ vi.mock("@/lib/epic-selectors", () => ({
   useOpenEpicId: () => "epic-1",
 }));
 
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () => actual.createHostRpcTierPlan(poolEntry),
+    };
+  },
+);
+
+vi.mock("@/hooks/environment/use-environment-arms", () => ({
+  useEnvironmentArmChats: () => [],
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 const hostEntryRef = vi.hoisted((): { value: HostDirectoryEntry | null } => ({
   value: null,
 }));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => hostEntryRef.value,
+  useHostDirectoryEntry: (hostId: string) =>
+    hostId === POOL_HOST_ID ? poolEntry : hostEntryRef.value,
 }));
 
 // `hostTransportKey` (reached through `hostStreamTransportKeyFor`, exercised
@@ -73,7 +148,9 @@ const globalClientRef = vi.hoisted(
   (): { value: HostClient<HostRpcRegistry> | null } => ({ value: null }),
 );
 const authServiceStub = vi.hoisted(() => ({
-  revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
+  revalidateCurrentContext: vi.fn(() =>
+    Promise.resolve({ kind: "valid" as const }),
+  ),
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => {
@@ -97,6 +174,7 @@ const openTransportRef = vi.hoisted(
     fn: null,
   }),
 );
+let servingWitness: PoolChatServingWitness | null = null;
 const stableOpenTransport = vi.hoisted(() => {
   return (hostId: string) => {
     if (openTransportRef.fn === null) {
@@ -138,10 +216,46 @@ vi.mock("@/stores/chats/skeleton-resume-cache", async (importOriginal) => {
   };
 });
 
-import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
-import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
+import {
+  disposeAllChatSessions,
+  getChatSessionRegistry,
+  useChatSessionHandle,
+} from "@/lib/registries/chat-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: (): boolean => true,
+}));
+vi.mock("@/hooks/providers/use-profile-move-computer-names", () => ({
+  useProfileMoveComputerNames:
+    () =>
+    (hostId: string | null): string =>
+      hostId === null ? "" : `Computer ${hostId}`,
+}));
+vi.mock("@/hooks/home-focus/use-focus-actions", () => ({
+  useFocusActions: () => ({ openAgent: () => undefined }),
+}));
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: () => undefined }),
+}));
+vi.mock("@/lib/layout-overrides", () => ({
+  useReadingWidthStyle: () => ({ className: "", maxWidth: undefined }),
+}));
+
+afterAll(() => {
+  vi.doUnmock("@/lib/epic-selectors");
+  vi.doUnmock("@/hooks/host/use-host-directory-entry");
+  vi.doUnmock("@traycer-clients/shared/host-transport/remote/index");
+  vi.doUnmock("@/lib/host");
+  vi.doUnmock("@/lib/host/use-durable-stream-transport");
+  vi.doUnmock("@/stores/chats/skeleton-resume-cache");
+  vi.doUnmock("@/hooks/host/use-host-supports-method");
+  vi.doUnmock("@/hooks/providers/use-profile-move-computer-names");
+  vi.doUnmock("@/hooks/home-focus/use-focus-actions");
+  vi.doUnmock("@/stores/tabs/use-system-tab-modal");
+  vi.doUnmock("@/lib/layout-overrides");
+});
 
 /** Matches `createRequestContextFixture`'s default identity. */
 const FIXTURE_USER_ID = "user-fixture-1";
@@ -257,12 +371,79 @@ function wrapper(props: { readonly children: ReactNode }): ReactNode {
   });
   return (
     <QueryClientProvider client={queryClient}>
-      {props.children}
+      <ChatServingWitnessContext.Provider value={servingWitness}>
+        {props.children}
+      </ChatServingWitnessContext.Provider>
     </QueryClientProvider>
   );
 }
 
 const LOCAL_HOST_ID = "chat-registry-local-host";
+const ACCOUNT_WAIT_CHAT_ID = "chat-account-wait-removed-source";
+const ACCOUNT_WAIT_SOURCE: ProvidersPreviewProfileMoveRequest["source"] = {
+  providerId: "claude-code",
+  profileId: "removed-source",
+};
+const ACCOUNT_WAIT_REMOVED = chatAccountWaitSchema.parse({
+  reason: "removed",
+  source: ACCOUNT_WAIT_SOURCE,
+});
+const ACCOUNT_WAIT_LIST: ProvidersListResponse =
+  providersListResponseSchema.parse({
+    providers: [
+      providerState({
+        providerId: "claude-code",
+        authStatus: "authenticated",
+        profiles: [
+          pinProfile({
+            profileId: "destination-profile",
+            label: "Destination profile",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+            aliases: [],
+            personNotice: null,
+            terminalOnThisComputer: false,
+            otherNames: [],
+          }),
+        ],
+      }),
+    ],
+    native: null,
+    removedProfiles: [
+      removedEntry({
+        providerId: "claude-code",
+        profileId: ACCOUNT_WAIT_SOURCE.profileId,
+        aliases: ["legacy-source-alias"],
+      }),
+    ],
+    offersSignIns: true,
+  });
+const ACCOUNT_WAIT_PREVIEW = providersPreviewProfileMoveResponseSchema.parse({
+  extent: "fleet",
+  mode: "waiting",
+  targets: [
+    {
+      kind: "agent",
+      epicId: "epic-waiting",
+      agentId: "agent-waiting",
+      hostId: LOCAL_HOST_ID,
+      title: "Waiting agent",
+      standing: "waiting",
+    },
+  ],
+  terminals: [],
+  pendingComputers: [],
+});
+const ACCOUNT_WAIT_FAILURE: LastFailedAttempt = {
+  userMessageId: "user-account-wait",
+  turnId: "turn-account-wait",
+  failure: { reason: "rate_limit" },
+  eligibleRungs: ["retry"],
+  waitDisposition: "no_verified_reset",
+  switchDisposition: "unknown",
+  failedTuple: null,
+};
 
 /**
  * This machine's host as the directory lists it: dialable at `websocketUrl`,
@@ -281,6 +462,72 @@ function localEntry(
     version,
     transportDialability: websocketUrl === null ? "not-dialable" : "dialable",
   };
+}
+
+function accountWaitClient(): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly previewRequests: ProvidersPreviewProfileMoveRequest[];
+} {
+  const previewRequests: ProvidersPreviewProfileMoveRequest[] = [];
+  const hostEntry = localEntry("ws://127.0.0.1:55300/rpc", "2.0.0");
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) => (hostId === LOCAL_HOST_ID ? hostEntry : null),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "account-wait-preview",
+      handlers: {
+        "providers.previewProfileMove": (params) => {
+          previewRequests.push(
+            providersPreviewProfileMoveRequestSchema.parse(params),
+          );
+          return ACCOUNT_WAIT_PREVIEW;
+        },
+      },
+    }),
+  });
+  client.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-account-wait",
+    }),
+  );
+  return {
+    client: client.createRequester(hostEntry),
+    previewRequests,
+  };
+}
+
+function RegisteredAccountWaitScene(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly chatId: string;
+  readonly toolbarStore: ComposerToolbarStore;
+  readonly providersList: ProvidersListResponse;
+}): ReactNode {
+  const wait = useChatAccountWait({
+    fallbackCardVisible: false,
+    providersList: props.providersList,
+    epicId: "epic-1",
+    chatId: props.chatId,
+    hostId: LOCAL_HOST_ID,
+  });
+  return (
+    <ChatComposerBannerPortalProvider hidden={false}>
+      <AccountWaitSurface
+        epicId="epic-1"
+        chatId={props.chatId}
+        providersList={props.providersList}
+        wait={wait}
+        client={props.client}
+        hostId={LOCAL_HOST_ID}
+        toolbarStore={props.toolbarStore}
+        canAct
+      >
+        {null}
+      </AccountWaitSurface>
+    </ChatComposerBannerPortalProvider>
+  );
 }
 
 /** Publishes one host's lease the way the selection bridge does. */
@@ -306,6 +553,19 @@ function signIn(): void {
   });
 }
 
+function unauthorizedClose(doorReason: string | null): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "test host refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      ...(doorReason === null ? {} : { doorReason }),
+    },
+  };
+}
+
 /**
  * Flushes effects and microtasks before a survival assertion: a release is
  * asynchronous, so a synchronous read would stay green even if a regression
@@ -321,6 +581,8 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
   afterEach(() => {
     cleanup();
     disposeAllChatSessions();
+    servingWitness?.dispose();
+    servingWitness = null;
     hostEntryRef.value = null;
     globalClientRef.value = null;
     openTransportRef.fn = null;
@@ -529,7 +791,7 @@ describe("a live chat session survives a degraded liveness read", () => {
         viewerReachability: "unknown",
         clientCloud: "ok",
         updateState: "current",
-        appVersion: "1.0.0",
+        appVersion: "2.0.0",
         lastSeenAt: "2026-08-01T00:00:00.000Z",
       },
     };
@@ -772,9 +1034,50 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
   const FIRST_URL = "ws://127.0.0.1:55300/rpc";
   const RESPAWN_URL = "ws://127.0.0.1:61234/rpc";
 
+  async function openRegisteredAccountWaitSession() {
+    signIn();
+    openTransportRef.fn = createTrackedOpenTransport().openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
+    const { result } = renderHook(
+      () => useChatSessionHandle(ACCOUNT_WAIT_CHAT_ID, LOCAL_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const handle = result.current;
+    if (handle === null) throw new Error("expected a registered chat handle");
+    return handle;
+  }
+
+  function accountWaitToolbarStore() {
+    return createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
+      seedKey: "account-wait-registered-session",
+      values: {
+        ultracode: false,
+        permission: "supervised",
+        selection: {
+          harnessId: "claude",
+          modelSlug: "claude-sonnet-4",
+          profileId: "destination-profile",
+        },
+        reasoning: "high",
+        serviceTier: "",
+      },
+      onSettingsChange: () => undefined,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
+      hostId: LOCAL_HOST_ID,
+    });
+  }
+
   it.each([
-    ["the websocket URL", localEntry(RESPAWN_URL, "1.0.0")],
-    ["the host version", localEntry(FIRST_URL, "1.1.0")],
+    ["the websocket URL", localEntry(RESPAWN_URL, "2.0.0")],
+    ["the host version", localEntry(FIRST_URL, "2.1.0")],
   ] as const)(
     "keeps the same store when %s changes, and never reopens the transport",
     async (_label, changed) => {
@@ -782,7 +1085,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       const tracked = createTrackedOpenTransport();
       openTransportRef.fn = tracked.openTransport;
       globalClientRef.value = buildGlobalClient();
-      hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+      hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
 
       const { result, rerender } = renderHook(
         () => useChatSessionHandle("chat-local-1", LOCAL_HOST_ID, true),
@@ -806,12 +1109,12 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     },
   );
 
-  it("holds the handle while the host boots, and the URL returning revives the same store", async () => {
+  it("keeps an at-floor owner while the host boots, and the URL returning revives the same store", async () => {
     signIn();
     const tracked = createTrackedOpenTransport();
     openTransportRef.fn = tracked.openTransport;
     globalClientRef.value = buildGlobalClient();
-    hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+    hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
 
     const { result, rerender } = renderHook(
       () => useChatSessionHandle("chat-boot-1", LOCAL_HOST_ID, true),
@@ -823,18 +1126,126 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     const liveHandle = result.current;
 
     // The restart: the directory swaps in the booting twin.
-    hostEntryRef.value = localEntry(null, "1.0.0");
+    hostEntryRef.value = localEntry(null, "2.0.0");
     rerender();
     await settle();
     expect(result.current).toBe(liveHandle);
 
     // The host publishes again, on a new port and a new build.
-    hostEntryRef.value = localEntry(RESPAWN_URL, "1.1.0");
+    hostEntryRef.value = localEntry(RESPAWN_URL, "2.1.0");
     rerender();
     await settle();
     expect(result.current).toBe(liveHandle);
     expect(tracked.records()).toHaveLength(1);
     expect(tracked.records()[0].closeCount).toBe(0);
+  });
+
+  it("uses the failed turn's registered removed-profile snapshot to name and open the bulk count", async () => {
+    const user = userEvent.setup();
+    const handle = await openRegisteredAccountWaitSession();
+    const anchor = claudeChatSessionAnchorSchema.parse({
+      harnessId: "claude",
+      hostId: LOCAL_HOST_ID,
+      sessionId: "account-wait-session",
+      sessionWorkspaceSnapshot: {
+        workspaceKind: "session-snapshot",
+        primaryWorkspace: "/repo",
+        secondaryWorkspaces: [],
+      },
+      claudeMessageUuid: "account-wait-message",
+      createdAt: 1,
+      profileId: "legacy-source-alias",
+      labelSnapshot: "Source profile",
+      accountUuid: null,
+      accentColor: null,
+      turnTailUuid: null,
+      coveredUntilMessageId: null,
+    });
+    act(() => {
+      handle.store.setState({
+        accountWait: ACCOUNT_WAIT_REMOVED,
+        lastFailedAttempt: ACCOUNT_WAIT_FAILURE,
+        transcriptRowContext: {
+          [assistantRowId(ACCOUNT_WAIT_FAILURE.turnId)]: {
+            sessionAnchor: anchor,
+          },
+        },
+      });
+    });
+
+    const { client, previewRequests } = accountWaitClient();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RegisteredAccountWaitScene
+          client={client}
+          chatId={ACCOUNT_WAIT_CHAT_ID}
+          toolbarStore={accountWaitToolbarStore()}
+          providersList={ACCOUNT_WAIT_LIST}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Source profile")).toBeTruthy();
+    expect(screen.getByText("Was removed")).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Move all waiting agents" }),
+    );
+    expect(
+      await screen.findByText("1 agent is waiting on Source profile."),
+    ).toBeTruthy();
+    expect(previewRequests).toEqual([
+      {
+        extent: "fleet",
+        mode: "waiting",
+        source: ACCOUNT_WAIT_SOURCE,
+      },
+    ]);
+  });
+
+  it("shows only Was removed and Choose when the registered session has no name snapshot", async () => {
+    const handle = await openRegisteredAccountWaitSession();
+    act(() => {
+      handle.store.setState({
+        accountWait: ACCOUNT_WAIT_REMOVED,
+        lastFailedAttempt: undefined,
+        transcriptRowContext: {},
+      });
+    });
+    const { client, previewRequests } = accountWaitClient();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RegisteredAccountWaitScene
+          client={client}
+          chatId={ACCOUNT_WAIT_CHAT_ID}
+          toolbarStore={accountWaitToolbarStore()}
+          providersList={ACCOUNT_WAIT_LIST}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Was removed")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Choose another profile" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Move all waiting agents" }),
+    ).toBeNull();
+    expect(screen.queryByText("removed-source")).toBeNull();
+    expect(screen.queryByText("legacy-source-alias")).toBeNull();
+    expect(previewRequests).toEqual([]);
   });
 
   const losses: ReadonlyArray<
@@ -861,7 +1272,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       openTransportRef.fn = createTrackedOpenTransport().openTransport;
       const globalClient = buildGlobalClient();
       globalClientRef.value = globalClient;
-      hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
+      hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
 
       const { result, rerender } = renderHook(
         () => useChatSessionHandle("chat-boot-lost-1", LOCAL_HOST_ID, true),
@@ -870,7 +1281,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       await waitFor(() => {
         expect(result.current).not.toBeNull();
       });
-      hostEntryRef.value = localEntry(null, "1.0.0");
+      hostEntryRef.value = localEntry(null, "2.0.0");
       rerender();
       await settle();
       // Held by the booting shape, so the release below is the loss's doing.
@@ -883,6 +1294,125 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       });
     },
   );
+  it("does not acquire an owner for a below-floor host in the local booting shape", () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = localEntry(null, "1.5.4");
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-boot-below-floor", LOCAL_HOST_ID, true),
+      { wrapper },
+    );
+
+    expect(result.current).toBeNull();
+    expect(tracked.records()).toHaveLength(0);
+  });
+
+  it("releases an at-floor remote owner when appVersion falls below floor during restarting-expected", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    const remote = remoteTarget("pubkey-a");
+    const remoteAtFloor: RemoteHostDirectoryEntry = {
+      ...remote,
+      websocketUrl: null,
+      transportDialability: "not-dialable",
+      version: "9.9.9",
+      remoteStatus: { ...remote.remoteStatus, appVersion: "2.0.0" },
+    };
+    hostEntryRef.value = remoteAtFloor;
+    publishLease({
+      hostId: REMOTE_HOST_ID,
+      status: "restarting-expected",
+      dead: null,
+    });
+
+    const registry = getChatSessionRegistry();
+    const releaseHandle = vi.spyOn(registry, "releaseHandle");
+    try {
+      const { result, rerender } = renderHook(
+        () =>
+          useChatSessionHandle(
+            "chat-remote-restart-below-floor",
+            REMOTE_HOST_ID,
+            true,
+          ),
+        { wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current).not.toBeNull();
+      });
+      expect(tracked.records()).toHaveLength(1);
+      const owner = result.current;
+      if (owner === null) throw new Error("remote chat owner was not acquired");
+
+      const remoteBelowFloor: RemoteHostDirectoryEntry = {
+        ...remoteAtFloor,
+        remoteStatus: { ...remoteAtFloor.remoteStatus, appVersion: "1.5.4" },
+      };
+      hostEntryRef.value = remoteBelowFloor;
+      rerender();
+      await waitFor(() => {
+        expect(result.current).toBeNull();
+      });
+      await waitFor(() => {
+        expect(releaseHandle).toHaveBeenCalledWith(
+          "epic-1",
+          "chat-remote-restart-below-floor",
+          REMOTE_HOST_ID,
+          owner,
+        );
+      });
+      expect(
+        registry.peek(
+          "epic-1",
+          "chat-remote-restart-below-floor",
+          REMOTE_HOST_ID,
+        ),
+      ).toBe(owner);
+    } finally {
+      releaseHandle.mockRestore();
+    }
+  });
+
+  it("keeps an at-floor remote owner when its absent endpoint is covered by restarting-expected", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    const remote = remoteTarget("pubkey-a");
+    const remoteAtFloor: RemoteHostDirectoryEntry = {
+      ...remote,
+      websocketUrl: null,
+      transportDialability: "not-dialable",
+      remoteStatus: { ...remote.remoteStatus, appVersion: "2.0.0" },
+    };
+    hostEntryRef.value = remoteAtFloor;
+    publishLease({
+      hostId: REMOTE_HOST_ID,
+      status: "restarting-expected",
+      dead: null,
+    });
+
+    const { result } = renderHook(
+      () =>
+        useChatSessionHandle(
+          "chat-remote-restart-at-floor",
+          REMOTE_HOST_ID,
+          true,
+        ),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
 });
 
 describe("useChatSessionHandle retryFromUser silence gate", () => {
@@ -995,6 +1525,8 @@ describe("the production chat stream client factory forwards every probe", () =>
     vi.restoreAllMocks();
     cleanup();
     disposeAllChatSessions();
+    servingWitness?.dispose();
+    servingWitness = null;
     hostEntryRef.value = null;
     globalClientRef.value = null;
     openTransportRef.fn = null;
@@ -1002,7 +1534,11 @@ describe("the production chat stream client factory forwards every probe", () =>
     useAuthStore.setState({ profile: null, status: "signed-out" });
   });
 
-  async function openChat(chatId: string, fake: FakeStreamClient) {
+  async function openChatAtHost(
+    chatId: string,
+    hostId: string,
+    fake: FakeStreamClient,
+  ) {
     useAuthStore.setState({
       status: "signed-in",
       profile: {
@@ -1018,9 +1554,12 @@ describe("the production chat stream client factory forwards every probe", () =>
       },
     });
     globalClientRef.value = buildGlobalClient();
-    hostEntryRef.value = remoteTarget("pubkey-a");
+    hostEntryRef.value =
+      hostId === POOL_HOST_ID
+        ? poolEntry
+        : { ...remoteTarget("pubkey-a"), hostId };
     const { result } = renderHook(
-      () => useChatSessionHandle(chatId, REMOTE_HOST_ID, true),
+      () => useChatSessionHandle(chatId, hostId, true),
       { wrapper },
     );
     await waitFor(() => {
@@ -1032,6 +1571,95 @@ describe("the production chat stream client factory forwards every probe", () =>
     }
     return handle;
   }
+
+  async function openChat(chatId: string, fake: FakeStreamClient) {
+    return openChatAtHost(chatId, REMOTE_HOST_ID, fake);
+  }
+
+  it.each(["enrolment_broken", "host_claimed", null] as const)(
+    "does not revalidate sign-in for a host-token stream close (%s)",
+    async (doorReason) => {
+      const fake = new FakeStreamClient(true);
+      authServiceStub.revalidateCurrentContext.mockClear();
+      await openChatAtHost("chat-host-token-close", REMOTE_HOST_ID, fake);
+      await waitFor(() => expect(fake.sessions).toHaveLength(1));
+
+      act(() => {
+        fake.sessions[0]?.emitClosed(unauthorizedClose(doorReason));
+      });
+
+      expect(authServiceStub.revalidateCurrentContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still revalidates sign-in for the pool stream", async () => {
+    const fake = new FakeStreamClient(true);
+    authServiceStub.revalidateCurrentContext.mockClear();
+    await openChatAtHost("chat-pool-close", POOL_HOST_ID, fake);
+    await waitFor(() => expect(fake.sessions).toHaveLength(1));
+
+    act(() => {
+      fake.sessions[0]?.emitClosed(unauthorizedClose(null));
+    });
+
+    expect(authServiceStub.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates sign-in when a team sandbox at rest is served by the pool", async () => {
+    const ownerHostId = teamSandboxEntry.hostId;
+    const servingClient = new FakeStreamClient(true);
+    const chatClient = new FakeStreamClient(true);
+    const openedHostIds: string[] = [];
+    servingWitness = new PoolChatServingWitness();
+    servingWitness.setStreamClient(servingClient);
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    authServiceStub.revalidateCurrentContext.mockClear();
+    openTransportRef.fn = (servingHostId) => {
+      openedHostIds.push(servingHostId);
+      return {
+        wsStreamClient: chatClient,
+        close: () => chatClient.close(),
+      };
+    };
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = teamSandboxEntry;
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-at-rest-on-pool", ownerHostId, true),
+      { wrapper },
+    );
+    await waitFor(() => expect(servingClient.subscribes).toHaveLength(1));
+    act(() => {
+      servingClient.sessions[0]?.emit(
+        {
+          kind: "serving",
+          hasBinaryPayload: false,
+          serving: {
+            ownerHostId,
+            state: "at-rest",
+            catchingUp: null,
+          },
+        },
+        null,
+      );
+    });
+    await waitFor(() => expect(openedHostIds).toEqual([POOL_HOST_ID]));
+    await waitFor(() => expect(result.current).not.toBeNull());
+    await waitFor(() => expect(chatClient.sessions).toHaveLength(1));
+
+    act(() => {
+      chatClient.sessions[0]?.emitClosed(unauthorizedClose(null));
+    });
+
+    expect(authServiceStub.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+  });
 
   it.each(FORWARDED_PROBES)(
     "%s reaches the store from the real ChatStreamClient",

@@ -2,14 +2,24 @@ import { useCallback } from "react";
 import {
   queryOptions,
   useQueries,
+  useQueryClient,
+  type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { localRowCohort } from "@/components/settings/environment/local-row-cohort";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
-import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  environmentStatusMoveRunning,
+  stampHostRpcMethod,
+} from "@/lib/host-rpc-policy/host-method-policy-table";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { queryKeys } from "@/lib/query-keys";
 import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
@@ -25,12 +35,33 @@ const EMPTY_PARAMS = {};
  */
 const STATUS_STALE_MS = 5 * 60_000;
 
+type StatusAnswer = ResponseOfMethod<HostRpcRegistry, typeof METHOD>;
+
+/**
+ * Also polled after `done` until the Local row turns over: the host records `done`
+ * before the planes flip. Personal computers only: a team's answers `done` with
+ * local planes as its ordinary state.
+ */
+function movePollWanted(status: StatusAnswer | undefined): boolean {
+  if (status === undefined) return false;
+  return (
+    environmentStatusMoveRunning(status) ||
+    (status.move?.state === "done" &&
+      status.principal?.kind === "personal" &&
+      localRowCohort(status).kind === "local")
+  );
+}
+
 /**
  * `environment.status` for each host in `hostIds`, one Query per host
  * through that host's own requester, unpolled. The key is the one
  * `useHostQuery` files the same read under, so a page that polls one host's
  * status (the Personal frame, the Overview) keeps that host's row current
  * here, and this read never duplicates it.
+ *
+ * A computer is polled, on the status policy's own lanes, only while its
+ * cached status says its move is running or its Local row is still standing
+ * after the move is done; a computer at rest is read once.
  *
  * Map entries are `null` until a host answers, and for a host that cannot
  * (`connectable` false is never dialled).
@@ -42,6 +73,8 @@ export function useRegisteredHostEnvironmentStatuses(
   }>,
 ): ReadonlyMap<string, EnvironmentStatusResponseV12 | null> {
   const binding = useHostBinding();
+  const queryClient = useQueryClient();
+  const coordinator = getConditionPollEpisodeCoordinator(queryClient);
   const combine = useCallback(
     (
       results: Array<
@@ -57,13 +90,19 @@ export function useRegisteredHostEnvironmentStatuses(
     [hosts],
   );
   return useQueries({
-    queries: hosts.map((host) =>
-      environmentStatusQueryOptions(
+    queries: hosts.map((host) => {
+      const options = environmentStatusQueryOptions(
         binding,
         host.hostId,
         host.connectable && binding !== null,
-      ),
-    ),
+      );
+      const key: QueryKey = options.queryKey;
+      const cached = queryClient.getQueryData<StatusAnswer>(key);
+      const polling = movePollWanted(cached)
+        ? coordinator.pollOptionsFor(METHOD, true)
+        : {};
+      return { ...options, ...polling };
+    }),
     combine,
   });
 }

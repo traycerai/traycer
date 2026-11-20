@@ -7,6 +7,7 @@ import {
   type ResponseOfMethod,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { OpenFrameBearerSource } from "../auth/bearer-source";
+import { hostRefusalOf } from "./host-door-state";
 
 export {
   HostMethodVersionUnsatisfiedError,
@@ -261,6 +262,6 @@ export class HostAuthoritySupersededError extends Error {
 export function isTransientHostRpcFailure(error: HostRpcError): boolean {
   return (
     error instanceof HostTransportFailureError ||
-    error.fatalDetails?.retryable === true
+    hostRefusalOf(error)?.retryable === true
   );
 }

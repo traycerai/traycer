@@ -55,6 +55,12 @@ import {
 } from "@/components/chat/segments/use-artifact-row-display";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
+import { useIsLooseFileArtifact } from "@/lib/epic-selectors";
+import {
+  distinctArtifactCount,
+  groupArtifactFolderChanges,
+  type ArtifactFolderBundle,
+} from "@/lib/chat/artifact-folder-bundles";
 
 interface ChatAccumulatedChangesPanelProps {
   readonly restore: ChatRestoreContextValue;
@@ -68,6 +74,13 @@ interface RevertGate {
   readonly enabled: boolean;
   readonly tooltip: string;
 }
+
+const LOADING_CHANGES_TOOLTIP = "Still loading the full list of changes.";
+
+const LOADING_CHANGES_GATE: RevertGate = {
+  enabled: false,
+  tooltip: LOADING_CHANGES_TOOLTIP,
+};
 
 interface DiffCounts {
   readonly additions: number;
@@ -163,12 +176,14 @@ export function ChatAccumulatedChangesPanel(
   // stronger claim. (Line 255 already treats a non-zero `undelivered` as "the
   // set is a prefix"; this keeps the two controls saying one thing about it.)
   const undoableTooltip =
-    undelivered > 0
-      ? "Still loading the full list of changes."
-      : "Nothing here can be reverted.";
+    undelivered > 0 ? LOADING_CHANGES_TOOLTIP : "Nothing here can be reverted.";
   const fileCount = changes.length + undelivered;
   const artifactCount = useMemo(
-    () => changes.filter((change) => change.artifact && change.undoable).length,
+    () => distinctArtifactCount(changes.filter((change) => change.undoable)),
+    [changes],
+  );
+  const groupedChanges = useMemo(
+    () => groupArtifactFolderChanges(changes, (change) => change.artifact),
     [changes],
   );
 
@@ -233,21 +248,40 @@ export function ChatAccumulatedChangesPanel(
 
   const rows = (
     <div className={CHAT_DOCK_PANEL_LIST}>
-      {changes.map((change) => (
-        <AccumulatedChangeRow
-          key={change.filePath}
-          change={change}
-          counts={change.counts ?? { additions: 0, deletions: 0 }}
-          gate={gate}
-          pending={restore.restoreActionPending}
-          clickHandlers={rowClickHandlers(opener, change)}
-          onUndo={() =>
-            // A per-row Undo targets this exact path, so artifacts are
-            // always included (the opt-out is only for bulk reverts).
-            restore.revertFileChanges(null, [change.filePath], true)
-          }
-        />
-      ))}
+      {groupedChanges.map((grouped) =>
+        grouped.kind === "single" ? (
+          <AccumulatedChangeRow
+            key={grouped.item.filePath}
+            change={grouped.item}
+            label={null}
+            counts={grouped.item.counts ?? { additions: 0, deletions: 0 }}
+            gate={gate}
+            pending={restore.restoreActionPending}
+            clickHandlers={rowClickHandlers(opener, grouped.item)}
+            onUndo={() =>
+              // A per-row Undo targets this exact path, so artifacts are
+              // always included (the opt-out is only for bulk reverts).
+              restore.revertFileChanges(null, [grouped.item.filePath], true)
+            }
+          />
+        ) : (
+          <AccumulatedArtifactBundleRow
+            key={`artifact:${grouped.artifactId}`}
+            bundle={grouped}
+            gate={gate}
+            artifactUndoGate={
+              // The artifact's Undo reverts the files listed under it, so a
+              // list still arriving would revert only part of the artifact.
+              restore.accumulatedSetComplete ? gate : LOADING_CHANGES_GATE
+            }
+            pending={restore.restoreActionPending}
+            opener={opener}
+            onUndo={(filePaths) =>
+              restore.revertFileChanges(null, filePaths, true)
+            }
+          />
+        ),
+      )}
     </div>
   );
 
@@ -432,6 +466,8 @@ function UndoAllDialogContent(props: UndoAllDialogProps) {
 
 interface AccumulatedChangeRowProps {
   readonly change: AccumulatedChangeRow;
+  /** The row's text in place of its full path; `null` shows the path. */
+  readonly label: string | null;
   readonly counts: DiffCounts;
   readonly gate: RevertGate;
   readonly pending: boolean;
@@ -440,22 +476,30 @@ interface AccumulatedChangeRowProps {
 }
 
 function AccumulatedChangeRow(props: AccumulatedChangeRowProps) {
-  const { change, counts, gate, onUndo, pending, clickHandlers } = props;
+  const { change, counts, gate, label, onUndo, pending, clickHandlers } = props;
   const { additions, deletions } = counts;
-  const undoEnabled = gate.enabled && change.undoable && !pending;
   return (
-    // muted-fill-ok: row inside the canvas-surface panel above; --canvas never equals --muted
-    <div className={cn("group", CHAT_DOCK_PANEL_ROW, "hover:bg-muted/40")}>
-      {change.artifact ? (
+    <div
+      className={cn(
+        "group",
+        CHAT_DOCK_PANEL_ROW,
+        label === null ? null : "pl-8",
+        // muted-fill-ok: row inside the canvas-surface panel above; --canvas never equals --muted
+        "hover:bg-muted/40",
+      )}
+    >
+      {change.artifact && label === null ? (
         <ArtifactAccumulatedHeader
           artifact={change.artifact}
           operation={change.operation}
           additions={additions}
           deletions={deletions}
+          fileCount={null}
         />
       ) : (
         <FileChangeHeader
           filePath={change.filePath}
+          label={label ?? change.filePath}
           operation={change.operation}
           additions={additions}
           deletions={deletions}
@@ -465,33 +509,158 @@ function AccumulatedChangeRow(props: AccumulatedChangeRowProps) {
           clickHandlers={clickHandlers}
         />
       )}
-      <TooltipWrapper
-        label={
-          change.undoable ? gate.tooltip : "This change cannot be reverted."
-        }
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            disabled={!undoEnabled}
-            aria-label={`Undo changes to ${change.filePath}`}
-            data-testid="accumulated-undo-file"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (!undoEnabled) return;
-              onUndo();
-            }}
-          >
-            <RotateCcw className="size-3" aria-hidden />
-          </Button>
-        </span>
-      </TooltipWrapper>
+      <RowUndoButton
+        undoable={change.undoable}
+        gate={gate}
+        pending={pending}
+        ariaLabel={`Undo changes to ${change.filePath}`}
+        testId="accumulated-undo-file"
+        onUndo={onUndo}
+      />
     </div>
+  );
+}
+
+interface AccumulatedArtifactBundleRowProps {
+  readonly bundle: ArtifactFolderBundle<AccumulatedChangeRow>;
+  readonly gate: RevertGate;
+  readonly artifactUndoGate: RevertGate;
+  readonly pending: boolean;
+  readonly opener: ChatSnapshotDiffOpener | null;
+  readonly onUndo: (filePaths: ReadonlyArray<string>) => void;
+}
+
+/**
+ * One html or canvas artifact. A loose HTML page is its own single file and
+ * reads as any single artifact row; a folder is one collapsed row for all of
+ * its changed files.
+ */
+function AccumulatedArtifactBundleRow(
+  props: AccumulatedArtifactBundleRowProps,
+) {
+  const { bundle, gate, onUndo, opener, pending } = props;
+  const page = bundle.members[0].item;
+  return useIsLooseFileArtifact(bundle.artifactId) ? (
+    <AccumulatedChangeRow
+      change={page}
+      label={null}
+      counts={page.counts ?? { additions: 0, deletions: 0 }}
+      gate={gate}
+      pending={pending}
+      clickHandlers={rowClickHandlers(opener, page)}
+      onUndo={() => onUndo([page.filePath])}
+    />
+  ) : (
+    <AccumulatedArtifactFolderRow {...props} />
+  );
+}
+
+/**
+ * An html or canvas folder: its title, how many of its files changed and
+ * their summed `+/-`, collapsed by default. Expanded, each changed file is an
+ * ordinary file row of this panel; the artifact's own Undo reverts them all.
+ */
+function AccumulatedArtifactFolderRow(
+  props: AccumulatedArtifactBundleRowProps,
+) {
+  const { bundle, gate, onUndo, opener, pending } = props;
+  const [expanded, setExpanded] = useState(false);
+  const memberChanges = bundle.members.map((member) => member.item);
+  const totals = accumulatedDiffTotals(memberChanges);
+  return (
+    <>
+      {/* muted-fill-ok: row inside the canvas-surface panel above; --canvas never equals --muted */}
+      <div className={cn("group", CHAT_DOCK_PANEL_ROW, "hover:bg-muted/40")}>
+        <ArtifactAccumulatedHeader
+          artifact={{
+            artifactId: bundle.artifactId,
+            kind: bundle.artifactKind,
+            title: bundle.title,
+          }}
+          operation={bundle.operation}
+          additions={totals.additions}
+          deletions={totals.deletions}
+          fileCount={memberChanges.length}
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-expanded={expanded}
+          aria-label={expanded ? "Hide changed files" : "Show changed files"}
+          data-testid="accumulated-artifact-toggle"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <ChevronDown
+            aria-hidden
+            className={cn(
+              "size-3 text-muted-foreground/70 transition-transform",
+              expanded ? null : "-rotate-90",
+            )}
+          />
+        </Button>
+        <RowUndoButton
+          undoable={memberChanges.some((change) => change.undoable)}
+          gate={props.artifactUndoGate}
+          pending={pending}
+          ariaLabel={`Undo changes to ${bundle.title ?? "this artifact"}`}
+          testId="accumulated-undo-artifact"
+          onUndo={() => onUndo(memberChanges.map((change) => change.filePath))}
+        />
+      </div>
+      {expanded
+        ? bundle.members.map((member) => (
+            <AccumulatedChangeRow
+              key={member.item.filePath}
+              change={member.item}
+              label={member.label}
+              counts={member.item.counts ?? { additions: 0, deletions: 0 }}
+              gate={gate}
+              pending={pending}
+              clickHandlers={rowClickHandlers(opener, member.item)}
+              onUndo={() => onUndo([member.item.filePath])}
+            />
+          ))
+        : null}
+    </>
+  );
+}
+
+function RowUndoButton(props: {
+  readonly undoable: boolean;
+  readonly gate: RevertGate;
+  readonly pending: boolean;
+  readonly ariaLabel: string;
+  readonly testId: string;
+  readonly onUndo: () => void;
+}) {
+  const { gate, onUndo, undoable } = props;
+  const undoEnabled = gate.enabled && undoable && !props.pending;
+  return (
+    <TooltipWrapper
+      label={undoable ? gate.tooltip : "This change cannot be reverted."}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          disabled={!undoEnabled}
+          aria-label={props.ariaLabel}
+          data-testid={props.testId}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!undoEnabled) return;
+            onUndo();
+          }}
+        >
+          <RotateCcw className="size-3" aria-hidden />
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -500,6 +669,8 @@ interface ArtifactAccumulatedHeaderProps {
   readonly operation: CheckpointFileOperation;
   readonly additions: number;
   readonly deletions: number;
+  /** How many of an html or canvas artifact's files changed; null otherwise. */
+  readonly fileCount: number | null;
 }
 
 /**
@@ -543,7 +714,7 @@ function ArtifactAccumulatedHeaderView(
     readonly display: ArtifactRowDisplay;
   },
 ) {
-  const { operation, additions, deletions, display } = props;
+  const { operation, additions, deletions, display, fileCount } = props;
   return (
     <>
       {display.displayKind === "file" ? (
@@ -605,6 +776,16 @@ function ArtifactAccumulatedHeaderView(
         >
           {display.title}
         </StartTruncatedText>
+      )}
+      {fileCount === null ? null : (
+        <span
+          className={cn(
+            "shrink-0 text-muted-foreground",
+            CHAT_DOCK_PANEL_ROW_TEXT,
+          )}
+        >
+          {fileCount} {fileCount === 1 ? "file" : "files"}
+        </span>
       )}
       <DiffLineDeltas
         counts={{ additions, deletions }}

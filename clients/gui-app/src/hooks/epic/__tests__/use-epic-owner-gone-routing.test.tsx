@@ -182,7 +182,12 @@ function createFixture(): Fixture {
         "epic.listChatRecords": () => {
           const hostId = lastCallHost(messengerRef.current ?? messenger);
           calls.push({ method: "epic.listChatRecords", hostId });
-          return { kind: "snapshot" as const, listStamp: null, chats: [] };
+          return {
+            kind: "snapshot" as const,
+            publicationRedirectRevision: null,
+            listStamp: null,
+            chats: [],
+          };
         },
         "epic.setChatArchived": () => {
           const hostId = lastCallHost(messengerRef.current ?? messenger);

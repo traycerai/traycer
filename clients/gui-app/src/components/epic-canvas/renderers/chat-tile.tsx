@@ -52,6 +52,11 @@ import type { ChatForkMode } from "@/components/chat/chat-message";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
+import type {
+  ProviderCliState,
+  ProvidersListResponse,
+} from "@traycer/protocol/host/provider-schemas";
+import type { RemovedProviderProfile } from "@/components/providers/provider-profile-model";
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas";
 import { importedProvenance } from "@traycer/protocol/persistence/epic/chat-events";
@@ -227,6 +232,13 @@ import {
 } from "@/stores/chats/rendered-messages";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-ownership";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { useEpicChatStarter } from "@/hooks/chats/use-epic-chat-starter";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { cloudChatBelongsToViewer } from "@/lib/chats/cloud-chat-view-ownership";
+import { SYSTEM_ACTOR_ID } from "@/lib/identity/person-identity";
+import { EVICTED_SEND_FAILED_MESSAGE } from "@/lib/chats/evicted-chat-refusal";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
@@ -242,7 +254,7 @@ import {
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import { TranscriptQueuePauseReasonSupportContext } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import { useHostBinding } from "@/lib/host";
+import { useHostBinding, useOptionalHostClient } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
@@ -334,11 +346,13 @@ import {
   worktreeStagingKeyString,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity";
 import {
   resolveAgentReasoningLabel,
   resolveAgentServiceTierLabel,
   resolveAgentSenderDisplay,
-  resolveSenderLabel,
+  otherPersonSenderId,
+  resolvePersonSenderLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
 import { getModelLabelIndex } from "@/lib/chat/model-label-index";
@@ -430,6 +444,18 @@ const COMPACT_ACTION_LOCK_MS = 1500;
  * every time and re-partition the setup lifecycle on every streamed token.
  */
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
+const NO_PROVIDERS: ReadonlyArray<ProviderCliState> = [];
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
+
+function tombstonedProfileListProps(list: ProvidersListResponse | undefined): {
+  readonly providers: ReadonlyArray<ProviderCliState>;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
+} {
+  return {
+    providers: list?.providers ?? NO_PROVIDERS,
+    removedProfiles: list?.removedProfiles ?? NO_REMOVED_PROFILES,
+  };
+}
 
 /** Per-chat compact-conversation state, keyed by `handle.chatId` - see the comment on `compactConversation`. */
 interface CompactChatState {
@@ -452,6 +478,7 @@ interface ChatTileProps {
 }
 
 interface ChatTileSessionViewProps {
+  readonly cloudChat?: CloudChatSummary;
   readonly restingSandbox?: RestingChatSandbox;
   /**
    * The road for a message to a chat its host may have dropped the records
@@ -851,7 +878,7 @@ function ChatTileForChat(props: ChatTileProps) {
       />
       <SandboxReadyLineForChat chatId={node.id} />
       <TombstonedProfileProvider
-        providers={providersList.data?.providers ?? []}
+        {...tombstonedProfileListProps(providersList.data)}
         hostId={tabHostId}
       >
         <ChatSandboxLineContext value={sandbox.line !== null}>
@@ -2612,12 +2639,19 @@ function useChatTileSessionViewModel(
     tabHostCatalogClient,
     surfaceVisible,
   );
+  const identifyPerson = usePersonIdentityResolver();
   const renderedDisplayContext = useMemo<RenderedMessagesDisplayContext>(
     () => ({
       resolveProfileLabel: resolveRunProfileLabel,
       resolveUserSenderLabel: (sender) =>
-        resolveSenderLabel(sender, displayContext),
-      resolveUserSenderAvatarUrl: () => null,
+        resolvePersonSenderLabel(sender, displayContext, identifyPerson),
+      resolveUserSenderAvatarUrl: (sender) => {
+        const userId = otherPersonSenderId(sender, profile);
+        return userId === null
+          ? null
+          : (identifyPerson(userId)?.avatarUrl ?? null);
+      },
+      resolveUserSenderId: (sender) => otherPersonSenderId(sender, profile),
       resolveAgentSenderDisplay: (sender) =>
         resolveAgentSenderDisplay(sender, displayContext),
       resolveAgentReasoningLabel: (sender, reasoningEffort) =>
@@ -2626,7 +2660,7 @@ function useChatTileSessionViewModel(
         resolveAgentServiceTierLabel(sender, serviceTier, displayContext),
       contentBlocksPreview,
     }),
-    [displayContext, resolveRunProfileLabel],
+    [displayContext, identifyPerson, profile, resolveRunProfileLabel],
   );
   // Read from the full store: its effective activity includes the handoff
   // carry, even before the next host turn is named.
@@ -2659,9 +2693,16 @@ function useChatTileSessionViewModel(
         ? state.pendingUserMessages
         : [
             ...state.pendingUserMessages,
-            ...parkedEvictedSends.map((send) => send.row),
+            ...parkedEvictedSends
+              .filter(
+                (send) =>
+                  send.onOriginSignIn() &&
+                  send.row.sender.type === "user" &&
+                  send.row.sender.userId === profile?.userId,
+              )
+              .map((send) => send.row),
           ],
-    [parkedEvictedSends, state.pendingUserMessages],
+    [parkedEvictedSends, profile?.userId, state.pendingUserMessages],
   );
   const renderedMessages = useRenderedMessages(
     {
@@ -3280,6 +3321,10 @@ function useChatTileSessionViewModel(
       getDraftBlobBridgeSupported,
     });
 
+  const cloneChat = useCallback(() => {
+    forkAtAssistantMessage(null, "plain", null, FORK_ON_SOURCE_HOST);
+  }, [forkAtAssistantMessage]);
+
   // Switching hosts clones the chat from the latest checkpoint available to
   // the destination at submit time. Per-message forks still name an exact reply.
   const forkChatOnHost = useCallback(
@@ -3501,6 +3546,7 @@ function useChatTileSessionViewModel(
     (
       input: ChatComposerSubmitInput,
       onDispatch: ((accepted: boolean) => void) | null,
+      onOriginSignIn: (() => boolean) | null,
     ): boolean | Promise<boolean> => {
       if (!canAct) return false;
       // Armed behind the folder dialog, the composer gets the promise and
@@ -3508,6 +3554,7 @@ function useChatTileSessionViewModel(
       return submitThroughRebindGate({
         submit: input,
         dispatch: (message) => {
+          if (onOriginSignIn !== null && !onOriginSignIn()) return false;
           const accepted = dispatchUserSend(message);
           // Transfer custody and report at dispatch, before a consent promise
           // continuation or the next parked send can run.
@@ -3519,7 +3566,10 @@ function useChatTileSessionViewModel(
           });
           return accepted;
         },
-        refusal: NO_LIVE_SEND_REFUSAL,
+        refusal:
+          onOriginSignIn === null
+            ? NO_LIVE_SEND_REFUSAL
+            : () => (onOriginSignIn() ? null : EVICTED_SEND_FAILED_MESSAGE),
       }).accepted;
     },
     [
@@ -3531,9 +3581,69 @@ function useChatTileSessionViewModel(
     ],
   );
   const evictedSend = props.evictedSend ?? null;
+  const isAtRest =
+    props.restingSandbox !== undefined || evictedSend?.served === true;
+  const cloudChatClient = useOptionalHostClient();
+  const atRestCloudChats = useCloudChatList({
+    client: cloudChatClient,
+    taskId: currentEpicId,
+    enabled: isAtRest,
+  });
+  const environmentChatRows = useEnvironmentArmChats(
+    isAtRest ? currentEpicId : "",
+  );
+  const cloudChat = useMemo(() => {
+    const namesThisChat = (chat: CloudChatSummary): boolean =>
+      chat.identity.taskId === currentEpicId &&
+      chat.identity.chatId === node.id &&
+      chat.identity.ownerUserId === state.chat?.userId &&
+      chat.ownerHostId === activeHostId;
+    if (props.cloudChat !== undefined && namesThisChat(props.cloudChat)) {
+      return props.cloudChat;
+    }
+    const viewerRow = atRestCloudChats.data?.chats.find(namesThisChat);
+    if (viewerRow?.creatorUserId !== undefined) return viewerRow;
+    return environmentChatRows.find(namesThisChat) ?? viewerRow;
+  }, [
+    activeHostId,
+    atRestCloudChats.data,
+    currentEpicId,
+    environmentChatRows,
+    node.id,
+    props.cloudChat,
+    state.chat?.userId,
+  ]);
+  const recordedStarter = useEpicChatStarter(
+    currentEpicId,
+    state.chat?.userId ?? null,
+    node.id,
+  );
+  const teamEnvironments = useEnvironmentListQuery(isAtRest);
+  // This only chooses local capture while the read-only pool serves the chat.
+  // The host's fresh access verdict still decides whether a captured send goes.
+  const heldCreatorMatchesViewer =
+    teamEnvironments.data?.environments.some(
+      (environment) =>
+        environment.ownerKind === "organization" &&
+        environment.environmentId === state.chat?.userId,
+    ) === true &&
+    recordedStarter !== null &&
+    recordedStarter !== SYSTEM_ACTOR_ID &&
+    recordedStarter === profile?.userId;
+  const canParkCreatorMessage =
+    isAtRest &&
+    profile !== null &&
+    (cloudChat === undefined
+      ? heldCreatorMatchesViewer
+      : cloudChatBelongsToViewer(cloudChat, profile.userId));
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean | Promise<boolean> => {
       if (profile === null) return false;
+      if (
+        handle.store.getState().access?.role !== "owner" &&
+        !canParkCreatorMessage
+      )
+        return false;
       if (activeEditingQueueItemId !== null) {
         if (!canAct) return false;
         // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
@@ -3568,10 +3678,12 @@ function useChatTileSessionViewModel(
       if (props.restingSandbox !== undefined)
         return submitBoundSandboxMessage(input);
       if (evictedSend?.parks === true) {
-        evictedSend.park(input, { type: "user", userId: profile.userId });
-        return true;
+        return evictedSend.park(input, {
+          type: "user",
+          userId: profile.userId,
+        });
       }
-      return submitLiveMessage(input, null);
+      return submitLiveMessage(input, null, null);
     },
     [
       activeEditingQueueItemId,
@@ -3584,19 +3696,36 @@ function useChatTileSessionViewModel(
       dispatchUi,
       node.instanceId,
       profile,
+      handle.store,
+      canParkCreatorMessage,
     ],
   );
-  // The parked messages go once the host holds the chat again and this
-  // session is the host's own: the pool's session never acts, so `canAct`
-  // waits for the host's snapshot.
+  // A host snapshot, not the at-rest hint, decides whether locally captured messages go.
   useEffect(() => {
     if (evictedSend === null || !evictedSend.ready) return;
-    if (evictedSend.served || !canAct) return;
+    if (
+      evictedSend.served ||
+      !state.snapshotLoaded ||
+      state.connectionStatus !== "open" ||
+      handle.userId !== profile?.userId
+    )
+      return;
+    if (!canAct) {
+      if (state.access?.role !== "viewer") return;
+      for (;;) {
+        const refused = evictedSend.take().at(0);
+        if (refused === undefined) break;
+        evictedSend.settle(refused, false);
+      }
+      return;
+    }
     for (;;) {
       const send = evictedSend.take().at(0);
       if (send === undefined) break;
-      const accepted = submitLiveMessage(send.input, (result) =>
-        evictedSend.settle(send, result),
+      const accepted = submitLiveMessage(
+        send.input,
+        (result) => evictedSend.settle(send, result),
+        send.onOriginSignIn,
       );
       if (typeof accepted === "boolean") {
         evictedSend.settle(send, accepted);
@@ -3607,7 +3736,16 @@ function useChatTileSessionViewModel(
         break;
       }
     }
-  }, [evictedSend, canAct, submitLiveMessage]);
+  }, [
+    evictedSend,
+    canAct,
+    submitLiveMessage,
+    handle.userId,
+    profile?.userId,
+    state.snapshotLoaded,
+    state.connectionStatus,
+    state.access?.role,
+  ]);
   useEvictedSendAckRefusals(handle, evictedSend?.refuse ?? null);
   // `/btw` / `/side`: fork this chat and ask there. The tile contributes what
   // only it knows about its own chat - owner, title, lineage, workspace, pane -
@@ -4111,7 +4249,7 @@ function useChatTileSessionViewModel(
   const lowerAccess = useMemo(
     () => ({
       isCopy,
-      isViewer: accessFlags.isViewer,
+      isViewer: accessFlags.isViewer && !canParkCreatorMessage,
       canAct,
       readOnlyNotice: props.readOnlyNotice,
       restingSandbox: props.restingSandbox,
@@ -4120,6 +4258,7 @@ function useChatTileSessionViewModel(
     [
       isCopy,
       accessFlags.isViewer,
+      canParkCreatorMessage,
       canAct,
       props.readOnlyNotice,
       props.restingSandbox,
@@ -4365,6 +4504,7 @@ function useChatTileSessionViewModel(
       currentEpicId,
       onSubmitMessage: submitMessage,
       onSideChat: startSideChatFromComposer,
+      onClone: cloneChat,
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -4386,6 +4526,7 @@ function useChatTileSessionViewModel(
       currentEpicId,
       submitMessage,
       startSideChatFromComposer,
+      cloneChat,
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
@@ -4741,6 +4882,7 @@ export function ChatSessionMessagesSurface(
                 taskId={props.node.id}
                 epicId={props.epicId}
                 hostId={props.tabHostId}
+                payerHostId={props.tabHostId}
                 messages={props.messages}
                 transcriptWindow={props.transcriptWindow}
                 onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
@@ -4751,6 +4893,7 @@ export function ChatSessionMessagesSurface(
                 backgroundItems={props.backgroundItems}
                 scrollRequest={props.scrollRequest}
                 onScrollRequestSettled={props.onScrollRequestSettled}
+                onReaderMoved={null}
                 getMessageActions={props.getMessageActions}
                 nextStepActions={props.nextStepActions}
                 instanceId={props.node.instanceId}

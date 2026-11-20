@@ -103,6 +103,7 @@ function ChatMessagesHarness({
       taskId="turn-part-stream-chat"
       epicId="turn-part-stream-epic"
       hostId={null}
+      payerHostId={null}
       messages={messages}
       transcriptWindow={null}
       onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
@@ -118,6 +119,7 @@ function ChatMessagesHarness({
       systemOverlayActive={false}
       scrollRequest={scrollRequest}
       onScrollRequestSettled={onScrollRequestSettled}
+      onReaderMoved={null}
       composerOverlayHeight={0}
       subagentDrillIn={subagentDrillIn}
     />

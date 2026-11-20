@@ -34,6 +34,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { providersNativeQueryKeys } from "@/lib/query-keys/providers-native-query-keys";
+import { ProviderNativeRpcError } from "@/hooks/providers/native-response-map";
 import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers-workspace-selection-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
@@ -498,6 +499,38 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
   });
 
+  it("renders the unsupported-action copy for a promote-only v1.5 list refusal", async () => {
+    const fixture = createFixture();
+    const response = listResponse([]);
+    // Deliberately violate the list schema at the fake-host boundary:
+    // needs_connection belongs only to the promote response.
+    Object.defineProperty(response, "native", {
+      value: { ok: false, code: "needs_connection", detail: null },
+    });
+    fixture.enqueue(globalKey(HOST_A, "codex"), {
+      kind: "pending",
+      promise: Promise.resolve(response),
+    });
+    renderTab(fixture, "codex");
+
+    expect(
+      await screen.findByText(
+        "This action is not supported for this provider.",
+      ),
+    ).toBeDefined();
+    const query = fixture.queryClient.getQueryCache().find({
+      queryKey: providersNativeQueryKeys.mcpList(HOST_A, {
+        providerId: "codex",
+        scope: GLOBAL,
+        workspaceRoot: null,
+      }),
+    });
+    expect(query?.state.error).toBeInstanceOf(ProviderNativeRpcError);
+    expect(query?.state.error).toMatchObject({
+      nativeCode: "unsupported_action",
+    });
+  });
+
   it("disables Retry while a retry is pending, then replaces rows and clears stale state on success", async () => {
     const fixture = createFixture();
     fixture.enqueue(globalKey(HOST_A, "codex"), {
@@ -880,7 +913,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     await screen.findByText("server-a");
     await screen.findByText("server-b");
 
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
     let firstPromise: Promise<unknown> | null = null;
@@ -997,7 +1030,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     await screen.findByText("server-a");
     const initialData = fixture.queryClient.getQueryData<McpListData>(key);
     if (initialData === undefined) throw new Error("missing initial MCP data");
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
     let firstPromise: Promise<unknown> | null = null;
@@ -1081,7 +1114,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
     await screen.findByText("server-a");
     await screen.findByText("server-b");
 
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
     let firstPromise: Promise<unknown> | null = null;
@@ -1486,7 +1519,7 @@ describe("<ProviderMcpTab /> stale MCP refresh integration", () => {
         screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
       ).toBe(true),
     );
-    const mutateRendered = renderHook(() => useProvidersMcpMutate(), {
+    const mutateRendered = renderHook(() => useProvidersMcpMutate(null, null), {
       wrapper: fixture.Wrapper,
     });
     let mutationPromise: Promise<unknown> | null = null;

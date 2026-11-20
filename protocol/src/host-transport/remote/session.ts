@@ -47,6 +47,7 @@ import type {
   StreamFrameEnvelope,
 } from "../stream-session";
 import { isRetryableSessionLifecycleFatal } from "../stream-session";
+import { isCredentialRefusal } from "../door-refusal";
 import type { TimerHandle } from "../timers";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -54,6 +55,7 @@ import {
   HostRpcError,
   HostTransportFailureError,
   markMayHaveReachedHost,
+  markTargetAnswer,
   negotiatedVersionMeetsRequirement,
   transportFailureBeforeSend,
   RetryableTransportError,
@@ -110,7 +112,6 @@ import {
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_FINE_CREDITS,
-  SESSION_CAPABILITY_MEMBER_CREDENTIAL,
   SESSION_CAPABILITY_RESUME,
   SESSION_CAPABILITY_TUNNEL_STREAMS,
   creditPayloadSchema,
@@ -121,7 +122,6 @@ import {
   sessionOpenAckPayloadSchema,
   unaryResponsePayloadSchema,
   type EncodeMuxFrameInput,
-  type MemberCredentialHandoff,
   type MuxFrame,
   type QosClassValue,
   type SessionManifests,
@@ -208,7 +208,7 @@ function qosForStreamMethod(method: string): QosClassValue {
  * R4-E3):
  *   mint fresh grant → dial relay(?grant) → attach_ack{sid}
  *     → Noise-NK handshake (msg0 → msg1)
- *     → open{bearer, manifest, authz:null, resume:null}  (re-presents bearer, A2)
+ *     → open{bearer:"", manifest, authz:{v:2, grant}, resume:null}  (host-only token, A2)
  *     → openAck{manifest, capabilities}  → compat mirror → ready
  *     → re-subscribe every live stream
  *
@@ -290,7 +290,8 @@ type ConnectionLossProvenance = "host-transport-plane" | "not-host-evidence";
  * checked by CODE rather than by any recovery flag because the two are
  * orthogonal: the same code arrives both retryable (the host's JWKS lookup
  * timed out) and terminal (our bearer is genuinely bad), and neither is host
- * evidence.
+ * evidence. A refusal carrying a `doorReason` is credential plane whatever its
+ * code (`keys_unavailable` rides `NETWORK_ERROR`).
  *
  * Deliberately narrow rather than a guessed "credential family": every other
  * fatal on this path - a relay policy close, a malformed frame, a phase
@@ -332,7 +333,7 @@ function emptyReattachMarks(): ReattachMarks {
 function sessionFatalProvenance(
   details: FatalErrorDetails,
 ): ConnectionLossProvenance {
-  return details.code === "UNAUTHORIZED"
+  return details.code === "UNAUTHORIZED" || details.doorReason !== undefined
     ? "not-host-evidence"
     : "host-transport-plane";
 }
@@ -549,25 +550,6 @@ export interface RemoteSessionOptions<
    * `NO_TRANSPORT_EVIDENCE`. Host dialers pass `null`.
    */
   readonly evidence: RemoteSessionEvidence | null;
-  /**
-   * Mints the credential a team host spends for this session's member, or
-   * `null` for a composition that never opens one: a personal host, which
-   * takes the user bearer on `open`, and a host-to-host dialer.
-   *
-   * A team host spends only a member credential the client hands it after
-   * `OPEN_ACK`, so nothing may run on the session before that frame. When the
-   * host offers {@link SESSION_CAPABILITY_MEMBER_CREDENTIAL}, the session
-   * mints, enqueues `CREDENTIAL_UPDATE {bearer: null, memberCredential}` and
-   * only then becomes `ready`, which is what releases parked unary callers and
-   * re-opens streams; the same on every re-attach, except that a credential
-   * minted for an attach that dropped before carrying it is carried by the
-   * next one instead of a new mint. A mint that resolves `null`
-   * or throws is logged and the session goes on, so the host's own refusal
-   * still names the cause.
-   */
-  readonly mintMemberCredential:
-    | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
-    | null;
 }
 
 /**
@@ -580,9 +562,7 @@ export interface RemoteSessionOptions<
  * checked at run time:
  *
  *  - `authz` is always `null` on its `open`: {@link PoolSessionAuth} has no
- *    slot to fill;
- *  - it never mints or hands off a member credential: there is no minter,
- *    and a pool `openAck` that offers the capability is not acted on.
+ *    slot to fill.
  *
  * There is no re-authentication loop: that loop re-presents an attach grant
  * to the relay, and the pool re-authorizes its own connections. Nor a
@@ -648,9 +628,6 @@ type SessionDial =
       readonly hostStaticPublicKey: Uint8Array;
       readonly grantProvider: AttachGrantProvider;
       readonly auth: RemoteSessionAuth;
-      readonly mintMemberCredential:
-        | ((hostId: string) => Promise<MemberCredentialHandoff | null>)
-        | null;
     }
   | {
       readonly kind: "pool";
@@ -989,11 +966,6 @@ interface ActiveConnection {
   /** Whether the HOST advertised `SESSION_CAPABILITY_TUNNEL_STREAMS`; gates `host.tunnel.open` in `openSubscription`. */
   tunnelStreamsSupported: boolean;
   /**
-   * Whether this connection's `OPEN_ACK` is held while the member credential
-   * is minted. A second ack on the same connection is ignored meanwhile.
-   */
-  memberCredentialPending: boolean;
-  /**
    * The relay's last word on the host leg. A session that negotiated resume
    * sets it back only when an exchange completes: until then the host has not
    * spoken, so `host_attached` alone is not the host being back.
@@ -1320,14 +1292,6 @@ export class RemoteSession<
   private nextStreamId = 1;
   private readyBoundaryGeneration: number | null = null;
   /**
-   * A minted member credential whose attach went stale or lost its host
-   * before it could carry it. The mint flow holds an adoption claim for the
-   * credential it just handed out, so a fresh mint on the redial answers that
-   * one is already pending; the next attach that offers the capability carries
-   * this one instead of minting.
-   */
-  private undeliveredMemberCredential: MemberCredentialHandoff | null = null;
-  /**
    * The bearer presented in the current connection's `open` frame, captured
    * at send time so the `UNAUTHORIZED` session-fatal recovery can tell
    * whether the NEXT attach would present a different token (progress) or
@@ -1495,7 +1459,6 @@ export class RemoteSession<
             hostStaticPublicKey: options.hostStaticPublicKey,
             grantProvider: options.grantProvider,
             auth: options.auth,
-            mintMemberCredential: options.mintMemberCredential,
           };
     this.evidence =
       "poolUrl" in options
@@ -2309,7 +2272,6 @@ export class RemoteSession<
       qos: QosClass.INTERACTIVE,
       json: {
         bearer,
-        memberCredential: null,
       } satisfies CredentialUpdatePayload,
       binary: null,
     });
@@ -2968,7 +2930,6 @@ export class RemoteSession<
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
       tunnelStreamsSupported: false,
-      memberCredentialPending: false,
       hostAttached: true,
       ledger: new ResumeLedger((report) => this.logResumeGap(report)),
       resumeNegotiated: false,
@@ -3728,7 +3689,7 @@ export class RemoteSession<
     connection: ActiveConnection,
     json: Record<string, unknown> | null,
   ): void {
-    if (this.phase !== "opening" || connection.memberCredentialPending) {
+    if (this.phase !== "opening") {
       return;
     }
     if (!connection.hostAttached) {
@@ -3824,105 +3785,7 @@ export class RemoteSession<
         FINE_INITIAL_BULK_SEND_CREDITS,
       );
     }
-    // A pool session has no minter, so a pool `openAck` offering the
-    // capability is never acted on: the member credential is not requested
-    // from, nor handed to, a pool peer.
-    const mintMemberCredential =
-      this.dial.kind === "relay" ? this.dial.mintMemberCredential : null;
-    if (
-      mintMemberCredential !== null &&
-      parsed.data.capabilities.includes(SESSION_CAPABILITY_MEMBER_CREDENTIAL)
-    ) {
-      const held = this.undeliveredMemberCredential;
-      if (held !== null) {
-        this.undeliveredMemberCredential = null;
-        this.enqueueMemberCredential(connection, held);
-        this.completeOpen(generation, connection);
-        return;
-      }
-      // The open-ack timer stays armed across the mint, so a mint that never
-      // settles drops this attach like a missing ack would.
-      connection.memberCredentialPending = true;
-      void this.handOffMemberCredential(
-        generation,
-        connection,
-        mintMemberCredential,
-      );
-      return;
-    }
     this.completeOpen(generation, connection);
-  }
-
-  /**
-   * Mints the member credential and enqueues it as the session's first frame
-   * after `OPEN_ACK`, then completes the open. `INTERACTIVE` frames leave in
-   * enqueue order, and nothing else is enqueued before `ready`, so the host
-   * reads the credential before any request this session carries.
-   */
-  private async handOffMemberCredential(
-    generation: number,
-    connection: ActiveConnection,
-    mint: (hostId: string) => Promise<MemberCredentialHandoff | null>,
-  ): Promise<void> {
-    let handoff: MemberCredentialHandoff | null = null;
-    let failure: "mint-unavailable" | "mint-failed" | null = null;
-    try {
-      handoff = await mint(this.options.hostId);
-      if (handoff === null) {
-        failure = "mint-unavailable";
-      }
-    } catch {
-      failure = "mint-failed";
-    }
-    if (
-      !this.isCurrent(generation) ||
-      this.connection !== connection ||
-      this.phase !== "opening"
-    ) {
-      this.holdUndeliveredMemberCredential(handoff);
-      return;
-    }
-    connection.memberCredentialPending = false;
-    if (!connection.hostAttached) {
-      // Parked exactly as `handleOpenAck` parks a pre-ready detach: the
-      // redial's own ack carries the held credential.
-      this.holdUndeliveredMemberCredential(handoff);
-      return;
-    }
-    if (handoff === null) {
-      // Console on purpose, as the dial-failure log: shared transport code
-      // with no logger seam.
-      console.warn(
-        `[remote-session] member credential not handed: ${failure ?? "mint-unavailable"}`,
-      );
-    } else {
-      this.enqueueMemberCredential(connection, handoff);
-    }
-    this.completeOpen(generation, connection);
-  }
-
-  private holdUndeliveredMemberCredential(
-    handoff: MemberCredentialHandoff | null,
-  ): void {
-    if (handoff !== null) {
-      this.undeliveredMemberCredential = handoff;
-    }
-  }
-
-  private enqueueMemberCredential(
-    connection: ActiveConnection,
-    handoff: MemberCredentialHandoff,
-  ): void {
-    this.enqueueMessage(connection, {
-      type: MuxFrameType.CREDENTIAL_UPDATE,
-      streamId: SESSION_CONTROL_STREAM_ID,
-      qos: QosClass.INTERACTIVE,
-      json: {
-        bearer: null,
-        memberCredential: handoff,
-      } satisfies CredentialUpdatePayload,
-      binary: null,
-    });
   }
 
   /** The `ready` boundary of an accepted open. */
@@ -3930,6 +3793,7 @@ export class RemoteSession<
     this.clearPhaseTimer();
     this.phase = "ready";
     this.reattachMarks.openAckAt = Date.now();
+    this.options.auth.door?.admitted();
     // The host accepted the `open{bearer}`: any prior UNAUTHORIZED episode is
     // over, so a later one starts its no-progress bound from a clean slate.
     this.noProgressUnauthorizedReconnects = 0;
@@ -4733,13 +4597,36 @@ export class RemoteSession<
           parsed.data.error.message,
         );
       }
-      entry.reject(
-        HostRpcError.fromWireEnvelope(
-          parsed.data.error,
-          entry.requestId,
-          entry.method,
-        ),
+      const wireError = parsed.data.error;
+      const answered = HostRpcError.fromWireEnvelope(
+        wireError,
+        entry.requestId,
+        entry.method,
       );
+      if (answered.doorRefusal !== null)
+        this.options.auth.door?.refused(answered.doorRefusal);
+      // A transient refusal is this call's no-dispatch attestation: it may be sent again,
+      // and nothing is minted for it.
+      const answer =
+        wireError.retryable === true
+          ? new RetryableTransportError({
+              code: answered.code,
+              message: answered.message,
+              requestId: entry.requestId,
+              method: entry.method,
+              fatalDetails: answered.doorRefusal ?? {
+                code: wireError.code,
+                reason: wireError.message,
+                incompatibleMethods: null,
+                upgradeGuidance: null,
+                retryable: true,
+              },
+              doorRefusal: answered.doorRefusal,
+              replaySafetyFromKey: false,
+            })
+          : answered;
+      markTargetAnswer(answer);
+      entry.reject(answer);
       return;
     }
     try {
@@ -5755,6 +5642,7 @@ export class RemoteSession<
     // the expected-outage HOLD above the death streak the loss feeds. Two
     // honest reports beat one that tries to mean both.
     this.reportRestartIntentIfPresent(details);
+    this.options.auth.door?.refused(details);
     // Classified BEFORE the retryable arm, and that order is the whole point.
     // `retryable` says how to RECOVER; it says nothing about what the failure
     // is evidence OF, and the two are independent. A host whose own JWKS fetch
@@ -5784,7 +5672,7 @@ export class RemoteSession<
       return;
     }
     const auth = this.revalidator();
-    if (details.code === "UNAUTHORIZED" && auth !== null) {
+    if (isCredentialRefusal(details) && auth !== null) {
       this.handleUnauthorizedSessionFatal(generation, details, auth);
       return;
     }
@@ -5866,7 +5754,7 @@ export class RemoteSession<
     details: FatalErrorDetails,
     rejectedBearer: string | null,
   ): Promise<void> {
-    const outcome = await this.revalidateWithinBudget(auth);
+    const outcome = await this.revalidateWithinBudget(auth, details);
     if (generation !== this.connectGeneration) {
       // A stale completion: the generation this revalidation was recovering
       // has been superseded while it was in flight. It owns nothing now - it
@@ -6078,6 +5966,7 @@ export class RemoteSession<
    */
   private async revalidateWithinBudget(
     auth: RemoteSessionAuth | PoolSessionAuth,
+    refusal: FatalErrorDetails,
   ): Promise<RemoteSessionAuthRecoveryOutcome> {
     let timer: TimerHandle | null = null;
     const budget = new Promise<RemoteSessionAuthRecoveryOutcome>((resolve) => {
@@ -6099,7 +5988,7 @@ export class RemoteSession<
         if (reconnect === null) {
           return "rejected" as const;
         }
-        return reconnect();
+        return reconnect(refusal);
       })
       .catch((): RemoteSessionAuthRecoveryOutcome => "network-error");
     try {

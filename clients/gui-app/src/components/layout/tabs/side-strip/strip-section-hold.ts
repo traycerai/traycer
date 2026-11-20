@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  tabRefKey,
+  type SplitSide,
+  type StripItem,
+} from "@/stores/tabs/layout";
+import {
   groupEntriesBySection,
+  moreUrgentSection,
   type StripSection,
   type StripSectionEntry,
   type StripSectionGroup,
@@ -102,6 +108,278 @@ export function useStripSectionHolds(
       ),
     [pointer, focus],
   );
+}
+
+/**
+ * Whether the pointer is inside the list, as far as the page can tell. A
+ * window that lost focus or a page that was hidden gets no `pointerleave`, so
+ * either one ends it too; the next `pointerover` starts it again. Pointer
+ * events of every type count, and a touch pointer leaves when it lifts.
+ */
+export function useStripPointerInside(scroller: HTMLElement | null): boolean {
+  const [inside, setInside] = useState(false);
+  useEffect(() => {
+    if (scroller === null) return;
+    const enter = (): void => {
+      setInside(true);
+    };
+    const leave = (): void => {
+      setInside(false);
+    };
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === "hidden") setInside(false);
+    };
+    scroller.addEventListener("pointerover", enter);
+    scroller.addEventListener("pointerleave", leave);
+    window.addEventListener("blur", leave);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      scroller.removeEventListener("pointerover", enter);
+      scroller.removeEventListener("pointerleave", leave);
+      window.removeEventListener("blur", leave);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      // Another scroller starts with no pointer seen inside it.
+      setInside(false);
+    };
+  }, [scroller]);
+  return inside;
+}
+
+/**
+ * The section the holds draw an item in, or `null` when none holds it. The
+ * last hold wins, as it does in `holdInPlace`, so pass them in the order it
+ * takes them: keyboard focus over the pointer, either over a waiting row.
+ */
+function heldSectionOf(
+  holds: ReadonlyArray<StripSectionHold>,
+  itemId: string,
+): StripSection | null {
+  return holds.filter((held) => held.itemId === itemId).at(-1)?.section ?? null;
+}
+
+function sectionOfItem(
+  sections: ReadonlyArray<StripSectionGroup>,
+  itemId: string,
+): StripSection | null {
+  return (
+    sections.find((group) =>
+      group.entries.some(
+        (entry) => entry.kind === "tabs" && entry.itemId === itemId,
+      ),
+    )?.section ?? null
+  );
+}
+
+/**
+ * The current item and the tab on screen in it, a pair's focused member. The
+ * tab is what was opened: swapping a pair's sides opens nothing, and neither
+ * does closing its other member, though that gives the row a new item id.
+ */
+interface StripOpening {
+  readonly itemId: string;
+  readonly focusedTab: string | null;
+}
+
+function focusedSideOf(item: StripItem): SplitSide {
+  return item.kind === "split" ? item[item.focusedSide] : item;
+}
+
+function openingOf(
+  layoutItems: ReadonlyArray<StripItem>,
+  activeItemId: string | null,
+): StripOpening | null {
+  if (activeItemId === null) return null;
+  const item = layoutItems.find((entry) => entry.id === activeItemId);
+  const focused = item === undefined ? null : focusedSideOf(item);
+  return {
+    itemId: activeItemId,
+    focusedTab: focused?.kind === "tab" ? tabRefKey(focused.ref) : null,
+  };
+}
+
+interface CurrentHoldState {
+  readonly sections: ReadonlyArray<StripSectionGroup>;
+  readonly opening: StripOpening | null;
+  readonly hold: StripSectionHold | null;
+}
+
+/** Whether the same tab is on screen; by item where no tab is known. */
+function sameOpened(a: StripOpening | null, b: StripOpening): boolean {
+  if (a === null) return false;
+  return a.focusedTab === null && b.focusedTab === null
+    ? a.itemId === b.itemId
+    : a.focusedTab === b.focusedTab;
+}
+
+/**
+ * Where an item's row was drawn when the person opened it in this render,
+ * which a change landing in the same render has not moved yet. Opening a
+ * pair's other member is an opening too, and the pair's row is one row.
+ * `null` for an item with no row before this render.
+ */
+function drawnWhenOpened(
+  prev: CurrentHoldState,
+  itemId: string,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSection | null {
+  return (
+    heldSectionOf(holds, itemId) ??
+    (prev.hold?.itemId === itemId ? prev.hold.section : null) ??
+    sectionOfItem(prev.sections, itemId)
+  );
+}
+
+function currentHoldOf(
+  prev: CurrentHoldState,
+  sections: ReadonlyArray<StripSectionGroup>,
+  opening: StripOpening | null,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold | null {
+  if (opening === null) return null;
+  const { itemId } = opening;
+  const now = sectionOfItem(sections, itemId);
+  if (now === null) return null;
+  const floor = sameOpened(prev.opening, opening)
+    ? prev.hold?.section
+    : drawnWhenOpened(prev, itemId, holds);
+  const section = moreUrgentSection(floor ?? now, now);
+  return prev.hold?.itemId === itemId && prev.hold.section === section
+    ? prev.hold
+    : { itemId, section };
+}
+
+/**
+ * The current task's row, held in the most urgent section it has been drawn
+ * in since it became the current one: it rises with its state and never
+ * sinks. Opening a task reads it, and answering it ends its wait, either of
+ * which would send its row down the list, out from where the person clicked
+ * and often out of view. It stays until they open another task. A task that
+ * is current when the list mounts is held from the section it mounts in.
+ */
+export function useCurrentSectionHold(
+  sections: ReadonlyArray<StripSectionGroup>,
+  layoutItems: ReadonlyArray<StripItem>,
+  activeItemId: string | null,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold | null {
+  const opening = openingOf(layoutItems, activeItemId);
+  const [state, setState] = useState<CurrentHoldState>(() => {
+    const section =
+      opening === null ? null : sectionOfItem(sections, opening.itemId);
+    return {
+      sections,
+      opening,
+      hold:
+        opening === null || section === null
+          ? null
+          : { itemId: opening.itemId, section },
+    };
+  });
+  if (
+    state.sections !== sections ||
+    state.opening?.itemId !== opening?.itemId ||
+    state.opening?.focusedTab !== opening?.focusedTab
+  ) {
+    setState({
+      sections,
+      opening,
+      hold: currentHoldOf(state, sections, opening, holds),
+    });
+  }
+  return state.hold;
+}
+
+const NO_HOLDS: ReadonlyArray<StripSectionHold> = [];
+
+interface ReleasedHoldState {
+  readonly sections: ReadonlyArray<StripSectionGroup>;
+  readonly current: StripSectionHold | null;
+  readonly released: ReadonlyArray<StripSectionHold>;
+}
+
+/**
+ * The hold of the row where it is drawn: under the pointer or keyboard focus
+ * that is the section their hold keeps it in, which its hold as the current
+ * row may have risen past.
+ */
+function drawnHoldOf(
+  current: StripSectionHold,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold {
+  const drawn = heldSectionOf(holds, current.itemId);
+  return drawn === null || drawn === current.section
+    ? current
+    : { itemId: current.itemId, section: drawn };
+}
+
+function releasedHoldsOf(
+  prev: ReleasedHoldState,
+  now: {
+    readonly current: StripSectionHold | null;
+    readonly sections: ReadonlyArray<StripSectionGroup>;
+    readonly pointerInside: boolean;
+    readonly holds: ReadonlyArray<StripSectionHold>;
+  },
+): ReadonlyArray<StripSectionHold> {
+  const { current, sections, pointerInside, holds } = now;
+  if (!pointerInside) return NO_HOLDS;
+  const left =
+    prev.current !== null && prev.current.itemId !== current?.itemId
+      ? [drawnHoldOf(prev.current, holds)]
+      : [];
+  // A row waits even where its own section is the one it is drawn in: a
+  // folded section draws it only while it waits, and a wait that ended when
+  // the two met would let the row move on under the pointer. It stops only as
+  // the current row again, or with its item gone: a pair that lost a member
+  // has a new item id.
+  const waiting = [...prev.released, ...left].filter(
+    (held) =>
+      held.itemId !== current?.itemId &&
+      sectionOfItem(sections, held.itemId) !== null,
+  );
+  if (waiting.length === 0) return NO_HOLDS;
+  return waiting.length === prev.released.length &&
+    waiting.every((held, index) => held === prev.released[index])
+    ? prev.released
+    : waiting;
+}
+
+/**
+ * The holds of rows that stopped being the current one while the pointer was
+ * inside the list. Letting such a row go to its own section at once would
+ * move the rows under the pointer, the one just clicked among them, so it
+ * waits where it was drawn, whatever its own section becomes, until the
+ * pointer is no longer inside. A change made with the pointer elsewhere lets
+ * it go at once.
+ */
+export function useReleasedSectionHolds(
+  current: StripSectionHold | null,
+  sections: ReadonlyArray<StripSectionGroup>,
+  pointerInside: boolean,
+  holds: ReadonlyArray<StripSectionHold>,
+): ReadonlyArray<StripSectionHold> {
+  const [state, setState] = useState<ReleasedHoldState>({
+    sections,
+    current,
+    released: NO_HOLDS,
+  });
+  if (
+    state.current !== current ||
+    (state.sections !== sections && state.released.length > 0) ||
+    (!pointerInside && state.released.length > 0)
+  ) {
+    setState({
+      sections,
+      current,
+      released: releasedHoldsOf(state, {
+        current,
+        sections,
+        pointerInside,
+        holds,
+      }),
+    });
+  }
+  return state.released;
 }
 
 /**

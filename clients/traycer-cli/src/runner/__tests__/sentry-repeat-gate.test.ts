@@ -31,11 +31,8 @@ describe("messageTemplate", () => {
   const profileRemoved = (uuid: string): string =>
     `Profile "${uuid}" for provider "claude-code" was removed and can no longer be used.`;
 
-  const systemdUnreachable = (
-    showEnvCode: number,
-    statusCode: number,
-  ): string =>
-    `the systemd user manager is not reachable, so the ai.traycer.host.service service cannot be installed: systemctl --user show-environment exited with code ${showEnvCode}: Failed to get environment: Process org.freedesktop.systemd1 exited with status ${statusCode}`;
+  const systemdUnreachable = (showCode: number, statusCode: number): string =>
+    `the systemd user manager is not reachable, so the ai.traycer.host.service service cannot be installed: systemctl --user show --property=Version --value exited with code ${showCode}: Failed to get manager version: Process org.freedesktop.systemd1 exited with status ${statusCode}`;
 
   const launchctlBootstrapFailed = (
     uid: number,

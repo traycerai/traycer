@@ -38,7 +38,7 @@ export interface UseProfileUsageComparisonArgs {
    *  tab host id and let `isReady` reflect the unreachable state instead. */
   readonly runTargetHostId: string | null;
   readonly providerId: ProviderId;
-  /** 2+ selectable profiles for `providerId` on the target host - the same
+  /** The selectable profiles for `providerId` on the target host - the same
    *  set the profile dropdown renders. Every profile gets a comparison
    *  entry; only rate-limit-capable providers (`isRateLimitCapableProvider`)
    *  mount cache observers, so a non-capable provider's profiles all resolve

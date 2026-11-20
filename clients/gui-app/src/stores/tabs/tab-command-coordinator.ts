@@ -26,7 +26,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import {
   isOpenLandingDraft,
-  newestLandingDraftId,
+  resumableLandingDraftId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -1207,12 +1207,13 @@ export class TabCommandCoordinator {
     layout: PersistedTabStripLayout,
   ): ResolvedCoordinatedActivation | null {
     // The installed mobile app has ONE stable composer (no tab strip to close
-    // a second draft tab), so an id-less create lands on the newest existing
-    // draft instead of minting - mirroring `createDraft`'s product-flag gate.
-    const mobileStableDraftId =
-      target.draftId === null && target.create && isMobileApp()
-        ? newestLandingDraftId()
-        : null;
+    // a second draft tab), so an id-less create lands on this device's own
+    // draft instead of minting.
+    const mobileNewTask =
+      target.draftId === null && target.create && isMobileApp();
+    const mobileStableDraftId = mobileNewTask
+      ? resumableLandingDraftId()
+      : null;
     const draftId =
       target.draftId ??
       mobileStableDraftId ??
@@ -1230,6 +1231,10 @@ export class TabCommandCoordinator {
         useLandingDraftStore
           .getState()
           .createDraftWithId(draftId, target.settings);
+        // The draft just minted is the one the next "New task" comes back to.
+        if (mobileNewTask) {
+          useLandingDraftStore.getState().setResumeDraft(draftId);
+        }
         return;
       }
       if (!open) {

@@ -34,7 +34,7 @@ import type {
   ConfigAgentMemoriesSetResponse,
 } from "@traycer/protocol/host/config/schemas";
 import type {
-  EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
   EnvironmentUploadReceipt,
 } from "@traycer/protocol/host/environment-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -124,8 +124,8 @@ function receipt(
 const script: {
   reads: ConfigAgentMemoriesResponse[];
   get: (() => Promise<ConfigAgentMemoriesResponse>) | null;
-  statuses: EnvironmentStatusResponseV12[];
-  status: (() => Promise<EnvironmentStatusResponseV12>) | null;
+  statuses: EnvironmentStatusResponseV13[];
+  status: (() => Promise<EnvironmentStatusResponseV13>) | null;
   set: (request: {
     readonly enabled: boolean;
   }) =>
@@ -423,8 +423,11 @@ describe("Memories ▸ the host row's write", () => {
         state === "queued"
           ? queuedAnswer(UPLOAD)
           : {
-              ...savedAnswer({ enabled: true, revision: 6 }),
+              enabled: true,
               state,
+              revision: 6,
+              environmentId: ENV,
+              uploadId: null,
             };
       script.reads = [read(false, 5), read(true, 6)];
       script.statuses = [
@@ -945,7 +948,7 @@ describe("Memories ▸ the host row's write", () => {
   );
 
   it("retires an active observation when a new client serves the same host", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV13) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1441,7 +1444,7 @@ describe("Memories ▸ the host row's write", () => {
   });
 
   it("stands down when the configuration switches while status is in flight", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV13) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1473,7 +1476,7 @@ describe("Memories ▸ the host row's write", () => {
   });
 
   it("ignores an older held status after a newer write supersedes it", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV13) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1515,7 +1518,7 @@ describe("Memories ▸ the host row's write", () => {
   });
 
   it("ignores a status response after the row unmounts", async () => {
-    let resolveStatus: (value: EnvironmentStatusResponseV12) => void = () => {
+    let resolveStatus: (value: EnvironmentStatusResponseV13) => void = () => {
       throw new Error("status was not started");
     };
     script.set = () => queuedAnswer(UPLOAD);
@@ -1581,7 +1584,7 @@ describe("Memories ▸ the host row's write", () => {
 
     await waitFor(() => expect(toast.info).toHaveBeenCalledTimes(1));
     expect(toast.info).toHaveBeenCalledWith(
-      "This setting was changed in the dashboard just now.",
+      "This setting was changed just now.",
       { id: "environment-write-stale" },
     );
     expect(toast.error).not.toHaveBeenCalled();
@@ -1618,5 +1621,62 @@ describe("Memories ▸ the host row's write", () => {
     );
     await vi.advanceTimersByTimeAsync(20_000);
     expect(harness.paramsOf("environment.status")).toEqual([]);
+  });
+
+  describe("a save the host answers local_only, on a computer bound to no configuration", () => {
+    const localOnly = (enabled: boolean): ConfigAgentMemoriesSetResponse => ({
+      state: "local_only",
+      enabled,
+    });
+    const cachedReads = (
+      harness: TeamPageHarness,
+    ): (ConfigAgentMemoriesResponse | undefined)[] =>
+      harness.queryClient
+        .getQueryCache()
+        .getAll()
+        .filter(
+          (entry) =>
+            JSON.stringify(entry.queryKey).includes(
+              "config.agentMemories.get",
+            ) && entry.state.data !== undefined,
+        )
+        .map((entry) => entry.state.data as ConfigAgentMemoriesResponse);
+
+    it("takes the answer as the read of a row that read no configuration, settled, with no environment or revision of its own", async () => {
+      script.reads = [{ enabled: false, revision: null, environmentId: null }];
+      script.set = () => localOnly(true);
+      const harness = mount();
+      await flipOn();
+
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("switch", { name: SWITCH_NAME })
+            .getAttribute("aria-checked"),
+        ).toBe("true"),
+      );
+      expect(await line()).toContain("Running agents pick this up");
+      expect(cachedReads(harness)).toEqual([
+        { enabled: true, revision: null, environmentId: null },
+      ]);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("ends a row that read a configuration settled, without taking the answer as its read", async () => {
+      script.reads = [read(false, 5)];
+      script.set = () => localOnly(true);
+      const harness = mount();
+      await flipOn();
+
+      await waitFor(async () =>
+        expect(await line()).toContain("Running agents pick this up"),
+      );
+      expect(
+        screen
+          .getByRole("switch", { name: SWITCH_NAME })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+      expect(cachedReads(harness)).toEqual([read(false, 5)]);
+    });
   });
 });
