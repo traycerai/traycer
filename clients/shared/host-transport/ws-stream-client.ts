@@ -3490,7 +3490,10 @@ class StreamSession<
       .allowed()
       .catch(() => false)
       .then((allowed) => {
-        if (this.disposed) return;
+        if (this.disposed) {
+          this.rememberedRow = null;
+          return;
+        }
         this.rememberedRow = {
           userId,
           hostId,
