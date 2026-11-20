@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import { ColumnEdgeContext } from "@/components/layout/column-edge-context";
-import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { SideTabGroupHeader } from "@/components/layout/tabs/side-strip/side-tab-group-header";
 import type { SideTabRowVariant } from "@/components/layout/tabs/side-strip/side-tab-row";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -123,7 +123,7 @@ function renderHeader(input: {
     <OrganizationContext.Provider value={ORGANIZATION}>
       <ColumnEdgeContext.Provider value={input.columnSide}>
         <TooltipProvider>
-          <NotificationIndicatorsContext.Provider value={input.indicators}>
+          <NotificationIndicatorsProvider indicators={input.indicators}>
             <SideTabGroupHeader
               groupId={GROUP_ID}
               group={input.group}
@@ -132,7 +132,7 @@ function renderHeader(input: {
               memberEntities={input.memberEntities}
               onClose={() => undefined}
             />
-          </NotificationIndicatorsContext.Provider>
+          </NotificationIndicatorsProvider>
         </TooltipProvider>
       </ColumnEdgeContext.Provider>
     </OrganizationContext.Provider>,

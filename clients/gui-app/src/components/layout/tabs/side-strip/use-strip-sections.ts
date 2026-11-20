@@ -2,7 +2,7 @@ import { useContext, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { HostNotificationSeverity } from "@traycer/protocol/host/notifications/contracts";
 import { SAMPLE_NEEDS_YOU_ROW } from "@/components/sample-workspace/sample-workspace-scene";
-import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import { useNotificationIndicatorsSnapshot } from "@/components/notifications/notification-indicator-context";
 import { useAccountActivityCoverage } from "@/hooks/agent/use-account-activity-coverage";
 import { useEpicWaitingReasons } from "@/hooks/epic/use-epic-activity-status";
 import { EMPTY_EPIC_AGENT_ACTIVITY } from "@/lib/agent-activity";
@@ -90,7 +90,7 @@ export function useStripSections(
   const { headerItemIds, layoutItems, groups, customizations, tabs } =
     controller;
   const { byEpic, rowless } = useContext(StripNeedsYouContext);
-  const indicators = useContext(NotificationIndicatorsContext);
+  const indicators = useNotificationIndicatorsSnapshot();
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
   const coverage = useAccountActivityCoverage();
   const notificationRows = useMergedNotificationRows();

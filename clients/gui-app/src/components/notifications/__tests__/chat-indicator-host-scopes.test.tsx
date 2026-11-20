@@ -1,4 +1,4 @@
-import { createElement, useContext, type ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +19,7 @@ import type {
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import {
-  NotificationIndicatorsContext,
+  useNotificationIndicatorsSnapshot,
   useSurfaceNotificationIndicatorState,
 } from "@/components/notifications/notification-indicator-context";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -200,7 +200,7 @@ function EpicProbe(): ReactNode {
 
 /** The inherited epic's unread count as the aggregate holds it. */
 function EpicCountProbe(): ReactNode {
-  const indicators = useContext(NotificationIndicatorsContext);
+  const indicators = useNotificationIndicatorsSnapshot();
   return (
     <span data-testid="probe-epic-1-count">
       {String(indicators.epics["epic-1"].unreadCount)}
