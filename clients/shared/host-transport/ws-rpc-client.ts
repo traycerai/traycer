@@ -27,9 +27,9 @@ import {
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
-import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import {
   isReleasedHostTokenRefusal,
+  NO_HOST_TOKEN_PROBE,
   type ReleasedUnaryCause,
   type ReleasedUnarySignOn,
 } from "./released-sign-on";
@@ -378,11 +378,10 @@ export class WsRpcClient<
     HostRequestAuthority,
     StreamAuthRevalidator | null
   >();
-  /**
-   * Hosts that refused, with their reason, a sign-in sent because no host-only
-   * token could be had: current hosts, never sent the sign-in that way again.
-   */
-  private readonly signInRefusedAsCurrent = new Set<string>();
+  /** Authorities carrying `NO_HOST_TOKEN_PROBE` in place of a host-only token that cannot be had. */
+  private readonly probeAuthorities = new WeakSet<HostRequestAuthority>();
+  /** Hosts that answered the probe with their reason: current hosts, never probed again. */
+  private readonly probeAnsweredAsCurrent = new Set<string>();
   /** A released host refused the host-only token, and the door has not heard of it. */
   private readonly releasedRefusals = new WeakSet<HostRpcError>();
   /** A released host refused the sign-in, a recovery is left, and the door has not heard of it. */
@@ -490,13 +489,15 @@ export class WsRpcClient<
           this.reportRefusal(options.authority.endpoint.hostId, cause);
           throw cause;
         }
+        // The probe carried no credential of the person's: a current host's
+        // answer to it is not theirs to see, and the call fails as with no token.
         if (
           cause instanceof HostRpcError &&
-          this.signInAuthorities.has(hostOptions.authority) &&
-          cause.fatalDetails !== null &&
-          readDoorReason(cause.fatalDetails.doorReason) !== "absent"
-        )
-          this.signInRefusedAsCurrent.add(options.authority.endpoint.hostId);
+          this.probeAuthorities.has(hostOptions.authority)
+        ) {
+          this.probeAnsweredAsCurrent.add(options.authority.endpoint.hostId);
+          throw noHostTokenError(this.requestIdProvider(), method);
+        }
         if (cause instanceof HostRpcError && cause.doorRefusal !== null)
           this.doorFor?.(options.authority.endpoint.hostId).refused(
             cause.doorRefusal,
@@ -533,25 +534,26 @@ export class WsRpcClient<
       options.authority.bearer,
     );
     const hostId = options.authority.endpoint.hostId;
-    if (bearer === null && !this.signInRefusedAsCurrent.has(hostId)) {
+    if (bearer === null && !this.probeAnsweredAsCurrent.has(hostId)) {
       const signIn = await this.releasedSignOnFor?.(
         options.authority,
         "no-host-token",
       ).catch(() => null);
+      // Only a host that answers the probe the released way is then sent the sign-in.
       if (signIn !== undefined && signIn !== null) {
-        const authority = { ...options.authority, bearer: signIn.bearer };
-        this.signInAuthorities.set(authority, signIn.recovery);
+        const authority: HostRequestAuthority = {
+          ...options.authority,
+          bearer: {
+            identity: options.authority.bearer.identity,
+            getBearerToken: () => NO_HOST_TOKEN_PROBE,
+          },
+        };
+        this.probeAuthorities.add(authority);
         return { ...options, authority };
       }
     }
     if (bearer === null)
-      throw new HostRpcError({
-        code: "RPC_ERROR",
-        message: "No host-only token is held for this host",
-        requestId: this.requestIdProvider(),
-        method,
-        fatalDetails: null,
-      });
+      throw noHostTokenError(this.requestIdProvider(), method);
     return { ...options, authority: { ...options.authority, bearer } };
   }
 
@@ -878,8 +880,10 @@ export class WsRpcClient<
         const signInRefused =
           isReleasedHostTokenRefusal(ackFrame.details) &&
           (this.signInAuthorities.get(authority) ?? null) !== null;
-        // Reported once the sign-in, or its refresh, cannot answer it.
-        if (!releasedWay && !signInRefused)
+        const probe = this.probeAuthorities.has(authority);
+        // Reported once the sign-in, or its refresh, cannot answer it; never
+        // for the probe, which carried no credential of the person's.
+        if (!releasedWay && !signInRefused && !probe)
           this.doorFor?.(selected.hostId).refused(ackFrame.details);
         if (
           ackFrame.details.code === SESSION_GRANT_REQUIRED &&
@@ -887,11 +891,12 @@ export class WsRpcClient<
         ) {
           this.localOpenAuth?.noteSessionGrantRequired(selected.hostId);
         }
-        this.localOpenAuth?.noteRefusal(
-          selected.hostId,
-          authority.bearer,
-          ackFrame.details,
-        );
+        if (!probe)
+          this.localOpenAuth?.noteRefusal(
+            selected.hostId,
+            authority.bearer,
+            ackFrame.details,
+          );
         const error = hostFatalError(
           ackFrame,
           requestId,
@@ -2726,5 +2731,15 @@ function throwIfAuthorityAborted(
     requestId,
     method,
     mayHaveDispatched: false,
+  });
+}
+
+function noHostTokenError(requestId: string, method: string): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message: "No host-only token is held for this host",
+    requestId,
+    method,
+    fatalDetails: null,
   });
 }

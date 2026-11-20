@@ -16,7 +16,6 @@ import {
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
-import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
   getMemoizedStreamMethodSupport,
@@ -101,6 +100,7 @@ import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remot
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import {
   isReleasedHostTokenRefusal,
+  NO_HOST_TOKEN_PROBE,
   type ReleasedSignOn,
 } from "./released-sign-on";
 
@@ -1884,10 +1884,14 @@ class StreamSession<
     "host-token";
   private noHostTokenCheck = false;
   /**
-   * A host refused, naming its reason, a sign-in dialed because no host-only
-   * token could be presented: a current host, so it is never dialed that way again.
+   * With no host-only token to present, the next dial, or this one, carries
+   * `NO_HOST_TOKEN_PROBE`, so that only a host answering it the released way is
+   * then handed the sign-in.
    */
-  private signInRefusedAsCurrent = false;
+  private probeNext = false;
+  private probing = false;
+  /** A host answered the probe with its reason: a current host, never probed again. */
+  private probeAnsweredAsCurrent = false;
   private credentialSocketSequence = 0;
   private openFrameToken: string | null = null;
   /**
@@ -2387,6 +2391,8 @@ class StreamSession<
       (this.config.releasedSignOn?.signIn() ?? null) !== null
         ? "sign-in"
         : "host-token";
+    this.probing = this.probeNext && this.releasedPlan === "host-token";
+    this.probeNext = false;
     const bearer = this.wireBearer();
     this.openFrameBearer = bearer;
     this.usesSessionGrant = false;
@@ -2400,11 +2406,11 @@ class StreamSession<
         if (
           this.releasedPlan === "host-token" &&
           released !== null &&
-          !this.signInRefusedAsCurrent &&
+          !this.probeAnsweredAsCurrent &&
           released.hostTokenUnobtainable() &&
           released.signIn() !== null
         ) {
-          this.dialSignInWithoutHostToken(released);
+          this.probeWithoutHostToken(released);
           return;
         }
         this.scheduleReconnect();
@@ -3204,12 +3210,14 @@ class StreamSession<
     }
     const details = termParse.data.details;
     const releasedWay = this.answersReleasedWay(details);
-    if (
-      this.releasedPlan === "sign-in" &&
-      !releasedWay &&
-      readDoorReason(details.doorReason) !== "absent"
-    )
-      this.signInRefusedAsCurrent = true;
+    // The probe carried no credential of the person's: a current host's answer
+    // to it is not theirs to see, and the dial goes on as with no token.
+    if (this.probing && !releasedWay) {
+      this.probeAnsweredAsCurrent = true;
+      this.teardownSocket(1000, "no-host-token-probe");
+      this.dropAndReconnect(details);
+      return;
+    }
     // Answered by the sign-in, or reported once its recovery gives up.
     if (!releasedWay) this.config.door?.refused(details);
     const localAuth = this.config.localOpenAuth;
@@ -3374,8 +3382,13 @@ class StreamSession<
     });
   }
 
-  /** No host-only token can be presented to this machine's host: open it with the sign-in, as a released client did. */
-  private dialSignInWithoutHostToken(released: ReleasedSignOn): void {
+  /**
+   * No host-only token can be presented to this machine's host. A released
+   * client opened it with the sign-in, but the sign-in goes only to a host
+   * that answers the probe the released way: team computers and sandboxes are
+   * all current hosts, and every current host names its reason.
+   */
+  private probeWithoutHostToken(released: ReleasedSignOn): void {
     if (this.noHostTokenCheck) return;
     this.noHostTokenCheck = true;
     void released
@@ -3388,16 +3401,18 @@ class StreamSession<
           this.scheduleReconnect();
           return;
         }
-        this.releasedPlan = "sign-in-next";
+        this.probeNext = true;
         this.connect();
       });
   }
 
   /** The lease this dial presents, or the next one will: the host-only token, or the sign-in. */
   private wireBearer(): OpenFrameBearerSource | null {
-    return this.releasedPlan === "host-token"
-      ? this.config.bearer()
-      : (this.config.releasedSignOn?.signIn() ?? null);
+    const signIn = this.config.releasedSignOn?.signIn() ?? null;
+    if (this.releasedPlan !== "host-token") return signIn;
+    return this.probing && signIn !== null
+      ? { identity: signIn.identity, getBearerToken: () => NO_HOST_TOKEN_PROBE }
+      : this.config.bearer();
   }
 
   private credentialRecovery(): StreamAuthRevalidator | null {
