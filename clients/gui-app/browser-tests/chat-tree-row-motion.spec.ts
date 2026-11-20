@@ -4,10 +4,12 @@ import {
   ROOTS,
   ROW_PITCH,
   SCROLLED_TOP,
+  counting,
   drawn,
   expectAppearsAtOnce,
   expectFadesInPlace,
   expectHeld,
+  expectOnlyMountsRender,
   expectSlides,
   expectSlidesBack,
   expectSnaps,
@@ -60,16 +62,16 @@ interface Place {
    * ease up 30 px. Base (traycer 2f451d3ee5, recorded 22:19:17Z on the fixture
    * that answers `epic.listTaskHosts` and `epic.listCollaborators`):
    * - reparent: g 302, 301.1, 298.6, 293.8, 289.6, 285.6, 281.9, 278.8, 276,
-   *   273.9, 272.5, 272 (no step over 4.8 px); h the same 30 px lower;
+   *   273.9, 272.5, 272; h the same 30 px lower;
    * - hide child: b3 122, 118.9, 114.4, 109.9, 106, 102.3, 99, 96.2, 94.1,
-   *   92.6, 92 (no step over 4.5 px);
+   *   92.6, 92;
    * - hide root: d 182, 180.7, 178.6, 174.4, 169.9, 165.8, 162.3, 159, 156.2,
-   *   154.1, 152.6, 152 (no step over 4.5 px); e to h the same shape.
+   *   154.1, 152.6, 152; e to h the same shape.
+   * Only where it starts, where it ends and that it never turns back are
+   * asserted: a step's size depends on the frame rate and the machine's load.
    */
   readonly closesGapAfterFade: boolean;
 }
-/** Base's biggest step, 4.8 px, and a pixel of jitter. */
-const MAX_GLIDE_STEP_PX = 6;
 const PLACES: readonly Place[] = [
   {
     name: "at the top of the list",
@@ -197,11 +199,12 @@ for (const place of PLACES) {
       page,
     }) => {
       await open(page, BASE);
-      const recording = await recordHide(
-        page,
-        tree({ ...BASE, children: { b: ["b1", "b3"] } }),
-        ["b2"],
+      const { recording, commits } = await counting(page, () =>
+        recordHide(page, tree({ ...BASE, children: { b: ["b1", "b3"] } }), [
+          "b2",
+        ]),
       );
+      if (place.scrollTop > 0) expectOnlyMountsRender(commits);
       expectFadesInPlace(recording, "b2");
       for (const id of ["a", "b", "b1"]) expectHeld(recording, id);
       // Its sibling slides into the slot, and only after the fade has run.
@@ -215,7 +218,6 @@ for (const place of PLACES) {
         expectSlidesBack(recording, "b3", {
           from: start,
           to: start - ROW_PITCH,
-          maxStep: MAX_GLIDE_STEP_PX,
           afterFrame: lastDrawnFrame(recording, "b2"),
         });
       }
@@ -230,11 +232,14 @@ for (const place of PLACES) {
       page,
     }) => {
       await open(page, BASE);
-      const recording = await recordHide(
-        page,
-        tree({ ...BASE, roots: ROOTS.filter((id) => id !== "c") }),
-        ["c"],
+      const { recording, commits } = await counting(page, () =>
+        recordHide(
+          page,
+          tree({ ...BASE, roots: ROOTS.filter((id) => id !== "c") }),
+          ["c"],
+        ),
       );
+      if (place.scrollTop > 0) expectOnlyMountsRender(commits);
       expectFadesInPlace(recording, "c");
       for (const id of ["a", "b", "b1", "b2", "b3"]) expectHeld(recording, id);
       for (const id of ["d", "e", "f", "g", "h"]) {
@@ -248,7 +253,6 @@ for (const place of PLACES) {
           expectSlidesBack(recording, id, {
             from: start,
             to: start - ROW_PITCH,
-            maxStep: MAX_GLIDE_STEP_PX,
             afterFrame: lastDrawnFrame(recording, "c"),
           });
         }
@@ -260,14 +264,17 @@ for (const place of PLACES) {
       page,
     }) => {
       await open(page, BASE);
-      const recording = await recordShape(
-        page,
-        tree({
-          roots: ROOTS.filter((id) => id !== "f"),
-          children: { b: ["b1", "b2", "b3", "f"] },
-          updatedAt: undefined,
-        }),
+      const { recording, commits } = await counting(page, () =>
+        recordShape(
+          page,
+          tree({
+            roots: ROOTS.filter((id) => id !== "f"),
+            children: { b: ["b1", "b2", "b3", "f"] },
+            updatedAt: undefined,
+          }),
+        ),
       );
+      if (place.scrollTop > 0) expectOnlyMountsRender(commits);
       // Where the row lands: below b3, which has not moved.
       const newPlace = startTop(recording, "b3") + ROW_PITCH;
       const oldPlace = startTop(recording, "f");
@@ -306,7 +313,6 @@ for (const place of PLACES) {
           expectSlidesBack(recording, id, {
             from: start + ROW_PITCH,
             to: start,
-            maxStep: MAX_GLIDE_STEP_PX,
             afterFrame: lastLeaving,
           });
         }

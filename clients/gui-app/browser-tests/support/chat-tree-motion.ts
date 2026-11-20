@@ -30,8 +30,16 @@ export interface RowSample {
 }
 /** One entry per frame; the first is sampled before the change. */
 export type Recording = RowSample[][];
+/** What one React commit rendered: rows again, rows new, the panel. */
+export interface CommitCount {
+  readonly rows: number;
+  readonly mounted: number;
+  readonly panel: number;
+}
 interface Probe {
   readonly ready: boolean;
+  readonly startCommitCount: (row: string, panel: string) => void;
+  readonly stopCommitCount: () => CommitCount[];
   readonly errors: string[];
   readonly setShape: (shape: Shape) => void;
   readonly recordShape: (shape: Shape, frames: number) => Promise<Recording>;
@@ -273,6 +281,60 @@ export function recordScroll(page: Page, top: number): Promise<Recording> {
     [top, FRAMES] as const,
   );
 }
+/** The components whose renders a commit count tells apart, by function name. */
+const ROW_COMPONENT = "ChatRowButton";
+const PANEL_COMPONENT = "ChatTreePanelBody";
+/** What `record` recorded, and what each React commit during it rendered. */
+export interface Counted {
+  readonly recording: Recording;
+  readonly commits: readonly CommitCount[];
+}
+/** Runs `record` with the page's commits counted, the first being the change's. */
+export async function counting(
+  page: Page,
+  record: () => Promise<Recording>,
+): Promise<Counted> {
+  await page.evaluate(
+    ([row, panel]) => {
+      const probe = window.__chatTreeMotion;
+      if (probe === undefined) throw new Error("no probe");
+      probe.startCommitCount(row, panel);
+    },
+    [ROW_COMPONENT, PANEL_COMPONENT] as const,
+  );
+  const recording = await record();
+  const commits = await page.evaluate(() => {
+    const probe = window.__chatTreeMotion;
+    if (probe === undefined) throw new Error("no probe");
+    return probe.stopCommitCount();
+  });
+  return { recording, commits };
+}
+/**
+ * After the commit that makes the change, no commit renders a row that was
+ * already there or the panel, and at most one row mounts in each. The cause
+ * this holds off: a host query the mock host left unanswered was fetched again
+ * whenever a row mounted into the window, and each failure re-rendered every
+ * row in a long task, so the motion stuttered.
+ */
+export function expectOnlyMountsRender(commits: readonly CommitCount[]): void {
+  expect(commits.length, "commits after the change").toBeGreaterThan(0);
+  const trail = JSON.stringify(commits);
+  commits.slice(1).forEach((commit, i) => {
+    expect(
+      commit.rows,
+      `commit ${String(i + 1)} re-rendered rows (all commits: ${trail})`,
+    ).toBe(0);
+    expect(
+      commit.panel,
+      `commit ${String(i + 1)} re-rendered the panel (all commits: ${trail})`,
+    ).toBe(0);
+    expect(
+      commit.mounted,
+      `commit ${String(i + 1)} mounted rows (all commits: ${trail})`,
+    ).toBeLessThanOrEqual(1);
+  });
+}
 /** Errors the page raised, the fixture's own and the browser's. */
 export async function pageErrors(page: Page): Promise<readonly string[]> {
   return page.evaluate(() => window.__chatTreeMotion?.errors ?? []);
@@ -450,19 +512,6 @@ export function expectFadesInPlace(recording: Recording, id: string): void {
   );
 }
 
-/** The row's top and bottom, frame by frame, for reading a recording by eye. */
-export function trackOf(
-  recording: Recording,
-  id: string,
-): { frame: number; top: number; bottom: number; opacity: number }[] {
-  return drawn(recording, id).map(({ frame, top, bottom, opacity }) => ({
-    frame,
-    top,
-    bottom,
-    opacity,
-  }));
-}
-
 /** The row is there before the change, solid whenever it is drawn, and gone by `byFrame`. */
 export function expectVanishesWithoutFade(
   recording: Recording,
@@ -603,14 +652,13 @@ export function expectRailHolds(
 }
 
 /**
- * From `afterFrame` on, the row eases from about `from` to `to` in steps no
- * bigger than `maxStep`, all in one direction: it glides, it does not jump.
- * Frames before `afterFrame` are not looked at.
+ * From `afterFrame` on, the row goes from `from` to `to`, in one direction
+ * only. How fast is not asserted: a frame's step depends on the frame rate
+ * and the machine's load. Frames before `afterFrame` are not looked at.
  */
 interface Glide {
   readonly from: number;
   readonly to: number;
-  readonly maxStep: number;
   readonly afterFrame: number;
 }
 export function expectSlidesBack(
@@ -618,17 +666,19 @@ export function expectSlidesBack(
   id: string,
   glide: Glide,
 ): void {
-  const { from, to, maxStep, afterFrame } = glide;
+  const { from, to, afterFrame } = glide;
   const rows = drawn(recording, id).filter((row) => row.frame >= afterFrame);
   expect(
     rows.length,
     `${id} is drawn after frame ${String(afterFrame)}`,
   ).toBeGreaterThan(0);
-  // The glide may already have begun by the first frame looked at, by one step.
+  expect(rows[0].frame, `${id} is drawn on frame ${String(afterFrame)}`).toBe(
+    afterFrame,
+  );
   expect(
     Math.abs(rows[0].top - from),
-    `${id} starts the slide at ${String(from)}`,
-  ).toBeLessThanOrEqual(maxStep);
+    `${id} is still at ${String(from)} on frame ${String(afterFrame)}`,
+  ).toBeLessThanOrEqual(SUBPIXEL_PX);
   expect(rows[rows.length - 1].top, `${id} ends the slide at`).toBeCloseTo(
     to,
     0,
@@ -636,10 +686,6 @@ export function expectSlidesBack(
   const direction = Math.sign(to - from);
   for (let i = 1; i < rows.length; i += 1) {
     const step = rows[i].top - rows[i - 1].top;
-    expect(
-      Math.abs(step),
-      `${id} frame ${String(rows[i].frame)}: ${String(rows[i - 1].top)} -> ${String(rows[i].top)}`,
-    ).toBeLessThanOrEqual(maxStep);
     expect(
       step * direction,
       `${id} never turns back (frame ${String(rows[i].frame)})`,

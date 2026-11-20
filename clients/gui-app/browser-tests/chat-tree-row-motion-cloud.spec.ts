@@ -1,11 +1,12 @@
 import { expect, test as base } from "@playwright/test";
 import {
+  ROW_PITCH,
+  expectSlides,
   expectVanishesWithoutFade,
   openTree,
   pageErrors,
   recordCloud,
   seedCloud,
-  trackOf,
   type CloudSpec,
   type Shape,
 } from "./support/chat-tree-motion.ts";
@@ -64,16 +65,9 @@ test.describe("virtual chat tree: cloud rows", () => {
       SUBAGENTS[2],
     ]);
     expectVanishesWithoutFade(recording, "s2", FRAME_BY_WHICH_IT_IS_GONE);
-    // Recorded, not asserted: whether its siblings and the rows below slide
-    // or snap, for a run on another tree to be compared with.
-    await test.info().attach("cloud-sibling-tracks", {
-      body: JSON.stringify(
-        Object.fromEntries(
-          ["orch", "s1", "s3", "a"].map((id) => [id, trackOf(recording, id)]),
-        ),
-      ),
-      contentType: "application/json",
-    });
+    // Its sibling below slides up into the slot. Base (traycer 2f451d3ee5,
+    // recorded 21:27:31Z) drew s3 at 92, then 62 about 11 frames later.
+    expectSlides(recording, "s3", -ROW_PITCH);
     expect(await pageErrors(page), "errors in the fixture").toEqual([]);
   });
 });
