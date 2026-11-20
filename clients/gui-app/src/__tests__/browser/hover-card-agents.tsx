@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -12,6 +12,12 @@ import { LazyMotion, domAnimation } from "motion/react";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
+import { ChatTreeVirtualList } from "@/components/epic-canvas/sidebar/chat-tree-virtual-list";
+import type {
+  ChatTreePendingRootInput,
+  ChatTreeRow,
+} from "@/components/epic-canvas/sidebar/chat-tree-rows";
+import { useChatTreeRowModel } from "@/components/epic-canvas/sidebar/use-chat-tree-row-model";
 import {
   Dialog,
   DialogContent,
@@ -30,10 +36,18 @@ import {
   EpicSessionContext,
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
+import {
+  localChatRowKey,
+  type UnifiedChatEntry,
+} from "@/lib/chats/unified-chat-list";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
-import type { ChatProjection, TreeNode } from "@/stores/epics/open-epic/types";
+import type {
+  ChatProjection,
+  TreeNode,
+  TreeSlice,
+} from "@/stores/epics/open-epic/types";
 import "@/lib/theme-applier";
 import "@/index.css";
 
@@ -43,8 +57,8 @@ import "@/index.css";
  * to the label fallback. It exists for the one thing the canvas fixture's
  * tree cannot seed, a list MIXING the two outcomes (driven by
  * `browser-tests/hover-card.spec.ts`), and it is composed the way the sidebar
- * tree composes its rows: one `HoverCardGroup` around them
- * (`ChatTreePanelBody`).
+ * tree composes its rows: one `HoverCardGroup` around the chat tree's virtual
+ * list, each row inside the list's `treeitem` (`ChatTreePanelBody`).
  *
  * Beside them, two actionable cards on the bare primitive: one inside a real
  * modal `Dialog` (L1: the pointer reaches its link, Escape closes the card
@@ -77,6 +91,24 @@ const AGENTS: ReadonlyArray<TreeNode> = [
 /** The rows past this index have no owner host, so they take the label fallback. */
 const OWNER_ROWS = 4;
 
+const TREE: TreeSlice = {
+  rootIds: AGENTS.map((node) => node.id),
+  childrenByParent: {},
+  nodeById: Object.fromEntries(AGENTS.map((node) => [node.id, node])),
+};
+const OWNER_IDS: ReadonlySet<string> = new Set(
+  AGENTS.slice(0, OWNER_ROWS).map((node) => node.id),
+);
+const LIST_ENTRIES: readonly UnifiedChatEntry[] = AGENTS.map((node) => ({
+  kind: "local",
+  key: localChatRowKey(node.id),
+  nodeId: node.id,
+}));
+const NO_PENDING: readonly ChatTreePendingRootInput[] = [];
+const NOTHING_EXPANDED: ReadonlySet<string> = new Set();
+const ANY_TYPE = (): boolean => true;
+const FIXTURE_TAB_ID = "hover-card-agents-tab";
+
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
   awareness: () => undefined,
@@ -96,12 +128,8 @@ function openSession() {
     },
     writeCommand: null,
   });
-  const nodeById: Record<string, TreeNode> = {};
-  const rootIds: string[] = [];
   const byId: Record<string, ChatProjection> = {};
   for (const node of AGENTS) {
-    nodeById[node.id] = node;
-    rootIds.push(node.id);
     byId[node.id] = {
       id: node.id,
       title: node.title,
@@ -118,7 +146,7 @@ function openSession() {
     };
   }
   handle.store.setState({
-    tree: { rootIds, childrenByParent: {}, nodeById },
+    tree: TREE,
     chats: { allIds: Object.keys(byId), byId },
   });
   getOpenEpicRegistry().acquire(EPIC_ID, () => handle);
@@ -285,22 +313,60 @@ function ModalWithCard(): ReactNode {
   );
 }
 
+function renderAgentRow(row: ChatTreeRow): ReactNode {
+  if (row.kind !== "local") return null;
+  return (
+    <Row
+      node={TREE.nodeById[row.nodeId]}
+      withOwner={OWNER_IDS.has(row.nodeId)}
+    />
+  );
+}
+
+/** The agent rows, drawn through the chat tree's row model and virtual list. */
+function AgentRows(): ReactNode {
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const regionRef = useRef<HTMLDivElement>(null);
+  const model = useChatTreeRowModel({
+    listEntries: LIST_ENTRIES,
+    pendingRoots: NO_PENDING,
+    tree: TREE,
+    expandedIds: NOTHING_EXPANDED,
+    visibleIds: null,
+    treeFilter: ANY_TYPE,
+    comparator: null,
+    clock: null,
+  });
+  return (
+    <div
+      ref={regionRef}
+      data-fixture-panel
+      className="flex w-72 shrink-0 flex-col border-r border-border bg-background"
+    >
+      <div ref={setScrollElement} className="min-h-0 flex-1 overflow-auto p-2">
+        <HoverCardGroup>
+          <ChatTreeVirtualList
+            model={model}
+            tabId={FIXTURE_TAB_ID}
+            scrollElement={scrollElement}
+            regionRef={regionRef}
+            renderRow={renderAgentRow}
+          />
+        </HoverCardGroup>
+      </div>
+    </div>
+  );
+}
+
 export function Fixture(): ReactNode {
   useEffect(() => {
     Reflect.set(window, "__hoverCardAgentsProbe", { ready: true });
   }, []);
   return (
     <div className="flex h-dvh bg-canvas text-canvas-foreground">
-      <div
-        data-fixture-panel
-        className="flex w-72 shrink-0 flex-col gap-0.5 border-r border-border bg-background p-2"
-      >
-        <HoverCardGroup>
-          {AGENTS.map((node, index) => (
-            <Row key={node.id} node={node} withOwner={index < OWNER_ROWS} />
-          ))}
-        </HoverCardGroup>
-      </div>
+      <AgentRows />
       <main
         data-fixture-content
         className="flex min-w-0 flex-1 flex-col items-start gap-3 bg-background p-4 text-ui-sm"
