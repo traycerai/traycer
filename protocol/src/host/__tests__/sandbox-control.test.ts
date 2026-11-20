@@ -156,6 +156,11 @@ describe("sandbox control plane mirror", () => {
       ],
     });
     expect(parsed.providers[0]?.shape.diskDefaultMb).toBe(20480);
+    expect(parsed.providers[0]?.regions[0]?.fromPriceMcPerHour).toEqual({
+      awakeMc: 60,
+      suspendedMc: 2,
+      stoppedMc: 1,
+    });
     expect(parsed.offeredAgents).toEqual(["traycer"]);
   });
 
