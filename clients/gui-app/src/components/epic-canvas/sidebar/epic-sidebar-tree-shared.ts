@@ -74,6 +74,15 @@ export function revealSidebarNode(
  */
 export const TREE_GUIDE_OFFSET_PX = 7;
 
+/** How an indent-guide rail is drawn, wherever it is placed. */
+export const TREE_GUIDE_CLASS =
+  "pointer-events-none absolute w-px bg-border/70";
+
+/** The rail's left offset, under the chevron column of the group's parent. */
+export function treeGuideLeft(parentDepth: number): number {
+  return parentDepth * INDENT_PX + BASE_PAD_LEFT + TREE_GUIDE_OFFSET_PX;
+}
+
 export const EMPTY_PENDING_LIST: ReadonlyArray<{ id: string; name: string }> =
   [];
 export const EMPTY_PRE_ACK_LIST: ReadonlyArray<{

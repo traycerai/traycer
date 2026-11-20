@@ -16,6 +16,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
@@ -41,7 +42,6 @@ import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-sto
 import type { ChatProjection, TreeNode } from "@/stores/epics/open-epic/types";
 import "@/lib/theme-applier";
 import "@/index.css";
-
 /**
  * The REAL `ChatTreePanelBody` over a seeded epic store, for the claims about
  * row motion that only a real layout can decide: which rows slide, fade or
@@ -50,16 +50,13 @@ import "@/index.css";
  * `window.__chatTreeMotion` seeds and changes the tree and samples every row's
  * box and opacity once per frame.
  */
-
 const EPIC_ID = "fixture-chat-tree-motion";
 const TAB_ID = "tab-chat-tree-motion";
 const USER_ID = "viewer-1";
-
 useAuthStore.setState({
   status: "signed-in",
   contextMetadata: { userId: USER_ID, username: USER_ID },
 });
-
 function meta(): SnapshotMetaEpic {
   return {
     schemaVersion: "1.0",
@@ -86,7 +83,6 @@ function meta(): SnapshotMetaEpic {
     hostStateVectorBase64: "AA==",
   };
 }
-
 function seedDoc(): Uint8Array {
   const donor = new Y.Doc();
   const epic = donor.getMap<unknown>("epic");
@@ -96,7 +92,6 @@ function seedDoc(): Uint8Array {
   epic.set("chats", new Y.Map<unknown>());
   return Y.encodeStateAsUpdate(donor);
 }
-
 function openSession() {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
@@ -121,16 +116,21 @@ function openSession() {
   getOpenEpicRegistry().acquire(EPIC_ID, () => handle);
   return handle;
 }
-
 const SESSION = openSession();
-
-/** Root ids in display order, and each parent's child ids in order. */
+/**
+ * Root ids and each parent's child ids. The tree sorts newest first, ties by
+ * id, so `updatedAt` (an id's activity time, 1 when absent or unlisted) and
+ * the ids decide the display order.
+ */
 interface Shape {
   readonly roots: readonly string[];
   readonly children: Readonly<Record<string, readonly string[]>>;
+  readonly updatedAt: Readonly<Record<string, number>> | undefined;
 }
-
-function node(id: string, parentId: string | null): TreeNode {
+function activityOf(shape: Shape, id: string): number {
+  return shape.updatedAt?.[id] ?? 1;
+}
+function node(id: string, parentId: string | null, at: number): TreeNode {
   return {
     id,
     parentId,
@@ -138,17 +138,16 @@ function node(id: string, parentId: string | null): TreeNode {
     type: "chat",
     status: null,
     createdAt: 1,
-    updatedAt: 1,
+    updatedAt: at,
   };
 }
-
-function chat(id: string, parentId: string | null): ChatProjection {
+function chat(id: string, parentId: string | null, at: number): ChatProjection {
   return {
     id,
     title: `Agent ${id}`,
     parentId,
     createdAt: 1,
-    updatedAt: 1,
+    updatedAt: at,
     userId: USER_ID,
     ownedByViewer: true,
     hostId: mockLocalHostEntry.hostId,
@@ -158,7 +157,6 @@ function chat(id: string, parentId: string | null): ChatProjection {
     settings: null,
   };
 }
-
 /**
  * Replaces the tree with `shape`; every listed id is a live chat. `kept` ids
  * stay in the store without a place in the tree, the way a row the filter or
@@ -169,55 +167,80 @@ function setShape(shape: Shape, kept: readonly string[]): void {
   const byId: Record<string, ChatProjection> = {};
   const childrenByParent: Record<string, string[]> = {};
   const add = (id: string, parentId: string | null): void => {
-    nodeById[id] = node(id, parentId);
-    byId[id] = chat(id, parentId);
+    nodeById[id] = node(id, parentId, activityOf(shape, id));
+    byId[id] = chat(id, parentId, activityOf(shape, id));
     const kids = shape.children[id] ?? [];
     if (kids.length > 0) childrenByParent[id] = [...kids];
     for (const kid of kids) add(kid, id);
   };
   for (const id of shape.roots) add(id, null);
   for (const id of kept) {
-    nodeById[id] = node(id, null);
-    byId[id] = chat(id, null);
+    nodeById[id] = node(id, null, 1);
+    byId[id] = chat(id, null, 1);
   }
   SESSION.store.setState({
     tree: { rootIds: [...shape.roots], childrenByParent, nodeById },
     chats: { allIds: Object.keys(byId), byId },
   });
 }
-
 interface RowSample {
   readonly id: string;
   readonly top: number;
+  readonly bottom: number;
   readonly left: number;
   readonly opacity: number;
 }
-
-/** Every rendered local row's box and drawn opacity, by its chat id. */
+const LOCAL_ROW_PREFIX = "epic-sidebar-item-";
+const CLOUD_ROW_PREFIX = "epic-sidebar-cloud-item-";
+/** The opacity an element is drawn at: its own times every ancestor's. */
+function drawnOpacity(element: HTMLElement): number {
+  let opacity = 1;
+  for (
+    let el: HTMLElement | null = element;
+    el !== null && el !== document.body;
+    el = el.parentElement
+  ) {
+    opacity *= Number(getComputedStyle(el).opacity);
+  }
+  return Math.round(opacity * 1000) / 1000;
+}
+function sampleOf(id: string, element: HTMLElement): RowSample {
+  const box = element.getBoundingClientRect();
+  return {
+    id,
+    top: Math.round(box.top * 10) / 10,
+    bottom: Math.round(box.bottom * 10) / 10,
+    left: Math.round(box.left * 10) / 10,
+    opacity: drawnOpacity(element),
+  };
+}
+/**
+ * Every rendered row's box and drawn opacity, by its chat id (a cloud row by
+ * its cloud chat id), and every group rail's, by `rail:` and the row key of
+ * the row that owns it.
+ */
 function sampleRows(): RowSample[] {
   const out: RowSample[] = [];
   for (const button of document.querySelectorAll<HTMLElement>(
-    '[data-testid^="epic-sidebar-item-"]',
+    `[data-testid^="${LOCAL_ROW_PREFIX}"], [data-testid^="${CLOUD_ROW_PREFIX}"]`,
   )) {
-    const box = button.getBoundingClientRect();
-    let opacity = 1;
-    for (
-      let el: HTMLElement | null = button;
-      el !== null && el !== document.body;
-      el = el.parentElement
-    ) {
-      opacity *= Number(getComputedStyle(el).opacity);
-    }
-    out.push({
-      id: (button.dataset.testid ?? "").replace("epic-sidebar-item-", ""),
-      top: Math.round(box.top * 10) / 10,
-      left: Math.round(box.left * 10) / 10,
-      opacity: Math.round(opacity * 1000) / 1000,
-    });
+    const testId = button.dataset.testid ?? "";
+    out.push(
+      sampleOf(
+        testId.startsWith(CLOUD_ROW_PREFIX)
+          ? testId.slice(CLOUD_ROW_PREFIX.length)
+          : testId.slice(LOCAL_ROW_PREFIX.length),
+        button,
+      ),
+    );
+  }
+  for (const rail of document.querySelectorAll<HTMLElement>(
+    "[data-tree-guide-for]",
+  )) {
+    out.push(sampleOf(`rail:${rail.dataset.treeGuideFor ?? ""}`, rail));
   }
   return out;
 }
-
 async function nextFrame(): Promise<void> {
   await new Promise<void>((resolve) => {
     requestAnimationFrame(() => {
@@ -225,21 +248,31 @@ async function nextFrame(): Promise<void> {
     });
   });
 }
-
-/** Samples, runs `change`, then samples once per frame for `frames` frames. */
+/**
+ * How long a recording runs after the change, whatever the frame rate: a fade
+ * then a slide, 160 ms each, with margin.
+ */
+const RECORD_WINDOW_MS = 5 * 160;
+/**
+ * Samples, runs `change`, then samples once per frame until it has taken at
+ * least `frames` frames and `RECORD_WINDOW_MS` has passed since the change.
+ */
 async function record(
   change: () => void,
   frames: number,
 ): Promise<RowSample[][]> {
   const samples: RowSample[][] = [sampleRows()];
+  const start = performance.now();
   change();
-  for (let i = 0; i < frames; i += 1) {
+  while (
+    samples.length <= frames ||
+    performance.now() - start < RECORD_WINDOW_MS
+  ) {
     await nextFrame();
     samples.push(sampleRows());
   }
   return samples;
 }
-
 function scroller(): HTMLElement {
   const region = document.querySelector<HTMLElement>(
     '[data-testid="epic-chat-tree-region"]',
@@ -250,7 +283,59 @@ function scroller(): HTMLElement {
   }
   throw new Error("no scroll container above the tree region");
 }
-
+/** A cloud chat of the task: `parentId` makes it a subagent of that cloud chat. */
+interface CloudSpec {
+  readonly id: string;
+  readonly parentId: string | null;
+}
+let cloudChats: readonly CloudSpec[] = [];
+function cloudSummary(spec: CloudSpec): CloudChatSummary {
+  return {
+    identity: { taskId: EPIC_ID, chatId: spec.id, ownerUserId: USER_ID },
+    ownerHostId: "host-cloud",
+    createdAt: 100,
+    visibility: "task",
+    title: `Cloud ${spec.id}`,
+    isTitleEditedByUser: false,
+    parentChatId: spec.parentId,
+    isArchived: false,
+    runSettingsSummary: null,
+    metadataUpdatedAt: 300,
+    headSha256: null,
+    publishedAt: 300,
+    throughRecordSeq: null,
+    isOwnedByViewer: true,
+  };
+}
+function listedCloudChats(): { readonly chats: CloudChatSummary[] } {
+  return { chats: cloudChats.map(cloudSummary) };
+}
+/**
+ * Makes `specs` the task's cloud chats and has the list fetch them again; the
+ * rows follow once the answer lands.
+ */
+function seedCloudChats(specs: readonly CloudSpec[]): void {
+  cloudChats = specs;
+  void queryClient.invalidateQueries();
+}
+/**
+ * Makes `specs` the task's cloud chats in the list's cached answer at once,
+ * so the rows follow in the render this call causes and not after a fetch.
+ * Returns how many cached lists it wrote: one when the list is mounted.
+ */
+function replaceCloudChats(specs: readonly CloudSpec[]): number {
+  cloudChats = specs;
+  const written = queryClient.getQueryCache().findAll({
+    predicate: (query) => {
+      const data: unknown = query.state.data;
+      return typeof data === "object" && data !== null && "chats" in data;
+    },
+  });
+  for (const query of written) {
+    queryClient.setQueryData(query.queryKey, listedCloudChats());
+  }
+  return written.length;
+}
 function clickChevron(id: string): void {
   const glyph = document.querySelector(
     `[data-testid="epic-sidebar-item-${id}"] svg`,
@@ -260,7 +345,6 @@ function clickChevron(id: string): void {
     new MouseEvent("click", { bubbles: true, cancelable: true }),
   );
 }
-
 const errors: string[] = [];
 window.addEventListener("error", (event) => {
   errors.push(
@@ -276,10 +360,24 @@ window.addEventListener("unhandledrejection", (event) => {
       : String(event.reason),
   );
 });
-
 const probe = {
   ready: false,
   errors,
+  scrollTo: (top: number) => {
+    scroller().scrollTop = top;
+  },
+  scrollTop: () => scroller().scrollTop,
+  /** The scroller's box: the rows that are in view lie between these. */
+  viewport: () => {
+    const box = scroller().getBoundingClientRect();
+    return { top: box.top, bottom: box.bottom };
+  },
+  seedCloudChats,
+  recordCloud: (specs: readonly CloudSpec[], frames: number) =>
+    record(() => {
+      replaceCloudChats(specs);
+    }, frames),
+  replaceCloudChats,
   setShape: (shape: Shape) => {
     setShape(shape, []);
   },
@@ -303,9 +401,7 @@ const probe = {
   clickChevron,
 };
 Reflect.set(window, "__chatTreeMotion", probe);
-
 const queryClient = createAppQueryClient();
-
 function createHostClient(): HostClient<HostRpcRegistry> {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
@@ -316,7 +412,15 @@ function createHostClient(): HostClient<HostRpcRegistry> {
       registry: hostRpcRegistry,
       requestId: () => "chat-tree-motion",
       handlers: {
-        "epic.listCloudChats": () => Promise.resolve({ chats: [] }),
+        "epic.listCloudChats": () => Promise.resolve(listedCloudChats()),
+        // Answered as a host would: a row the window mounts asks for these,
+        // and a key left with no data is fetched again on every mount, its
+        // failure re-rendering every row that reads it.
+        "epic.listTaskHosts": () => ({ hosts: [] }),
+        "epic.listCollaborators": () => ({
+          collaborators: [],
+          collaboratorsAvailable: true,
+        }),
       },
     }),
   });
@@ -325,9 +429,7 @@ function createHostClient(): HostClient<HostRpcRegistry> {
   );
   return spine.createRequester(mockLocalHostEntry);
 }
-
 const HOST_CLIENT = createHostClient();
-
 const runnerHost = new MockRunnerHost({
   signInUrl: "http://127.0.0.1:9/sign-in",
   authnBaseUrl: "http://127.0.0.1:9",
@@ -337,7 +439,6 @@ const runnerHost = new MockRunnerHost({
   hasLocalHost: undefined,
   traycerCli: undefined,
 });
-
 let requestCounter = 0;
 const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
   new MockHostMessenger<HostRpcRegistry>({
@@ -350,9 +451,16 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         complete: true,
       }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
+      // Answered as a host would: a row the window mounts asks for these,
+      // and a key left with no data is fetched again on every mount, its
+      // failure re-rendering every row that reads it.
+      "epic.listTaskHosts": () => ({ hosts: [] }),
+      "epic.listCollaborators": () => ({
+        collaborators: [],
+        collaboratorsAvailable: true,
+      }),
     },
   });
-
 export function Fixture(): ReactNode {
   useEffect(() => {
     probe.ready = true;
@@ -372,7 +480,6 @@ export function Fixture(): ReactNode {
     </div>
   );
 }
-
 export function Providers(props: { readonly children: ReactNode }): ReactNode {
   return (
     <QueryClientProvider client={queryClient}>
@@ -401,7 +508,6 @@ export function Providers(props: { readonly children: ReactNode }): ReactNode {
     </QueryClientProvider>
   );
 }
-
 const rootRoute = createRootRoute({
   component: () => (
     <Providers>
@@ -418,7 +524,6 @@ const router = createRouter({
   routeTree: rootRoute.addChildren([indexRoute]),
   history: createMemoryHistory({ initialEntries: ["/"] }),
 });
-
 const container = document.getElementById("root");
 if (container === null) throw new Error("no #root");
 createRoot(container).render(<RouterProvider router={router} />);

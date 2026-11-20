@@ -17,13 +17,17 @@ import {
   useVirtualizer,
   type Range,
 } from "@tanstack/react-virtual";
-import { AnimatePresence, LayoutGroupContext } from "motion/react";
+import { AnimatePresence, LayoutGroupContext, m } from "motion/react";
 import { OverlayAnchorHoldContext } from "@/components/ui/overlay-anchor-hold";
 import { useReducedMotion } from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 import { useIsActiveEpicArtifact } from "@/stores/epics/canvas/store";
 import { useCloudChatRowActive } from "@/components/epic-canvas/sidebar/use-cloud-chat-row-active";
-import { TreeGroupGuide } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-guide";
+import {
+  TREE_GUIDE_CLASS,
+  treeGuideLeft,
+  useTreeRowMotion,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import type {
   ChatTreeCloudRow,
   ChatTreeLocalRow,
@@ -134,9 +138,9 @@ export interface ChatTreeVirtualListProps {
  *
  * Each row is an absolutely placed `<li role="treeitem">` at its offset,
  * carrying what the nesting used to imply: its level and position for a screen
- * reader, the gap `space-y-0.5` put above it, and the indent rails of the
- * groups it sits in. The row component inside it is the same one the
- * recursive tree drew.
+ * reader, and the gap `space-y-0.5` put above it. The row component inside it
+ * is the same one the recursive tree drew. Each open group's indent rail is
+ * drawn beside the rows; see `ChatTreeGroupRail`.
  */
 export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
   const { tabId, scrollElement, regionRef, renderRow, isRowGone } = props;
@@ -166,6 +170,17 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
     measureElement: measureRow,
   });
   const items = virtualizer.getVirtualItems();
+  const ends = useMemo(() => subtreeEnds(rows), [rows]);
+  const rails = groupRails(
+    items.map((item) => item.index),
+    {
+      rows,
+      indexByKey,
+      ends,
+      measurements: virtualizer.measurementsCache,
+      scrollMargin,
+    },
+  );
   // A fading row the window does not draw has no fade to finish.
   useLayoutEffect(() => {
     if (departing.size === 0) return;
@@ -221,6 +236,14 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
           className="relative"
           style={{ height: virtualizer.getTotalSize() }}
         >
+          {rails.map((rail) => (
+            <ChatTreeGroupRail
+              key={rail.owner.key}
+              rail={rail}
+              departing={departing.has(rail.owner.key)}
+              motionStamp={motionStamp(rail.owner)}
+            />
+          ))}
           {items.map((item) => (
             <ChatTreeVirtualItem
               key={item.key}
@@ -277,6 +300,117 @@ function layoutGroupForStamp(parent: LayoutGroup, stamp: number): LayoutGroup {
   return { ...parent };
 }
 
+/** Where an open group's indent rail is drawn, in the list's coordinates. */
+interface GroupRail {
+  /** The row whose children the group holds. */
+  readonly owner: ChatTreeRow;
+  readonly top: number;
+  readonly height: number;
+}
+
+/** For each row, the index of the last row drawn inside its subtree. */
+function subtreeEnds(rows: readonly ChatTreeRow[]): readonly number[] {
+  const ends = rows.map((_row, index) => index);
+  const open: number[] = [];
+  for (const [index, row] of rows.entries()) {
+    let last = open.at(-1);
+    while (last !== undefined && rows[last].depth >= row.depth) {
+      open.pop();
+      last = open.at(-1);
+    }
+    for (const owner of open) ends[owner] = index;
+    open.push(index);
+  }
+  return ends;
+}
+
+/**
+ * The rails of every group a drawn row sits in. A group's `<ul>` began under
+ * its parent's row and ended with its last descendant, and its rail spanned
+ * it: the rail stopped 2px short of the end, where `space-y-0.5`'s margin met
+ * the rail's absolute span.
+ */
+interface RailLayout {
+  readonly rows: readonly ChatTreeRow[];
+  readonly indexByKey: ReadonlyMap<string, number>;
+  /** Each row's last descendant's index; see `subtreeEnds`. */
+  readonly ends: readonly number[];
+  readonly measurements: readonly { readonly end: number }[];
+  readonly scrollMargin: number;
+}
+
+function groupRails(
+  drawnIndexes: readonly number[],
+  layout: RailLayout,
+): GroupRail[] {
+  const { rows, indexByKey, ends, measurements, scrollMargin } = layout;
+  const owners = new Set<number>();
+  for (const drawn of drawnIndexes) {
+    let parentKey = rows[drawn].parentKey;
+    while (parentKey !== null) {
+      const owner = indexByKey.get(parentKey);
+      if (owner === undefined || owners.has(owner)) break;
+      owners.add(owner);
+      parentKey = rows[owner].parentKey;
+    }
+  }
+  const rails: GroupRail[] = [];
+  for (const owner of [...owners].sort((a, b) => a - b)) {
+    const ownerBox = measurements.at(owner);
+    const lastBox = measurements.at(ends[owner]);
+    if (ownerBox === undefined || lastBox === undefined) continue;
+    const top = ownerBox.end - scrollMargin;
+    rails.push({
+      owner: rows[owner],
+      top,
+      height: Math.max(0, lastBox.end - scrollMargin - ROW_GAP_PX - top),
+    });
+  }
+  return rails;
+}
+
+/**
+ * An open group's indent rail. The recursive tree drew it inside the group,
+ * inside its parent row's motion element, so it moves and fades with that
+ * row: it slides when the row slides, fades out when the row fades out, and
+ * its length is set at once, as the group's own height was.
+ */
+function ChatTreeGroupRail(props: {
+  readonly rail: GroupRail;
+  readonly departing: boolean;
+  readonly motionStamp: number;
+}) {
+  const { rail, departing, motionStamp } = props;
+  const parentLayoutGroup = use(LayoutGroupContext);
+  const layoutGroup = useMemo(
+    () => layoutGroupForStamp(parentLayoutGroup, motionStamp),
+    [parentLayoutGroup, motionStamp],
+  );
+  const motion = useTreeRowMotion();
+  return (
+    <LayoutGroupContext.Provider value={layoutGroup}>
+      <AnimatePresence initial={false} presenceAffectsLayout={false}>
+        {departing ? null : (
+          <m.span
+            key="rail"
+            aria-hidden
+            data-tree-guide-for={rail.owner.key}
+            layout={motion.layout}
+            exit={motion.exit}
+            transition={motion.transition}
+            className={TREE_GUIDE_CLASS}
+            style={{
+              left: treeGuideLeft(rail.owner.depth),
+              top: rail.top,
+              height: rail.height,
+            }}
+          />
+        )}
+      </AnimatePresence>
+    </LayoutGroupContext.Provider>
+  );
+}
+
 const ChatTreeVirtualItem = memo(function ChatTreeVirtualItem(
   props: ChatTreeVirtualItemProps,
 ) {
@@ -325,8 +459,6 @@ function ChatTreeItemShell(
     [parentLayoutGroup, motionStamp],
   );
   const holdRow = useCallback(() => pinStore.pin(row.key), [pinStore, row.key]);
-  const guideDepths: number[] = [];
-  for (let depth = 0; depth < row.depth; depth += 1) guideDepths.push(depth);
   return (
     <li
       ref={measure}
@@ -343,9 +475,6 @@ function ChatTreeItemShell(
       className={cn("absolute left-0 w-full", row.posInSet > 1 && "pt-0.5")}
       style={{ top }}
     >
-      {guideDepths.map((depth) => (
-        <TreeGroupGuide key={depth} parentDepth={depth} />
-      ))}
       <LayoutGroupContext.Provider value={layoutGroup}>
         <OverlayAnchorHoldContext.Provider value={holdRow}>
           {/* The row's own presence, so its exit runs where it stood. It
