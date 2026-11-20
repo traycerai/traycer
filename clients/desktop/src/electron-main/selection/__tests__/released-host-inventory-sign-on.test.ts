@@ -253,17 +253,20 @@ describe("desktop inventory push against a released local host", () => {
     dial.fireMessage(releasedRefusal());
     await vi.waitFor(() => {
       const redial = FakeNativeWebSocket.instances[1];
-      if (redial !== undefined) {
-        if (sentFramesOfKind(redial, "open").length === 0) redial.fireOpen();
-        expect(sentFramesOfKind(redial, "open")).toHaveLength(1);
-        return;
+      if (
+        redial !== undefined &&
+        sentFramesOfKind(redial, "open").length === 0
+      ) {
+        redial.fireOpen();
       }
-      expect(second.statuses).toContain("closed");
+      expect(
+        second.statuses.includes("closed") ||
+          FakeNativeWebSocket.instances.length >= 2,
+      ).toBe(true);
     });
-    const redial = FakeNativeWebSocket.instances[1];
-    if (redial !== undefined) {
-      expect(sentFramesOfKind(redial, "open")[0]?.token).toBe(HOST_TOKEN_B);
-    }
+    expect(FakeNativeWebSocket.instances).toHaveLength(1);
+    expect(second.statuses).toContain("closed");
+    expect(sentTokens()).not.toContain(SIGN_IN_B);
     second.close();
   });
 });
