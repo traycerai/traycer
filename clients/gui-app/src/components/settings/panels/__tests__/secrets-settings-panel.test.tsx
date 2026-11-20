@@ -138,7 +138,6 @@ describe("<SecretsSettingsPanel />", () => {
 
     expect(screen.getByTestId("secrets-page")).toBeTruthy();
     expect(screen.queryByTestId("secrets-team-view")).toBeNull();
-    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
   it("shows the page while the host's principal is not yet read", () => {
@@ -162,7 +161,6 @@ describe("<SecretsSettingsPanel />", () => {
     );
     expect(screen.getByTestId("team-owned-line").textContent).toContain("Acme");
     expect(screen.queryByTestId("secrets-page")).toBeNull();
-    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
   it("shows the team line on a team's host that predates the page", () => {
@@ -175,7 +173,6 @@ describe("<SecretsSettingsPanel />", () => {
     });
 
     expect(screen.getByTestId("secrets-team-view")).toBeTruthy();
-    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
   });
 
   it("shows the title and description, and nothing under them, once the host says it does not serve the list", () => {
@@ -190,13 +187,10 @@ describe("<SecretsSettingsPanel />", () => {
     expect(
       screen.getByRole("heading", { name: SECRETS.page.label }),
     ).toBeTruthy();
-    expect(SECRETS.page.description).toBe("Values and logins your agents use.");
     expect(screen.getByText(SECRETS.page.description)).toBeTruthy();
     expect(
       document.querySelector("[data-settings-panel-body]")?.textContent,
     ).toBe("");
-    expect(screen.queryByTestId("secrets-update-host")).toBeNull();
-    expect(screen.queryByText(/Update this host/)).toBeNull();
     expect(surface.setSection).not.toHaveBeenCalled();
     expect(surface.replaceOwnedSettingsRoute).not.toHaveBeenCalled();
     expect(surface.openSettings).not.toHaveBeenCalled();

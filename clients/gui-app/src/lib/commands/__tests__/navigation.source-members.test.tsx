@@ -11,11 +11,18 @@ vi.mock(
     ).personalHostScopeModule,
 );
 vi.mock(
-  "@/components/settings/personal/use-window-host-runs-personal",
+  "@/components/settings/personal/use-window-host-personal",
   async () =>
     (
       await import("@/components/settings/__tests__/environment-section-reads-fixture")
-    ).windowHostRunsPersonalModule,
+    ).windowHostPersonalModule,
+);
+vi.mock(
+  "@/components/settings/environment/use-environment-status-model",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).environmentStatusModelModule,
 );
 
 import type { CommandItem } from "@/lib/commands/types";

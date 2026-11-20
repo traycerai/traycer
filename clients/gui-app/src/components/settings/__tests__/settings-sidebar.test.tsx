@@ -11,6 +11,7 @@ import {
 import { setMobileApp } from "@/lib/mobile-app";
 import {
   resetEnvironmentSectionReads,
+  windowHostOutage,
   windowHostRunsPersonal,
 } from "@/components/settings/__tests__/environment-section-reads-fixture";
 import {
@@ -201,11 +202,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
 
 // The cloud road by default: a Personal pick offers the cloud's pages.
 vi.mock(
-  "@/components/settings/personal/use-window-host-runs-personal",
+  "@/components/settings/personal/use-window-host-personal",
   async () =>
     (
       await import("@/components/settings/__tests__/environment-section-reads-fixture")
-    ).windowHostRunsPersonalModule,
+    ).windowHostPersonalModule,
 );
 
 // The Secrets and GitHub entry renders only with a runner host (it needs the
@@ -1177,7 +1178,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
   it("keeps MCP servers, Skills, Sandboxes and Storage visible under a Local pick, and hides Members", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
-    recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
+    recordNegotiatedHostMethods(LOCAL_PICK.hostId, [SECRETS_LIST]);
 
     await renderRail();
 
@@ -1202,7 +1203,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(present("providers")).toBe(true);
 
     act(() => {
-      recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, [SECRETS_LIST]);
     });
 
     expect(present("secrets")).toBe(true);
@@ -1210,7 +1211,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
   it("offers no Secrets row under a Local pick whose host answered without the list", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
-    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+    recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
 
     await renderRail();
 
@@ -1270,9 +1271,31 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(present("secrets")).toBe(true);
   });
 
+  it("offers Personal's Secrets row neither during the window host's outage nor after it, until the host serves the list", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    windowHostOutage.current = true;
+    await renderRail();
+
+    expect(present("secrets")).toBe(false);
+
+    windowHostOutage.current = false;
+    windowHostRunsPersonal.current = true;
+    act(() => {
+      recordNegotiatedHostMethods("host-a", ["environment.status"]);
+    });
+
+    expect(present("secrets")).toBe(false);
+
+    act(() => {
+      recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
+    });
+
+    expect(present("secrets")).toBe(true);
+  });
+
   it("offers a Secrets search result only where the pick's source serves the page", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
-    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+    recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
     const router = buildRouter("/settings/general");
     render(
       <KeybindingProvider router={router}>
@@ -1289,7 +1312,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(secretsHit()).toBeNull();
 
     act(() => {
-      recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, [SECRETS_LIST]);
     });
 
     expect(secretsHit()).not.toBeNull();
@@ -1309,7 +1332,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(present("secrets")).toBe(false);
 
     act(() => {
-      recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, [SECRETS_LIST]);
     });
 
     expect(present("secrets")).toBe(true);

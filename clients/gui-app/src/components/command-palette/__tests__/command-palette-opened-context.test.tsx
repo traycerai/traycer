@@ -10,11 +10,11 @@ vi.mock(
     ).personalHostScopeModule,
 );
 vi.mock(
-  "@/components/settings/personal/use-window-host-runs-personal",
+  "@/components/settings/personal/use-window-host-personal",
   async () =>
     (
       await import("@/components/settings/__tests__/environment-section-reads-fixture")
-    ).windowHostRunsPersonalModule,
+    ).windowHostPersonalModule,
 );
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

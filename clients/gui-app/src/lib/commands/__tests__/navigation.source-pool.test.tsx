@@ -12,11 +12,18 @@ vi.mock(
     ).personalHostScopeModule,
 );
 vi.mock(
-  "@/components/settings/personal/use-window-host-runs-personal",
+  "@/components/settings/personal/use-window-host-personal",
   async () =>
     (
       await import("@/components/settings/__tests__/environment-section-reads-fixture")
-    ).windowHostRunsPersonalModule,
+    ).windowHostPersonalModule,
+);
+vi.mock(
+  "@/components/settings/environment/use-environment-status-model",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/environment-section-reads-fixture")
+    ).environmentStatusModelModule,
 );
 
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
@@ -26,9 +33,15 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  PERSONAL_PICK,
+  UNRESOLVED_PICK,
+} from "@/lib/settings-environment-pages";
 import { mountSettingsSubpage } from "@/lib/commands/__tests__/settings-subpage-fixture";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import {
+  pickerDefaultPick,
   resetEnvironmentSectionReads,
   windowHostRunsPersonal,
 } from "@/components/settings/__tests__/environment-section-reads-fixture";
@@ -39,7 +52,12 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
-  useSettingsEnvironmentPickStore.setState({ pick: null });
+  useSettingsEnvironmentPickStore.setState({
+    pick: null,
+    defaultPick: UNRESOLVED_PICK,
+    defaultHostId: null,
+  });
+  useSelectionAuthorityStore.getState().reset();
   resetNegotiatedManifests();
   resetEnvironmentSectionReads();
 });
@@ -75,4 +93,19 @@ describe("navigationSource on a build with a server pool", () => {
       expect(offered()).toBe(true);
     },
   );
+});
+
+describe("navigationSource on a build with a server pool, in a window Settings has not opened", () => {
+  it("lists Secrets for Personal on a host that runs it, once the pool serves the list", () => {
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-a" });
+    windowHostRunsPersonal.current = true;
+    pickerDefaultPick.current = PERSONAL_PICK;
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+    recordNegotiatedHostMethods(POOL_HOST_ID, ["environment.secrets.list"]);
+
+    const history = mountSettingsSubpage("/").offered("nav:settings/secrets");
+
+    expect(history.at(-1)).toBe(true);
+    expect(history.indexOf(true)).toBeGreaterThan(history.lastIndexOf(false));
+  });
 });

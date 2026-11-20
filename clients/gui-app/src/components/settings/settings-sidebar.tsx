@@ -92,7 +92,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // section.
   const sections = visibleSettingsSections();
   // The pick hides the pages its source does not offer.
-  const environmentSectionShown = useEnvironmentSectionShown();
+  const environmentSectionShown = useEnvironmentSectionShown(globalScope);
   // The Guide group leaves the rail once every Getting started step is done.
   const guideComplete = useGettingStartedGuideIsComplete();
   const groups = guideComplete
