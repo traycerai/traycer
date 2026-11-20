@@ -11,6 +11,7 @@ import {
   expectHeld,
   expectOnlyMountsRender,
   expectSlides,
+  expectOutAndBack,
   expectSlidesBack,
   expectSnaps,
   expectVanishesAtOnce,
@@ -58,17 +59,19 @@ interface Place {
   /**
    * Whether the rows below a row that faded out (a reparented row's old place,
    * a hidden row) are checked for the glide that closes its gap once it has
-   * faded: scrolled, they are held where they were until the fade ends, then
-   * ease up 30 px. Base (traycer 2f451d3ee5, recorded 22:19:17Z on the fixture
-   * that answers `epic.listTaskHosts` and `epic.listCollaborators`):
-   * - reparent: g 302, 301.1, 298.6, 293.8, 289.6, 285.6, 281.9, 278.8, 276,
+   * faded: scrolled, a hidden row's followers are held where they were until
+   * the fade ends, then ease up 30 px; a reparented row's followers slide down
+   * a row during the fade, then ease back. Base (traycer 2f451d3ee5, recorded
+   * 22:19:17Z on the fixture that answers `epic.listTaskHosts` and
+   * `epic.listCollaborators`):
+   * - reparent: g 272 down to 302 during the fade, then 302, 301.1, 298.6, 293.8, 289.6, 285.6, 281.9, 278.8, 276,
    *   273.9, 272.5, 272; h the same 30 px lower;
    * - hide child: b3 122, 118.9, 114.4, 109.9, 106, 102.3, 99, 96.2, 94.1,
    *   92.6, 92;
    * - hide root: d 182, 180.7, 178.6, 174.4, 169.9, 165.8, 162.3, 159, 156.2,
    *   154.1, 152.6, 152; e to h the same shape.
-   * Only where it starts, where it ends and that it never turns back are
-   * asserted: a step's size depends on the frame rate and the machine's load.
+   * Only the order of the motion and where it ends are asserted: a step's size,
+   * and how late the sampler reads it, depend on the frame rate and the load.
    */
   readonly closesGapAfterFade: boolean;
 }
@@ -306,11 +309,11 @@ for (const place of PLACES) {
       for (const id of ["c", "d", "e"]) expectSlides(recording, id, ROW_PITCH);
       for (const id of ["a", "b", "b1", "b2", "b3"]) expectHeld(recording, id);
       if (place.closesGapAfterFade) {
-        // The rows after the old place stay where they were until its copy has
-        // faded out, then glide up into its slot.
+        // The rows after the old place slide down a row while its copy fades
+        // out, then glide back up into its slot.
         for (const id of ["g", "h"]) {
           const start = startTop(recording, id);
-          expectSlidesBack(recording, id, {
+          expectOutAndBack(recording, id, {
             from: start + ROW_PITCH,
             to: start,
             afterFrame: lastLeaving,

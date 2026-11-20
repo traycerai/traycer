@@ -27,6 +27,8 @@ export interface RowSample {
   readonly bottom: number;
   readonly left: number;
   readonly opacity: number;
+  /** When it was sampled, in ms after the change (0 before it). */
+  readonly at: number;
 }
 /** One entry per frame; the first is sampled before the change. */
 export type Recording = RowSample[][];
@@ -289,7 +291,10 @@ export interface Counted {
   readonly recording: Recording;
   readonly commits: readonly CommitCount[];
 }
-/** Runs `record` with the page's commits counted, the first being the change's. */
+/**
+ * Runs `record` with the page's commits counted, from the commit of the
+ * change it records on.
+ */
 export async function counting(
   page: Page,
   record: () => Promise<Recording>,
@@ -343,6 +348,15 @@ export async function pageErrors(page: Page): Promise<readonly string[]> {
 const SUBPIXEL_PX = 1;
 /** An opacity this low is a row that has faded out. */
 const FADED = 0.05;
+/** The tree's slide and fade (`useTreeRowMotion`). */
+const TRANSITION_MS = 160;
+/**
+ * How far into a transition every sample is still on the way: its easing has
+ * covered under 95% of the distance by then, with a frame of lateness to spare.
+ */
+const MID_TRANSITION_MS = 90;
+/** A gap between two samples this long is a stall, not a frame. */
+const STALL_MS = 50;
 /** Every sample of row `id`, with the frame it was drawn in. */
 export interface Drawn extends RowSample {
   readonly frame: number;
@@ -412,8 +426,10 @@ export function expectHeld(recording: Recording, id: string): void {
   }
 }
 /**
- * The row glides from where it began to `delta` px away: it is drawn in
- * between, on the way and in one direction, and it ends there.
+ * The row glides from where it began to `delta` px away: in one direction, it
+ * ends there, and every frame drawn in the first `MID_TRANSITION_MS` after it
+ * leaves its place is between the two. A stall longer than the transition
+ * hides the glide, so only the ends and the direction are asserted then.
  */
 export function expectSlides(
   recording: Recording,
@@ -425,19 +441,23 @@ export function expectSlides(
   const rows = drawn(recording, id);
   expect(rows.length, `${id} is drawn`).toBeGreaterThan(0);
   expect(rows[rows.length - 1].top, `${id} ends`).toBeCloseTo(end, 0);
-  const between = distinct(
-    rows
-      .map((row) => row.top)
-      .filter(
-        (top) =>
-          Math.abs(top - start) > SUBPIXEL_PX &&
-          Math.abs(top - end) > SUBPIXEL_PX,
-      ),
+  const moved = rows.findIndex(
+    (row) => Math.abs(row.top - start) > SUBPIXEL_PX,
   );
-  expect(
-    between.length,
-    `${id} is drawn between its two places`,
-  ).toBeGreaterThanOrEqual(2);
+  expect(moved, `${id} leaves its place`).toBeGreaterThan(0);
+  const departed = rows[moved].at;
+  if (departed - rows[moved - 1].at <= TRANSITION_MS) {
+    const onTheWay = rows
+      .slice(moved)
+      .filter((row) => row.at - departed <= MID_TRANSITION_MS);
+    for (const row of onTheWay) {
+      expect(
+        Math.abs(row.top - start) > SUBPIXEL_PX &&
+          Math.abs(row.top - end) > SUBPIXEL_PX,
+        `${id} is between its two places at ${String(row.at)} ms (frame ${String(row.frame)}, top ${String(row.top)})`,
+      ).toBe(true);
+    }
+  }
   const direction = Math.sign(delta);
   for (let i = 1; i < rows.length; i += 1) {
     expect(
@@ -478,38 +498,61 @@ export function expectVanishesAtOnce(recording: Recording, id: string): void {
     `${id} after the change`,
   ).toEqual([]);
 }
+/** When frame `frame` of the recording was sampled. */
+function sampledAt(recording: Recording, frame: number): number {
+  const rows = recording[frame];
+  if (rows.length === 0) throw new Error(`frame ${String(frame)} drew nothing`);
+  return rows[0].at;
+}
 /**
  * The row fades where it stood: it stays at its place while its opacity falls
- * to nothing and its box drifts left, and then it is gone.
+ * and its box drifts left, and then it is gone. Every frame drawn in the first
+ * `MID_TRANSITION_MS` after it starts to fade is part faded. How faint it gets
+ * and how far it drifts are asserted unless a stall swallowed the fade's end.
  */
 export function expectFadesInPlace(recording: Recording, id: string): void {
   const start = startTop(recording, id);
   const rows = drawn(recording, id).filter((row) => row.frame > 0);
-  expect(rows.length, `${id} is drawn after the change`).toBeGreaterThanOrEqual(
-    3,
-  );
+  expect(rows.length, `${id} is drawn after the change`).toBeGreaterThan(0);
   for (const row of rows) {
     expect(row.top, `${id} frame ${String(row.frame)}`).toBeCloseTo(start, 0);
   }
-  expect(
-    Math.min(...rows.map((row) => row.opacity)),
-    `${id}'s faintest`,
-  ).toBeLessThanOrEqual(FADED);
   for (let i = 1; i < rows.length; i += 1) {
     expect(
       rows[i].opacity,
       `${id} never brightens (frame ${String(rows[i].frame)})`,
     ).toBeLessThanOrEqual(rows[i - 1].opacity + 0.02);
   }
-  const before = drawn(recording, id)[0].left;
+  const last = rows[rows.length - 1];
+  expect(last.frame, `${id} is gone before the recording ends`).toBeLessThan(
+    recording.length - 1,
+  );
+  const fading = rows.findIndex((row) => row.opacity < 0.99);
+  const gone = sampledAt(recording, last.frame + 1);
+  if (gone - last.at > STALL_MS) {
+    expect(
+      fading === -1 || gone - rows[fading].at <= TRANSITION_MS + STALL_MS,
+      `${id}: a stall from ${String(last.at)} to ${String(gone)} ms ended the fade`,
+    ).toBe(true);
+    return;
+  }
+  expect(fading, `${id} fades`).toBeGreaterThanOrEqual(0);
+  const began = rows[fading].at;
+  for (const row of rows.slice(fading)) {
+    if (row.at - began > MID_TRANSITION_MS) break;
+    expect(
+      row.opacity,
+      `${id} is still part faded at ${String(row.at)} ms (frame ${String(row.frame)})`,
+    ).toBeGreaterThan(FADED);
+  }
+  expect(
+    Math.min(...rows.map((row) => row.opacity)),
+    `${id}'s faintest`,
+  ).toBeLessThanOrEqual(FADED);
   expect(
     Math.min(...rows.map((row) => row.left)),
     `${id} drifts left`,
-  ).toBeLessThan(before - 2);
-  const last = drawn(recording, id).at(-1)?.frame ?? 0;
-  expect(last, `${id} is gone before the recording ends`).toBeLessThan(
-    recording.length - 1,
-  );
+  ).toBeLessThan(drawn(recording, id)[0].left - 2);
 }
 
 /** The row is there before the change, solid whenever it is drawn, and gone by `byFrame`. */
@@ -691,4 +734,52 @@ export function expectSlidesBack(
       `${id} never turns back (frame ${String(rows[i].frame)})`,
     ).toBeGreaterThanOrEqual(-SUBPIXEL_PX);
   }
+}
+
+/**
+ * The row moves out towards `from` until frame `afterFrame`, never turning
+ * back, gets at least half a row of the way there, then moves back and ends
+ * at `to`, never turning back either: a row that slides while another fades
+ * and closes the gap once the fade ends. Where it is on `afterFrame` itself is
+ * not asserted: the sampler can read the slide a frame late.
+ */
+export function expectOutAndBack(
+  recording: Recording,
+  id: string,
+  glide: Glide,
+): void {
+  const { from, to, afterFrame } = glide;
+  const rows = drawn(recording, id);
+  const out = rows.filter((row) => row.frame <= afterFrame);
+  const back = rows.filter((row) => row.frame >= afterFrame);
+  expect(
+    out.length,
+    `${id} is drawn up to frame ${String(afterFrame)}`,
+  ).toBeGreaterThan(0);
+  expect(
+    back.length,
+    `${id} is drawn from frame ${String(afterFrame)}`,
+  ).toBeGreaterThan(0);
+  const outward = Math.sign(from - to);
+  for (let i = 1; i < out.length; i += 1) {
+    expect(
+      (out[i].top - out[i - 1].top) * outward,
+      `${id} moves out without turning (frame ${String(out[i].frame)})`,
+    ).toBeGreaterThanOrEqual(-SUBPIXEL_PX);
+  }
+  for (let i = 1; i < back.length; i += 1) {
+    expect(
+      (back[i].top - back[i - 1].top) * outward,
+      `${id} comes back without turning (frame ${String(back[i].frame)})`,
+    ).toBeLessThanOrEqual(SUBPIXEL_PX);
+  }
+  const turn = out[out.length - 1].top;
+  expect(
+    (turn - (from - (outward * ROW_PITCH) / 2)) * outward,
+    `${id} turns at ${String(turn)}, at least half a row towards ${String(from)}`,
+  ).toBeGreaterThanOrEqual(0);
+  expect(back[back.length - 1].top, `${id} ends the slide at`).toBeCloseTo(
+    to,
+    0,
+  );
 }
