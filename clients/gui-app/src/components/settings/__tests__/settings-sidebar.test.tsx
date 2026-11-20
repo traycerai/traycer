@@ -11,7 +11,7 @@ import {
 import { setMobileApp } from "@/lib/mobile-app";
 import {
   resetEnvironmentSectionReads,
-  windowHostOutage,
+  personalHostScopeOverrides,
   windowHostRunsPersonal,
 } from "@/components/settings/__tests__/environment-section-reads-fixture";
 import {
@@ -202,11 +202,11 @@ vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
 
 // The cloud road by default: a Personal pick offers the cloud's pages.
 vi.mock(
-  "@/components/settings/personal/use-window-host-personal",
+  "@/components/settings/personal/use-window-host-runs-personal",
   async () =>
     (
       await import("@/components/settings/__tests__/environment-section-reads-fixture")
-    ).windowHostPersonalModule,
+    ).windowHostRunsPersonalModule,
 );
 
 // The Secrets and GitHub entry renders only with a runner host (it needs the
@@ -1271,24 +1271,12 @@ describe("<SettingsSidebar /> Environment pick", () => {
     expect(present("secrets")).toBe(true);
   });
 
-  it("offers Personal's Secrets row neither during the window host's outage nor after it, until the host serves the list", async () => {
+  it("offers Personal's Secrets row while the window's host is unreachable, since the page reads the cloud", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
-    windowHostOutage.current = true;
+    personalHostScopeOverrides.current = { status: "unreachable" };
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+
     await renderRail();
-
-    expect(present("secrets")).toBe(false);
-
-    windowHostOutage.current = false;
-    windowHostRunsPersonal.current = true;
-    act(() => {
-      recordNegotiatedHostMethods("host-a", ["environment.status"]);
-    });
-
-    expect(present("secrets")).toBe(false);
-
-    act(() => {
-      recordNegotiatedHostMethods("host-a", [SECRETS_LIST]);
-    });
 
     expect(present("secrets")).toBe(true);
   });

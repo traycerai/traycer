@@ -1247,10 +1247,11 @@ this computer) or the `secretChangeRefusalLine` for a create refusal's code;
 `destination_unresolvable` reads "Couldn't reach <address>. Check the server
 address, then save again." On a team's host the page is the team line, no list.
 On a host that does not serve `environment.secrets.list`, Settings offers no
-Secrets row, search hit or palette row (none while that is still unknown, or
-while the window's host is out under Personal, `useEnvironmentSectionShown`;
-the palette's Settings rows resolve the pick themselves, in a window where
-Settings has not opened), and the page reached there anyway shows its title
+Secrets row, search hit or palette row (none while that is still unknown,
+`useEnvironmentSectionShown`; while the window's host is out, Personal follows
+the cloud as its page does; the palette's Settings rows resolve the pick
+themselves, in a window where Settings has not opened), and the page reached
+there anyway shows its title
 and nothing under it. **Replace** (`environment.secrets.replaceValue`, compare-and-set on the
 version the list showed; a stale answer asks to look again) carries the same
 custody sentence, and the row then reads the rotation

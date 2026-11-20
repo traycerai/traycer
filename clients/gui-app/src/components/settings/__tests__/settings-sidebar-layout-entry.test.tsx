@@ -34,11 +34,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 // The sidebar's section filters read whether the window's host runs Personal;
 // this suite is about the Layout entry, so the cloud road stands in.
 vi.mock(
-  "@/components/settings/personal/use-window-host-personal",
+  "@/components/settings/personal/use-window-host-runs-personal",
   async () =>
     (
       await import("@/components/settings/__tests__/environment-section-reads-fixture")
-    ).windowHostPersonalModule,
+    ).windowHostRunsPersonalModule,
 );
 
 // The Environment dropdown reads each registered computer's

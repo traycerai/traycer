@@ -41,7 +41,7 @@ import {
   ConfigurationSourceBoundary,
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
-import { useWindowHostPersonal } from "@/components/settings/personal/use-window-host-personal";
+import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
@@ -194,7 +194,7 @@ function PersonalSourceFrame(props: {
   readonly pick: EnvironmentPick;
   readonly children: ReactNode;
 }): ReactNode {
-  const { runs } = useWindowHostPersonal(usePersonalHostScope());
+  const runs = useWindowHostRunsPersonal(usePersonalHostScope());
   if (runs === null) {
     return (
       <AgentSpinningDots

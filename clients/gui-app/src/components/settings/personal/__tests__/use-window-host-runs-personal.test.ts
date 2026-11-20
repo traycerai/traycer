@@ -5,7 +5,7 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
-import { useWindowHostPersonal } from "@/components/settings/personal/use-window-host-personal";
+import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
 
 const reads = vi.hoisted(() => ({
   data: null,
@@ -31,54 +31,54 @@ afterEach(() => {
   reads.version = null;
 });
 
-describe("useWindowHostPersonal", () => {
-  it("is the cloud road, with no outage, for a window with no host", () => {
+describe("useWindowHostRunsPersonal", () => {
+  it("is the cloud road for a window with no host", () => {
     const { result } = renderHook(() =>
-      useWindowHostPersonal(hostScopeFixture({ host: null })),
+      useWindowHostRunsPersonal(hostScopeFixture({ host: null })),
     );
 
-    expect(result.current).toEqual({ runs: false, outage: false });
+    expect(result.current).toBe(false);
   });
 
   it.each(["unreachable", "vanished"] as const)(
-    "is the cloud road, in an outage, for a host that is %s",
+    "is the cloud road, as the page reads it, for a host that is %s",
     (status) => {
       const { result } = renderHook(() =>
-        useWindowHostPersonal(hostScopeFixture({ host: HOST, status })),
+        useWindowHostRunsPersonal(hostScopeFixture({ host: HOST, status })),
       );
 
-      expect(result.current).toEqual({ runs: false, outage: true });
+      expect(result.current).toBe(false);
     },
   );
 
-  it("is unknown, with no outage, until the host answers its status", () => {
+  it("is unknown until the host answers its status", () => {
     reads.version = { major: 1, minor: 3 };
 
     const { result } = renderHook(() =>
-      useWindowHostPersonal(hostScopeFixture({ host: HOST })),
+      useWindowHostRunsPersonal(hostScopeFixture({ host: HOST })),
     );
 
-    expect(result.current).toEqual({ runs: null, outage: false });
+    expect(result.current).toBeNull();
   });
 
-  it("is the cloud road, in an outage, when the status read errored", () => {
+  it("is the cloud road when the status read errored", () => {
     reads.version = { major: 1, minor: 3 };
     reads.isError = true;
 
     const { result } = renderHook(() =>
-      useWindowHostPersonal(hostScopeFixture({ host: HOST })),
+      useWindowHostRunsPersonal(hostScopeFixture({ host: HOST })),
     );
 
-    expect(result.current).toEqual({ runs: false, outage: true });
+    expect(result.current).toBe(false);
   });
 
-  it("is the cloud road, with no outage, for a host that does not serve the status", () => {
+  it("is the cloud road for a host that does not serve the status", () => {
     reads.version = false;
 
     const { result } = renderHook(() =>
-      useWindowHostPersonal(hostScopeFixture({ host: HOST })),
+      useWindowHostRunsPersonal(hostScopeFixture({ host: HOST })),
     );
 
-    expect(result.current).toEqual({ runs: false, outage: false });
+    expect(result.current).toBe(false);
   });
 });

@@ -13,7 +13,7 @@ import {
  * model that resolves the window's default pick. A suite mocks the module that
  * owns each read with the matching `*Module` below and sets the `current` of
  * its state; the reads' own states are `personal-page-frame.test.tsx`'s,
- * `use-window-host-personal.test.ts`'s and `use-host-scope-*.test.tsx`'s.
+ * `use-window-host-runs-personal.test.ts`'s and `use-host-scope-*.test.tsx`'s.
  *
  * The defaults are the cloud road: `host-a` is the window's host, it does not
  * run Personal and is reachable, so a Personal pick offers the cloud's pages,
@@ -23,8 +23,6 @@ export const windowHostRunsPersonal: { current: boolean | null } = {
   current: false,
 };
 
-export const windowHostOutage: { current: boolean } = { current: false };
-
 export const personalHostScopeOverrides: {
   current: Partial<HostScope>;
 } = { current: {} };
@@ -33,14 +31,9 @@ export const pickerDefaultPick: { current: EnvironmentPick } = {
   current: UNRESOLVED_PICK,
 };
 
-export const windowHostPersonalModule = {
-  useWindowHostPersonal: (): {
-    readonly runs: boolean | null;
-    readonly outage: boolean;
-  } => ({
-    runs: windowHostRunsPersonal.current,
-    outage: windowHostOutage.current,
-  }),
+export const windowHostRunsPersonalModule = {
+  useWindowHostRunsPersonal: (): boolean | null =>
+    windowHostRunsPersonal.current,
 };
 
 export const personalHostScopeModule = {
@@ -69,7 +62,6 @@ export const environmentStatusModelModule = {
 
 export function resetEnvironmentSectionReads(): void {
   windowHostRunsPersonal.current = false;
-  windowHostOutage.current = false;
   personalHostScopeOverrides.current = {};
   pickerDefaultPick.current = UNRESOLVED_PICK;
 }

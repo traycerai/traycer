@@ -11,11 +11,11 @@ vi.mock(
     ).personalHostScopeModule,
 );
 vi.mock(
-  "@/components/settings/personal/use-window-host-personal",
+  "@/components/settings/personal/use-window-host-runs-personal",
   async () =>
     (
       await import("@/components/settings/__tests__/environment-section-reads-fixture")
-    ).windowHostPersonalModule,
+    ).windowHostRunsPersonalModule,
 );
 vi.mock(
   "@/components/settings/environment/use-environment-status-model",
