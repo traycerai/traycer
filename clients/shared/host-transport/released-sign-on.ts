@@ -5,7 +5,10 @@ import type {
   OpenFrameBearerSource,
 } from "../auth/bearer-source";
 import type { StreamAuthRevalidator } from "../auth/bearer-revalidator";
-import type { TrackedHostTokens } from "../auth/host-token-lease";
+import {
+  authnDidNotAnswer,
+  type TrackedHostTokens,
+} from "../auth/host-token-lease";
 import { readHostOwnershipViaHttp } from "../host-client/host-ownership";
 import { hostDoorStateOfRefusal } from "./host-door-state";
 import type { HostRequestAuthority } from "./host-messenger";
@@ -91,17 +94,17 @@ export const NO_HOST_TOKEN_PROBE = "no-host-only-token";
 
 /**
  * No host-only token can be presented to this machine's host: authn has no row
- * for this person, or it could not be reached and none is held.
+ * for this person, or it did not answer (`authnDidNotAnswer`) and none is held.
  */
 export function hostTokenUnobtainable(
   tokens: TrackedHostTokens,
   userId: string,
   hostId: string,
 ): boolean {
-  const failure = tokens.lastMintFailure(userId, hostId);
   return (
-    failure === "not-admitted" ||
-    (failure === "unavailable" && tokens.current(userId, hostId) === null)
+    tokens.lastMintFailure(userId, hostId) === "not-admitted" ||
+    (authnDidNotAnswer(tokens, userId, hostId) &&
+      tokens.current(userId, hostId) === null)
   );
 }
 

@@ -63,17 +63,35 @@ export function trackHostTokenMints(
 }
 
 /**
- * The held host-only token a local door is given past its end: only while the
- * last mint could not reach authn, never after authn refused one. The host
- * admits it while it cannot reach authn either; once a mint succeeds, the fresh
- * token is presented.
+ * Whether the last mint for a pair failed without authn answering it: authn
+ * could not be reached (`unavailable`), or the window holds a sign-in authn has
+ * not confirmed yet (`no-sign-in`: an app started or restarted while authn
+ * could not be reached, whose session is still unverified). Asked only where
+ * the caller holds the person's sign-in lease, so `no-sign-in` never means
+ * signed out here.
+ */
+export function authnDidNotAnswer(
+  tokens: TrackedHostTokens,
+  userId: string,
+  hostId: string,
+): boolean {
+  const failure = tokens.lastMintFailure(userId, hostId);
+  return failure === "unavailable" || failure === "no-sign-in";
+}
+
+/**
+ * The held host-only token a local door is given past its end: only while
+ * authn did not answer the last mint, never after it refused one. The token is
+ * kept on disk, so this holds across an app restart. The host admits it while
+ * it cannot reach authn either; once a mint succeeds, the fresh token is
+ * presented.
  */
 export function heldWhileAuthnUnreachable(
   tokens: TrackedHostTokens,
   userId: string,
   hostId: string,
 ): HostToken | null {
-  return tokens.lastMintFailure(userId, hostId) === "unavailable"
+  return authnDidNotAnswer(tokens, userId, hostId)
     ? tokens.current(userId, hostId)
     : null;
 }
