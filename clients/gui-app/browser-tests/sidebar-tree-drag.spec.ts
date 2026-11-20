@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { fixture, nextFrames, type Point } from "./support/fixtures.ts";
+import { fixture, type Point } from "./support/fixtures.ts";
 
 // The virtualised sidebar chat tree under the real `RootDndProvider`
 // (`chat-tree-drag.html`): real pointer and keyboard drags over a few hundred
@@ -25,10 +25,14 @@ interface ReparentRequest {
   readonly newParentId: string | null;
 }
 
-async function openTree(page: Page, chats: number): Promise<void> {
-  await page.goto(`${fixture("chat-tree-drag")}?chats=${String(chats)}`);
+async function openTreeAt(page: Page, search: string): Promise<void> {
+  await page.goto(`${fixture("chat-tree-drag")}?${search}`);
   await page.waitForFunction("window.__chatTreeDragProbe?.ready === true");
   await expect(page.getByTestId(`${ROW_PREFIX}chat-000`)).toBeVisible();
+}
+
+async function openTree(page: Page, chats: number): Promise<void> {
+  await openTreeAt(page, `chats=${String(chats)}`);
 }
 
 function scroller(page: Page): Locator {
@@ -64,16 +68,74 @@ async function scrollTop(page: Page): Promise<number> {
   return scroller(page).evaluate((node) => node.scrollTop);
 }
 
-/** Waits until the scroller has stopped moving, in frames. */
-async function scrollSettled(page: Page): Promise<void> {
-  let last = -1;
-  let stable = 0;
-  while (stable < 6) {
-    await nextFrames(page, 1);
-    const now = await scrollTop(page);
-    stable = now === last ? stable + 1 : 0;
-    last = now;
-  }
+/**
+ * dnd-kit's auto-scroller ticks every 5ms, so a scroll that has not moved the
+ * list for 250ms (fifty ticks) is not in progress.
+ */
+const NO_SCROLL_SPAN_MS = 250;
+
+/**
+ * Runs `action` and resolves once the list has finished any scrolling it
+ * caused: the scroller's `scrollend`, armed before the action so it cannot be
+ * missed, or no `scroll` event for `NO_SCROLL_SPAN_MS`. The second covers an
+ * action that scrolls nothing and a scroll the list writes straight to
+ * `scrollTop` after a `scrollend` (its own anchor correction), which ends
+ * without another `scrollend`. Only for a scroll the action itself starts: a
+ * scroll that starts after React work can begin after the quiet span has
+ * already passed.
+ */
+async function afterScrollEnds(
+  page: Page,
+  action: () => Promise<void>,
+): Promise<void> {
+  await page.evaluate((selector) => {
+    const scroller = [...document.querySelectorAll(selector)]
+      .filter((node) => node.querySelector("ul[role=tree]") !== null)
+      .at(-1);
+    if (scroller === undefined) throw new Error("no sidebar scroller");
+    const watch = {
+      ended: false,
+      lastScrollAt: performance.now(),
+      stop: (): void => {},
+    };
+    const onScroll = (): void => {
+      watch.ended = false;
+      watch.lastScrollAt = performance.now();
+    };
+    const onScrollEnd = (): void => {
+      watch.ended = true;
+    };
+    watch.stop = (): void => {
+      scroller.removeEventListener("scroll", onScroll);
+      scroller.removeEventListener("scrollend", onScrollEnd);
+    };
+    scroller.addEventListener("scroll", onScroll);
+    scroller.addEventListener("scrollend", onScrollEnd);
+    Reflect.set(window, "__scrollWatch", watch);
+  }, SCROLLER);
+  await action();
+  await page.evaluate(
+    (span) =>
+      new Promise<void>((resolve) => {
+        const watch: unknown = Reflect.get(window, "__scrollWatch");
+        if (typeof watch !== "object" || watch === null) {
+          throw new Error("no scroll watch");
+        }
+        const tick = (): void => {
+          const ended = Reflect.get(watch, "ended") === true;
+          const lastScrollAt = Number(Reflect.get(watch, "lastScrollAt"));
+          if (ended || performance.now() - lastScrollAt >= span) {
+            const stop: unknown = Reflect.get(watch, "stop");
+            if (typeof stop === "function") Reflect.apply(stop, watch, []);
+            resolve();
+          } else {
+            requestAnimationFrame(tick);
+          }
+        };
+        requestAnimationFrame(tick);
+      }),
+    NO_SCROLL_SPAN_MS,
+  );
 }
 
 async function scrollerBox(page: Page) {
@@ -100,6 +162,54 @@ async function startDrag(page: Page, id: string): Promise<Point> {
 
 function overlay(page: Page): Locator {
   return page.locator('div[style*="position: fixed"][style*="touch-action"]');
+}
+
+/**
+ * A stalled auto-scroll also needs this many rendered frames with the list
+ * still: dnd-kit arms its 5 ms interval only once the pointer move it reacts
+ * to has rendered, so one long render can use up the real-time span before
+ * the scroller had a chance to move. Time alone reads a slow render as a
+ * stall; frames alone read a fast display as one.
+ */
+const STALL_FRAMES = 15;
+
+/**
+ * Whether the list's `scrollTop` leaves `before` before both `spanMs` of real
+ * time and `STALL_FRAMES` rendered frames have passed.
+ */
+async function scrollsWithin(
+  page: Page,
+  before: number,
+  spanMs: number,
+): Promise<boolean> {
+  return page.evaluate(
+    ({ selector, from, span, minFrames }) =>
+      new Promise<boolean>((resolve) => {
+        const scroller = [...document.querySelectorAll(selector)]
+          .filter((node) => node.querySelector("ul[role=tree]") !== null)
+          .at(-1);
+        if (scroller === undefined) throw new Error("no sidebar scroller");
+        const startedAt = performance.now();
+        let frames = 0;
+        const tick = (): void => {
+          frames += 1;
+          if (scroller.scrollTop !== from) resolve(true);
+          else if (
+            performance.now() - startedAt >= span &&
+            frames >= minFrames
+          ) {
+            resolve(false);
+          } else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    {
+      selector: SCROLLER,
+      from: before,
+      span: spanMs,
+      minFrames: STALL_FRAMES,
+    },
+  );
 }
 
 /**
@@ -131,14 +241,8 @@ async function autoScrollBy(
     y = (await centreOf(row(page, near))).y;
     await page.mouse.move(x, y, { steps: 2 });
     const before = await scrollTop(page);
-    for (
-      let frame = 0;
-      frame < 30 && (await scrollTop(page)) === before;
-      frame += 1
-    ) {
-      await nextFrames(page, 1);
-    }
-    if ((await scrollTop(page)) === before) {
+    const moved = await scrollsWithin(page, before, NO_SCROLL_SPAN_MS);
+    if (!moved) {
       reaims += 1;
       const lit = await highlighted(page);
       const frames = JSON.stringify(
@@ -220,6 +324,51 @@ async function reparentRequests(page: Page): Promise<ReparentRequest[]> {
   return page.evaluate("window.__chatTreeDragProbe.reparentRequests()");
 }
 
+/**
+ * The row's centre once it is at rest: its motion wrapper (the parent of its
+ * drop wrapper) no longer holds a layout transform, so any slide has arrived.
+ */
+async function restedY(page: Page, id: string): Promise<number> {
+  const wrapper = dropWrapper(page, id).locator("xpath=..");
+  await expect
+    .poll(() => wrapper.evaluate((node) => getComputedStyle(node).transform), {
+      message: `${id} must come to rest`,
+      timeout: 10_000,
+    })
+    .toBe("none");
+  return (await centreOf(row(page, id))).y;
+}
+
+/** Starts recording whether the row's motion wrapper ever holds a transform. */
+async function watchSlide(page: Page, id: string): Promise<void> {
+  await page.evaluate(
+    ({ prefix, rowId }) => {
+      const state = { seen: false, stop: false };
+      Reflect.set(window, "__rowSlide", state);
+      const tick = (): void => {
+        const wrapper = document
+          .querySelector(`[data-testid="${prefix}${rowId}"]`)
+          ?.closest('[data-slot="context-menu-trigger"]')?.parentElement;
+        if (wrapper && getComputedStyle(wrapper).transform !== "none") {
+          state.seen = true;
+        }
+        if (!state.stop) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    },
+    { prefix: ROW_PREFIX, rowId: id },
+  );
+}
+
+async function slideSeen(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const state: unknown = Reflect.get(window, "__rowSlide");
+    if (typeof state !== "object" || state === null) return false;
+    Reflect.set(state, "stop", true);
+    return Reflect.get(state, "seen") === true;
+  });
+}
+
 async function release(page: Page): Promise<void> {
   await page.mouse.up();
   await expect(overlay(page)).toHaveCount(0);
@@ -252,8 +401,9 @@ async function dragToOffscreenRow(
     .annotations.push({ type: "reaims", description: String(scrolled.reaims) });
   const box = await scrollerBox(page);
   const middle = box.y + box.height / 2;
-  await page.mouse.move(start.x, middle, { steps: 4 });
-  await scrollSettled(page);
+  await afterScrollEnds(page, () =>
+    page.mouse.move(start.x, middle, { steps: 4 }),
+  );
   const target = await rowNearest(page, middle, [SOURCE]);
   // On a tree that mounts every row there is nothing off-screen to prove.
   if (initial.length < CHAT_COUNT) {
@@ -332,14 +482,13 @@ test("C: dropping a nested chat on the panel's empty space un-nests it to root",
   expect(empty.y, "the point must lie below the last row").toBeGreaterThan(
     last.y + 20,
   );
-  const start = await startDrag(page, "chat-002-a");
+  await startDrag(page, "chat-002-a");
   await page.mouse.move(empty.x, empty.y, { steps: 6 });
   await expect(page.locator('[class*="ring-primary/50"]')).toHaveCount(1);
   await release(page);
   await expect
     .poll(() => reparentRequests(page))
     .toEqual([{ chatId: "chat-002-a", newParentId: null }]);
-  void start;
 });
 
 test("D: the dragged row stays mounted through a far scroll, the overlay stays under the pointer and auto-scroll keeps going", async ({
@@ -401,6 +550,8 @@ test("E: a row that grows mid-drag moves the rows below it with every row still 
   await openTree(page, 12);
   await page.evaluate(() => window.__chatTreeDragProbe.collapse("chat-002"));
   await expect(row(page, "chat-002-a")).toHaveCount(0);
+  // The collapse slides the rows below up; the press lands where SOURCE ends.
+  await restedY(page, SOURCE);
   const start = await startDrag(page, SOURCE);
   const mountedBefore = (await mountedIds(page)).sort();
   const target = "chat-003";
@@ -415,12 +566,12 @@ test("E: a row that grows mid-drag moves the rows below it with every row still 
       message: "the target must move down",
     })
     .toBeGreaterThan(targetBefore.y + 20);
-  await nextFrames(page, 4);
+  const targetNowY = await restedY(page, target);
   expect(
     (await mountedIds(page)).sort(),
     "the growth must not change which rows are mounted, or dnd-kit re-measures by itself",
   ).toEqual(mountedBefore);
-  const targetNow = await centreOf(row(page, target));
+  const targetNow = { x: start.x, y: targetNowY };
   const scrollerNow = await scrollerBox(page);
   expect(
     targetNow.y,
@@ -428,6 +579,10 @@ test("E: a row that grows mid-drag moves the rows below it with every row still 
   ).toBeLessThan(scrollerNow.y + scrollerNow.height * 0.8);
   await page.mouse.move(start.x, targetNow.y, { steps: 3 });
   await expect(dropWrapper(page, target)).toHaveClass(RING);
+  expect(
+    (await mountedIds(page)).sort(),
+    "the mounted rows must be the same at the drop, so only the re-measure could have corrected the targets",
+  ).toEqual(mountedBefore);
   await release(page);
   await expect
     .poll(() => reparentRequests(page))
@@ -440,6 +595,8 @@ test("F: a folder that springs open mid-drag does not stale the rows below it: t
   await openTree(page, CHAT_COUNT);
   await page.evaluate(() => window.__chatTreeDragProbe.collapse("chat-001"));
   await expect(row(page, "chat-001-a")).toHaveCount(0);
+  // The collapse slides the rows below up; measure and press where they end.
+  await restedY(page, SOURCE);
   const folderBelow = (await centreOf(row(page, "chat-002"))).y;
   const start = await startDrag(page, SOURCE);
   const folder = await centreOf(row(page, "chat-001"));
@@ -448,19 +605,88 @@ test("F: a folder that springs open mid-drag does not stale the rows below it: t
     row(page, "chat-001-a"),
     "the folder must spring open",
   ).toBeVisible();
-  await nextFrames(page, 4);
-  const beforeOpen = folderBelow;
-  const below = await centreOf(row(page, "chat-002"));
+  const belowY = await restedY(page, "chat-002");
   expect(
-    below.y,
+    belowY,
     "the row below the folder must have moved down when it opened",
-  ).toBeGreaterThan(beforeOpen + 50);
-  await page.mouse.move(start.x, below.y, { steps: 4 });
+  ).toBeGreaterThan(folderBelow + 50);
+  await page.mouse.move(start.x, belowY, { steps: 4 });
   await expect(dropWrapper(page, "chat-002")).toHaveClass(RING);
   await release(page);
   await expect
     .poll(() => reparentRequests(page))
     .toEqual([{ chatId: SOURCE, newParentId: "chat-002" }]);
+});
+
+test("H: a row slide after auto-scroll does not stale the targets: the drop lands on the row hovered", async ({
+  page,
+}) => {
+  await openTreeAt(page, `chats=${String(CHAT_COUNT)}&folders=1`);
+  const folders = Array.from(
+    { length: 25 },
+    (_, step) => `chat-${String(10 + step * 2).padStart(3, "0")}`,
+  );
+  for (const folder of folders) {
+    await page.evaluate(
+      (id) => window.__chatTreeDragProbe.collapse(id),
+      folder,
+    );
+  }
+  const start = await startDrag(page, SOURCE);
+  await autoScrollBy(page, start.x, FAR_SCROLL_PX, SOURCE);
+  const box = await scrollerBox(page);
+  await afterScrollEnds(page, () =>
+    page.mouse.move(start.x, box.y + box.height / 2, { steps: 4 }),
+  );
+  // A collapsed folder in the upper part of the window, whose opening slides
+  // the rows below it by its three children. The band starts below dnd-kit's
+  // top auto-scroll zone (the top 20% of the scroller), so hovering the
+  // folder scrolls nothing, and ends high enough that the slid target stays
+  // above the bottom zone (from 80%). Folders sit every second root (60px),
+  // so the band (18% of 362px) always holds one.
+  const mounted = await mountedIds(page);
+  let folder: string | null = null;
+  for (const id of folders) {
+    if (!mounted.includes(id)) continue;
+    const at = await centreOf(row(page, id));
+    if (at.y > box.y + box.height * 0.22 && at.y < box.y + box.height * 0.4) {
+      folder = id;
+    }
+  }
+  if (folder === null)
+    throw new Error("no collapsed folder in the upper window");
+  const target = `chat-${String(Number(folder.slice(5)) + 1).padStart(3, "0")}`;
+  expect(mounted, "the target must be mounted before the slide").toContain(
+    target,
+  );
+  await watchSlide(page, target);
+  const folderAt = await centreOf(row(page, folder));
+  await page.mouse.move(start.x, folderAt.y, { steps: 4 });
+  await expect(
+    row(page, `${folder}-a`),
+    "the folder must spring open",
+  ).toBeVisible();
+  const settledAt = await restedY(page, target);
+  expect(
+    await slideSeen(page),
+    "the row below the folder must have slid with a transform, or the layout motion is not running",
+  ).toBe(true);
+  expect(
+    settledAt,
+    "the target must stay clear of the auto-scroll zone",
+  ).toBeLessThan(box.y + box.height * 0.8);
+  await page.mouse.move(start.x, settledAt, { steps: 4 });
+  await expect(dropWrapper(page, target)).toHaveClass(RING);
+  await expect(
+    page.locator(
+      '[data-slot="context-menu-trigger"][class*="ring-primary/70"]',
+    ),
+    "the hovered row must be the only one lit",
+  ).toHaveCount(1);
+  await release(page);
+  await expect
+    .poll(() => reparentRequests(page))
+    .toEqual([{ chatId: SOURCE, newParentId: target }]);
 });
 
 async function highlighted(page: Page): Promise<string | null> {
@@ -486,15 +712,10 @@ test("G: a keyboard drag carried past the window mounts rows that were not there
   await expect(overlay(page)).toHaveCount(1);
   let target: string | null = null;
   for (let press = 0; press < 150 && target === null; press += 1) {
-    await page.keyboard.press("ArrowDown");
-    await nextFrames(page, 1);
+    // The sensor may scroll the list under the overlay: read once it has ended.
+    await afterScrollEnds(page, () => page.keyboard.press("ArrowDown"));
     const lit = await highlighted(page);
-    if (lit !== null && !initial.includes(lit)) {
-      // The sensor may still be scrolling the list under the overlay.
-      await scrollSettled(page);
-      const still = await highlighted(page);
-      if (still !== null && !initial.includes(still)) target = still;
-    }
+    if (lit !== null && !initial.includes(lit)) target = lit;
   }
   if (target === null)
     throw new Error(

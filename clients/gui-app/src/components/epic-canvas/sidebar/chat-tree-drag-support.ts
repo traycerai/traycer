@@ -1,5 +1,6 @@
-import { useEffect, useEffectEvent, useMemo } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { useDndContext } from "@dnd-kit/core";
+import type { VirtualItem } from "@tanstack/react-virtual";
 import { SIDEBAR_NODE_DND_TYPE } from "@/components/epic-canvas/dnd/dnd";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { useChatTreeVirtual } from "@/components/epic-canvas/sidebar/chat-tree-virtual-context";
@@ -44,11 +45,28 @@ export function ChatTreeDragSupport(props: { readonly tabId: string }): null {
   const measureTargets = useEffectEvent(() => {
     dnd.measureDroppableContainers([]);
   });
+  const lastLayout = useRef<ReadonlyMap<VirtualItem["key"], string>>(new Map());
   useEffect(() => {
+    const layout = new Map(
+      virtualizer
+        .getVirtualItems()
+        .map((item): [VirtualItem["key"], string] => [
+          item.key,
+          `${item.start}:${item.size}`,
+        ]),
+    );
+    const before = lastLayout.current;
+    lastLayout.current = layout;
+    if (!dragging || !shown) return;
     // A row that stays mounted but moves - its height corrected from the
     // estimate, a folder spring-loaded open above it - changes no target, so
-    // dnd-kit would keep its old rect.
-    if (dragging && shown) measureTargets();
-  }, [dragging, shown, measureVersion]);
+    // dnd-kit would keep its old rect. A row that only enters or leaves the
+    // window changes the set of targets, which dnd-kit measures by itself.
+    const moved = [...layout].some(([key, at]) => {
+      const was = before.get(key);
+      return was !== undefined && was !== at;
+    });
+    if (moved) measureTargets();
+  }, [dragging, shown, measureVersion, virtualizer]);
   return null;
 }
