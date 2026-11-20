@@ -8,6 +8,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useInsertionEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -605,6 +606,25 @@ function BotChatTranscriptBody(props: {
   }>({ request: null, issued: 0 });
   const scrollRequest = scroll.request;
   const [pendingJump, setPendingJump] = useState<PendingJump | null>(null);
+  // Rule for `scroll` and `pendingJump`, which are also written during render
+  // (a landing settles there): outside render, neither is given a write that
+  // leaves it as the last commit had it. React keeps such a write without
+  // scheduling a render for it, and once a later render has skipped it,
+  // replays it over whatever that render wrote during render: a landing made
+  // in between would lose its scroll or its jump. So a settle is passed on
+  // only for the request the last commit holds (`onScrollRequestSettled`),
+  // and a pending jump is written outside render only through
+  // `setJumpOutsideRender`, which ends no jump when none waits. `seek` can be
+  // given such a write too and needs no guard: render only ever clears a
+  // stale one, and does so again after a replay.
+  // The list settles a request this commit replaced from its own layout
+  // effect, which runs before this component's, so the id is published in
+  // the insertion phase, ahead of every layout effect of the commit (as the
+  // list's own `listRowsRef` is).
+  const committedRequestIdRef = useRef<number | null>(null);
+  useInsertionEffect(() => {
+    committedRequestIdRef.current = scrollRequest?.requestId ?? null;
+  }, [scrollRequest]);
   const { ordinal: seekOrdinal, seek: setSeekOrdinal } = useUnreadOrdinal(
     state.transcriptBaselineEpoch,
     handle.sessionGeneration,
@@ -623,16 +643,14 @@ function BotChatTranscriptBody(props: {
     },
     [],
   );
+  // `setJump` is how the caller writes the pending jump: the state's own
+  // setter during render, `setJumpOutsideRender` anywhere else.
   const jumpTo = useCallback(
-    (jump: PendingJump) => {
+    (jump: PendingJump, setJump: (next: PendingJump | null) => void) => {
       setSeekOrdinal(null);
       const target = jumpTargetIn(messages, jump);
-      if (target !== null) {
-        setPendingJump(null);
-        issueScroll(target);
-        return;
-      }
-      setPendingJump(jump);
+      setJump(target === null ? jump : null);
+      if (target !== null) issueScroll(target);
     },
     [issueScroll, messages, setSeekOrdinal],
   );
@@ -650,6 +668,7 @@ function BotChatTranscriptBody(props: {
               postId: landing.sendPostId,
               fallbackMessageId: landing.messageId,
             },
+        setPendingJump,
       ),
     [jumpTo],
   );
@@ -703,10 +722,20 @@ function BotChatTranscriptBody(props: {
   // in an event or an effect, whose render comes later (a wheel's comes a
   // task later): until it commits, the timer could speak of a jump already
   // ended or clear the one that replaced it. So every such write goes
-  // through `writeJumpOutsideRender`, which clears this first, and the timer
+  // through `setJumpOutsideRender`, which clears this first, and the timer
   // asks here before it acts. The writes made during render (a landing, a
   // reported miss, a send's fallback, a landing's new jump) never touch
   // this: a render may be discarded or run twice.
+  // The list can also report a movement from inside a commit, in a layout
+  // effect of its own that runs before this one (following the end, it reads
+  // a view the browser moved ahead of the scroll report). The commit is the
+  // cut: a movement reported before the commit that leaves a jump waiting
+  // does not end that jump, whether it is reported in an event or in that
+  // commit's own layout phase, where it finds this cleared; one reported
+  // later does. Nothing here knows when a landing made during render was
+  // asked, so no finer line can be drawn, and a movement made between that
+  // render and its commit counts as one before it. So this is published in
+  // the layout phase, where the timer is armed, and not earlier.
   const liveJumpRef = useRef<PendingJump | null>(null);
   useLayoutEffect(() => {
     liveJumpRef.current = pendingJump;
@@ -714,28 +743,26 @@ function BotChatTranscriptBody(props: {
       liveJumpRef.current = null;
     };
   }, [pendingJump]);
-  const writeJumpOutsideRender = useCallback((write: () => void) => {
+  const setJumpOutsideRender = useCallback((next: PendingJump | null) => {
+    if (next === null && liveJumpRef.current === null) return;
     liveJumpRef.current = null;
-    write();
+    setPendingJump(next);
   }, []);
   const expireJump = useCallback(
     (jump: PendingJump): boolean => {
       if (liveJumpRef.current !== jump) return false;
-      writeJumpOutsideRender(() => setPendingJump(null));
+      setJumpOutsideRender(null);
       return true;
     },
-    [writeJumpOutsideRender],
+    [setJumpOutsideRender],
   );
   usePendingJumpBound(pendingJump, expireJump);
   // The reader moved the view while a jump waited on its row: where they went
   // is where they stay. Clearing the jump is what releases the range the
-  // store holds open for it, below. The list is given this only while a jump
-  // waits: React keeps a write that changes nothing and replays it in a later
-  // render, after the jump that render set (`useLandOnMessage` lands during
-  // render), which would clear a jump asked after the reader moved.
+  // store holds open for it, below.
   const dropPendingJump = useCallback(
-    () => writeJumpOutsideRender(() => setPendingJump(null)),
-    [writeJumpOutsideRender],
+    () => setJumpOutsideRender(null),
+    [setJumpOutsideRender],
   );
   const locatedOrdinal = located.status === "found" ? located.ordinal : null;
   const { requestTranscriptOrdinal } = state;
@@ -754,6 +781,7 @@ function BotChatTranscriptBody(props: {
     [requestTranscriptOrdinal],
   );
   const onScrollRequestSettled = useCallback((requestId: number) => {
+    if (committedRequestIdRef.current !== requestId) return;
     setScroll((current) =>
       current.request !== null && current.request.requestId === requestId
         ? { request: null, issued: current.issued }
@@ -866,8 +894,9 @@ function BotChatTranscriptBody(props: {
       ...repliesBase,
       above: (messageId) => above.get(messageId) ?? null,
       open: (messageId) =>
-        writeJumpOutsideRender(() =>
-          jumpTo({ kind: "message", messageId, reportsMiss: false }),
+        jumpTo(
+          { kind: "message", messageId, reportsMiss: false },
+          setJumpOutsideRender,
         ),
     };
   }, [
@@ -875,8 +904,8 @@ function BotChatTranscriptBody(props: {
     jumpTo,
     messages,
     repliesBase,
+    setJumpOutsideRender,
     transcriptWindow,
-    writeJumpOutsideRender,
   ]);
   const listHeader = surface?.kind === "channel" ? surface.history : header;
   const intro = channelIntro(
@@ -906,7 +935,7 @@ function BotChatTranscriptBody(props: {
         return;
       }
       setSeekOrdinal(null);
-      writeJumpOutsideRender(() => setPendingJump(null));
+      setJumpOutsideRender(null);
       setScroll((previous) => ({
         request: {
           kind: "boundary",
@@ -916,7 +945,7 @@ function BotChatTranscriptBody(props: {
         issued: previous.issued + 1,
       }));
     },
-    [setSeekOrdinal, writeJumpOutsideRender],
+    [setJumpOutsideRender, setSeekOrdinal],
   );
 
   // The channel's first screen, as a created channel nobody has written in
@@ -991,7 +1020,7 @@ function BotChatTranscriptBody(props: {
                   systemOverlayActive={false}
                   scrollRequest={scrollRequest}
                   onScrollRequestSettled={onScrollRequestSettled}
-                  onReaderMoved={pendingJump === null ? null : dropPendingJump}
+                  onReaderMoved={dropPendingJump}
                   composerOverlayHeight={0}
                   subagentDrillIn={subagentDrillIn}
                 />
