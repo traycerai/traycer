@@ -171,6 +171,16 @@ export async function mockReactVirtual(
         ...options,
         observeElementRect: (instance, onRect) => {
           const untrack = trackList(instance);
+          const scroller = instance.scrollElement;
+          // jsdom reports a scrollHeight of 0, which the virtualizer reads as
+          // "nothing to scroll" and clamps every scroll to 0.
+          if (scroller !== null) {
+            Object.defineProperty(scroller, "scrollHeight", {
+              configurable: true,
+              get: () =>
+                Math.max(instance.getTotalSize(), state.viewportHeight),
+            });
+          }
           state.rectListeners.add(onRect);
           onRect({
             width: state.hidden ? 0 : VIEWPORT_WIDTH_PX,
