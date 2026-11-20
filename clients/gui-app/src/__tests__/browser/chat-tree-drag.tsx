@@ -9,7 +9,7 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { LazyMotion, domAnimation } from "motion/react";
+import { LazyMotion, domMax } from "motion/react";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -55,8 +55,9 @@ import "@/index.css";
  * start unmounted). The first roots are shaped for the specs:
  * - `chat-002` has the children `chat-002-a` and `chat-002-b`, EXPANDED, so a
  *   nested chat can be un-nested.
- * - `chat-0` + a folder index: the folder (see `FOLDER_ID`) has three children
- *   and starts COLLAPSED.
+ * - the folder (see `FOLDER_ID`) has three children.
+ * - `?folders=1` also gives every second root from `chat-010` to `chat-058` three
+ *   children, so a folder is always among the rows an auto-scroll brings in.
  *
  * `window.__chatTreeDragProbe` carries what a spec reads back: the parent the
  * session's projected tree gives a chat, and the `epic.reparentChat` requests
@@ -69,6 +70,11 @@ const ROOT_COUNT = Number(
   new URLSearchParams(window.location.search).get("chats") ?? "300",
 );
 const FOLDER_ID = "chat-001";
+const EXTRA_FOLDERS =
+  new URLSearchParams(window.location.search).get("folders") === "1";
+const EXTRA_FOLDER_IDS: readonly string[] = EXTRA_FOLDERS
+  ? Array.from({ length: 25 }, (_, step) => rootId(10 + step * 2))
+  : [];
 
 function rootId(index: number): string {
   return `chat-${String(index).padStart(3, "0")}`;
@@ -127,6 +133,11 @@ function seed(): Seed {
     [FOLDER_ID, `${FOLDER_ID}-a`],
     [FOLDER_ID, `${FOLDER_ID}-b`],
     [FOLDER_ID, `${FOLDER_ID}-c`],
+    ...EXTRA_FOLDER_IDS.flatMap((folder): Array<readonly [string, string]> => [
+      [folder, `${folder}-a`],
+      [folder, `${folder}-b`],
+      [folder, `${folder}-c`],
+    ]),
   ];
   for (const [parent, child] of children) {
     if (!Object.hasOwn(nodeById, parent)) continue;
@@ -555,7 +566,7 @@ const rootRoute = createRootRoute({
           remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
           fallback={<div data-fixture-runtime-fallback />}
         >
-          <LazyMotion features={domAnimation}>
+          <LazyMotion features={domMax}>
             <TooltipProvider>
               <EpicSessionContext value={SESSION}>
                 <SnapshotLoadingProvider
