@@ -1098,10 +1098,12 @@ export class WsStreamClient<
    * credential travels on this client's connection, which opened as
    * `options.userId`; after a switch it would be the next user's credential on
    * that connection. What a mint already running at a switch returns is the
-   * flow's own decision.
+   * flow's own decision. A connection a released host opened with the sign-in
+   * holds no host-only token; its sign-in is bound to the same user.
    */
   private liveHostCredentialMint(): HostCredentialMintFlow | null {
-    return this.bearer() === null ? null : this.options.hostCredentialMint;
+    const live = this.bearer() ?? this.releasedSignOn?.signIn() ?? null;
+    return live === null ? null : this.options.hostCredentialMint;
   }
 
   private async runMintFlow(
