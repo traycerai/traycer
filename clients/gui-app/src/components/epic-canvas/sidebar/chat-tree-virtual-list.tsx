@@ -1,10 +1,13 @@
 import {
+  Fragment,
   memo,
+  use,
   useCallback,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ContextType,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -14,6 +17,9 @@ import {
   useVirtualizer,
   type Range,
 } from "@tanstack/react-virtual";
+import { AnimatePresence, LayoutGroupContext } from "motion/react";
+import { OverlayAnchorHoldContext } from "@/components/ui/overlay-anchor-hold";
+import { useReducedMotion } from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 import { useIsActiveEpicArtifact } from "@/stores/epics/canvas/store";
 import { useCloudChatRowActive } from "@/components/epic-canvas/sidebar/use-cloud-chat-row-active";
@@ -29,7 +35,9 @@ import {
   usePinnedRowKeys,
   VirtualRowPinContext,
   withPinnedIndexes,
+  type VirtualRowPinStore,
 } from "@/components/epic-canvas/sidebar/virtual-row-pins";
+import { useChatTreeRowPresence } from "@/components/epic-canvas/sidebar/use-chat-tree-row-presence";
 import { useChatTreeListEffects } from "@/components/epic-canvas/sidebar/use-chat-tree-list-effects";
 import { ChatTreeDragSupport } from "@/components/epic-canvas/sidebar/chat-tree-drag-support";
 import {
@@ -113,6 +121,11 @@ export interface ChatTreeVirtualListProps {
    * facts change and not when the window moves it.
    */
   readonly renderRow: (row: ChatTreeRow) => ReactNode;
+  /**
+   * Whether a row that left the model left the task with it (its node is
+   * gone), so it goes at once rather than fading out where it stood.
+   */
+  readonly isRowGone: (row: ChatTreeRow) => boolean;
 }
 
 /**
@@ -126,7 +139,9 @@ export interface ChatTreeVirtualListProps {
  * recursive tree drew.
  */
 export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
-  const { model, tabId, scrollElement, regionRef, renderRow } = props;
+  const { tabId, scrollElement, regionRef, renderRow, isRowGone } = props;
+  const { model, departing, motionStamp, completeExit } =
+    useChatTreeRowPresence(props.model, isRowGone, !useReducedMotion());
   const { rows, indexByKey } = model;
   const [pinStore] = useState(createVirtualRowPinStore);
   const pinnedKeys = usePinnedRowKeys(pinStore);
@@ -151,6 +166,14 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
     measureElement: measureRow,
   });
   const items = virtualizer.getVirtualItems();
+  // A fading row the window does not draw has no fade to finish.
+  useLayoutEffect(() => {
+    if (departing.size === 0) return;
+    const drawn = new Set(items.map((item) => String(item.key)));
+    for (const key of departing.keys()) {
+      if (!drawn.has(key)) completeExit(key);
+    }
+  });
   const rangeVersion = items.map((item) => item.key).join("\n");
   const measureVersion = items
     .map((item) => `${item.start}:${item.size}`)
@@ -185,7 +208,7 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
   return (
     <ChatTreeVirtualContext.Provider value={api}>
       <VirtualRowPinContext.Provider value={pinStore}>
-        <ChatTreeListEffects />
+        <ChatTreeListEffects tabId={tabId} />
         <ChatTreeDragSupport tabId={tabId} />
         <ul
           ref={listRef}
@@ -193,8 +216,8 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
           aria-label="Epic agents tree"
           // The number of rows the tree draws - every row a branch shows,
           // none a collapsed branch hides - whether or not the window has
-          // them mounted.
-          data-chat-tree-row-count={rows.length}
+          // them mounted. A row still fading out is no longer one of them.
+          data-chat-tree-row-count={props.model.rows.length}
           className="relative"
           style={{ height: virtualizer.getTotalSize() }}
         >
@@ -207,6 +230,10 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
               measure={virtualizer.measureElement}
               tabId={tabId}
               renderRow={renderRow}
+              departing={departing.has(rows[item.index].key)}
+              motionStamp={motionStamp(rows[item.index])}
+              onExitComplete={completeExit}
+              pinStore={pinStore}
             />
           ))}
         </ul>
@@ -216,8 +243,8 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
 }
 
 /** Runs the effects seam with the live API, as its own leaf. */
-function ChatTreeListEffects(): null {
-  useChatTreeListEffects(useChatTreeVirtual());
+function ChatTreeListEffects(props: { readonly tabId: string }): null {
+  useChatTreeListEffects(useChatTreeVirtual(), props.tabId);
   return null;
 }
 
@@ -228,6 +255,26 @@ interface ChatTreeVirtualItemProps {
   readonly measure: (element: HTMLLIElement | null) => void;
   readonly tabId: string;
   readonly renderRow: (row: ChatTreeRow) => ReactNode;
+  /** Fading out where it stood; see `useChatTreeRowPresence`. */
+  readonly departing: boolean;
+  /** Changes in the render where this row may slide to a new place. */
+  readonly motionStamp: number;
+  readonly onExitComplete: (key: string) => void;
+  readonly pinStore: VirtualRowPinStore;
+}
+
+type LayoutGroup = ContextType<typeof LayoutGroupContext>;
+
+/**
+ * A copy of the surrounding layout group, made again for each new stamp.
+ * Motion re-measures a layout element whenever its layout group context
+ * changes, so a new copy makes the row's element slide from where it was
+ * drawn to where this render places it; under an unchanged copy the row is set
+ * down at its new offset, as a measurement correction or a scroll must be.
+ */
+function layoutGroupForStamp(parent: LayoutGroup, stamp: number): LayoutGroup {
+  void stamp;
+  return { ...parent };
 }
 
 const ChatTreeVirtualItem = memo(function ChatTreeVirtualItem(
@@ -260,7 +307,24 @@ function CloudTreeItem(
 function ChatTreeItemShell(
   props: ChatTreeVirtualItemProps & { readonly selected: boolean },
 ) {
-  const { row, index, top, measure, renderRow, selected } = props;
+  const {
+    row,
+    index,
+    top,
+    measure,
+    renderRow,
+    selected,
+    departing,
+    motionStamp,
+    onExitComplete,
+    pinStore,
+  } = props;
+  const parentLayoutGroup = use(LayoutGroupContext);
+  const layoutGroup = useMemo(
+    () => layoutGroupForStamp(parentLayoutGroup, motionStamp),
+    [parentLayoutGroup, motionStamp],
+  );
+  const holdRow = useCallback(() => pinStore.pin(row.key), [pinStore, row.key]);
   const guideDepths: number[] = [];
   for (let depth = 0; depth < row.depth; depth += 1) guideDepths.push(depth);
   return (
@@ -282,7 +346,22 @@ function ChatTreeItemShell(
       {guideDepths.map((depth) => (
         <TreeGroupGuide key={depth} parentDepth={depth} />
       ))}
-      {renderRow(row)}
+      <LayoutGroupContext.Provider value={layoutGroup}>
+        <OverlayAnchorHoldContext.Provider value={holdRow}>
+          {/* The row's own presence, so its exit runs where it stood. It
+            never marks the row for a re-measure (`presenceAffectsLayout`):
+            the stamp above decides when a row slides. */}
+          <AnimatePresence
+            initial={false}
+            presenceAffectsLayout={false}
+            onExitComplete={() => {
+              onExitComplete(row.key);
+            }}
+          >
+            {departing ? null : <Fragment key="row">{renderRow(row)}</Fragment>}
+          </AnimatePresence>
+        </OverlayAnchorHoldContext.Provider>
+      </LayoutGroupContext.Provider>
     </li>
   );
 }

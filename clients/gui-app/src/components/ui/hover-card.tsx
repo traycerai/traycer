@@ -37,6 +37,7 @@ import { DismissableLayer } from "radix-ui/internal";
 
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
 import { useAnyMenuOpen } from "@/components/ui/open-menus";
+import { useOverlayAnchorHold } from "@/components/ui/overlay-anchor-hold";
 import { TooltipsSuppressedContext } from "@/components/ui/tooltip-wrapper";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
@@ -288,6 +289,7 @@ export function HoverCard(props: HoverCardProps): ReactNode {
   // parent is told to drop its.
   if (suppressed && uncontrolledOpen) setUncontrolledOpen(false);
   const open = (props.open ?? uncontrolledOpen) && !suppressed;
+  useOverlayAnchorHold(open);
   const controlledOpen = props.open === true;
   const onOpenChange = props.onOpenChange;
   useEffect(() => {

@@ -166,10 +166,7 @@ import {
   useEpicSidebarEffectiveExpanded,
   useEpicSidebarExpansionStore,
 } from "@/stores/epics/epic-sidebar-expansion-store";
-import {
-  clearSidebarNodeRevealRequest,
-  useSidebarNodeRevealRequest,
-} from "@/stores/epics/sidebar-node-reveal-store";
+import { useSidebarNodeRevealRequest } from "@/stores/epics/sidebar-node-reveal-store";
 import {
   useAncestorIds,
   useEpicAgentRoleClaims,
@@ -267,7 +264,6 @@ import {
   SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
   anyMutationPending,
   chatRowClassName,
-  revealSidebarNode,
   useNodeIconDisplay,
   useTreeRowMotion,
 } from "./epic-sidebar-tree-shared";
@@ -392,6 +388,9 @@ const EMPTY_OWN_CLOUD_CHATS: ReadonlyMap<string, CloudChatSummary> = new Map();
  * fold of local ids onto cloud rows, whether this task has an audience).
  * Resolved once in `ChatTreePanelBody` and read by the rows.
  */
+/** The panel's scroller, as a motion element so it can be a layout scroller. */
+const MotionSidebarContent = m.create(SidebarContent);
+
 const SidebarChatSharingContext = createContext<SidebarChatSharingValue>({
   visibilitySupported: false,
   ownCloudChatByLocalId: EMPTY_OWN_CLOUD_CHATS,
@@ -1082,17 +1081,13 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     },
     [tabId, panelId, expandAction, collapseAction],
   );
+  // A reveal opens the row's ancestors here; the list scrolls to the row,
+  // flashes it and clears the request (`useChatTreeReveal`).
   useLayoutEffect(() => {
     if (revealRequest === null) return;
-    const region = treeRegionRef.current;
-    if (region === null) return;
     for (const ancestorId of ancestorIdsOfReveal) {
       expandAction(tabId, panelId, ancestorId);
     }
-    if (!revealSidebarNode(region, revealRequest.nodeId, revealRequest.nonce)) {
-      return;
-    }
-    clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
   }, [
     ancestorIdsOfReveal,
     expandAction,
@@ -1266,6 +1261,14 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // See `ChatTreeVirtualListProps.scrollElement`.
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(
     null,
+  );
+  // A local row whose node left the task goes at once: its row drew nothing
+  // from the moment the node was gone. Pending rows were never in a group.
+  const isRowGone = useCallback(
+    (row: ChatTreeRow): boolean =>
+      row.kind === "pending" ||
+      (row.kind === "local" && !Object.hasOwn(tree.nodeById, row.nodeId)),
+    [tree],
   );
   const renderRow = useCallback(
     (row: ChatTreeRow): ReactNode => {
@@ -1465,6 +1468,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
               scrollElement={scrollElement}
               regionRef={treeRegionRef}
               renderRow={renderRow}
+              isRowGone={isRowGone}
             />
           </m.div>
         )}
@@ -1498,7 +1502,13 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                       {/* One clock for the tree's rows, owner cards and name labels
                     alike: the first waits, the next row's opens at once. */}
                       <HoverCardGroup>
-                        <SidebarContent ref={setScrollElement}>
+                        {/* A layout scroller, so a row's slide is measured against the
+                        scroll it ends at: the list may move the scroll in the
+                        same frame to keep the rows in view where they were. */}
+                        <MotionSidebarContent
+                          layoutScroll
+                          ref={setScrollElement}
+                        >
                           <SidebarGroup className="min-h-0 flex-1">
                             <SidebarGroupContent
                               ref={treeRegionRef}
@@ -1509,7 +1519,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                               {messageHits.node}
                             </SidebarGroupContent>
                           </SidebarGroup>
-                        </SidebarContent>
+                        </MotionSidebarContent>
                       </HoverCardGroup>
                     </SidebarFilterVisibilityContext.Provider>
                   </SidebarSortClockContext.Provider>

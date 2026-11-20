@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { chatTreeLayout } from "@/__tests__/chat-tree-virtual-layout";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -113,6 +113,11 @@ describe("a row's own state while it is scrolled out of the window", () => {
     const user = userEvent.setup();
     await user.click(input);
     await user.keyboard("{Escape}");
+    // Escape hands focus back to the row, and a focused row stays mounted.
+    // Focus moves to another row, so only the ended rename could hold it.
+    act(() => {
+      screen.getByTestId("epic-sidebar-item-c0").focus();
+    });
 
     await waitFor(() => {
       expect(mountedChatIds()).not.toContain("c2");

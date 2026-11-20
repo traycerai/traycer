@@ -1,10 +1,11 @@
-import { createContext, use, type ReactNode } from "react";
+import { createContext, use, useState, type ReactNode } from "react";
 import { Slot } from "radix-ui";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useOverlayAnchorHold } from "@/components/ui/overlay-anchor-hold";
 
 /**
  * True where the app is being SHOWN rather than used, so a hover must not open
@@ -81,6 +82,10 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
     ...rest
   } = props;
   const suppressed = use(TooltipsSuppressedContext);
+  // Radix keeps an uncontrolled tooltip's state to itself; it is mirrored
+  // here only to hold the trigger's row while the label shows.
+  const [shown, setShown] = useState(false);
+  useOverlayAnchorHold(open ?? shown);
   // `undefined` degrades exactly like `null`. It used to fall through and
   // render an empty tooltip box, which is never what a caller means - and the
   // shape that produces it (`someReason ?? undefined`, left over from the
@@ -95,7 +100,13 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
     return <Slot.Root {...rest}>{children}</Slot.Root>;
   }
   return (
-    <Tooltip open={open} onOpenChange={onOpenChange}>
+    <Tooltip
+      open={open}
+      onOpenChange={(next) => {
+        setShown(next);
+        onOpenChange?.(next);
+      }}
+    >
       <TooltipTrigger asChild {...rest}>
         {children}
       </TooltipTrigger>
