@@ -81,3 +81,47 @@ describe("cursor is a reserved TuiHarnessId (read compatibility)", () => {
     }
   });
 });
+
+/**
+ * Antigravity terminal-agent persistence (staging).
+ *
+ * `antigravity` is promoted onto the TUI harness surface so that, once the
+ * internal host ships an `agy` launch adapter and advertises `modes:["tui"]`,
+ * its terminal-agent records persist and read back. The record shape mirrors
+ * Codex/Cursor: the resumable session id is host-back-filled, so it is
+ * nullable.
+ */
+describe("antigravity is a TuiHarnessId (staging persistence)", () => {
+  it("parses the 'antigravity' harness id", () => {
+    expect(tuiHarnessIdSchema.safeParse("antigravity").success).toBe(true);
+  });
+
+  it("parses a persisted antigravity terminal-agent record to its variant", () => {
+    const record = {
+      harnessId: "antigravity",
+      id: "tui-agy-1",
+      parentId: null,
+      title: "",
+      isTitleEditedByUser: false,
+      createdAt: 1,
+      updatedAt: 2,
+      hostId: "host-1",
+      userId: "user-1",
+      workspaceFolders: ["/repo"],
+      model: null,
+      reasoningEffort: null,
+      agentMode: "regular",
+      terminalAgentArgs: null,
+      terminalShellCommand: null,
+      terminalShellArgs: null,
+      profileId: null,
+      harnessSessionId: null,
+    };
+
+    const parsed = tuiAgentSchema.safeParse(record);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.harnessId).toBe("antigravity");
+    }
+  });
+});

@@ -49,6 +49,8 @@ import {
   type ListAgentsResponse,
   type ListAgentsResponseV92,
   tuiHarnessIdSchema,
+  canReceiveA2AMessages,
+  canUseA2ATools,
 } from "@traycer/protocol/host/agent/shared";
 import { providerIdSchema } from "@traycer/protocol/host/provider-ids";
 import {
@@ -74,7 +76,24 @@ describe("agent host schemas", () => {
       "codex",
       "opencode",
       "cursor",
+      "antigravity",
     ]);
+  });
+
+  it("accepts antigravity as a TUI harness id (staging, inert until host)", () => {
+    expect(tuiHarnessIdSchema.safeParse("antigravity").success).toBe(true);
+  });
+
+  it("keeps antigravity inert: no A2A transport on the terminal surface yet", () => {
+    // antigravity is a valid TUI harness id but, like cursor/codex/opencode,
+    // has no inbox transport, so it can be neither messaged nor handed the
+    // A2A tool catalog as a terminal agent until the host ships support.
+    expect(
+      canReceiveA2AMessages({ surface: "tui", harnessId: "antigravity" }),
+    ).toBe(false);
+    expect(
+      canUseA2ATools({ surface: "tui", harnessId: "antigravity" }),
+    ).toBe(false);
   });
 
   it("accepts the agent.gui.listCommands request and response shapes", () => {

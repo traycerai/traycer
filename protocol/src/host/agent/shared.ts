@@ -50,6 +50,15 @@ export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 // adapter does not implement the TUI surface, the runtime TUI catalog omits
 // Cursor, and `epic.createTuiAgent` / `agent.create` reject `harnessId: "cursor"`
 // on the Terminal interface.
+//
+// Antigravity is listed here as a STAGING value: the provider is a GUI (ACP)
+// harness today that runs `agy_acp_server`, and the separate `agy` CLI is its
+// Terminal binary. The id is accepted so that, once the host ships an `agy`
+// launch adapter and advertises `modes:["tui"]`, its terminal-agent records
+// persist and route under the one `antigravity` identity. Until then it is
+// inert for the same reasons as Cursor: no TUI adapter, the runtime TUI
+// catalog omits it, and it has no A2A inbox transport (`canReceiveA2AMessages`
+// is false for it).
 export const harnessIdSchema = getRecordSchema(
   commonRecordRegistry,
   "harness-id",
@@ -406,7 +415,7 @@ export const guiHarnessIdSchemaV90 = lazySchema(() =>
 export type GuiHarnessIdV90 = z.infer<typeof guiHarnessIdSchemaV90>;
 
 export const tuiHarnessIdSchema = lazySchema(() =>
-  harnessIdSchema.extract(["claude", "codex", "opencode", "cursor"]),
+  harnessIdSchema.extract(["claude", "codex", "opencode", "cursor", "antigravity"]),
 );
 export type TuiHarnessId = z.infer<typeof tuiHarnessIdSchema>;
 
