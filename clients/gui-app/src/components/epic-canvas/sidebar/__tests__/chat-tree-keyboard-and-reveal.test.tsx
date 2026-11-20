@@ -265,11 +265,17 @@ describe("Tab and Shift+Tab across the window", () => {
 });
 
 describe("a focused row that scrolls out", () => {
-  it("stays mounted and focused after the window moves far away", () => {
+  it("stays mounted and focused after the window moves far away", async () => {
     mountTree(rootChats(ROOT_COUNT));
     chatTreeLayout.scrollTo(MIDDLE_OFFSET_PX);
     const button = rowButton("c30");
     focus(button);
+    // Focus also opens the row's hover card, whose hold would keep the row
+    // without the focus pin. Escape closes it and leaves focus on the row.
+    await setup().keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.queryByTestId("hover-card-content")).toBeNull();
+    });
 
     chatTreeLayout.scrollTo(0);
 
