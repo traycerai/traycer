@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import { botAppearanceSchema } from "@traycer/protocol/host/bot/schemas";
 import {
   botListV10,
   botListV11,
   botListV12,
+  botListV13,
   botReadV10,
   botReadV11,
+  botReadV12,
   botUpdateAppearanceV10,
 } from "@traycer/protocol/host/bot/contracts";
 
@@ -35,7 +38,8 @@ const entry = hostRpcRegistry["bot.list"][1];
 
 describe("bot.list@1.1 main bot ids", () => {
   it("keeps 1.1 and 1.0 registered below the head", () => {
-    expect(entry.latestMinor).toBe(2);
+    expect(entry.latestMinor).toBe(3);
+    expect(entry.versions[3].contract).toBe(botListV13);
     expect(entry.versions[2].contract).toBe(botListV12);
     expect(entry.versions[1].contract).toBe(botListV11);
     expect(entry.versions[0].contract).toBe(botListV10);
@@ -85,6 +89,48 @@ describe("bot.list@1.1 main bot ids", () => {
   });
 });
 
+describe("bot profile choice directory field", () => {
+  const listEntry = hostRpcRegistry["bot.list"][1];
+  const readEntry = hostRpcRegistry["bot.read"][1];
+
+  it("carries the pending choice on bot.list@1.3 and bot.read@1.2, and strips it for older readers", () => {
+    const chosen = { ...BOT_ROW, profileChoice: "ambiguous" as const };
+    expect(
+      botListV13.responseSchema.parse({ bots: [chosen], mainBotIds: null })
+        .bots[0]?.profileChoice,
+    ).toBe("ambiguous");
+    expect(
+      botReadV12.responseSchema.parse({ bot: chosen }).bot.profileChoice,
+    ).toBe("ambiguous");
+
+    expect(
+      botListV12.responseSchema.parse({ bots: [chosen], mainBotIds: null })
+        .bots[0],
+    ).toEqual(BOT_ROW);
+    expect(botReadV11.responseSchema.parse({ bot: chosen }).bot).toEqual(
+      BOT_ROW,
+    );
+    expect(
+      botUpdateAppearanceV10.responseSchema.parse({ bot: chosen }).bot,
+    ).toEqual(BOT_ROW);
+  });
+
+  it("keeps profile choice optional and validates only the pending state", () => {
+    expect(
+      botListV13.responseSchema.parse({ bots: [BOT_ROW], mainBotIds: null })
+        .bots[0]?.profileChoice,
+    ).toBeUndefined();
+    expect(
+      botReadV12.responseSchema.safeParse({
+        bot: { ...BOT_ROW, profileChoice: "settled" },
+      }).success,
+    ).toBe(false);
+    expect(listEntry.versions[3].contract).toBe(botListV13);
+    expect(readEntry.latestMinor).toBe(2);
+    expect(readEntry.versions[2].contract).toBe(botReadV12);
+  });
+});
+
 describe("bot.list rows' app conversation", () => {
   it("reads a row from a host that predates the field as naming no conversation", () => {
     const olderRow = Object.fromEntries(
@@ -124,8 +170,7 @@ describe("bot.list rows' app conversation", () => {
 
 const APPEARANCE = {
   mark: { kind: "mascot", shape: "ghost" },
-  color: 3,
-  background: 20,
+  color: "#4c8af0",
 } as const;
 
 describe("bot appearance on the wire", () => {
@@ -164,11 +209,7 @@ describe("bot appearance on the wire", () => {
       bot: { ...BOT_ROW, appearance: APPEARANCE },
     }).bot.appearance;
 
-    expect(Object.keys(appearance ?? {}).sort()).toEqual([
-      "background",
-      "color",
-      "mark",
-    ]);
+    expect(Object.keys(appearance ?? {}).sort()).toEqual(["color", "mark"]);
   });
 
   it("reads a row without an appearance as naming none", () => {
@@ -219,10 +260,6 @@ describe("bot appearance on the wire", () => {
         { ...APPEARANCE, color: "unrecognised" },
       ],
       [
-        { ...APPEARANCE, background: 1.5 },
-        { ...APPEARANCE, background: "unrecognised" },
-      ],
-      [
         { ...APPEARANCE, eyewear: "monocle", accessory: "halo" },
         { ...APPEARANCE, eyewear: "unrecognised", accessory: "halo" },
       ],
@@ -249,9 +286,8 @@ describe("bot.updateAppearance request", () => {
         botId: BOT_A,
         mark: null,
         color: null,
-        background: null,
       }),
-    ).toEqual({ botId: BOT_A, mark: null, color: null, background: null });
+    ).toEqual({ botId: BOT_A, mark: null, color: null });
   });
 
   it("accepts an eyewear and an accessory, each nullable", () => {
@@ -263,21 +299,19 @@ describe("bot.updateAppearance request", () => {
     ).toEqual({ botId: BOT_A, eyewear: null, accessory: null });
   });
 
-  it("accepts a mascot and the color bounds", () => {
+  it("accepts a mascot and a hex colour", () => {
     expect(
       request.parse({
         botId: BOT_A,
         mark: { kind: "mascot", shape: "doc" },
-        color: 0,
-        background: 23,
-      }).background,
-    ).toBe(23);
+        color: "#93bdc8",
+      }).color,
+    ).toBe("#93bdc8");
   });
 
-  it("refuses an out-of-range color, an unknown shape or kind, and unrecognised", () => {
+  it("refuses a colour that is not a lowercase hex, an unknown shape or kind, and unrecognised", () => {
     for (const bad of [
       { color: 24 },
-      { background: 24 },
       { color: -1 },
       { color: "unrecognised" },
       { eyewear: "monocle" },
@@ -289,5 +323,68 @@ describe("bot.updateAppearance request", () => {
     ]) {
       expect(request.safeParse({ botId: BOT_A, ...bad }).success).toBe(false);
     }
+  });
+});
+
+/**
+ * A channel's background was once part of a bot's look and is gone. An older
+ * host or server may still send it, and an older client may still send it: it
+ * is read as an unknown key and dropped, the rest of the look intact.
+ */
+describe("a channel background an older peer still sends", () => {
+  const STALE_ROW = {
+    ...BOT_ROW,
+    appearance: { ...APPEARANCE, background: 7 },
+  };
+
+  it("is dropped from a bot.updateAppearance request, the other keys intact", () => {
+    const parsed = botUpdateAppearanceV10.requestSchema.parse({
+      botId: BOT_A,
+      color: "#f04c4c",
+      eyewear: "visor",
+      background: 5,
+    });
+
+    expect(parsed).toEqual({
+      botId: BOT_A,
+      color: "#f04c4c",
+      eyewear: "visor",
+    });
+    expect("background" in parsed).toBe(false);
+  });
+
+  it.each([7, "unrecognised", 1.5, null])(
+    "is dropped from an appearance that carries %s, the rest read as written",
+    (background) => {
+      const parsed = botAppearanceSchema.parse({ ...APPEARANCE, background });
+
+      expect(parsed).toEqual(APPEARANCE);
+      expect("background" in parsed).toBe(false);
+    },
+  );
+
+  it("is dropped from the rows of bot.list@1.2, bot.read@1.1 and bot.updateAppearance@1.0", () => {
+    const fromList = botListV12.responseSchema.parse({
+      bots: [STALE_ROW],
+      mainBotIds: null,
+    }).bots[0]?.appearance;
+    const fromRead = botReadV11.responseSchema.parse({ bot: STALE_ROW }).bot
+      .appearance;
+    const fromUpdate = botUpdateAppearanceV10.responseSchema.parse({
+      bot: STALE_ROW,
+    }).bot.appearance;
+
+    for (const appearance of [fromList, fromRead, fromUpdate]) {
+      expect(appearance).toEqual(APPEARANCE);
+      expect(Object.keys(appearance ?? {})).not.toContain("background");
+    }
+  });
+
+  it("leaves a row that never named one unchanged", () => {
+    const parsed = botReadV11.responseSchema.parse({
+      bot: { ...BOT_ROW, appearance: APPEARANCE },
+    }).bot;
+
+    expect(parsed).toEqual({ ...BOT_ROW, appearance: APPEARANCE });
   });
 });

@@ -234,3 +234,18 @@ describe("the drawer's item lines", () => {
     expect(document.body.textContent).not.toContain("unknown");
   });
 });
+
+describe("the drawer's host rows", () => {
+  it.each([
+    ["applied", "Applied"],
+    ["a_state_from_a_newer_host", "Status unknown"],
+    ["constructor", "Status unknown"],
+  ])("words a host in state %s as %s", (state, words) => {
+    renderDrawer({
+      status: status({ hosts: [host("dev-box", state)] }),
+      itemRetry: { onRetry: () => undefined, pending: false, error: null },
+    });
+
+    expect(screen.getByText(new RegExp(`^${words} ·`))).toBeTruthy();
+  });
+});

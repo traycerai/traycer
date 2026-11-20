@@ -1,3 +1,4 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   useCallback,
@@ -32,14 +33,22 @@ import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-la
 import {
   AddProfileIdentityStep,
   AddProfileWaitingStep,
+  DuplicateAccountNotice,
 } from "./add-provider-profile-dialog";
 import {
-  useProviderProfileLoginFlow,
+  useProviderProfileOutcomeLoginFlow,
   providerProfileLoginProgress,
   type ProviderProfileLoginFlow,
 } from "./use-provider-profile-login-flow";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
+import type { CachedProviderProfilesReader } from "@/hooks/providers/use-cached-providers-list";
 import { useHostCredentialRefusal } from "@/hooks/host/use-host-credential-refusal";
+import {
+  ADD_AS_NEW_PROFILE_TEXT,
+  differentAccountText,
+  profileNotChangedText,
+  SIGN_IN_UNPROVEN_TEXT,
+} from "@/components/providers/profile-sync-copy";
 
 function noop(): void {}
 
@@ -65,6 +74,15 @@ interface ProviderProfileReauthPanelProps {
     | null;
   readonly onCancel: () => void;
   readonly onDone: () => void;
+  readonly signInOutcomes: ReauthSignInOutcomes | null;
+}
+
+export interface ReauthSignInOutcomes {
+  readonly reader: CachedProviderProfilesReader;
+  readonly onAddAsNewProfile: (
+    reason: "account-mismatch" | "account-unproven",
+  ) => void;
+  readonly onSettledChange: (settled: boolean) => void;
 }
 
 export function ProviderProfileReauthPanel({
@@ -74,6 +92,7 @@ export function ProviderProfileReauthPanel({
   onSameAccountReconnected,
   onCancel,
   onDone,
+  signInOutcomes,
 }: ProviderProfileReauthPanelProps): ReactNode {
   const openLink = useOpenLink();
   // The floor under every way in (Sign in, Switch account, a deep link's
@@ -83,7 +102,13 @@ export function ProviderProfileReauthPanel({
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
-  const submitLoginCode = useProvidersSubmitLoginCode();
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Provider login code input is unavailable.",
+  );
+  const submitLoginCode = useProvidersSubmitLoginCode(
+    submittedLoginCode.read,
+    submittedLoginCode.clear,
+  );
   const touchLogin = useProvidersTouchLogin();
   const ensurePack = useProvidersEnsurePack();
   // The `profile` prop is LIVE, and it turns over mid-flow:
@@ -100,25 +125,31 @@ export function ProviderProfileReauthPanel({
   const [entryProfile] = useState(profile);
   const supportsLoginOwnership = useProvidersLoginOwnership();
   const hostBlock = providerHostBlock(state, "sign-in");
-  const flow = useProviderProfileLoginFlow({
-    hostBlock,
-    supportsLoginOwnership,
-    mode: "reauth",
-    providerId: state.providerId,
-    existingProfileId: entryProfile.profileId,
-    loginCapability: state.loginCapability,
-    startLogin,
-    awaitLogin,
-    cancelLogin,
-    submitLoginCode,
-    touchLogin,
-    ensurePack,
-    failureMessages: {
-      notStarted: "Sign-in did not start. Try again when ready.",
-      notFinished: "Sign-in did not finish. Try again.",
+  const profileOutcomes =
+    signInOutcomes === null ? null : signInOutcomes.reader;
+  const flow = useProviderProfileOutcomeLoginFlow(
+    {
+      hostBlock,
+      supportsLoginOwnership,
+      mode: "reauth",
+      providerId: state.providerId,
+      existingProfileId: entryProfile.profileId,
+      loginCapability: state.loginCapability,
+      startLogin,
+      awaitLogin,
+      cancelLogin,
+      submitLoginCode,
+      setSubmittedLoginCode: submittedLoginCode.set,
+      touchLogin,
+      ensurePack,
+      failureMessages: {
+        notStarted: "Sign-in did not start. Try again when ready.",
+        notFinished: "Sign-in did not finish. Try again.",
+      },
+      onFailed: noop,
     },
-    onFailed: noop,
-  });
+    profileOutcomes,
+  );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const startedRef = useRef(false);
   const handedOffRef = useRef(false);
@@ -133,6 +164,7 @@ export function ProviderProfileReauthPanel({
     !sameProfileIdentity(entryProfile, flow.state.profile);
   const handingOff =
     onSameAccountReconnected !== null && showIdentity && !identityChanged;
+  useSettledReport(signInOutcomes, flow.state);
   // Suppressed from the render, not just skipped afterwards: the hand-off
   // runs in an effect, so the card would otherwise paint for a frame - and
   // stay painted for the caller's exit animation - before vanishing. A card
@@ -154,6 +186,14 @@ export function ProviderProfileReauthPanel({
     setEmailRevealed(false);
     start();
   };
+
+  const completed = flow.state.kind === "completed";
+  const completedHandledRef = useRef(false);
+  useEffect(() => {
+    if (!completed || completedHandledRef.current) return;
+    completedHandledRef.current = true;
+    onDone();
+  }, [completed, onDone]);
 
   useEffect(() => {
     // Not latched while refused, so the automatic start is never spent on a
@@ -227,8 +267,92 @@ export function ProviderProfileReauthPanel({
         onSignInAgain={signInAgain}
         onDone={onDone}
       />
+      {signInOutcomes === null ? null : (
+        <ProviderProfileReauthOutcome
+          flowState={flow.state}
+          entryProfile={entryProfile}
+          onAddAsNewProfile={signInOutcomes.onAddAsNewProfile}
+          onDone={onDone}
+        />
+      )}
     </div>
   );
+}
+
+function ProviderProfileReauthOutcome({
+  flowState,
+  entryProfile,
+  onAddAsNewProfile,
+  onDone,
+}: {
+  readonly flowState: ProviderProfileLoginFlow["state"];
+  readonly entryProfile: ProviderProfile;
+  readonly onAddAsNewProfile: (
+    reason: "account-mismatch" | "account-unproven",
+  ) => void;
+  readonly onDone: () => void;
+}): ReactNode {
+  if (flowState.kind === "already-signed-in")
+    return (
+      <div className="flex flex-col gap-3">
+        <DuplicateAccountNotice profile={flowState.profile} />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={onDone}>
+            Done
+          </Button>
+        </div>
+      </div>
+    );
+  if (flowState.kind !== "not-changed") return null;
+  const mismatch = flowState.reason === "account-mismatch";
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        role="status"
+        className="flex flex-col gap-1 text-ui-sm text-foreground"
+      >
+        {mismatch ? (
+          <p>{differentAccountText(entryProfile.label)}</p>
+        ) : (
+          <>
+            <p>{SIGN_IN_UNPROVEN_TEXT}</p>
+            <p>{profileNotChangedText(entryProfile.label)}</p>
+          </>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {mismatch ? (
+          <Button type="button" size="sm" variant="outline" onClick={onDone}>
+            Done
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => onAddAsNewProfile(flowState.reason)}
+        >
+          {mismatch ? "Switch account" : ADD_AS_NEW_PROFILE_TEXT}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function useSettledReport(
+  signInOutcomes: ReauthSignInOutcomes | null,
+  flowState: ProviderProfileLoginFlow["state"],
+): void {
+  const onSettledChange =
+    signInOutcomes === null ? null : signInOutcomes.onSettledChange;
+  const settled =
+    flowState.kind === "completed" ||
+    flowState.kind === "already-signed-in" ||
+    flowState.kind === "not-changed";
+  useEffect(() => {
+    if (onSettledChange === null) return;
+    onSettledChange(settled);
+    return () => onSettledChange(false);
+  }, [onSettledChange, settled]);
 }
 
 function ProviderProfileReauthState({

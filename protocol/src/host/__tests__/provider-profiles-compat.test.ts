@@ -16,8 +16,12 @@ import {
   providerCliStateSchemaV30,
   providerMutationCliStateSchemaV20,
   providerProfileActionSchema,
+  providersAwaitLoginRequestSchema,
+  providersAwaitLoginRequestSchemaV23,
   providersAwaitLoginResponseSchema,
   providersAwaitLoginResponseSchemaV21,
+  providersAwaitLoginResponseSchemaV23,
+  providersAwaitLoginResponseSchemaV24,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersSetEnabledRequestSchemaV21,
@@ -758,9 +762,27 @@ describe("providers.awaitLogin wire compatibility", () => {
     expect(parsed.state).toBeNull();
   });
 
-  it("wires 2.1 and 2.2 to frozen schemas and 2.3 to the live schema", () => {
+  it("wires 2.1 to 2.4 to frozen schemas and 2.5 to the live schema", () => {
     const line = hostRpcRegistry["providers.awaitLogin"][2];
-    expect(line.latestMinor).toBe(3);
+    expect(line.latestMinor).toBe(5);
+    expect(line.versions[3].contract.requestSchema).toBe(
+      providersAwaitLoginRequestSchemaV23,
+    );
+    expect(line.versions[3].contract.responseSchema).toBe(
+      providersAwaitLoginResponseSchemaV23,
+    );
+    expect(line.versions[4].contract.requestSchema).toBe(
+      providersAwaitLoginRequestSchemaV23,
+    );
+    expect(line.versions[4].contract.responseSchema).toBe(
+      providersAwaitLoginResponseSchemaV24,
+    );
+    expect(line.versions[5].contract.requestSchema).toBe(
+      providersAwaitLoginRequestSchema,
+    );
+    expect(line.versions[5].contract.responseSchema).toBe(
+      providersAwaitLoginResponseSchema,
+    );
     expect(
       line.versions[1].contract.responseSchema.parse({ state: null, refusal }),
     ).not.toHaveProperty("refusal");
@@ -789,9 +811,24 @@ describe("providers.awaitLogin wire compatibility", () => {
       admissionId: "admission-opaque-1",
       count: 2,
     });
+    expect(
+      line.versions[3].contract.responseSchema.parse({
+        ...waiting,
+        profileOutcome: { kind: "signed-in", profileId: "row-1" },
+      }),
+    ).not.toHaveProperty("profileOutcome");
+    expect(
+      line.versions[4].contract.responseSchema.parse({
+        ...waiting,
+        profileOutcome: { kind: "signed-in", profileId: "row-1" },
+      }).profileOutcome,
+    ).toEqual({ kind: "signed-in", profileId: "row-1" });
+    expect(
+      providersAwaitLoginResponseSchemaV23.parse({ state: null }),
+    ).not.toHaveProperty("profileOutcome");
   });
 
-  it("upgrades the frozen 2.2 request and response into the live 2.3 wait fields", () => {
+  it("upgrades the frozen 2.2 request and response into frozen 2.3 wait fields", () => {
     const upgradedRequest = upgradeRequestToVersion(
       hostRpcRegistry["providers.awaitLogin"],
       { major: 2, minor: 2 },

@@ -559,6 +559,7 @@ async function fetchUserRouteOnce(
             }
           : {}),
       },
+      redirect: "manual",
       signal,
     });
   } catch {
@@ -781,11 +782,21 @@ async function refreshAuthTokenOnceViaHttp(
           ...(clientKind === null ? {} : { clientKind }),
           ...(rotationCode === null ? {} : { rotationCode }),
         }),
+        // Never follow a redirect: the body carries the refresh token.
+        redirect: "manual",
         signal,
       }),
       signal,
     );
   } catch {
+    return { kind: "network-error" };
+  }
+
+  // A redirect is not authn's answer: nothing is refused and the credential stays.
+  if (
+    response.type === "opaqueredirect" ||
+    (response.status >= 300 && response.status < 400)
+  ) {
     return { kind: "network-error" };
   }
 
@@ -924,6 +935,8 @@ async function exchangeCodeForTokensWithSignal(
         },
         body: JSON.stringify({ code, code_verifier: codeVerifier }),
         signal,
+        // Never follow a redirect: the body carries the code and its verifier.
+        redirect: "manual",
       },
     );
   } catch {

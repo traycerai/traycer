@@ -2,6 +2,7 @@
  * Docs: see ../SETTINGS.md (Fallback).
  * Update that file whenever this settings surface changes.
  */
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import {
   useCallback,
@@ -687,6 +688,15 @@ function FallbackPolicyEditor(props: {
           });
         })
         .catch((error: unknown) => {
+          if (reportedSaveFailure(error) === null) {
+            setOverrideOrigins((origins) => {
+              const nextOrigins = new Map(origins);
+              nextOrigins.delete(requestId);
+              return nextOrigins;
+            });
+            dispatch({ type: "save-abandoned", requestId });
+            return;
+          }
           const failure = classifyFallbackSaveFailure(error, "draft");
           dispatch({
             type: "save-failed",
@@ -1070,8 +1080,7 @@ function FallbackPolicyEditor(props: {
         group={FALLBACK.definitions.fallback}
         // The page is already titled Fallback. This strip is the master switch
         // for all three tabs, not a section beside them, so a heading repeating
-        // the page name is the second name `notification-chime-settings-section`
-        // refuses for the same reason.
+        // the page name would be a second name for the same controls.
         showTitle={false}
         tone="default"
         dataTestId="settings-fallback-group"

@@ -104,6 +104,23 @@ describe("team computer release results", () => {
     await expect(release()).resolves.toEqual({ kind: "not-computer" });
   });
 
+  it("maps the typed 403 read-only refusal to the fixed read-only-seat result", async () => {
+    stubFetch(async () =>
+      jsonResponse(403, {
+        code: "host_return_seat_read_only",
+        error: "private diagnostic details",
+      }),
+    );
+
+    await expect(release()).resolves.toEqual({ kind: "read-only-seat" });
+  });
+
+  it("maps a 403 whose body is not JSON to unauthorized", async () => {
+    stubFetch(async () => new Response("private", { status: 403 }));
+
+    await expect(release()).resolves.toEqual({ kind: "unauthorized" });
+  });
+
   it.each([401, 403])("maps HTTP %i to unauthorized", async (status) => {
     stubFetch(async () => jsonResponse(status, { message: "private" }));
 

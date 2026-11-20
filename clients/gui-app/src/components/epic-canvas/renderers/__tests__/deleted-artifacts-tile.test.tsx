@@ -19,14 +19,30 @@ const state = vi.hoisted(() => ({
     readonly params: Record<string, unknown>;
     readonly enabled: boolean;
   }>,
+  refetchCalls: [] as string[],
   mutations: [] as Array<{
     readonly epicId: string;
     readonly artifactId: string;
   }>,
 }));
 
+const toast = vi.hoisted(() => vi.fn());
+
+vi.mock("sonner", () => ({ toast }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => null,
+  useTabHostClient: () => ({ getActiveHostId: () => "host-a" }),
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
@@ -58,7 +74,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
         data: { entries: state.entries },
         isLoading: state.loading,
         isError: state.error,
-        refetch: vi.fn(),
+        refetch: () => state.refetchCalls.push(args.method),
       };
     }
     const observationId = String(args.params.observationId);
@@ -70,7 +86,7 @@ vi.mock("@/hooks/host/use-host-query", () => ({
           : undefined,
       isLoading: enabled && state.previewLoading,
       isError: enabled && state.previewError,
-      refetch: vi.fn(),
+      refetch: () => state.refetchCalls.push(args.method),
     };
   },
 }));
@@ -89,6 +105,8 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
 }));
 
 import { DeletedArtifactsTile } from "../deleted-artifacts-tile";
+import { installHostUpdateGestureDirectory } from "@/hooks/host/__tests__/host-update-gesture-directory";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 
 const EPIC_ID = "epic-a";
 
@@ -102,6 +120,7 @@ function renderTile(): void {
 
 describe("<DeletedArtifactsTile />", () => {
   beforeEach(() => {
+    toast.mockReset();
     state.entries = [];
     state.blobs = new Map();
     state.loading = false;
@@ -112,10 +131,40 @@ describe("<DeletedArtifactsTile />", () => {
     state.available = true;
     state.permissionRole = "owner";
     state.queryCalls = [];
+    state.refetchCalls = [];
     state.mutations = [];
   });
 
   afterEach(cleanup);
+
+  it("preflights deleted-artifact Retry against the live host row and admits the floor", async () => {
+    state.error = true;
+    const liveDirectory = await installHostUpdateGestureDirectory(
+      "host-a",
+      "2.0.0",
+      "1.0.0",
+    );
+
+    try {
+      renderTile();
+      const retry = screen.getByRole("button", { name: "Retry" });
+
+      await liveDirectory.refreshVersions("1.5.4", "9.9.9");
+      fireEvent.click(retry);
+
+      expect(state.refetchCalls).toEqual([]);
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(toast.mock.calls[0]?.[0]).toBe(HOST_UPDATE_SKEW_COPY.title);
+
+      await liveDirectory.refreshVersions("2.0.0", "1.0.0");
+      fireEvent.click(retry);
+
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(state.refetchCalls).toEqual(["epic.deletedArtifacts.list"]);
+    } finally {
+      liveDirectory.dispose();
+    }
+  });
 
   it("renders an epic-scoped empty state", () => {
     renderTile();

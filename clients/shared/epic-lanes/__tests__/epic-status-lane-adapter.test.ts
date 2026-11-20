@@ -520,7 +520,7 @@ describe("createEpicStatusLaneAdapter - canWrite", () => {
   it.each([
     { role: "owner" as const, canWrite: true },
     { role: "editor" as const, canWrite: true },
-    { role: "viewer" as const, canWrite: false },
+    { role: "viewer" as const, canWrite: true },
     { role: null, canWrite: false },
   ])("role $role -> canWrite $canWrite", ({ role, canWrite }) => {
     const { factory, latest } = createFakeStreamClientFactory();
@@ -545,6 +545,81 @@ describe("createEpicStatusLaneAdapter - canWrite", () => {
       throw new Error("expected a permission-changed event");
     }
     expect(permissionEvent.canWrite).toBe(canWrite);
+  });
+});
+
+describe("createEpicStatusLaneAdapter - a viewer wire role reads as editor, an unknown one as no access", () => {
+  function permissionEvents(log: readonly LogEntry[]) {
+    return emittedEvents(log).filter(
+      (event) =>
+        event.kind === "permission-changed" ||
+        event.kind === "control-snapshot-complete",
+    );
+  }
+
+  it("a snapshot naming viewer emits editor, both as the boundary's role and as the permission verdict", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ permissionRole: "viewer" }),
+      true,
+    );
+
+    expect(permissionEvents(log)).toMatchObject([
+      { kind: "control-snapshot-complete", role: "editor" },
+      { kind: "permission-changed", role: "editor", canWrite: true },
+    ]);
+  });
+
+  it("a permissionChanged transition naming viewer emits editor and may write", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+    latest().callbacks.onSnapshot(
+      snapshotFrame({ authorityEpoch: "epoch-1", securityEpoch: 3 }),
+      true,
+    );
+
+    latest().callbacks.onTransition(
+      permissionChangedFrame("epoch-1", 3, "viewer"),
+      true,
+    );
+
+    const last = permissionEvents(log).at(-1);
+    expect(last).toMatchObject({
+      kind: "permission-changed",
+      role: "editor",
+      canWrite: true,
+    });
+  });
+
+  it("a role nothing recognises emits no role and cannot write", () => {
+    const { factory, latest } = createFakeStreamClientFactory();
+    const adapter = createEpicStatusLaneAdapter(
+      createSources(factory, undefined),
+    );
+    const { host, log } = createRecordingHost();
+    adapter.attach(host);
+    // A value a newer host invented: the frame schema would not carry it, so
+    // it is handed to the adapter directly.
+    const frame = Object.assign(snapshotFrame({}), {
+      permissionRole: "supervisor",
+    });
+
+    latest().callbacks.onSnapshot(frame, true);
+
+    expect(permissionEvents(log)).toMatchObject([
+      { kind: "control-snapshot-complete", role: null },
+      { kind: "permission-changed", role: null, canWrite: false },
+    ]);
   });
 });
 

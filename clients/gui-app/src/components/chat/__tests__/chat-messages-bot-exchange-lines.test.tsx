@@ -42,6 +42,7 @@ const PRESENTATION: ChatBotPresentation = {
   openAnnouncementThread: null,
   threadAnchorKinds: [],
   chooseOption: null,
+  reply: null,
   questions: null,
   failedRequest: null,
   failedRecovery: null,
@@ -184,6 +185,7 @@ function Channel(props: {
               taskId="channel-1"
               epicId={BOT_ID}
               hostId={null}
+              payerHostId={null}
               messages={props.messages}
               transcriptWindow={null}
               onVisibleOrdinalRangeChange={() => undefined}
@@ -199,6 +201,7 @@ function Channel(props: {
               systemOverlayActive={false}
               scrollRequest={null}
               onScrollRequestSettled={() => undefined}
+              onReaderMoved={null}
               composerOverlayHeight={0}
               subagentDrillIn={subagentDrillIn}
             />

@@ -10,8 +10,8 @@ const requests = vi.hoisted(() => ({
   empty: false,
 }));
 vi.mock("@/hooks/bots/use-environment-host-lists-query", () => ({
-  useEnvironmentHostLists: (_client: unknown, ids: string[]) => {
-    requests.ids = ids;
+  useEnvironmentHostLists: (ids: readonly string[], _enabled: boolean) => {
+    requests.ids = [...ids];
     const hostsByEnvironmentId = new Map<
       string,
       Array<{ hostId: string; hostLabel: string }>
@@ -29,7 +29,11 @@ vi.mock("@/hooks/bots/use-environment-host-lists-query", () => ({
         ]);
       }
     }
-    return { hostsByEnvironmentId };
+    return {
+      hostsByEnvironmentId,
+      failedEnvironmentIds: new Set<string>(),
+      retryFailed: () => undefined,
+    };
   },
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({

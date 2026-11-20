@@ -86,11 +86,13 @@ function stateVectorBase64(doc: Y.Doc): string {
 }
 
 function buildMeta(
-  role: WirePermissionRole | null,
+  role: WirePermissionRole | "supervisor" | null,
   hostDoc: Y.Doc | null,
 ): SnapshotMetaEpic {
   const nextHostDoc = hostDoc === null ? new Y.Doc() : hostDoc;
-  return {
+  // `"supervisor"` stands for a role nothing recognises. It never parses on the
+  // wire, so it is handed over the way a decoder that let it through would.
+  const meta: SnapshotMetaEpic = {
     schemaVersion: "1.0",
     epicLight:
       role === null
@@ -109,7 +111,7 @@ function buildMeta(
             createdBy: "u",
             version: "1",
           },
-    permissionRole: role,
+    permissionRole: null,
     repos: [],
     workspaces: [],
     repoMapping: [],
@@ -117,6 +119,7 @@ function buildMeta(
     unresolvedRepos: [],
     hostStateVectorBase64: stateVectorBase64(nextHostDoc),
   };
+  return Object.assign(meta, { permissionRole: role });
 }
 
 function emptySnapshot(): Uint8Array {
@@ -277,7 +280,7 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("keeps access lost for retired early metadata until a granted role returns", () => {
+  it("keeps access lost for early metadata naming a role nothing recognises until a granted role returns", () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-a",
@@ -292,12 +295,38 @@ describe("createOpenEpicStore", () => {
     try {
       handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
       handle().callbacks.onPermissionChanged(null);
-      handle().callbacks.onEarlyMeta(buildMeta("viewer", null));
+      handle().callbacks.onEarlyMeta(buildMeta("supervisor", null));
 
       expect(opened.store.getState().permissionRole).toBeNull();
       expect(opened.store.getState().accessLost).toBe(true);
 
       handle().callbacks.onEarlyMeta(buildMeta("editor", null));
+      expect(opened.store.getState().permissionRole).toBe("editor");
+      expect(opened.store.getState().accessLost).toBe(false);
+    } finally {
+      opened.dispose();
+    }
+  });
+
+  it("restores access from early metadata naming viewer: a viewer role reads as editor", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    try {
+      handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+      handle().callbacks.onPermissionChanged(null);
+      expect(opened.store.getState().accessLost).toBe(true);
+
+      handle().callbacks.onEarlyMeta(buildMeta("viewer", null));
+
       expect(opened.store.getState().permissionRole).toBe("editor");
       expect(opened.store.getState().accessLost).toBe(false);
     } finally {
@@ -475,7 +504,37 @@ describe("createOpenEpicStore", () => {
     }
   });
 
-  it("holds no role for a snapshot naming the retired viewer role, and writes nothing until a role arrives", () => {
+  it("holds no role for a snapshot naming a role nothing recognises, and writes nothing until a role arrives", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("supervisor", null),
+      emptySnapshot(),
+    );
+
+    expect(opened.store.getState().permissionRole).toBeNull();
+    // A local write with no role is dropped, never sent.
+    opened.doc.getMap("epic").set("title", "while-no-role");
+    expect(handle().applied.length).toBe(0);
+
+    handle().callbacks.onPermissionChanged("editor");
+    opened.doc.getMap("epic").set("title", "while-editor");
+    expect(handle().applied.length).toBe(1);
+
+    opened.dispose();
+  });
+
+  it("holds the editor role for a snapshot naming viewer, and sends a local write", () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-a",
@@ -490,13 +549,8 @@ describe("createOpenEpicStore", () => {
     handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(buildMeta("viewer", null), emptySnapshot());
 
-    expect(opened.store.getState().permissionRole).toBeNull();
-    // A local write with no role is dropped, never sent.
-    opened.doc.getMap("epic").set("title", "while-no-role");
-    expect(handle().applied.length).toBe(0);
-
-    handle().callbacks.onPermissionChanged("editor");
-    opened.doc.getMap("epic").set("title", "while-editor");
+    expect(opened.store.getState().permissionRole).toBe("editor");
+    opened.doc.getMap("epic").set("title", "while-viewer");
     expect(handle().applied.length).toBe(1);
 
     opened.dispose();
@@ -2053,7 +2107,7 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
   });
 
-  it("does not flush queued artifact-room-body edits with a stale editor role when the reconnect snapshot names the retired viewer role", async () => {
+  it("does not flush queued artifact-room-body edits with a stale editor role when the reconnect snapshot names a role nothing recognises", async () => {
     const { factory, handle } = fakeFactory();
     const opened = openStoreForTest({
       epicId: "epic-artifact-rooms",
@@ -2093,7 +2147,7 @@ describe("createOpenEpicStore", () => {
     expect(handle().artifactRoomApplied.length).toBe(0);
 
     handle().callbacks.onSnapshot(
-      buildMeta("viewer", donor),
+      buildMeta("supervisor", donor),
       Y.encodeStateAsUpdate(donor),
     );
     expect(opened.store.getState().permissionRole).toBeNull();
@@ -2117,6 +2171,44 @@ describe("createOpenEpicStore", () => {
     if (refreshedFragmentDoc === null)
       throw new Error("missing refreshed fragment doc");
     expect(refreshedFragmentDoc.getMap("offline").get("k")).toBeUndefined();
+
+    opened.dispose();
+  });
+
+  it("keeps the editor role when the reconnect snapshot names viewer: a viewer role reads as editor, so nothing is torn down", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      emptySnapshot(),
+      stateVectorBase64(new Y.Doc()),
+    );
+    const fragmentBefore = await leasedFragment(opened, "art-1");
+
+    handle().callbacks.onSnapshot(
+      buildMeta("viewer", donor),
+      Y.encodeStateAsUpdate(donor),
+    );
+
+    expect(opened.store.getState().permissionRole).toBe("editor");
+    expect(opened.store.getState().accessLost).toBe(false);
+    expect(await leasedFragment(opened, "art-1")).toBe(fragmentBefore);
 
     opened.dispose();
   });
@@ -2820,12 +2912,12 @@ describe("createOpenEpicStore", () => {
     // dropped before the resolver re-snapshots.
     handle().callbacks.onPermissionChanged(null);
 
-    // Reconnect + resnapshot naming the retired viewer role. Even if the new
+    // Reconnect + resnapshot naming a role nothing recognises. Even if the new
     // snapshot's state vector trails the prior watermark, we must not ship a
     // stale local update - the store dropped the watermark on the loss.
     const refreshed = handle().callbacks;
     refreshed.onConnectionStatus("open", null, true, null);
-    refreshed.onSnapshot(buildMeta("viewer", null), emptySnapshot());
+    refreshed.onSnapshot(buildMeta("supervisor", null), emptySnapshot());
     refreshed.onArtifactRoomSnapshot(
       "artifact-room-0",
       emptySnapshot(),

@@ -13,12 +13,12 @@
  * that drifts OPEN queues writes against an epic the user has lost access to,
  * and nothing notices until the host refuses them.
  *
- * Every role a person can hold now writes, so the predicate's own answer is
- * only interesting for the inputs that are NOT a held role: `null`, and the
- * values that reach a client on the wire and resolve to none. Those arrive
- * through `grantedRole`, so the composition is what the cases below exercise -
- * calling the predicate on a wire string directly is a type error, which is
- * the point.
+ * Every role a person can hold writes - `viewer` reads as `editor` - so the
+ * predicate's own answer is only interesting for the inputs that are NOT a
+ * held role: `null`, and the values that reach a client on the wire and resolve
+ * to none. Those arrive through `grantedRole`, so the composition is what the
+ * cases below exercise - calling the predicate on a wire string directly is a
+ * type error, which is the point.
  */
 import { describe, expect, it } from "vitest";
 import { grantedRole } from "@traycer/protocol/common/permission-role";
@@ -31,8 +31,8 @@ const WRITABLE_BY_ROLE: Record<PermissionRole, boolean> = {
   editor: true,
 };
 
-/** The retired view-only role, as a released peer still spells it. */
-const RETIRED_WIRE_ROLE = "viewer";
+/** The view-only role, as a released peer still spells it. */
+const VIEWER_WIRE_ROLE = "viewer";
 
 describe("isWritablePermissionRole", () => {
   it("answers true for every role a grant may hold", () => {
@@ -48,25 +48,27 @@ describe("isWritablePermissionRole", () => {
     expect(isWritablePermissionRole(null)).toBe(false);
   });
 
+  it("answers true for the view-only wire role: it reads as editor", () => {
+    // The view-only role still crosses the wire - a released host sends it -
+    // and the composition a client actually runs is decode, then ask: it
+    // decodes to `editor`, so it writes.
+    expect(isWritablePermissionRole(grantedRole(VIEWER_WIRE_ROLE))).toBe(true);
+  });
+
   it("fails closed on a wire role that grants nothing", () => {
-    // The retired view-only role still crosses the wire - a released host
-    // sends it, and refusing to decode it would take the frame down - so the
-    // guarantee is about the COMPOSITION a client actually runs: decode, then
-    // ask. An unknown value from a newer writer takes the same path, because a
-    // role nobody granted write access to must not acquire it by arriving late.
-    expect(isWritablePermissionRole(grantedRole(RETIRED_WIRE_ROLE))).toBe(
-      false,
-    );
+    // An unknown value from a newer writer takes the same path, because a role
+    // nobody granted write access to must not acquire it by arriving late.
     expect(isWritablePermissionRole(grantedRole("auditor"))).toBe(false);
+    expect(isWritablePermissionRole(grantedRole("Viewer"))).toBe(false);
   });
 
   it("covers every role the released enum actually carries", () => {
     // The other half of the exhaustiveness guard. The `Record` type above
     // catches a granted role added to the enum and missing here; this catches a
     // key here that the released wire does not have - a rename that left a
-    // stale entry behind, which would otherwise read as coverage. The retired
+    // stale entry behind, which would otherwise read as coverage. The view-only
     // role is checked alongside them because the wire still has to parse it.
-    for (const role of [...Object.keys(WRITABLE_BY_ROLE), RETIRED_WIRE_ROLE]) {
+    for (const role of [...Object.keys(WRITABLE_BY_ROLE), VIEWER_WIRE_ROLE]) {
       expect(() => LatestPermissionRoleSchema.parse(role)).not.toThrow();
     }
   });

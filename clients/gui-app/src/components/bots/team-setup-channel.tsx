@@ -1,4 +1,5 @@
 import { TeamComputerUnattendedSetup } from "@/components/settings/team/team-computer-unattended-setup";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
 import { useId, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
@@ -39,6 +40,7 @@ import {
   type SandboxDefaultsRead,
 } from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useEnvironmentBillingAdmin } from "@/hooks/sandboxes/use-team-billing-admin";
 import { usePickedTeamHandle } from "@/components/settings/environment/team-pick-label";
 import { AddComputerDialog } from "@/components/settings/team/add-computer-dialog";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
@@ -112,7 +114,10 @@ export function TeamSetupChannel(props: {
         data-testid="team-setup-channel"
         className="flex min-h-0 min-w-0 flex-1 flex-col md:bg-canvas"
       >
-        <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
+        <header
+          data-testid="team-setup-header"
+          className="@container/title-strip flex shrink-0 items-center gap-2 px-4 pt-3 pb-2"
+        >
           <BotAvatar size="sm" />
           <BotChannelTitle
             level2={level2}
@@ -122,6 +127,7 @@ export function TeamSetupChannel(props: {
             threadsView={threadsView}
           />
           <MainBotBadge testId="bot-tab-main" tone="muted" />
+          <TracyPlaybackSlot />
         </header>
         {/* The post sits at the bottom, as a channel's newest row does; its
               top margin, not the column's end alignment, puts it there, so a
@@ -383,7 +389,10 @@ function EnableTeamCloudAction(props: {
   const catalogue = useSandboxCatalogue(true);
   const defaults = useSandboxDefaults([environmentId]).get(environmentId);
   const sandboxes = useSandboxList();
-  const create = useSandboxCreate("inline");
+  const create = useSandboxCreate(
+    "inline",
+    useEnvironmentBillingAdmin(environmentId),
+  );
   // Held outside the card: a create outlives the card that sent it, and the
   // list's refresh answers after the create settles, so a card mounted in
   // between must still know the team's sandbox is coming.

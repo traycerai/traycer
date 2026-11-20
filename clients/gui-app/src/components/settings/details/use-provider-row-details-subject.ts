@@ -1,5 +1,4 @@
 import { usePersonalHostState } from "@/components/settings/personal/personal-page-context";
-import { useHostClient } from "@/lib/host";
 import type { DetailsSubject } from "@/lib/settings-details-entry";
 import { useDetailsEnvironmentId } from "./use-details-environment-id";
 
@@ -7,7 +6,7 @@ export function useProviderRowDetailsSubject(
   kind: string,
   itemKey: string,
 ): DetailsSubject | null {
-  const environmentId = useDetailsEnvironmentId(useHostClient());
+  const environmentId = useDetailsEnvironmentId();
   return environmentId === null ? null : { environmentId, kind, key: itemKey };
 }
 

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { structuredPatch } from "diff";
 import {
   diffLineCountsFromContents,
+  languageFromFilePath,
   resetDiffLineCountCacheForTests,
 } from "@/lib/file-change-diff-hunks";
 
@@ -84,5 +85,17 @@ describe("diffLineCountsFromContents memoization", () => {
       deletions: 0,
     });
     expect(vi.mocked(structuredPatch)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("languageFromFilePath", () => {
+  it.each([
+    ["src/app.ts", "typescript"],
+    ["lib/main.RS", "rust"],
+    ["notes.unheard-of", "text"],
+    ["Makefile", "text"],
+    ["x.constructor", "text"],
+  ])("reads %s as %s", (filePath, language) => {
+    expect(languageFromFilePath(filePath)).toBe(language);
   });
 });

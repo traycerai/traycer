@@ -1,44 +1,27 @@
 /**
- * The machine lists of several team environments on one client (Tracy Bots):
+ * The machine lists of several team environments, each the app's own read of
+ * authn on the person's sign-in (Tracy Bots):
  * an environment whose list was refused is named failed and stays out of the
  * answered map (so a reader can tell "could not read" from "no machine"), and
  * `retryFailed` asks the failed ones again without re-asking the answered.
  *
- * Real hook over a mock messenger whose handler can refuse.
+ * Real hook over the page harness's fake authn, whose handler can refuse.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import {
-  HostClient,
-  type HostRequester,
-} from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
-import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import {
   useEnvironmentHostLists,
   type EnvironmentHostLists,
 } from "@/hooks/bots/use-environment-host-lists-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
-
-vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
-  useReactiveHostReadiness: (client: HostRequester<HostRpcRegistry> | null) => {
-    const hostId = client === null ? null : client.getActiveHostId();
-    return {
-      hostId,
-      requestContextUserId: "user-1",
-      isReady: hostId !== null,
-      hasRpcEndpoint: hostId !== null,
-      canExecute: hostId !== null,
-    };
-  },
-}));
 
 // The lists are the signed-in viewer's, and are not read without one.
 beforeEach(() => {
@@ -48,6 +31,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  resetTeamPageHarness();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
@@ -76,43 +60,23 @@ function mountLists(flakyAnswersFromStart: boolean): {
   readonly breakFlaky: () => void;
   readonly refetchFlaky: () => Promise<void>;
 } {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
   const reads: Record<string, number> = {};
   let flakyAnswers = flakyAnswersFromStart;
-  let seq = 0;
-  const messenger = new MockHostMessenger<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    requestId: () => `req-${String(++seq)}`,
-    handlers: {
-      "environment.host.list": ({ environmentId }) => {
-        reads[environmentId] = (reads[environmentId] ?? 0) + 1;
-        if (environmentId === FLAKY && !flakyAnswers) {
-          throw new Error("refused");
-        }
-        return { hosts: [machine(`host-in-${environmentId}`)] };
-      },
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.host.list": ({ environmentId }) => {
+      reads[environmentId] = (reads[environmentId] ?? 0) + 1;
+      if (environmentId === FLAKY && !flakyAnswers) {
+        throw new Error("refused");
+      }
+      return { hosts: [machine(`host-in-${environmentId}`)] };
     },
   });
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger,
-  });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
-  const client = spine.createRequester(mockLocalHostEntry);
+  const queryClient = harness.queryClient;
   const wrapper = (props: { readonly children: ReactNode }): ReactNode => (
-    <QueryClientProvider client={queryClient}>
-      {props.children}
-    </QueryClientProvider>
+    <harness.Wrapper>{props.children}</harness.Wrapper>
   );
   const { result } = renderHook(
-    () => useEnvironmentHostLists(client, [FLAKY, STEADY], true),
+    () => useEnvironmentHostLists([FLAKY, STEADY], true),
     { wrapper },
   );
   return {

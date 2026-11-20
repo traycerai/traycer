@@ -186,12 +186,14 @@ import {
   listCloudChatPayloadsResponseSchema,
   listCloudChatsRequestSchema,
   listCloudChatsResponseSchema,
+  listCloudChatsResponseV10Schema,
   readCloudChatPartRequestSchema,
   readCloudChatPartResponseSchema,
   readCloudChatPayloadRequestSchema,
   readCloudChatPayloadResponseSchema,
   resolveCloudChatHeadRequestSchema,
   resolveCloudChatHeadResponseSchema,
+  resolveCloudChatHeadResponseV10Schema,
   setChatSharingDefaultRequestSchema,
   setChatSharingDefaultResponseSchema,
   setCloudChatVisibilityRequestSchema,
@@ -218,6 +220,8 @@ import {
   listChatRecordsResponseV12Schema,
   listChatRecordsResponseV13Schema,
   listChatRecordsResponseV14Schema,
+  listChatRecordsResponseV15Schema,
+  listChatRecordsResponseV16Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -261,7 +265,9 @@ import {
 } from "@traycer/protocol/host/epic/artifact-attachment";
 import {
   attachEnvironmentRequestSchema,
+  attachEnvironmentRequestSchemaV20,
   attachEnvironmentResponseSchema,
+  attachEnvironmentResponseSchemaV20,
 } from "@traycer/protocol/host/epic/environment-attachment";
 import {
   localHistoryReadRequestSchema,
@@ -1324,6 +1330,39 @@ export const epicAttachEnvironmentV10 = defineRpcContract({
 });
 
 /**
+ * `epic.attachEnvironment@2.0`, the prepare without the cloud attachment;
+ * `@1.0` stays registered beside it. Not an agent capability.
+ */
+export const epicAttachEnvironmentV20 = defineRpcContract({
+  method: "epic.attachEnvironment",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: attachEnvironmentRequestSchemaV20,
+  responseSchema: attachEnvironmentResponseSchemaV20,
+});
+
+/**
+ * Never run: `@2.0` has no downgrade, so a host refuses a `@1.0` caller and an app
+ * meets a `@1.0`-only host as unsupported.
+ */
+export const epicAttachEnvironmentUpgradeV10ToV20 = defineUpgradePath<
+  typeof epicAttachEnvironmentV10,
+  typeof epicAttachEnvironmentV20
+>({
+  from: epicAttachEnvironmentV10.schemaVersion,
+  to: epicAttachEnvironmentV20.schemaVersion,
+  upgradeRequest: () => {
+    throw new Error(
+      "epic.attachEnvironment v1.0 requests cannot be upgraded to v2.0: v2.0 attaches nothing",
+    );
+  },
+  upgradeResponse: () => {
+    throw new Error(
+      "epic.attachEnvironment v1.0 responses cannot be upgraded to v2.0: v1.0's attached is not v2.0's prepared",
+    );
+  },
+});
+
+/**
  * Optional (non-floor): the host's local History contribution, read with no
  * cloud call. See `local-history.ts`.
  */
@@ -1818,14 +1857,48 @@ export const epicListCloudChatsV10 = defineRpcContract({
   method: "epic.listCloudChats",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listCloudChatsRequestSchema,
+  responseSchema: listCloudChatsResponseV10Schema,
+});
+
+export const epicListCloudChatsV11 = defineRpcContract({
+  method: "epic.listCloudChats",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listCloudChatsRequestSchema,
   responseSchema: listCloudChatsResponseSchema,
+});
+
+export const epicListCloudChatsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicListCloudChatsV10,
+  typeof epicListCloudChatsV11
+>({
+  from: epicListCloudChatsV10.schemaVersion,
+  to: epicListCloudChatsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 export const epicResolveCloudChatHeadV10 = defineRpcContract({
   method: "epic.resolveCloudChatHead",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: resolveCloudChatHeadRequestSchema,
+  responseSchema: resolveCloudChatHeadResponseV10Schema,
+});
+
+export const epicResolveCloudChatHeadV11 = defineRpcContract({
+  method: "epic.resolveCloudChatHead",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: resolveCloudChatHeadRequestSchema,
   responseSchema: resolveCloudChatHeadResponseSchema,
+});
+
+export const epicResolveCloudChatHeadUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicResolveCloudChatHeadV10,
+  typeof epicResolveCloudChatHeadV11
+>({
+  from: epicResolveCloudChatHeadV10.schemaVersion,
+  to: epicResolveCloudChatHeadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // The title a reference to a chat is drawn with, read by task and chat id.
@@ -2073,6 +2146,50 @@ export const epicListChatRecordsUpgradeV13ToV14 = defineUpgradePath<
           ...response,
           chats: response.chats.map((row) => ({ ...row, evicted: false })),
         },
+});
+
+// `@1.5` says on each row who started the chat (`starterUserId`). Request
+// unchanged from `@1.3`; the row gains one optional key, which an older peer's
+// schema strips.
+export const epicListChatRecordsV15 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: listChatRecordsRequestV13Schema,
+  responseSchema: listChatRecordsResponseV15Schema,
+});
+
+/** A `@1.4` host's rows carry no `starterUserId`, and absent is the honest answer for it. */
+export const epicListChatRecordsUpgradeV14ToV15 = defineUpgradePath<
+  typeof epicListChatRecordsV14,
+  typeof epicListChatRecordsV15
+>({
+  from: epicListChatRecordsV14.schemaVersion,
+  to: epicListChatRecordsV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// `@1.6` carries the publication redirect revision on either answer arm:
+// redirect freshness is independent of whether the record rows changed.
+export const epicListChatRecordsV16 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: listChatRecordsRequestV13Schema,
+  responseSchema: listChatRecordsResponseV16Schema,
+});
+
+/** An older host carries no redirect revision; request shape is unchanged. */
+export const epicListChatRecordsUpgradeV15ToV16 = defineUpgradePath<
+  typeof epicListChatRecordsV15,
+  typeof epicListChatRecordsV16
+>({
+  from: epicListChatRecordsV15.schemaVersion,
+  to: epicListChatRecordsV16.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    publicationRedirectRevision: null,
+  }),
 });
 
 // Brings an evicted chat's records back onto its host before a message is

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { replaceEqualDeep, useQueryClient } from "@tanstack/react-query";
+import type { HostControllerStatus } from "@traycer-clients/shared/platform/runner-host";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { resolveDesktopHostControllerStatusBridge } from "@/lib/windows/desktop-capabilities";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -21,11 +22,22 @@ export function HostControllerStatusListener(): null {
     if (management === null) return;
     const bridge = resolveDesktopHostControllerStatusBridge(runnerHost);
     if (bridge === null) return;
+    const key = runnerQueryKeys.hostControllerStatus(management);
     const subscription = bridge.onChange((status) => {
-      queryClient.setQueryData(
-        runnerQueryKeys.hostControllerStatus(management),
-        status,
-      );
+      // The main process re-sends the status every few seconds whether or not
+      // it changed, stamped with a fresh `checkedAt` that nothing here reads.
+      // Storing it would hand every reader a new object each time and
+      // re-render them all, the host gate included, for nothing.
+      const previous = queryClient.getQueryData<HostControllerStatus>(key);
+      if (
+        previous !== undefined &&
+        replaceEqualDeep(previous, {
+          ...status,
+          checkedAt: previous.checkedAt,
+        }) === previous
+      )
+        return;
+      queryClient.setQueryData(key, status);
     });
     return () => {
       subscription.dispose();

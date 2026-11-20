@@ -58,8 +58,16 @@ function DrawerContent({
   ref,
   className,
   children,
+  fullWidth = false,
   ...props
-}: React.ComponentProps<typeof DrawerPrimitive.Content>) {
+}: React.ComponentProps<typeof DrawerPrimitive.Content> & {
+  /**
+   * A side drawer (`direction="left"` or `"right"`) spans everything the
+   * safe-area insets leave, at every width, instead of three quarters of the
+   * screen capped at `sm:max-w-sm`. Top and bottom drawers ignore it.
+   */
+  fullWidth?: boolean;
+}) {
   const contentRef = useOverlayDragSuppressionRef(ref);
   return (
     <DrawerPortal data-slot="drawer-portal">
@@ -86,6 +94,10 @@ function DrawerContent({
           // a fixed element, so a margin alone would displace it rather than
           // narrow it.
           "data-[vaul-drawer-direction=left]:mt-safe-top data-[vaul-drawer-direction=left]:ml-safe-left data-[vaul-drawer-direction=left]:max-w-safe-dvw data-[vaul-drawer-direction=right]:mt-safe-top data-[vaul-drawer-direction=right]:mr-safe-right data-[vaul-drawer-direction=right]:max-w-safe-dvw",
+          // After the defaults above, so the same-modifier width rules they set
+          // are displaced rather than tied.
+          fullWidth &&
+            "data-[vaul-drawer-direction=right]:w-full data-[vaul-drawer-direction=right]:sm:max-w-safe-dvw data-[vaul-drawer-direction=left]:w-full data-[vaul-drawer-direction=left]:sm:max-w-safe-dvw",
           className,
         )}
         {...props}

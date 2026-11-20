@@ -9,6 +9,7 @@ afterEach(cleanup);
 
 const EDITOR: TeamRole = "editor";
 const ADMIN: TeamRole = "admin";
+const VIEWER: TeamRole = "viewer";
 
 const NOTICE =
   "Prompts go to the provider you pick; nothing else leaves the host.";
@@ -20,6 +21,16 @@ function grantText(): string {
 }
 
 describe("RoleGrant", () => {
+  it("opens with the viewer prefix and the common text", () => {
+    render(<RoleGrant role={VIEWER} noticeText={NOTICE} />);
+    expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
+      "You can see the team's settings but not change them.",
+    );
+    expect(screen.getByTestId("role-grant-common").textContent).toContain(
+      "Every member can interrupt or permanently delete any team sandbox",
+    );
+  });
+
   it("opens with the editor prefix and the common text", () => {
     render(<RoleGrant role={EDITOR} noticeText={NOTICE} />);
     expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
@@ -84,5 +95,21 @@ describe("InviteAcceptGrant", () => {
     expect(screen.getByTestId("role-grant")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Accept" }));
     expect(onAccept).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the Viewer grant before Accept", () => {
+    render(
+      <InviteAcceptGrant
+        role={VIEWER}
+        noticeText={NOTICE}
+        paidPlan
+        accepting={false}
+        onAccept={() => undefined}
+      />,
+    );
+    expect(screen.getByTestId("role-grant-prefix").textContent).toBe(
+      "You can see the team's settings but not change them.",
+    );
+    expect(screen.getByRole("button", { name: "Accept" })).toBeTruthy();
   });
 });

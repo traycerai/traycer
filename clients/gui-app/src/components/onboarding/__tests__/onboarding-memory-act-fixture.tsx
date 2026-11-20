@@ -15,7 +15,11 @@ import {
 } from "@testing-library/react";
 
 import type { ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  MutationCache,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -36,21 +40,26 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { IStreamSession } from "@traycer/protocol/host-transport/stream-session";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { epicGetChatRunSettingsV41 } from "@traycer/protocol/host/epic/contracts";
-import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
+import { environmentStatusResponseSchemaV13 } from "@traycer/protocol/host/environment-schemas";
 import {
   providerState,
   type ProviderSpec,
 } from "@/components/onboarding/__tests__/onboarding-memory-act-provider-state";
+import { abandonedSaveError } from "@/lib/environment/__tests__/settings-save-failure-fixtures";
 import { DirectoryProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-directory-probe";
 import { TourSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-tour-slot";
 import { SettingsPanelSlot } from "@/components/onboarding/__tests__/onboarding-memory-act-settings-panel";
 import { RequestContext } from "@/components/onboarding/__tests__/onboarding-memory-act-request-context";
+import { OnboardingMemoryActAuthServiceProbe } from "@/components/onboarding/__tests__/onboarding-memory-act-auth-service-probe";
 import { AGENT_MEMORIES } from "@/components/settings/panels/agent-memories.definitions";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { AuthService } from "@/lib/auth/auth-service";
 import {
   HostRuntimeProvider,
   hostRpcRegistry,
@@ -78,6 +87,17 @@ interface Receipt {
 interface Deferred {
   readonly promise: Promise<void>;
   readonly resolve: () => void;
+}
+
+interface MutationCapture {
+  readonly mutationKey: ReadonlyArray<unknown> | undefined;
+  readonly variables: unknown;
+}
+
+interface HeldAgentMemoriesMutation {
+  readonly gate: Deferred;
+  readonly started: Deferred;
+  capture: MutationCapture | null;
 }
 
 /** What the faked host holds and answers. Reset for every test. */
@@ -109,6 +129,7 @@ interface World {
   setAnswers: SetAnswer[];
   /** Per harness id: how many more `providers.setNativeMemory` calls fail. */
   nativeFailures: Map<string, number>;
+  nativeFailureKind: "refused" | "abandoned";
   /**
    * A landed `providers.setNativeMemory` changes what the next
    * `providers.list` says. Off by default: the list then stays as it was
@@ -155,6 +176,7 @@ function freshWorld(): World {
     providers: defaultProviders(),
     setAnswers: ["applied"],
     nativeFailures: new Map(),
+    nativeFailureKind: "refused",
     applyNativeWrites: false,
     chatSettingsGate: null,
     accepted: [],
@@ -168,6 +190,8 @@ function freshWorld(): World {
 
 export const world = freshWorld();
 const messengers: MockHostMessenger<HostRpcRegistry>[] = [];
+let authService: AuthService | null = null;
+let heldAgentMemoriesMutation: HeldAgentMemoriesMutation | null = null;
 
 export function deferred(): Deferred {
   let resolve: () => void = () => undefined;
@@ -175,6 +199,37 @@ export function deferred(): Deferred {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+export function holdAgentMemoriesSetMutation(): {
+  readonly started: Promise<void>;
+  readonly capture: () => MutationCapture | null;
+  readonly release: () => void;
+} {
+  if (heldAgentMemoriesMutation !== null) {
+    throw new Error("an agent-memory mutation is already held");
+  }
+  const held: HeldAgentMemoriesMutation = {
+    gate: deferred(),
+    started: deferred(),
+    capture: null,
+  };
+  heldAgentMemoriesMutation = held;
+  return {
+    started: held.started.promise,
+    capture: () => held.capture,
+    release: () => {
+      held.gate.resolve();
+      if (heldAgentMemoriesMutation === held) heldAgentMemoriesMutation = null;
+    },
+  };
+}
+
+export function fixtureAuthService(): AuthService {
+  if (authService === null) {
+    throw new Error("the Memory act host runtime has not mounted");
+  }
+  return authService;
 }
 
 function hostFailure(method: string): HostRpcError {
@@ -188,7 +243,7 @@ function hostFailure(method: string): HostRpcError {
 }
 
 function statusAnswer() {
-  return environmentStatusResponseSchemaV12.parse({
+  return environmentStatusResponseSchemaV13.parse({
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,
@@ -313,7 +368,9 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) => {
         const failures = world.nativeFailures.get(request.harnessId) ?? 0;
         if (failures > 0) {
           world.nativeFailures.set(request.harnessId, failures - 1);
-          throw hostFailure("providers.setNativeMemory");
+          throw world.nativeFailureKind === "abandoned"
+            ? abandonedSaveError("providers.setNativeMemory")
+            : hostFailure("providers.setNativeMemory");
         }
         if (world.applyNativeWrites) {
           const providerId =
@@ -449,6 +506,44 @@ function streamBinding() {
   return { wsStreamClient: client, hostId: HOST_ID, retain: null };
 }
 
+const SIGNED_IN_AT = new Date("2026-01-01T00:00:00.000Z");
+const SIGNED_IN_USER: AuthenticatedUser = {
+  user: {
+    id: "memory-act-user",
+    name: "Person",
+    providerId: "provider-1",
+    providerHandle: "person",
+    providerType: "GITHUB",
+    email: "person@example.test",
+    avatarUrl: null,
+    activatedAt: SIGNED_IN_AT,
+    createdAt: SIGNED_IN_AT,
+    updatedAt: SIGNED_IN_AT,
+    lastSeenAt: SIGNED_IN_AT,
+    privacyMode: false,
+    isLearningEnabled: false,
+  },
+  userSubscription: {
+    id: "sub-1",
+    userID: "memory-act-user",
+    orgID: null,
+    teamID: null,
+    customerId: "cust-1",
+    createdAt: SIGNED_IN_AT,
+    updatedAt: SIGNED_IN_AT,
+    subscriptionExpiry: null,
+    trialEndsAt: null,
+    subscriptionStatus: "FREE",
+    hasPaymentMethod: null,
+    isInTrial: false,
+    rechargeRateSeconds: 0,
+  },
+  payAsYouGoUsage: { allowPayAsYouGo: false },
+  teamSubscriptions: [],
+  environments: { personal: null, teams: [] },
+  actingAs: null,
+};
+
 let queryClient = new QueryClient();
 let hostDirectory: HostDirectoryService | null = null;
 const captureDirectory = (directory: HostDirectoryService | null): void => {
@@ -527,9 +622,43 @@ export function invalidateAllQueries(): Promise<void> {
   return queryClient.invalidateQueries();
 }
 
+function signInWindow(runnerHost: MockRunnerHost): void {
+  runnerHost.tokenStoreEntries.set("traycer.token", {
+    token: "t1",
+    refreshToken: "t2",
+    savedAt: new Date().toISOString(),
+    user: {
+      id: SIGNED_IN_USER.user.id,
+      email: "person@example.test",
+      name: "Person",
+    },
+  });
+  Object.assign(runnerHost, {
+    validateAuthTokenIdentity: (): Promise<AuthIdentityValidationResult> =>
+      Promise.resolve({ kind: "valid", user: SIGNED_IN_USER }),
+  });
+}
+
 /** Renders `ui` inside the faked host's real providers. */
 export function renderInHost(ui: ReactNode): void {
   queryClient = new QueryClient({
+    mutationCache: new MutationCache({
+      onMutate: async (variables, mutation) => {
+        const held = heldAgentMemoriesMutation;
+        if (
+          held === null ||
+          mutation.options.mutationKey?.[0] !== "config.agentMemories.set"
+        ) {
+          return;
+        }
+        held.capture = {
+          mutationKey: mutation.options.mutationKey,
+          variables,
+        };
+        held.started.resolve();
+        await held.gate.promise;
+      },
+    }),
     // The app's minute of freshness: a reader that reuses a fresh entry is seen.
     defaultOptions: {
       queries: { retry: false, staleTime: 60_000, gcTime: 300_000 },
@@ -545,6 +674,7 @@ export function renderInHost(ui: ReactNode): void {
     hasLocalHost: undefined,
     traycerCli: new MockTraycerCli(),
   });
+  signInWindow(runnerHost);
   for (const other of world.otherHosts)
     recordNegotiatedHostManifest(other.hostId, FULL_MANIFEST);
   const streams = streamBinding();
@@ -562,6 +692,11 @@ export function renderInHost(ui: ReactNode): void {
             }
             fallback={<div data-testid="memory-act-fallback" />}
           >
+            <OnboardingMemoryActAuthServiceProbe
+              onAuthService={(service) => {
+                authService = service;
+              }}
+            />
             <WindowsBridgeContext.Provider
               value={{ bridge: null, hasHydrated: true }}
             >
@@ -714,6 +849,9 @@ export function negotiateManifest(
 
 /** Every test file's beforeEach: a fresh host, manifest, store and scroll stub. */
 export function resetMemoryActFixture(): void {
+  heldAgentMemoriesMutation?.gate.resolve();
+  heldAgentMemoriesMutation = null;
+  authService = null;
   mountSettings = null;
   tourSlot.leave = null;
   // Motion keeps its frame loop at module level for the whole worker; a file
@@ -735,6 +873,9 @@ export function resetMemoryActFixture(): void {
 
 /** Every test file's afterEach. */
 export function cleanupMemoryActFixture(): void {
+  heldAgentMemoriesMutation?.gate.resolve();
+  heldAgentMemoriesMutation = null;
+  authService = null;
   MotionGlobalConfig.skipAnimations = skipAnimationsBefore;
   cleanup();
   if (scrollToDescriptor === undefined)

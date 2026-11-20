@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useTeamBundleBalances } from "@/hooks/sandboxes/use-team-bundle-balances";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
 import { useSandboxGetReadiness } from "@/hooks/sandboxes/use-sandbox-get-readiness-query";
 import {
@@ -385,6 +386,7 @@ function ShapeSheetForm(props: {
 }): ReactNode {
   const ids = useId();
   const user = useAuthUser().data ?? null;
+  const teamBalanceMc = useTeamBundleBalances();
   const [form, setForm] = useState<ShapeForm>(() => {
     const provider = stageProviderFor(props.catalogue, props.initialShape.os);
     const name = stagedSandboxName(props.initialName);
@@ -406,7 +408,7 @@ function ShapeSheetForm(props: {
   const shape = "shape" in result ? result.shape : null;
   const price = shape === null ? null : stagePrice(props.catalogue, shape);
   const wake = wakeString(provider.suspendFidelity);
-  const balance = stageBalanceMc(user, props.configuration);
+  const balance = stageBalanceMc(user, props.configuration, teamBalanceMc);
   const needsCredits = stageNeedsCredits(balance, price);
   const clauses = consequenceClauses({
     configuration: props.configuration,

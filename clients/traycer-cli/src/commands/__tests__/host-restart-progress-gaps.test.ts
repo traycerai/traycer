@@ -79,6 +79,21 @@ vi.mock("@sentry/node", () => ({
   close: (timeout: number) => sentryMocks.close(timeout),
 }));
 
+// Model the explicit no-stored-sign-in advisory without auth-store I/O in the
+// fake-clock budget. Keep the real command runner and restart waits active.
+const credentialProvision = vi.hoisted(() => ({ calls: 0 }));
+vi.mock("../../host/install-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/install-auth")>();
+  return {
+    ...actual,
+    maybeProvisionCredential: async () => {
+      credentialProvision.calls += 1;
+      return null;
+    },
+  };
+});
+
 // A plain `setTimeout`-backed sleep - the one every fake below uses, so
 // every bounded wait in this file advances on `vi.useFakeTimers()`'s clock,
 // never a real one.
@@ -485,6 +500,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   recoveryAction.current = "restart-current";
+  credentialProvision.calls = 0;
   supervisorWaitCalls.count = 0;
   spawnEdgeCalls.count = 0;
   spawnEdgeConfig.failFirstCall = true;
@@ -667,6 +683,8 @@ describe("host restart emits no progress across its longest waits (wall-clock re
     expect(last.type).toBe("result");
     const data = (last.data ?? {}) as { readonly restarted: boolean };
     expect(data.restarted).toBe(true);
+    expect(last.data).toMatchObject({ credentialProvision: null });
+    expect(credentialProvision.calls).toBe(1);
     expect(controllerCalls.stopForRestart).toBe(1);
     expect(controllerCalls.relaunchAfterRestart).toBe(2);
     expect(supervisorWaitCalls.count).toBe(2);
@@ -693,6 +711,8 @@ describe("host restart emits no progress across its longest waits (wall-clock re
     expect(last.type).toBe("result");
     const data = (last.data ?? {}) as { readonly restarted: boolean };
     expect(data.restarted).toBe(true);
+    expect(last.data).toMatchObject({ credentialProvision: null });
+    expect(credentialProvision.calls).toBe(1);
     expect(controllerCalls.stopForRestart).toBe(1);
     expect(controllerCalls.relaunchAfterRestart).toBe(1);
     expect(supervisorWaitCalls.count).toBe(0);
@@ -722,6 +742,8 @@ describe("host restart emits no progress across its longest waits (wall-clock re
     };
     expect(data.restarted).toBe(false);
     expect(data.deferredForParkedActivation).toBe(true);
+    expect(last.data).toMatchObject({ credentialProvision: null });
+    expect(credentialProvision.calls).toBe(0);
     expect(controllerCalls.stopForRestart).toBe(0);
     expect(controllerCalls.relaunchAfterRestart).toBe(0);
 
@@ -760,6 +782,8 @@ describe("host restart emits no progress across its longest waits (wall-clock re
     expect(last.type).toBe("result");
     const data = (last.data ?? {}) as { readonly restarted: boolean };
     expect(data.restarted).toBe(true);
+    expect(last.data).toMatchObject({ credentialProvision: null });
+    expect(credentialProvision.calls).toBe(1);
     expect(controllerCalls.stopForRestart).toBe(1);
     expect(controllerCalls.relaunchAfterRestart).toBe(1);
 

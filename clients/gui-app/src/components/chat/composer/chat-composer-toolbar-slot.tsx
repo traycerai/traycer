@@ -21,7 +21,7 @@ interface ChatComposerToolbarSlotProps {
   readonly dictation: ComposerDictationControl | null;
   readonly dictationPreparing: DictationPreparingStatus | null;
   readonly settingsLocked: boolean;
-  /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
+  /** The host "Add a profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   readonly createProfileHostId: string | null;
   readonly runTargetHostId: string | null;

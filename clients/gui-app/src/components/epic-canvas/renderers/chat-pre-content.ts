@@ -277,7 +277,6 @@ export interface ChatPreContentInput {
   readonly hostKind: HostReachabilityHostKind;
   /** `resolvedHostLabel`'s answer: `null` while the directory has no label. */
   readonly hostLabel: string | null;
-  /** `hostIsBehindClient` over the two app versions. */
   readonly hostBehindClient: boolean;
   /**
    * Whether this client holds a ready live session to the host

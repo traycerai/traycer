@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { subscribeAnyHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import {
   hasBorrowableRemoteSession,
   subscribeRemoteSessionReadiness,
 } from "@traycer-clients/shared/host-transport/remote/index";
-import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { useHostBinding } from "@/lib/host";
+import { servesOverLocalSocket } from "@/lib/host/host-messenger";
 import {
   readsHostBindingsFromPool,
   useHostEnvironmentBindings,
@@ -15,22 +17,33 @@ import {
  * every row's binding comes from the pool, so every row is read. Without
  * one each read goes to the host itself, so the rule the fleet update badges
  * keep applies - Settings does not silently dial other hosts to decorate a row:
- * a host is read only when this client already holds a session to it (the
- * local host, the host Settings is scoped to, and any remote host with a
- * borrowable session). Every other host resolves to `null` and its row says
- * nothing about its environment.
+ * a host is read only when reading it dials nothing (a host the transport
+ * serves over the local socket, the host Settings is scoped to, and any
+ * remote host with a borrowable session). Every other host resolves to `null`
+ * and its row says nothing about its environment.
  */
 export function useHostEnvironmentLabelResolver(
   hostIds: ReadonlyArray<string>,
   scopedHostId: string | null,
 ): (hostId: string) => string | null {
-  const localHostId = useReactiveLocalHostId();
+  const hostClient = useHostBinding()?.hostClient ?? null;
   const fromPool = readsHostBindingsFromPool();
   const idsKey = hostIds.join("\n");
-  const subscribe = useCallback(
-    (onStoreChange: () => void) =>
-      subscribeRemoteSessionReadiness(onStoreChange),
-    [],
+  const subscribe = useCallback((onStoreChange: () => void) => {
+    const unsubscribeSessions = subscribeRemoteSessionReadiness(onStoreChange);
+    const unsubscribeRows = subscribeAnyHostRowChanged(onStoreChange);
+    return () => {
+      unsubscribeSessions();
+      unsubscribeRows();
+    };
+  }, []);
+  const servedOverLocalSocket = useCallback(
+    (hostId: string) => {
+      const entry =
+        hostClient === null ? null : hostClient.resolveHostById(hostId);
+      return entry !== null && servesOverLocalSocket(entry);
+    },
+    [hostClient],
   );
   // A string stamp because `useSyncExternalStore` compares with `Object.is`:
   // a readiness wake that moved no listed host re-renders nothing.
@@ -42,12 +55,12 @@ export function useHostEnvironmentLabelResolver(
           (hostId) =>
             hostId.length > 0 &&
             (fromPool ||
-              hostId === localHostId ||
+              servedOverLocalSocket(hostId) ||
               hostId === scopedHostId ||
               hasBorrowableRemoteSession(hostId)),
         )
         .join("\n"),
-    [fromPool, idsKey, localHostId, scopedHostId],
+    [fromPool, idsKey, servedOverLocalSocket, scopedHostId],
   );
   const readableStamp = useSyncExternalStore(
     subscribe,

@@ -43,6 +43,14 @@ import {
 // The three seams `agent-row-reach-mark` stubs: host reachability, the per-host
 // client beneath a row (a null client disables the queries under it), a row's
 // owner PR references, and the notification indicator query.
+// jsdom lays nothing out: the chat tree is virtualised, so its rows come
+// from the shared layout stand-in (every row fits, at its estimate).
+vi.mock("@tanstack/react-virtual", async (importOriginal) =>
+  (await import("@/__tests__/chat-tree-virtual-layout")).mockReactVirtual(
+    importOriginal,
+  ),
+);
+
 vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => {
   const actual =
     await importOriginal<

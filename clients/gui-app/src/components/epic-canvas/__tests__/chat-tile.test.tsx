@@ -1,7 +1,16 @@
 import type { ComponentProps, ReactNode } from "react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -26,11 +35,28 @@ import {
   tryReserveLandingImageBudget,
 } from "@/lib/composer/landing-image-budget";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { PersonMembersContext } from "@/hooks/identity/use-person-identity";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
+
+interface SenderTestPerson {
+  readonly displayName: string;
+  readonly avatarUrl: string | null;
+}
+
+const teamDirectoryPeople = new Map<string, SenderTestPerson>();
+
+function resolveTeamDirectoryPerson(userId: string): SenderTestPerson | null {
+  return teamDirectoryPeople.get(userId) ?? null;
+}
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -195,9 +221,14 @@ const MOCK_HOST_DIRECTORY = {
 // What the task says of the chat's host, and the viewer's sandbox list, when
 // a case sets them; otherwise the real reads answer.
 const taskSandboxTestState = vi.hoisted(
-  (): { task: TaskSandboxHost | null; sandboxes: SandboxSummary[] | null } => ({
+  (): {
+    task: TaskSandboxHost | null;
+    sandboxes: SandboxSummary[] | null;
+    personalEnvironmentId: string | null;
+  } => ({
     task: null,
     sandboxes: null,
+    personalEnvironmentId: null,
   }),
 );
 vi.mock("@/hooks/sandboxes/use-sandbox-list-query", async (importOriginal) => {
@@ -228,6 +259,8 @@ vi.mock("@/hooks/epic/use-task-sandbox-end", async (importOriginal) => {
   };
 });
 
+const PERSONAL_SANDBOX_ENVIRONMENT = "env-personal";
+
 const directoryListTestState = vi.hoisted(() => ({
   entries: null as readonly HostDirectoryEntry[] | null,
 }));
@@ -251,7 +284,22 @@ vi.mock("@/hooks/host/use-host-directory-list-query", async (importActual) => {
 });
 
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: undefined }),
+  useEnvironmentListQuery: () => ({
+    data:
+      taskSandboxTestState.personalEnvironmentId === null
+        ? undefined
+        : {
+            environments: [
+              {
+                environmentId: taskSandboxTestState.personalEnvironmentId,
+                ownerKind: "user",
+              },
+            ],
+          },
+    error: null,
+    isError: false,
+    refetch: () => Promise.resolve(),
+  }),
 }));
 
 // ENUMERATES deliberately - do NOT convert to an `importOriginal` spread.
@@ -650,6 +698,11 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { ChatMessageDeliveryV142 } from "@traycer/protocol/host/agent/gui/message-delivery";
+import type { UserMessageSender } from "@traycer/protocol/persistence/epic/senders";
+import type {
+  ChatRecordSummaryV12,
+  ChatRecordSummaryV15,
+} from "@traycer/protocol/host/epic/chat-records";
 import {
   readStagedWorktreeIntent,
   useWorktreeIntentStagingStore,
@@ -694,7 +747,6 @@ const RESTING_COPY_SANDBOX = {
     displayName: "resting-copy",
   }),
   configuration: { kind: "personal" as const },
-  wakeChangesPayer: false,
 };
 const QUEUED_CONTENT: JsonContent = {
   type: "doc",
@@ -1030,6 +1082,78 @@ function testWorktreeBinding(): WorktreeBinding {
       },
     ],
   };
+}
+
+function userSenderMessage(
+  messageId: string,
+  sender: UserMessageSender,
+  text: string,
+): Message {
+  return {
+    role: "user",
+    messageId,
+    sender,
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text }],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 1,
+    sessionAnchor: null,
+  };
+}
+
+function chatStarterRecord(
+  starterUserId: string | null,
+): ChatRecordSummaryV12 & Pick<ChatRecordSummaryV15, "starterUserId"> {
+  return {
+    chatId: CHAT_ARTIFACT.id,
+    ownerUserId: "owner-1",
+    originHostId: HOST_ID,
+    title: CHAT_ARTIFACT.name,
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    archived: false,
+    archivedAt: null,
+    runSettingsSummary: null,
+    revision: 1,
+    visibility: "private",
+    origin: "own",
+    docResident: false,
+    head: null,
+    ...(starterUserId === null ? {} : { starterUserId }),
+  };
+}
+
+function installHostDirectory(rows: ReadonlyArray<HostDirectoryEntry>): void {
+  const byId = new Map(rows.map((row) => [row.hostId, row]));
+  installHostConnectionRegistrySource({
+    directory: {
+      findById: (hostId) => byId.get(hostId) ?? null,
+      onDirectoryChanged: () => ({ dispose: () => undefined }),
+    },
+    leases: null,
+  });
+}
+
+function publishChatStarter(starterUserId: string | null): void {
+  const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+  if (handle === null) throw new Error("expected live epic handle");
+  act(() => {
+    handle.store
+      .getState()
+      .applyChatRecords([chatStarterRecord(starterUserId)], null);
+  });
 }
 
 function hostUserMessage(): Message {
@@ -1772,7 +1896,11 @@ function chatTileProviders(queryClient: QueryClient, content: ReactNode) {
             <TooltipProvider>
               <TestEpicSessionWrapper epicId={EPIC_ID}>
                 <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                  {content}
+                  <PersonMembersContext.Provider
+                    value={resolveTeamDirectoryPerson}
+                  >
+                    {content}
+                  </PersonMembersContext.Provider>
                 </TabHostProvider>
               </TestEpicSessionWrapper>
             </TooltipProvider>
@@ -1928,6 +2056,7 @@ function deliverBlockEvent(
 
 describe("<ChatTile />", () => {
   beforeEach(() => {
+    stubImmediateImage();
     installLegendListViewportMetrics();
     installLegendListTestClock();
     window.localStorage.clear();
@@ -1991,6 +2120,7 @@ describe("<ChatTile />", () => {
     useWorktreeIntentStagingStore.getState().resetForTests();
     resetFocusedComposerControlsForTests();
     cloudChatListTestState.knownChatIds.clear();
+    teamDirectoryPeople.clear();
     harnessCatalogTestState.harnesses = [];
     harnessCatalogTestState.toolbarModelsReady = false;
     resetNegotiatedManifests();
@@ -1998,6 +2128,7 @@ describe("<ChatTile />", () => {
 
   afterEach(() => {
     cleanup();
+    teamDirectoryPeople.clear();
     sandboxCatalogueTestState.catalogue = null;
     viewport.mobile = false;
     restoreLegendListTestClock();
@@ -2011,6 +2142,7 @@ describe("<ChatTile />", () => {
     directoryListTestState.entries = null;
     taskSandboxTestState.task = null;
     taskSandboxTestState.sandboxes = null;
+    taskSandboxTestState.personalEnvironmentId = null;
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerDraftStore.setState({
       drafts: {},
@@ -2526,6 +2658,161 @@ describe("<ChatTile />", () => {
     rootState.destroy();
   });
 
+  it("shows team member and former-member names and pictures on chat rows", async () => {
+    teamDirectoryPeople.set("team-member", {
+      displayName: "Team Directory Member",
+      avatarUrl: "https://images.example.test/chat-team-member.png",
+    });
+    teamDirectoryPeople.set("former-member", {
+      displayName: "Former Directory Member",
+      avatarUrl: "https://images.example.test/chat-former-member.png",
+    });
+
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [
+          userSenderMessage(
+            "team-member-row",
+            { type: "user", userId: "team-member" },
+            "Team member chat row",
+          ),
+          userSenderMessage(
+            "former-member-row",
+            { type: "user", userId: "former-member" },
+            "Former member chat row",
+          ),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    expect(await screen.findByText("Team Directory Member")).not.toBeNull();
+    expect(await screen.findByText("Former Directory Member")).not.toBeNull();
+    await waitFor(() => {
+      const pictures = screen
+        .getAllByTestId("person-avatar")
+        .map((avatar) => avatar.querySelector("img")?.getAttribute("src"));
+      expect(pictures).toContain(
+        "https://images.example.test/chat-team-member.png",
+      );
+      expect(pictures).toContain(
+        "https://images.example.test/chat-former-member.png",
+      );
+    });
+    expect(screen.queryByText("team-member", { exact: true })).toBeNull();
+    expect(screen.queryByText("former-member", { exact: true })).toBeNull();
+  });
+
+  it("keeps the viewer at You without a picture and keeps an agent sender's label", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [
+          userSenderMessage(
+            "viewer-row",
+            { type: "user", userId: "owner-1" },
+            "Viewer chat row",
+          ),
+          userSenderMessage(
+            "agent-row",
+            {
+              type: "agent",
+              harnessId: "codex",
+              agentId: "codex",
+              displayName: "Codex",
+              reply: { expectsReply: false },
+              inReplyTo: null,
+            },
+            "Agent chat row",
+          ),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    expect(await screen.findByText("You")).not.toBeNull();
+    expect(screen.getByText("Codex")).not.toBeNull();
+    expect(screen.queryByTestId("person-avatar")).toBeNull();
+  });
+
+  it("shows only the timestamp on a system sender row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [
+          userSenderMessage(
+            "viewer-row",
+            { type: "user", userId: "owner-1" },
+            "Viewer chat row",
+          ),
+          userSenderMessage(
+            "system-row",
+            { type: "user", userId: "system" },
+            "System status row",
+          ),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    const systemText = await screen.findByText("System status row");
+    const systemRow = systemText.closest('[class~="group/message"]');
+    if (!(systemRow instanceof HTMLElement)) {
+      throw new Error("expected the system sender row");
+    }
+    expect(within(systemRow).queryByText("system", { exact: true })).toBeNull();
+    expect(within(systemRow).queryByTestId("person-avatar")).toBeNull();
+    const stamp = within(systemRow).getByTestId("chat-message-timestamp");
+    expect(stamp.closest("span.text-overline")?.textContent).not.toContain(
+      " · ",
+    );
+  });
+
+  it.each([
+    ["a personal computer's", { kind: "user", id: "owner-1" } as const],
+    [
+      "a team computer's",
+      { kind: "team", id: "team-1", name: "Team" } as const,
+    ],
+  ])(
+    "draws no Started by strip on %s chat, whoever started it",
+    async (_computer, owner) => {
+      installHostDirectory([{ ...remoteEntry(HOST_ID, null), owner }]);
+      onTestFinished(resetHostConnectionRegistryForTest);
+      teamDirectoryPeople.set("u-priya", {
+        displayName: "Priya",
+        avatarUrl: "https://images.example.test/priya.png",
+      });
+      renderChatTile();
+      await waitForChatTileLoaded();
+
+      for (const starter of ["u-priya", "u-gone", "system", null]) {
+        publishChatStarter(starter);
+
+        expect(
+          screen.queryByTestId(`chat-started-by-${CHAT_ARTIFACT.id}`),
+        ).toBeNull();
+        expect(screen.queryByText(/Started by/u)).toBeNull();
+      }
+    },
+  );
+
   it("keeps a resting copy sendable without serving-host workspace access", async () => {
     useSettingsStore.setState({ defaultPermission: "full_access" });
     const liveTile = renderChatTile();
@@ -2594,8 +2881,13 @@ describe("<ChatTile />", () => {
     async (role) => {
       chatHarness.teardown();
       chatHarness.install(role, []);
+      taskSandboxTestState.personalEnvironmentId = PERSONAL_SANDBOX_ENVIRONMENT;
       taskSandboxTestState.sandboxes = [
-        sandboxSummaryFixture({ hostId: HOST_ID, displayName: "resting-box" }),
+        sandboxSummaryFixture({
+          hostId: HOST_ID,
+          displayName: "resting-box",
+          environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
+        }),
       ];
       sandboxCatalogueTestState.catalogue = {
         providers: [],
@@ -2608,6 +2900,7 @@ describe("<ChatTile />", () => {
         sandboxSummaryFixture({
           hostId: HOST_ID,
           displayName: "resting-box",
+          environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
           state: "suspended",
         }),
       ];
@@ -2628,21 +2921,32 @@ describe("<ChatTile />", () => {
       expect(document.body.textContent).not.toContain(
         "No sandbox is running this agent",
       );
-      expect(document.body.textContent).not.toContain("Read-only viewer");
       expect(document.body.textContent).not.toContain("is offline");
       if (role === "owner") {
+        expect(document.body.textContent).not.toContain("Read-only viewer");
         const send = screen.getByRole("button", { name: "Send" });
         if (!(send instanceof HTMLButtonElement)) {
           throw new Error("expected send button");
         }
         expect(send.disabled).toBe(false);
+      } else {
+        expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+        expect(
+          screen.getByRole("button", { name: "Clone agent" }),
+        ).not.toBeNull();
+        expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
       }
     },
   );
 
   it("keeps an unconfirmed send and its delivery check beside a resting sandbox footer", async () => {
+    taskSandboxTestState.personalEnvironmentId = PERSONAL_SANDBOX_ENVIRONMENT;
     taskSandboxTestState.sandboxes = [
-      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "resting-box" }),
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "resting-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
+      }),
     ];
     sandboxCatalogueTestState.catalogue = {
       providers: [],
@@ -2670,6 +2974,7 @@ describe("<ChatTile />", () => {
       sandboxSummaryFixture({
         hostId: HOST_ID,
         displayName: "resting-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
         state: "suspended",
       }),
     ];
@@ -2694,6 +2999,7 @@ describe("<ChatTile />", () => {
   });
 
   it("lets a sandbox state explain a dead lease before the first snapshot, even while the directory says reachable", async () => {
+    taskSandboxTestState.personalEnvironmentId = PERSONAL_SANDBOX_ENVIRONMENT;
     directoryListTestState.entries = [
       {
         hostId: HOST_ID,
@@ -2705,7 +3011,11 @@ describe("<ChatTile />", () => {
       },
     ];
     taskSandboxTestState.sandboxes = [
-      sandboxSummaryFixture({ hostId: HOST_ID, displayName: "stopping-box" }),
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "stopping-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
+      }),
     ];
     useSelectionAuthorityStore.setState({
       attached: true,
@@ -2728,6 +3038,7 @@ describe("<ChatTile />", () => {
       sandboxSummaryFixture({
         hostId: HOST_ID,
         displayName: "stopping-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
         state: "stopped",
       }),
     ];
@@ -2745,6 +3056,31 @@ describe("<ChatTile />", () => {
     });
     expect(document.body.textContent).not.toContain("is offline");
     expect(screen.queryByText(/isn't available/)).toBeNull();
+  });
+
+  it("keeps a resting footer to the state alone while the person's own environment is not known", async () => {
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "resting-box",
+        environmentId: PERSONAL_SANDBOX_ENVIRONMENT,
+        state: "suspended",
+      }),
+    ];
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("resting-box is suspended");
+    });
+    expect(document.body.textContent).not.toContain(
+      "your next message resumes it",
+    );
   });
 
   it("keeps an ordinary host's reconnect status when the sandbox carrier is absent", async () => {
@@ -5822,29 +6158,91 @@ describe("<ChatTile />", () => {
       status: "waitingChat",
       chatId: CHAT_ARTIFACT.id,
     });
-    expect(
-      await screen.findByText(
-        "Read-only viewer. The agent owner can send prompts and manage this queue.",
-      ),
-    ).not.toBeNull();
+    expect(await screen.findByText("Read-only viewer.")).not.toBeNull();
   });
 
-  it("shows read-only viewer state without owner actions", async () => {
+  it("lets a read-only environment viewer clone through the existing fork dialog", async () => {
     harness.teardown();
     chatHarness.teardown();
     harness.install(seedDocWithChat, "editor");
     chatHarness.install("viewer", []);
+    taskSandboxTestState.task = {
+      kind: "sandbox",
+      name: "Shared environment",
+    };
+    taskSandboxTestState.sandboxes = [
+      sandboxSummaryFixture({
+        hostId: HOST_ID,
+        displayName: "Shared environment",
+        environmentId: "env-team-shared",
+      }),
+    ];
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: "viewer-2",
+        userName: "Viewer",
+        email: "viewer@example.com",
+      },
+      contextMetadata: { userId: "viewer-2", username: "Viewer" },
+    });
 
     renderChatTile();
 
     await waitForChatTileLoaded();
 
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Clone agent" }));
+    expect(await screen.findByLabelText("Fork agent title")).not.toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("gates pending interview controls from the host access role", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [hostUserMessage(), streamingInterviewAssistantMessage()],
+        activeTurn: null,
+        pendingInterviews: [{ blockId: "question-1", requestedAt: 3 }],
+      });
+    });
+
     expect(
-      screen.getByText(
-        "Read-only viewer. The agent owner can send prompts and manage this queue.",
-      ),
+      await screen.findByText("Which path should we take?"),
     ).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "1. Option A" }));
+    const ownerSubmit = screen.getByRole("button", { name: "Submit" });
+    if (!(ownerSubmit instanceof HTMLButtonElement)) {
+      throw new Error("expected the interview submit button");
+    }
+    expect(ownerSubmit.disabled).toBe(false);
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "viewer",
+        queueItems: [],
+        settings: null,
+        messages: [hostUserMessage(), streamingInterviewAssistantMessage()],
+        activeTurn: null,
+        pendingInterviews: [{ blockId: "question-1", requestedAt: 3 }],
+      });
+    });
+
+    expect(screen.queryByText("Which path should we take?")).toBeNull();
+    expect(screen.queryByRole("button", { name: "1. Option A" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Submit" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
   });
 
   it("renders queued messages with compact row actions", async () => {
@@ -5998,7 +6396,7 @@ describe("<ChatTile />", () => {
 
   it("shows read-only queue chrome for viewers", async () => {
     chatHarness.teardown();
-    chatHarness.install("viewer", [
+    const queueItems: ChatQueuedItem[] = [
       {
         kind: "prompt" as const,
         queueItemId: "queue-1",
@@ -6010,7 +6408,7 @@ describe("<ChatTile />", () => {
         },
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
-        accountContext: { type: "PERSONAL" as const },
+        accountContext: { type: "TEAM" as const, teamId: "team-test" },
         sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
@@ -6020,16 +6418,34 @@ describe("<ChatTile />", () => {
         createdAt: 2,
         updatedAt: 2,
       },
-    ]);
+    ];
+    chatHarness.install("viewer", queueItems);
 
     renderChatTile();
 
     await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "viewer",
+        queueItems,
+        settings: null,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+      });
+    });
 
     expect(screen.getByText("Owner manages queue")).not.toBeNull();
+    expect(screen.getByText("Read-only viewer.")).not.toBeNull();
     expect(
       screen.queryByRole("button", { name: "Edit queued message" }),
     ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Steer queued message now" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).not.toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
   });
 
   it("updates queued item settings from composer toolbar while editing", async () => {

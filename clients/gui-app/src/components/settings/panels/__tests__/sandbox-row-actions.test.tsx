@@ -307,8 +307,9 @@ describe("<SandboxRowActions />", () => {
     });
     const props = {
       configuration: { kind: "personal" } as const,
+      credits: { kind: "personal" } as const,
       unreachable: false,
-      frozenNeedsOwnCredits: false,
+      frozenOffersAddCredits: false,
       settingsFailed: false,
     };
     renderRow(
@@ -354,8 +355,9 @@ describe("<SandboxRowActions />", () => {
           guestConfigured: true,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -385,8 +387,9 @@ describe("<SandboxRowActions />", () => {
           frozen: false,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -429,8 +432,9 @@ describe("<SandboxRowActions />", () => {
             guestConfigured: true,
           })}
           configuration={{ kind: "personal" }}
+          credits={{ kind: "personal" }}
           unreachable={false}
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );
@@ -460,8 +464,9 @@ describe("<SandboxRowActions />", () => {
           frozen: false,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -510,8 +515,9 @@ describe("<SandboxRowActions />", () => {
           frozen: false,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -545,8 +551,9 @@ describe("<SandboxRowActions />", () => {
             destroyAfterRestingMinutes: period,
           })}
           configuration={{ kind: "personal" }}
+          credits={{ kind: "personal" }}
           unreachable={false}
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );
@@ -565,8 +572,9 @@ describe("<SandboxRowActions />", () => {
       <SandboxRowActions
         summary={sandboxSummaryFixture({ state: "failed" })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -691,8 +699,9 @@ describe("<SandboxRowActions />", () => {
         <SandboxRowActions
           summary={summary}
           configuration={configuration}
+          credits={configuration}
           unreachable={false}
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );
@@ -1157,8 +1166,9 @@ describe("<SandboxRowActions />", () => {
           guestConfigured: true,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={false}
       />,
     );
@@ -1195,8 +1205,9 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
           ...overrides,
         })}
         configuration={{ kind: "personal" }}
+        credits={{ kind: "personal" }}
         unreachable={false}
-        frozenNeedsOwnCredits={false}
+        frozenOffersAddCredits={false}
         settingsFailed={settingsFailed}
       />,
     );
@@ -1459,8 +1470,9 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
             guestConfigured: true,
           })}
           configuration={{ kind: "personal" }}
+          credits={{ kind: "personal" }}
           unreachable
-          frozenNeedsOwnCredits={false}
+          frozenOffersAddCredits={false}
           settingsFailed={false}
         />,
       );

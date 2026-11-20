@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -94,6 +95,7 @@ import { MissingFilePlaceholder } from "@/components/epic-canvas/missing-file-pl
 import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
 import { useDocumentOpenExternallyTarget } from "@/hooks/editor/use-document-open-target";
 import { useWorkspaceFileOpenExternally } from "@/hooks/editor/use-workspace-file-open-externally";
+import { ownValue } from "@/lib/own-value";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
 /**
@@ -827,6 +829,7 @@ function WorkspaceFileTileLive(props: {
     return refreshedContent;
   }, [editSession.state?.conflict?.diskContent, query]);
   const handleKeepMine = useCallback(async (): Promise<void> => {
+    if (showHostUpdateNeededForGesture(tabHostId)) return;
     try {
       await editSession.resolveKeepMine(await readLatestDiskContent());
     } catch (error) {
@@ -834,8 +837,11 @@ function WorkspaceFileTileLive(props: {
         conflictResolutionErrorMessage(error),
       );
     }
-  }, [editSession, readLatestDiskContent]);
+  }, [editSession, readLatestDiskContent, tabHostId]);
   const handleUseDisk = useCallback(async (): Promise<void> => {
+    const diskContent = editSession.state?.conflict?.diskContent ?? null;
+    if (diskContent === null && showHostUpdateNeededForGesture(tabHostId))
+      return;
     try {
       await editSession.resolveUseDisk(await readLatestDiskContent());
     } catch (error) {
@@ -843,7 +849,7 @@ function WorkspaceFileTileLive(props: {
         conflictResolutionErrorMessage(error),
       );
     }
-  }, [editSession, readLatestDiskContent]);
+  }, [editSession, readLatestDiskContent, tabHostId]);
   const handleRevealConsumed = useCallback((): void => {
     clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
   }, [node.id, props.viewTabId]);
@@ -895,7 +901,10 @@ function WorkspaceFileTileLive(props: {
             <FileAutosaveStatus
               appearance="pill"
               state={editSession.state}
-              onRetry={editSession.retry}
+              onRetry={() => {
+                if (showHostUpdateNeededForGesture(tabHostId)) return;
+                editSession.retry();
+              }}
               onKeepMine={() => {
                 void handleKeepMine();
               }}
@@ -1412,7 +1421,7 @@ function languageForFileName(fileName: string): string {
   // Extension-less names (`Dockerfile`, `Makefile`) get an exact-name
   // mapping; everything else defers to the shared extension table.
   return (
-    EXACT_LANGUAGE_BY_FILE_NAME[fileName.toLowerCase()] ??
+    ownValue(EXACT_LANGUAGE_BY_FILE_NAME, fileName.toLowerCase()) ??
     languageFromFilePath(fileName)
   );
 }

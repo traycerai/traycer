@@ -148,6 +148,11 @@ describe("buildHarnessUsageSeriesScale", () => {
     expect(both.colorVar("commandcode")).toBe("var(--usage-series-1)");
   });
 
+  it("gives a harness named like an inherited member the first free slot", () => {
+    const scale = buildHarnessUsageSeriesScale(["constructor"]);
+    expect(scale.colorVar("constructor")).toBe("var(--usage-series-1)");
+  });
+
   it("keeps all selected supported harnesses visually distinct", () => {
     const supportedHarnesses = [
       "amp",

@@ -160,8 +160,8 @@ const GROUPED = {
 };
 
 // The host's own Traycer list, which holds the pick while no stage is up. Its
-// label carries the group prefix its display name drops.
-const PICKED = traycerModel("trc-picked", "Vendor: Picked Name", GROUPED);
+// name starts with its maker, and a Traycer name is shown in full.
+const PICKED = traycerModel("trc-picked", "Vendor Picked Name", GROUPED);
 const OTHER = traycerModel("trc-other", "Other Name", NO_GROUP);
 
 function pickOf(model: string): ChatRunSettings {
@@ -334,13 +334,13 @@ describe("<HarnessModelPicker /> under a staged sandbox", () => {
   it("keeps the pick's name when the cloud list omits it", async () => {
     cloud.sandboxHost = true;
     renderComposer([PICKED, OTHER], pickOf("trc-picked"));
-    await screen.findByRole("button", { name: /^Picked Name/ });
+    await screen.findByRole("button", { name: /^Vendor Picked Name/ });
 
     cloud.models = [OTHER];
     stageSandbox();
 
     expect(
-      await screen.findByRole("button", { name: /^Picked Name/ }),
+      await screen.findByRole("button", { name: /^Vendor Picked Name/ }),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Select model/ })).toBeNull();
   });
@@ -364,9 +364,8 @@ describe("<HarnessModelPicker /> under a staged sandbox", () => {
     renderComposer([PICKED, OTHER], pickOf("trc-picked"));
 
     expect(
-      await screen.findByRole("button", { name: /^Picked Name/ }),
+      await screen.findByRole("button", { name: /^Vendor Picked Name/ }),
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Vendor/ })).toBeNull();
   });
 
   it("still reads Select model for a missing pick with no stage", async () => {

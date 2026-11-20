@@ -1,21 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useRef, useState, type ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
-import { ChatTreeVirtualList } from "@/components/epic-canvas/sidebar/chat-tree-virtual-list";
-import { useChatTreeRowModel } from "@/components/epic-canvas/sidebar/use-chat-tree-row-model";
-import type {
-  ChatTreePendingRootInput,
-  ChatTreeRow,
-} from "@/components/epic-canvas/sidebar/chat-tree-rows";
+import { CloudChatTree } from "@/components/epic-canvas/sidebar/__tests__/cloud-chat-tree";
+import { leafCloudEntry } from "@/components/epic-canvas/sidebar/__tests__/cloud-chat-tree-entries";
 import {
   cloudChatRowKey,
   type UnifiedChatEntry,
-  type UnifiedCloudChatEntry,
 } from "@/lib/chats/unified-chat-list";
-import type { EpicTreeIndex } from "@/lib/epic-selectors";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { chatTreeLayout } from "@/__tests__/chat-tree-virtual-layout";
@@ -90,81 +82,17 @@ function summary(
   };
 }
 
-function leafEntry(chat: CloudChatSummary): UnifiedCloudChatEntry {
-  return {
-    kind: "cloud",
-    key: cloudChatRowKey(chat.identity),
-    chat,
-    children: [],
-  };
-}
-
 const PARENT = summary("parent-chat", null);
 const CHILD_A = summary("child-a", "parent-chat");
 const CHILD_B = summary("child-b", "parent-chat");
 const PARENT_KEY = cloudChatRowKey(PARENT.identity);
 const NESTED_PARENT: readonly UnifiedChatEntry[] = [
   {
-    ...leafEntry(PARENT),
-    children: [leafEntry(CHILD_A), leafEntry(CHILD_B)],
+    ...leafCloudEntry(PARENT),
+    children: [leafCloudEntry(CHILD_A), leafCloudEntry(CHILD_B)],
   },
 ];
-const LEAF_PARENT: readonly UnifiedChatEntry[] = [leafEntry(PARENT)];
-
-const NO_PENDING: readonly ChatTreePendingRootInput[] = [];
-const NO_LOCAL_TREE: EpicTreeIndex = {
-  rootIds: [],
-  childrenByParent: {},
-  nodeById: {},
-};
-const ANY_TYPE = (): boolean => true;
-
-function CloudTree(props: {
-  readonly listEntries: readonly UnifiedChatEntry[];
-  readonly expandedIds: ReadonlySet<string>;
-  readonly toggleExpanded: (id: string) => void;
-}): ReactNode {
-  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(
-    null,
-  );
-  const regionRef = useRef<HTMLDivElement>(null);
-  const model = useChatTreeRowModel({
-    listEntries: props.listEntries,
-    pendingRoots: NO_PENDING,
-    tree: NO_LOCAL_TREE,
-    expandedIds: props.expandedIds,
-    visibleIds: null,
-    treeFilter: ANY_TYPE,
-    comparator: null,
-    clock: null,
-  });
-  const renderRow = (row: ChatTreeRow): ReactNode =>
-    row.kind === "cloud" ? (
-      <EpicSidebarCloudChatRow
-        chat={row.chat}
-        hasChildren={row.hasChildren}
-        expanded={row.expanded}
-        expansionId={row.expansionId}
-        onToggleExpanded={props.toggleExpanded}
-        tabId="tab-1"
-        depth={row.depth}
-        selectionMode={false}
-      />
-    ) : null;
-  return (
-    <div ref={regionRef}>
-      <div ref={setScrollElement}>
-        <ChatTreeVirtualList
-          model={model}
-          tabId="tab-1"
-          scrollElement={scrollElement}
-          regionRef={regionRef}
-          renderRow={renderRow}
-        />
-      </div>
-    </div>
-  );
-}
+const LEAF_PARENT: readonly UnifiedChatEntry[] = [leafCloudEntry(PARENT)];
 
 function renderParent(input: {
   readonly listEntries: readonly UnifiedChatEntry[];
@@ -173,7 +101,7 @@ function renderParent(input: {
 }): void {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <CloudTree {...input} />
+      <CloudChatTree {...input} tabId="tab-1" />
     </QueryClientProvider>,
   );
 }

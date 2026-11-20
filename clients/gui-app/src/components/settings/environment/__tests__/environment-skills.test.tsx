@@ -39,6 +39,7 @@ import {
   mountTeamPage,
   personalPoolSource,
   poolSource,
+  requireTeamHostBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
@@ -51,10 +52,7 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => requireTeamHostClient(),
-  useHostBinding: () => ({
-    hostId: "host-local",
-    hostClient: requireTeamHostClient(),
-  }),
+  useHostBinding: () => requireTeamHostBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -1386,6 +1384,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
           providerId: "claude-code",
           mutation: {
             kind: "promoteToPersonal",
+            intentOperationId: null,
             entryKind: "skills",
             scope: "global",
             workspaceRoot: null,
@@ -1398,6 +1397,7 @@ describe("A provider's Skills tab on Personal or a team", () => {
           providerId: "claude-code",
           mutation: {
             kind: "promoteToPersonal",
+            intentOperationId: null,
             entryKind: "skills",
             scope: "project",
             workspaceRoot: "/Users/dev/app-wt",

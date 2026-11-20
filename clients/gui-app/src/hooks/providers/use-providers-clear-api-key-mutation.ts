@@ -2,23 +2,28 @@ import type { UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
   RequestOfMethod,
-  ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderApiKeyChangeResponse } from "@traycer-clients/shared/host-client/provider-api-key-change";
 import type { HostRpcRegistry } from "@/lib/host";
-import { useHostScopedMutation } from "@/hooks/host/use-host-scoped-mutation";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import { useProviderApiKeyChangeMutation } from "@/hooks/providers/use-provider-api-key-change-mutation";
 import { providersMutationKeys } from "@/lib/query-keys";
 
-export function useProvidersClearApiKey(): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "providers.clearApiKey">,
+export function useProvidersClearApiKey(
+  expectedEnvironmentId: string | null,
+): UseMutationResult<
+  ProviderApiKeyChangeResponse,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, "providers.clearApiKey">,
   { readonly hostId: string | null }
 > {
-  return useHostScopedMutation({
+  return useProviderApiKeyChangeMutation<
+    RequestOfMethod<HostRpcRegistry, "providers.clearApiKey">
+  >({
+    expectedEnvironmentId,
     method: "providers.clearApiKey",
     mutationKey: providersMutationKeys.clearApiKey(),
     errorMessage: "Couldn't clear the API key.",
-    invalidateMethods: PROVIDER_INVALIDATIONS,
+    changeOf: ({ providerId }) => ({ providerId, change: { action: "clear" } }),
+    clearInput: () => undefined,
   });
 }

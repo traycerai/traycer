@@ -16,10 +16,11 @@
  * theirs to not have - and `/settings/delete-account` redirects there, which is
  * what `isSettingsSectionVisible` is asked in that route's `beforeLoad`.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setMobileApp } from "@/lib/mobile-app";
 import {
+  RETIRED_SECTION_REPLACEMENTS,
   SETTINGS_SECTIONS,
   isSettingsSectionVisible,
   visibleSettingsSections,
@@ -31,10 +32,22 @@ const RETIRED: ReadonlyArray<SettingsSectionId> = [
   "machine-setup",
   "agent-definitions",
   "browser-agent-access",
+  "notifications",
 ];
+
+const soundtrackOfferedMock = vi.hoisted(() => ({ value: true }));
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => soundtrackOfferedMock.value,
+}));
 
 afterEach(() => {
   setMobileApp(false);
+});
+
+beforeEach(() => {
+  soundtrackOfferedMock.value = true;
 });
 
 describe("visibleSettingsSections", () => {
@@ -49,6 +62,31 @@ describe("visibleSettingsSections", () => {
     expect(isSettingsSectionVisible("keybindings")).toBe(true);
     expect(isSettingsSectionVisible("link-phone")).toBe(true);
     expect(isSettingsSectionVisible("delete-account")).toBe(false);
+  });
+
+  it("offers Sounds on desktop only where the soundtrack is offered", () => {
+    setMobileApp(false);
+    soundtrackOfferedMock.value = false;
+    expect(
+      visibleSettingsSections().map((section) => section.id),
+    ).not.toContain("app-notifications");
+    expect(isSettingsSectionVisible("app-notifications")).toBe(false);
+    expect(RETIRED_SECTION_REPLACEMENTS["app-notifications"]).toBe("alerts");
+
+    soundtrackOfferedMock.value = true;
+    expect(visibleSettingsSections().map((section) => section.id)).toContain(
+      "app-notifications",
+    );
+    expect(isSettingsSectionVisible("app-notifications")).toBe(true);
+  });
+
+  it("never offers Sounds in the installed mobile app, whatever the soundtrack", () => {
+    setMobileApp(true);
+    soundtrackOfferedMock.value = true;
+    expect(
+      visibleSettingsSections().map((section) => section.id),
+    ).not.toContain("app-notifications");
+    expect(isSettingsSectionVisible("app-notifications")).toBe(false);
   });
 
   // Identity, not just equality: consumers memoize on this list and compare it
@@ -115,6 +153,7 @@ describe("visibleSettingsSections", () => {
         id !== "keybindings" &&
         id !== "link-phone" &&
         id !== "app-diagnostics" &&
+        id !== "app-notifications" &&
         !RETIRED.includes(id),
     );
     expect(ids).toEqual(expected);

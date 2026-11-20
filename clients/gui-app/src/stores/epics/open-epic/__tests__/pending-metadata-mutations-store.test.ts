@@ -145,7 +145,7 @@ function makeMeta(permissionRole: WirePermissionRole): SnapshotMetaEpic {
   };
 }
 
-function newSession(permissionRole: WirePermissionRole): {
+function newSession(permissionRole: WirePermissionRole | "supervisor"): {
   handle: OpenedStoreForTest;
   callbacks: EpicStreamCallbacks;
 } {
@@ -180,7 +180,13 @@ function newSession(permissionRole: WirePermissionRole): {
   });
   if (captured.value === null) throw new Error("factory not invoked");
   const seed = Y.encodeStateAsUpdate(new Y.Doc());
-  captured.value.onSnapshot(makeMeta(permissionRole), seed);
+  // `"supervisor"` stands for a role nothing recognises: it never parses on the
+  // wire, so the snapshot is handed to the callback the way a decoder that let
+  // it through would.
+  captured.value.onSnapshot(
+    Object.assign(makeMeta("editor"), { permissionRole }),
+    seed,
+  );
   return { handle, callbacks: captured.value };
 }
 
@@ -440,8 +446,27 @@ describe("beginRenameMutation", () => {
     handle.dispose();
   });
 
-  it("returns null for the retired viewer role - it decodes to no role", async () => {
+  it("lets a stored viewer rename: a viewer role reads as editor", async () => {
     const { handle } = newSession("viewer");
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+
+    const requestId = await handle.store
+      .getState()
+      .beginRenameMutation(id, "Renamed by a viewer");
+
+    expect(requestId).not.toBeNull();
+    expect(handle.store.getState().artifacts.byId[id].title).toBe(
+      "Renamed by a viewer",
+    );
+    expect(isRenameInFlight("epic-test", id)).toBe(true);
+    if (requestId !== null) {
+      await handle.store.getState().retirePendingMutation(requestId, "failed");
+    }
+    handle.dispose();
+  });
+
+  it("returns null for a role nothing recognises - it grants no access", async () => {
+    const { handle } = newSession("supervisor");
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
 
     expect(
@@ -581,14 +606,31 @@ describe("beginReparentMutation", () => {
     handle.dispose();
   });
 
-  it("returns null for the retired viewer role - it decodes to no role", async () => {
+  it("lets a stored viewer move a node: a viewer role reads as editor", async () => {
     const { handle } = newSession("viewer");
+    const parent = createArtifactInDocForTests(handle.doc, "spec", null);
+    const child = createArtifactInDocForTests(handle.doc, "ticket", null);
+
+    const requestId = await handle.store
+      .getState()
+      .beginReparentMutation(child, parent);
+
+    expect(requestId).not.toBeNull();
+    const tree = handle.store.getState().tree;
+    expect(tree.rootIds).not.toContain(child);
+    expect(tree.childrenByParent[parent]).toContain(child);
+    handle.dispose();
+  });
+
+  it("returns null for a role nothing recognises - it grants no access", async () => {
+    const { handle } = newSession("supervisor");
     const parent = createArtifactInDocForTests(handle.doc, "spec", null);
     const child = createArtifactInDocForTests(handle.doc, "ticket", null);
 
     expect(
       await handle.store.getState().beginReparentMutation(child, parent),
     ).toBeNull();
+    expect(handle.store.getState().tree.rootIds).toContain(child);
     handle.dispose();
   });
 });
