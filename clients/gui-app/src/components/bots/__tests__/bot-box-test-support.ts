@@ -11,7 +11,11 @@
 import { act, fireEvent, screen, within } from "@testing-library/react";
 import { Editor } from "@tiptap/core";
 import { Selection } from "@tiptap/pm/state";
+import type { BotComposerReply } from "@/components/bots/bot-message-composer";
 import { botBoxText, botBoxWire } from "@/lib/bots/bot-box-content";
+
+/** A box that replies to nothing: its host takes no reply, and none was chosen. */
+export const NO_BOT_REPLY: BotComposerReply = { reach: "none", chosen: 0 };
 
 /** The editable element of the box labelled `label`; waits for the editor to mount. */
 export async function findBoxInput(label: string): Promise<HTMLElement> {

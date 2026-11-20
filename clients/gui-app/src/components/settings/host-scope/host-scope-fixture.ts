@@ -170,3 +170,17 @@ export function hostOptionsFixture(
     ...overrides,
   };
 }
+
+export function noHostsScopeModule() {
+  const scope = hostScopeFixture({ host: null });
+  const useHostScope = () => scope;
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    usePersonalHostScope: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
+  };
+}

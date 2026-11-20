@@ -30,20 +30,19 @@ import {
 } from "@/components/ui/context-menu";
 import {
   useOrganization,
-  type OrganizationContextValue,
+  useOrganizationView,
 } from "@/hooks/organization/organization-context";
 import { OrganizationDot } from "./organization-metadata";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useGroupEditorTarget } from "@/stores/tabs/group-editor-store";
 
 /** The group a task is in, as the organization view has it. */
-function taskGroupIdOf(
-  organization: OrganizationContextValue | null,
-  taskId: string,
-): string | null {
-  return (
-    organization?.view?.groups.memberships.find((m) => m.taskId === taskId)
-      ?.groupId ?? null
+function useTaskGroupId(taskId: string): string | null {
+  return useOrganizationView(
+    (view) =>
+      view?.groups.memberships.find((m) => m.taskId === taskId)?.groupId ??
+      null,
+    Object.is,
   );
 }
 
@@ -81,15 +80,15 @@ export function TaskOrganizationMenu(props: {
     ? DropdownMenuSubTrigger
     : ContextMenuSubTrigger;
   const organization = useOrganization();
-  const groupId = taskGroupIdOf(organization, props.taskId);
+  const groupId = useTaskGroupId(props.taskId);
   const editGroup = useEditGroupAction(groupId, props.onEditGroup);
+  const groups = useOrganizationView((view) => view?.groups, Object.is);
   if (organization === null) return null;
-  const view = organization.view;
   // A host that has answered and does not have the RPC is the one case worth
   // saying out loud. Everything else - no handshake yet, a readiness flap, a
   // momentary loss of cloud authorization - keeps the account's cached groups
   // on screen and only stops them being changed.
-  if (view === undefined)
+  if (groups === undefined)
     return organization.hostSupport === false ? (
       <>
         <MenuItem disabled>
@@ -164,8 +163,8 @@ export function TaskOrganizationMenu(props: {
             <Plus />
             New group…
           </MenuItem>
-          {view.groups.groups.length ? <MenuSeparator /> : null}
-          {view.groups.groups.map((group) => (
+          {groups.groups.length ? <MenuSeparator /> : null}
+          {groups.groups.map((group) => (
             <MenuItem
               key={group.groupId}
               disabled={!canEditOrganization}
@@ -177,7 +176,7 @@ export function TaskOrganizationMenu(props: {
                     return tab ? [tab.epicId] : [];
                   }),
                 );
-                const isOpen = view.groups.memberships.some(
+                const isOpen = groups.memberships.some(
                   (m) => m.groupId === group.groupId && openTasks.has(m.taskId),
                 );
                 void organization
@@ -188,7 +187,7 @@ export function TaskOrganizationMenu(props: {
                         operation: "moveTask",
                         taskId: props.taskId,
                         groupId: group.groupId,
-                        position: view.groups.memberships.filter(
+                        position: groups.memberships.filter(
                           (m) => m.groupId === group.groupId,
                         ).length,
                       },
@@ -196,7 +195,7 @@ export function TaskOrganizationMenu(props: {
                   })
                   .then(() => {
                     if (isOpen || openTasks.has(props.taskId)) {
-                      for (const member of view.groups.memberships.filter(
+                      for (const member of groups.memberships.filter(
                         (m) => m.groupId === group.groupId,
                       ))
                         useEpicCanvasStore
@@ -244,6 +243,7 @@ export function TaskOrganizationDropdown(props: {
   readonly title: string;
 }) {
   const organization = useOrganization();
+  const hasView = useOrganizationView((view) => view !== undefined, Object.is);
   // The same availability question the menu inside answers, asked the same
   // way. Hiding the trigger on `supported` alone threw away everything that
   // change was for: a readiness or authorization flap would take the
@@ -251,8 +251,7 @@ export function TaskOrganizationDropdown(props: {
   // would show nothing at all rather than saying so. The trigger appears
   // when the menu has something to put behind it, and not otherwise.
   if (organization === null) return null;
-  if (organization.view === undefined && organization.hostSupport !== false)
-    return null;
+  if (!hasView && organization.hostSupport !== false) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

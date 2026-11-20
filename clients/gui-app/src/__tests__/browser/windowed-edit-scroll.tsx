@@ -175,6 +175,7 @@ export function Fixture() {
           taskId="windowed-edit-scroll"
           epicId="windowed-edit-scroll"
           hostId={null}
+          payerHostId={null}
           messages={messagesFor(phase)}
           transcriptWindow={WINDOWS[phase]}
           onVisibleOrdinalRangeChange={() => undefined}
@@ -190,6 +191,7 @@ export function Fixture() {
           systemOverlayActive={false}
           scrollRequest={scrollRequest}
           onScrollRequestSettled={null}
+          onReaderMoved={null}
           composerOverlayHeight={0}
           subagentDrillIn={subagentDrillIn}
         />

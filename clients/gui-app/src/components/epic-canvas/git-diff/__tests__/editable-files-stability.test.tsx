@@ -68,10 +68,13 @@ vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
   }),
 }));
 
+// The bot lifetime listener subscribes to the store at import.
 vi.mock("@/stores/auth/auth-store", () => ({
-  useAuthStore: (
-    selector: (s: { contextMetadata: { userId: null } }) => unknown,
-  ) => selector({ contextMetadata: { userId: null } }),
+  useAuthStore: Object.assign(
+    (selector: (s: { contextMetadata: { userId: null } }) => unknown) =>
+      selector({ contextMetadata: { userId: null } }),
+    { subscribe: () => () => undefined },
+  ),
 }));
 
 const FILE: GitChangedFile = {

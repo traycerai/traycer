@@ -19,6 +19,7 @@ import {
   screen,
   waitFor,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -34,6 +35,7 @@ import {
 import type {
   BotMemoryEntry,
   BotRecord,
+  BotDirectoryRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
@@ -47,8 +49,12 @@ import type {
   SlackAppReadResult,
   SlackAppWriteResult,
 } from "@traycer-clients/shared/host-client/slack-app";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
+import { registerSlackAppViaHttp } from "@traycer-clients/shared/host-client/slack-app";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { SLACK_SETTINGS_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/slack-app";
+import { BotSlackAppError } from "@/hooks/bots/bot-slack-app-error";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   BotIdentityContext,
@@ -85,9 +91,10 @@ const mocks = vi.hoisted(() => ({
   stores: [] as ComposerToolbarStore[],
   // Every `maxModeContext` the (stubbed) picker was rendered with, one per render.
   pickerContexts: [] as MaxModeContext[],
+  pickerDisabled: [] as boolean[],
   updateRunSettings: vi.fn<(variables: object) => void>(),
-  // The client each `useBotUpdateRunSettingsMutation` call was handed.
-  runSettingsClients: [] as Array<object | null>,
+  environmentList: undefined as EnvironmentListResponseV11 | undefined,
+  environmentListEnabled: [] as boolean[],
   updateTitle: vi.fn<(variables: object) => void>(),
   deleteBot: vi.fn<(variables: object) => void>(),
   updateReplyMode: vi.fn<(variables: object) => void>(),
@@ -101,8 +108,6 @@ const mocks = vi.hoisted(() => ({
   notificationWriteError: null as string | null,
   // Whether the level write is in flight.
   notificationPending: false,
-  // What it answers for `bot.updateReplyMode`.
-  replyModeSupport: true as boolean | null,
   // Whether the reply-mode write is in flight.
   replyModePending: false,
   // What it answers for `bot.updateAppearance` (the appearance section).
@@ -119,6 +124,18 @@ const mocks = vi.hoisted(() => ({
   threadListEnabled: [] as boolean[],
   // What the bot's memory reads as (`useBotMemory`); `null` = unsupported.
   memoryEntries: null as number | "loading" | null,
+  // What `useVoiceAvailabilityQuery` answers; `undefined` data = still reading.
+  voiceAvailability: undefined as
+    | {
+        readonly available: boolean;
+        readonly voiceSelection: {
+          readonly version: 1;
+          readonly defaultVoice: string;
+          readonly voices: ReadonlyArray<string>;
+          readonly exactVoiceRenewal: true;
+        } | null;
+      }
+    | undefined,
   // The binding `useHostBinding` answers: its `auth` is the Slack adapter.
   binding: null as { readonly auth: object } | null,
   // What each write's mutation reports as its error; `null` = no refusal.
@@ -152,8 +169,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     if (method.startsWith("bot.notificationLevel.")) {
       return mocks.notificationSupport;
     }
-    if (method === "bot.updateAppearance") return mocks.appearanceSupport;
-    return method === "bot.updateReplyMode" ? mocks.replyModeSupport : null;
+    return method === "bot.updateAppearance" ? mocks.appearanceSupport : null;
   },
 }));
 vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
@@ -164,6 +180,13 @@ vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
 }));
 // The memory pane has its own suite (`bot-memory-pane.test.tsx`); here the
 // entry only counts what the stream reads.
+vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
+  useVoiceAvailabilityQuery: () => ({
+    data: mocks.voiceAvailability,
+    isPending: mocks.voiceAvailability === undefined,
+    isError: false,
+  }),
+}));
 vi.mock("@/hooks/bots/use-bot-memory", () => ({
   useBotMemory: (): BotMemoryReading => {
     if (mocks.memoryEntries === null) return { kind: "unsupported" };
@@ -229,8 +252,12 @@ vi.mock("@/components/epic-canvas/panels/epic-usage-dialog", async () => {
   };
 });
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
-  HarnessModelPicker: (props: { maxModeContext: MaxModeContext }) => {
+  HarnessModelPicker: (props: {
+    maxModeContext: MaxModeContext;
+    disabled: boolean;
+  }) => {
     mocks.pickerContexts.push(props.maxModeContext);
+    mocks.pickerDisabled.push(props.disabled);
     return <div data-testid="stub-harness-model-picker" />;
   },
 }));
@@ -245,14 +272,11 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     error: refusalOf(mocks.refusal.remove),
     mutate: mocks.deleteBot,
   }),
-  useBotUpdateRunSettingsMutation: (client: object | null) => {
-    mocks.runSettingsClients.push(client);
-    return {
-      isPending: false,
-      error: refusalOf(mocks.refusal.runSettings),
-      mutate: mocks.updateRunSettings,
-    };
-  },
+  useBotUpdateRunSettingsMutation: () => ({
+    isPending: false,
+    error: refusalOf(mocks.refusal.runSettings),
+    mutate: mocks.updateRunSettings,
+  }),
   useBotUpdateReplyModeMutation: () => ({
     isPending: mocks.replyModePending,
     error: refusalOf(mocks.refusal.replyMode),
@@ -267,6 +291,12 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
     error: null,
     mutate: vi.fn(),
   }),
+}));
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: (enabled: boolean) => {
+    mocks.environmentListEnabled.push(enabled);
+    return { data: mocks.environmentList };
+  },
 }));
 vi.mock("@/hooks/bots/use-bot-notification-level", () => ({
   useBotNotificationLevelsQuery: (
@@ -357,6 +387,63 @@ const BOT: BotRecord = {
   appConversationChatId: null,
 };
 
+function environmentListForTeamRole(
+  environmentId: string,
+  role: "admin" | "editor" | "viewer",
+): EnvironmentListResponseV11 {
+  return {
+    environments: [environmentRow(environmentId, role)],
+  };
+}
+
+function environmentRow(
+  environmentId: string,
+  effectiveRole: "admin" | "editor" | "viewer",
+): EnvironmentListResponseV11["environments"][number] {
+  return {
+    environmentId,
+    ownerKind: "organization",
+    ownerId: "team-1",
+    roomId: "room-1",
+    label: "Acme",
+    effectiveRole,
+    kind: "team",
+    hostCount: 1,
+    providerHandle: null,
+  };
+}
+
+function environmentListForRoles(
+  roles: ReadonlyArray<{
+    readonly environmentId: string;
+    readonly role: "admin" | "editor" | "viewer";
+  }>,
+): EnvironmentListResponseV11 {
+  return {
+    environments: roles.map(({ environmentId, role }) =>
+      environmentRow(environmentId, role),
+    ),
+  };
+}
+
+function personalEnvironmentList(): EnvironmentListResponseV11 {
+  return {
+    environments: [
+      {
+        environmentId: BOT.environmentId,
+        ownerKind: "user",
+        ownerId: "user-1",
+        roomId: "room-personal",
+        label: "Personal",
+        effectiveRole: "owner",
+        kind: "personal",
+        hostCount: 1,
+        providerHandle: null,
+      },
+    ],
+  };
+}
+
 // The Slack group's world: a real in-memory runner host behind the five
 // AuthService calls, an app-wide query client, and a signed-in person.
 let slackHost: MockRunnerHost;
@@ -367,7 +454,10 @@ const slackOverrides: {
   read: SlackAppReadResult | null;
   manifest: SlackAppManifestResult | null;
   dms: ((request: SlackAppDmsRequest) => Promise<SlackAppWriteResult>) | null;
-} = { read: null, manifest: null, dms: null };
+  register:
+    | ((request: SlackAppRegisterRequest) => Promise<SlackAppWriteResult>)
+    | null;
+} = { read: null, manifest: null, dms: null, register: null };
 const SLACK_BEARER = "test-bearer";
 
 function newSlackHost(): MockRunnerHost {
@@ -384,11 +474,15 @@ function newSlackHost(): MockRunnerHost {
 
 function newSlackAuth(host: MockRunnerHost): object {
   return {
+    // One sign-in for the whole case: every write's answer is read.
+    getIdentityGeneration: () => 1,
+    isIdentityCurrent: (generation: number) => generation === 1,
     readSlackApp: async (botId: string) =>
       slackOverrides.read ?? host.readSlackApp(SLACK_BEARER, botId),
     getSlackAppManifest: async (botId: string) =>
       slackOverrides.manifest ?? host.getSlackAppManifest(SLACK_BEARER, botId),
     registerSlackApp: (request: SlackAppRegisterRequest) =>
+      slackOverrides.register?.(request) ??
       host.registerSlackApp(SLACK_BEARER, request),
     mintSlackAppInstallUrl: (botId: string) =>
       host.mintSlackAppInstallUrl(SLACK_BEARER, botId),
@@ -409,13 +503,14 @@ function inProviders(children: ReactNode): ReactNode {
 }
 
 /** The channel settings panel, as it first opens: nothing folded. */
-function mountPanel(bot: BotRecord, personal: boolean): void {
+function mountPanel(bot: BotDirectoryRecord, personal: boolean): void {
   render(
     inProviders(
       <StrictMode>
         <BotChannelSettingsPanel
           bot={bot}
           personal={personal}
+          mayChange
           channelId={null}
           environmentBots={null}
           onClose={vi.fn()}
@@ -446,6 +541,7 @@ beforeEach(() => {
   slackOverrides.read = null;
   slackOverrides.manifest = null;
   slackOverrides.dms = null;
+  slackOverrides.register = null;
   mocks.binding = { auth: newSlackAuth(slackHost) };
   queryClient = createAppQueryClient();
   useBotSlackPendingInstallStore.setState({ entries: {} });
@@ -457,12 +553,13 @@ beforeEach(() => {
   mocks.seeds.length = 0;
   mocks.stores.length = 0;
   mocks.pickerContexts.length = 0;
-  mocks.runSettingsClients.length = 0;
+  mocks.pickerDisabled.length = 0;
+  mocks.environmentList = personalEnvironmentList();
+  mocks.environmentListEnabled.length = 0;
   mocks.refusal.title = null;
   mocks.refusal.runSettings = null;
   mocks.refusal.remove = null;
   mocks.refusal.replyMode = null;
-  mocks.replyModeSupport = true;
   mocks.appearanceSupport = null;
   mocks.replyModePending = false;
   mocks.supportQueries.length = 0;
@@ -472,6 +569,7 @@ beforeEach(() => {
   mocks.threadListEnabled.length = 0;
   mocks.usageChatIds = [];
   mocks.memoryEntries = null;
+  mocks.voiceAvailability = undefined;
   mocks.notificationLevels = {};
   mocks.notificationSupport = true;
   mocks.notificationReadError = null;
@@ -519,6 +617,24 @@ describe("<BotChannelSettingsPanel /> model", () => {
     expect(applyButton().disabled).toBe(true);
   });
 
+  it.each(["admin", "editor"] as const)(
+    "offers model, reply and Delete controls to a team %s",
+    (role) => {
+      mocks.environmentList = environmentListForTeamRole(
+        BOT.environmentId,
+        role,
+      );
+      mountPanel(BOT, true);
+
+      expect(mocks.pickerDisabled.at(-1)).toBe(false);
+      expect(screen.getByRole("button", { name: "Apply" })).toBeTruthy();
+      expect(screen.getByTestId("bot-settings-reply-mode")).toBeTruthy();
+      expect(screen.getByTestId("bot-settings-delete")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Delete bot" }));
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    },
+  );
+
   it("says only that the next turn uses what is applied, not what the bot runs on", () => {
     mountPanel(BOT, false);
 
@@ -529,7 +645,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
     expect(screen.queryByText(/Runs on/)).toBeNull();
   });
 
-  it("enables Apply once the person picks another model, and applies exactly that", async () => {
+  it("enables Apply once the person picks another model and account, and applies both", async () => {
     const user = userEvent.setup();
     mountPanel(BOT, false);
     expect(applyButton().disabled).toBe(true);
@@ -538,7 +654,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
       liveStore().getState().setSelection({
         harnessId: "claude",
         modelSlug: "model-c",
-        profileId: "profile-1",
+        profileId: "selected-account",
       });
     });
     expect(applyButton().disabled).toBe(false);
@@ -550,9 +666,21 @@ describe("<BotChannelSettingsPanel /> model", () => {
       harness: "claude",
       model: "model-c",
       effort: "high",
-      profile: "profile-1",
+      profile: "selected-account",
     });
-    expect(mocks.runSettingsClients.at(-1)).toBe(mocks.hostClient);
+  });
+
+  it("shows the pending account choice once in the model settings", () => {
+    mountPanel({ ...BOT, profileChoice: "ambiguous" }, false);
+
+    const refusals = screen.getAllByTestId("bot-settings-refusal");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]?.textContent).toBe(
+      "This bot's profile could be more than one account. Choose the account it should use.",
+    );
+    expect(screen.getByTestId("bot-settings-model").contains(refusals[0])).toBe(
+      true,
+    );
   });
 
   it("disables Apply again when the person picks the bot's own model back", () => {
@@ -636,6 +764,25 @@ describe("<BotChannelSettingsPanel /> refusals", () => {
     );
   });
 
+  it.each([
+    "Your environment did not accept this change.",
+    "Cloud service is temporarily unavailable. Please try again shortly.",
+    "Sign in again to manage settings.",
+    "Connect to manage settings.",
+  ])(
+    "renders the bot setup failure sentence %s under the model control",
+    (message) => {
+      mocks.refusal.runSettings = message;
+      mountPanel(BOT, false);
+
+      const refusal = within(
+        screen.getByTestId("bot-settings-model"),
+      ).getByTestId("bot-settings-refusal");
+      expect(refusal.textContent).toBe(message);
+      expect(refusal.getAttribute("role")).toBe("alert");
+    },
+  );
+
   it("states a delete refusal inside the confirm dialog, not on the panel", async () => {
     const user = userEvent.setup();
     mocks.refusal.remove = "Only the bot's owner can delete it";
@@ -668,30 +815,35 @@ describe("<BotChannelSettingsPanel /> refusals", () => {
 });
 
 describe("<BotChannelSettingsPanel /> appearance", () => {
-  it("offers Icon, Colour and Background in Details when the host can change them", () => {
+  it("offers Icon, Colour, Eyewear and Accessory, and no Background, in Details when the host can change them", () => {
     mocks.appearanceSupport = true;
     mountPanel(BOT, true);
 
     for (const [testId, label] of [
       ["bot-settings-icon", "Icon"],
       ["bot-settings-colour", "Colour"],
-      ["bot-settings-background", "Background"],
+      ["bot-settings-eyewear", "Eyewear"],
+      ["bot-settings-accessory", "Accessory"],
     ] as const) {
-      expect(within(screen.getByTestId(testId)).getByText(label)).toBeTruthy();
+      expect(screen.getByRole("region", { name: label })).toBe(
+        screen.getByTestId(testId),
+      );
     }
+    expect(screen.queryByText("Background")).toBeNull();
     expect(mocks.supportQueries).toContainEqual({
       hostId: "host-1",
       method: "bot.updateAppearance",
     });
   });
 
-  it("draws none of the three when the host cannot change them", () => {
+  it("draws none of the four when the host cannot change them", () => {
     mocks.appearanceSupport = false;
     mountPanel(BOT, true);
 
     expect(screen.queryByTestId("bot-settings-icon")).toBeNull();
     expect(screen.queryByTestId("bot-settings-colour")).toBeNull();
-    expect(screen.queryByTestId("bot-settings-background")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-eyewear")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-accessory")).toBeNull();
   });
 });
 
@@ -709,10 +861,6 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
     ).toBeTruthy();
     expect(radio("In the channel").getAttribute("aria-checked")).toBe("true");
     expect(radio("In a thread").getAttribute("aria-checked")).toBe("false");
-    expect(mocks.supportQueries).toContainEqual({
-      hostId: "host-1",
-      method: "bot.updateReplyMode",
-    });
   });
 
   it("checks the thread option for a bot that answers in threads", () => {
@@ -772,15 +920,15 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
     expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
   });
 
-  it.each([false, null])(
-    "draws no reply mode section for a host whose support for bot.updateReplyMode is %s",
-    (support) => {
-      mocks.replyModeSupport = support;
-      mountPanel(BOT, true);
+  it("draws no reply mode section for a role that may not change the bot", () => {
+    mocks.environmentList = environmentListForTeamRole(
+      BOT.environmentId,
+      "viewer",
+    );
+    mountPanel(BOT, true);
 
-      expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
-    },
-  );
+    expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
+  });
 });
 
 // The bot's next turn runs its stored harness/model/effort/profile with NO
@@ -931,6 +1079,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
           <BotChannelSettingsPanel
             bot={BOT}
             personal={input.personal}
+            mayChange
             channelId={CHANNEL}
             environmentBots={input.environmentBots}
             onClose={onClose}
@@ -978,6 +1127,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     expect(groupTitles()).toEqual([
       "Details",
       "Model",
+      "Voice",
       "Notifications",
       "Bots in this channel",
       "Slack",
@@ -1100,6 +1250,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
             <BotChannelSettingsPanel
               bot={BOT}
               personal
+              mayChange
               channelId={CHANNEL}
               environmentBots={null}
               onClose={onClose}
@@ -1175,6 +1326,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     expect(groupTitles()).toEqual([
       "Details",
       "Model",
+      "Voice",
       "Notifications",
       "Slack",
     ]);
@@ -1382,18 +1534,25 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
 
   /** The channel panel as a personal bot's owner opens it. */
   function mountSlackPanel(): void {
-    render(
-      inProviders(
-        <BotChannelSettingsPanel
-          bot={BOT}
-          personal
-          channelId={null}
-          environmentBots={null}
-          onClose={vi.fn()}
-          onDeleted={vi.fn()}
-        />,
-      ),
+    render(slackPanel(BOT));
+  }
+
+  function slackPanel(bot: BotRecord): ReactNode {
+    return inProviders(
+      <BotChannelSettingsPanel
+        bot={bot}
+        personal
+        mayChange
+        channelId={null}
+        environmentBots={null}
+        onClose={vi.fn()}
+        onDeleted={vi.fn()}
+      />,
     );
+  }
+
+  function mountSlackPanelFor(bot: BotRecord): RenderResult {
+    return render(slackPanel(bot));
   }
 
   function slackGroup(): HTMLElement {
@@ -1443,6 +1602,150 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
     expect(
       within(setup).getByRole("button", { name: "Open api.slack.com/apps" }),
     ).toBeTruthy();
+  });
+
+  it.each(["admin", "editor"] as const)(
+    "shows registration to a team %s",
+    async (role) => {
+      mocks.environmentList = environmentListForTeamRole(
+        BOT.environmentId,
+        role,
+      );
+      mountSlackPanel();
+
+      const setup = await screen.findByTestId("bot-settings-slack-setup");
+      expect(
+        within(setup).getByTestId("bot-settings-slack-register"),
+      ).toBeTruthy();
+      expect(within(setup).getByLabelText("Client Secret")).toBeTruthy();
+      expect(within(setup).getByLabelText("Signing Secret")).toBeTruthy();
+      expect(
+        within(setup).getByRole("button", { name: "Register" }),
+      ).toBeTruthy();
+    },
+  );
+
+  it("keeps registration hidden until the environment role is known, then follows a role change", async () => {
+    mocks.environmentList = undefined;
+    const view = mountSlackPanelFor(BOT);
+
+    const setup = await screen.findByTestId("bot-settings-slack-setup");
+    expect(
+      within(setup).queryByTestId("bot-settings-slack-register"),
+    ).toBeNull();
+    expect(mocks.environmentListEnabled).toContain(true);
+
+    mocks.environmentList = environmentListForTeamRole(
+      BOT.environmentId,
+      "editor",
+    );
+    view.rerender(slackPanel(BOT));
+    expect(
+      await screen.findByTestId("bot-settings-slack-register"),
+    ).toBeTruthy();
+
+    mocks.environmentList = environmentListForTeamRole(
+      BOT.environmentId,
+      "viewer",
+    );
+    view.rerender(slackPanel(BOT));
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-settings-slack-register")).toBeNull();
+    });
+  });
+
+  it("uses the bot's environment row when deciding whether to draw registration", async () => {
+    const teamBot = { ...BOT, environmentId: "env-b" };
+    mocks.environmentList = environmentListForRoles([
+      { environmentId: "env-a", role: "viewer" },
+      { environmentId: "env-b", role: "editor" },
+    ]);
+    const view = mountSlackPanelFor(teamBot);
+
+    await screen.findByTestId("bot-settings-slack-setup");
+    expect(screen.getByTestId("bot-settings-slack-register")).toBeTruthy();
+
+    mocks.environmentList = environmentListForRoles([
+      { environmentId: "env-a", role: "editor" },
+      { environmentId: "env-b", role: "viewer" },
+    ]);
+    view.rerender(slackPanel(teamBot));
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-settings-slack-register")).toBeNull();
+    });
+  });
+
+  it("keeps the Slack setup guide visible but hides registration from a Viewer", async () => {
+    mocks.environmentList = environmentListForTeamRole(
+      BOT.environmentId,
+      "viewer",
+    );
+    const register = vi.spyOn(slackHost, "registerSlackApp");
+    mountSlackPanel();
+
+    const setup = await screen.findByTestId("bot-settings-slack-setup");
+    expect(
+      within(setup).getByRole("button", { name: "Copy manifest" }),
+    ).toBeTruthy();
+    expect(
+      within(setup).getByRole("button", { name: "Open api.slack.com/apps" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-settings-slack-register")).toBeNull();
+    expect(screen.queryByLabelText("Client Secret")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Register" })).toBeNull();
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it.each(["admin", "editor"] as const)(
+    "shows registration in the registered state to a team %s",
+    async (role) => {
+      await seedRegisteredApp();
+      mocks.environmentList = environmentListForTeamRole(
+        BOT.environmentId,
+        role,
+      );
+      mountSlackPanel();
+
+      await screen.findByTestId("bot-settings-slack-status");
+      expect(screen.getByTestId("bot-settings-slack-register")).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Install to workspace" }),
+      ).toBeTruthy();
+    },
+  );
+
+  it("keeps registered-but-not-installed guidance visible while hiding the form from a Viewer", async () => {
+    await seedRegisteredApp();
+    mocks.environmentList = environmentListForTeamRole(
+      BOT.environmentId,
+      "viewer",
+    );
+    const register = vi.spyOn(slackHost, "registerSlackApp");
+    mountSlackPanel();
+
+    expect(
+      (await screen.findByTestId("bot-settings-slack-status")).textContent,
+    ).toBe("Registered, not installed.");
+    expect(
+      screen.getByRole("button", { name: "Install to workspace" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-settings-slack-register")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Register" })).toBeNull();
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it("keeps registration hidden in the registered state while the role is unknown", async () => {
+    await seedRegisteredApp();
+    mocks.environmentList = undefined;
+    mountSlackPanel();
+
+    expect(
+      (await screen.findByTestId("bot-settings-slack-status")).textContent,
+    ).toBe("Registered, not installed.");
+    expect(
+      screen.getByRole("button", { name: "Install to workspace" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-settings-slack-register")).toBeNull();
   });
 
   it("registers the four credentials in place, clears the form and keeps the secrets out of the caches", async () => {
@@ -1508,7 +1811,79 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
     for (const query of queryClient.getQueryCache().getAll()) {
       const data = JSON.stringify(query.state.data);
       for (const secret of secrets) expect(data).not.toContain(secret);
+      const key = JSON.stringify(query.queryKey);
+      for (const secret of secrets) expect(key).not.toContain(secret);
     }
+  });
+
+  it("shows the generic registration line when the server's code echoes a signing secret", async () => {
+    const user = userEvent.setup();
+    const secret = "private-value";
+    let result: SlackAppWriteResult | null = null;
+    const transport: EnvironmentTransport = () =>
+      Promise.resolve({
+        status: 400,
+        text: JSON.stringify({
+          statusCode: 400,
+          error: "Bad request",
+          code: secret,
+        }),
+      });
+    const writeErrors: Error[] = [];
+    queryClient.getMutationCache().subscribe((event) => {
+      if (
+        event.type === "updated" &&
+        event.mutation.state.status === "error" &&
+        event.mutation.state.error instanceof Error
+      ) {
+        writeErrors.push(event.mutation.state.error);
+      }
+    });
+    slackOverrides.register = async (request) => {
+      result = await registerSlackAppViaHttp(
+        "https://server.example.test",
+        SLACK_BEARER,
+        null,
+        transport,
+        request,
+      );
+      return result;
+    };
+    mountSlackPanel();
+    await screen.findByTestId("bot-settings-slack-setup");
+    await user.type(screen.getByLabelText("App ID"), CREDENTIALS.appId);
+    await user.type(screen.getByLabelText("Client ID"), CREDENTIALS.clientId);
+    await user.type(
+      screen.getByLabelText("Client Secret"),
+      CREDENTIALS.clientSecret,
+    );
+    await user.type(screen.getByLabelText("Signing Secret"), secret);
+    await user.click(screen.getByRole("button", { name: "Register" }));
+
+    const refusal = await screen.findByTestId("bot-settings-refusal");
+    expect(refusal.textContent).toBe(
+      "Couldn't update Slack settings. Try again.",
+    );
+    expect(result).toEqual({
+      kind: "refused",
+      status: 400,
+      code: "unrecognized",
+    });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    const error = writeErrors.find(
+      (candidate): candidate is BotSlackAppError =>
+        candidate instanceof BotSlackAppError,
+    );
+    expect(error).toBeInstanceOf(BotSlackAppError);
+    expect(error?.message).toBe("Couldn't update Slack settings. Try again.");
+    expect(error?.failure).toEqual({
+      kind: "refused",
+      status: 400,
+      code: "unrecognized",
+    });
+    expect(
+      JSON.stringify({ message: error?.message, failure: error?.failure }),
+    ).not.toContain(secret);
   });
 
   it("opens the install page from Install to workspace, waits for Slack, then shows the connected workspace", async () => {
@@ -1560,6 +1935,28 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
     const updated = await slackHost.readSlackApp(SLACK_BEARER, BOT.botId);
     expect(updated.kind).toBe("ok");
     if (updated.kind === "ok") expect(updated.app?.dmsEnabled).toBe(false);
+  });
+
+  it("leaves an installed Slack app's controls available to a Viewer", async () => {
+    await seedInstalledApp();
+    mocks.environmentList = environmentListForTeamRole(
+      BOT.environmentId,
+      "viewer",
+    );
+    mountSlackPanel();
+
+    const connected = await screen.findByTestId("bot-settings-slack-connected");
+    expect(within(connected).getByText("Mock workspace")).toBeTruthy();
+    expect(
+      within(connected).getByRole("switch", { name: "Direct messages" }),
+    ).toBeTruthy();
+    expect(
+      within(connected).getByRole("button", { name: "Install again" }),
+    ).toBeTruthy();
+    expect(
+      within(connected).getByRole("button", { name: "Disconnect" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-settings-slack-register")).toBeNull();
   });
 
   it("shows a DM setting refusal in place and disables its switch while writing", async () => {
@@ -1738,5 +2135,49 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
     );
     expect(refusal.textContent).toBe("You can't change this bot's Slack app.");
     expect(screen.queryByTestId("bot-settings-slack-setup")).toBeNull();
+  });
+});
+
+describe("<BotChannelSettingsPanel /> voice", () => {
+  it("draws the Voice group after Model, with the offered voices when the server offers a choice", () => {
+    mocks.voiceAvailability = {
+      available: true,
+      voiceSelection: {
+        version: 1,
+        defaultVoice: "marin",
+        voices: ["alloy", "cedar", "marin"],
+        exactVoiceRenewal: true,
+      },
+    };
+    mountPanel(BOT, false);
+
+    const model = screen.getByTestId("bot-settings-model");
+    const voice = screen.getByTestId("bot-settings-voice");
+    expect(model.compareDocumentPosition(voice)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(
+      within(voice)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Deployment default (Marin)", "Alloy", "Cedar", "Marin"]);
+  });
+
+  it("does not draw the Voice group when voice is not available on the deployment", () => {
+    mocks.voiceAvailability = { available: false, voiceSelection: null };
+    mountPanel(BOT, false);
+
+    expect(screen.queryByTestId("bot-settings-voice")).toBeNull();
+  });
+
+  it("says choices are not offered when the server offers no choice of voice", () => {
+    mocks.voiceAvailability = { available: true, voiceSelection: null };
+    mountPanel(BOT, false);
+
+    expect(
+      within(screen.getByTestId("bot-settings-voice")).getByText(
+        "Voice choices aren't available on this connection. Calls use the default voice.",
+      ),
+    ).toBeTruthy();
   });
 });

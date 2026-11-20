@@ -81,11 +81,13 @@ export function useChatTreeRowModel(
     },
   }));
   // Derived from the previous render's model, so it is updated during render
-  // (React re-runs this component at once, before committing anything).
+  // (React re-runs this component at once, before committing anything). It is
+  // stored only when the rows differ: an input rebuilt with the same content
+  // on every render must not re-render this forever.
   if (held.source !== fresh) {
-    const next = { source: fresh, model: nextModel(held.model, fresh) };
-    setHeld(next);
-    return next.model;
+    const model = nextModel(held.model, fresh);
+    if (model !== held.model) setHeld({ source: fresh, model });
+    return model;
   }
   return held.model;
 }

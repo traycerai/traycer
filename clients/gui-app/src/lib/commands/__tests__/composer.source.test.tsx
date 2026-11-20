@@ -6,8 +6,10 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   providerCliStateSchema,
+  type ProviderAuthStatus,
   type ProviderCliState,
   type ProviderId,
+  type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   registerFocusedComposerControls as registerFocusedComposerControlsWithCatalog,
@@ -364,6 +366,59 @@ function resetCanvasStore(): void {
     preAckRootCreatesByEpic: {},
     pendingRootCreatesByEpic: {},
   });
+}
+
+/** A Claude Code catalog row whose Terminal login reads signed out. */
+function signedOutClaude(): ComposerCatalogHarnessFixture {
+  return {
+    id: "claude",
+    label: "Claude Code",
+    available: true,
+    authStatus: "unauthenticated",
+    error: null,
+    models: [
+      {
+        harnessId: "claude",
+        slug: "opus",
+        label: "Opus",
+        description: null,
+        isDefault: true,
+        contextWindow: null,
+        maxOutputTokens: null,
+        defaultReasoningEffort: "high",
+        supportedReasoningEfforts: [
+          { id: "high", label: "High", description: null },
+        ],
+        defaultServiceTier: null,
+        supportedServiceTiers: [],
+        metadata: {},
+      },
+    ],
+    modelsLoading: false,
+    modelsError: null,
+  };
+}
+
+function profileRow(
+  profileId: string,
+  kind: "ambient" | "managed",
+  status: ProviderAuthStatus,
+): ProviderProfile {
+  return {
+    profileId,
+    enabled: true,
+    kind,
+    authType: "oauth",
+    label: profileId,
+    auth: { status, badgeText: null, label: null, detail: null },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
 }
 
 function providerRow(
@@ -905,36 +960,7 @@ describe("composerSource", () => {
 
   it("demotes a signed-out provider to the end of both subpages and badges it, but never removes it - the ambient verdict is not the send gate's verdict", () => {
     const original = catalogMock.harnesses;
-    catalogMock.harnesses = [
-      ...original,
-      {
-        id: "claude",
-        label: "Claude Code",
-        available: true,
-        authStatus: "unauthenticated",
-        error: null,
-        models: [
-          {
-            harnessId: "claude",
-            slug: "opus",
-            label: "Opus",
-            description: null,
-            isDefault: true,
-            contextWindow: null,
-            maxOutputTokens: null,
-            defaultReasoningEffort: "high",
-            supportedReasoningEfforts: [
-              { id: "high", label: "High", description: null },
-            ],
-            defaultServiceTier: null,
-            supportedServiceTiers: [],
-            metadata: {},
-          },
-        ],
-        modelsLoading: false,
-        modelsError: null,
-      },
-    ];
+    catalogMock.harnesses = [...original, signedOutClaude()];
     try {
       registerFocusedComposerControls(
         "landing",
@@ -1006,6 +1032,74 @@ describe("composerSource", () => {
       catalogMock.harnesses = original;
     }
   });
+
+  it.each([
+    ["one", ["work-uuid"]],
+    ["two", ["work-uuid", "side-uuid"]],
+  ])(
+    "neither badges nor demotes a signed-out-Terminal provider with %s signed-in managed profile(s)",
+    (_count, managedIds) => {
+      const original = catalogMock.harnesses;
+      // Claude first: demotion is the only thing that could move it behind codex.
+      catalogMock.harnesses = [signedOutClaude(), ...original];
+      providersListMock.providers = [
+        {
+          ...providerRow("claude-code", []),
+          profiles: [
+            profileRow("ambient", "ambient", "unauthenticated"),
+            ...managedIds.map((id) =>
+              profileRow(id, "managed", "authenticated"),
+            ),
+          ],
+        },
+      ];
+      try {
+        registerFocusedComposerControls(
+          "landing",
+          stubControls({}),
+          TEST_HOST_CLIENT,
+          null,
+        );
+        const items = captureItems(null, "landing");
+        const providerSubpage = items.find(
+          (i) => i.id === "composer:switch-provider",
+        )?.subpage;
+        const modelSubpage = items.find(
+          (i) => i.id === "composer:switch-model",
+        )?.subpage;
+        if (providerSubpage === null || providerSubpage === undefined) {
+          throw new Error("expected a provider subpage");
+        }
+        if (modelSubpage === null || modelSubpage === undefined) {
+          throw new Error("expected a model subpage");
+        }
+
+        const providerItems = collectSubpageItems(providerSubpage, "landing");
+        expect(
+          providerItems.find((item) => item.id === "composer:provider:claude")
+            ?.statusBadge,
+        ).toBeUndefined();
+        expect(providerItems.map((item) => item.id)).toEqual([
+          "composer:provider:claude",
+          "composer:provider:codex",
+        ]);
+
+        const modelItems = collectSubpageItems(modelSubpage, "landing");
+        const claudeModels = modelItems.filter((item) =>
+          item.id.startsWith("composer:model:claude"),
+        );
+        expect(claudeModels.length).toBeGreaterThan(0);
+        expect(
+          claudeModels.every((item) => item.statusBadge === undefined),
+        ).toBe(true);
+        expect(modelItems[0]?.id.startsWith("composer:model:claude")).toBe(
+          true,
+        );
+      } finally {
+        catalogMock.harnesses = original;
+      }
+    },
+  );
 
   it("excludes a provider with available: false from both subpages regardless of authStatus", () => {
     const original = catalogMock.harnesses;

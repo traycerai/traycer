@@ -55,7 +55,8 @@ const state = vi.hoisted(() => {
     supported: true,
     hostSupport: true as boolean | null,
     userId: "user-1",
-    view,
+    readView: (): OrganizationView | undefined => view,
+    subscribeView: () => () => undefined,
     register: vi.fn(
       (_key: string, _taskIds: readonly string[]) => () => undefined,
     ),
@@ -71,14 +72,13 @@ const state = vi.hoisted(() => {
   // states the shared fixture cannot express (no view yet, no support).
   const override: {
     current:
-      | (Omit<typeof organization, "view" | "supported" | "hostSupport"> & {
-          readonly view: OrganizationView | undefined;
+      | (Omit<typeof organization, "supported" | "hostSupport"> & {
           readonly supported: boolean;
           readonly hostSupport: boolean | null;
         })
       | null;
   } = { current: null };
-  return { command, collaboratorRows, organization, override };
+  return { command, collaboratorRows, organization, override, view };
 });
 
 const queryClient = new QueryClient({
@@ -96,10 +96,16 @@ function render(ui: ReactNode) {
 vi.mock("@/hooks/organization/organization-context", async (load) => {
   const actual =
     await load<typeof import("@/hooks/organization/organization-context")>();
+  const { organizationViewHookOverrides } =
+    await import("@/__tests__/organization-view-source");
   return {
     ...actual,
     useOrganization: () => state.override.current ?? state.organization,
     useOrganizationTasks: () => state.override.current ?? state.organization,
+    ...organizationViewHookOverrides(
+      () => (state.override.current ?? state.organization).readView(),
+      actual.taskOrganization,
+    ),
   };
 });
 
@@ -163,20 +169,20 @@ function resetOrganization(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   state.command.mockReset();
   state.command.mockImplementation(() => Promise.resolve());
-  state.organization.view.catalog = [];
-  state.organization.view.groups = {
+  state.view.catalog = [];
+  state.view.groups = {
     version: "0",
     groups: [],
     memberships: [],
   };
-  state.organization.view.appearances = [
+  state.view.appearances = [
     { taskId: "task-1", version: "0", color: "#445566", icon: "API" },
   ];
-  state.organization.view.taskLabels = {
+  state.view.taskLabels = {
     "task-1": { labels: [], removed: [] },
   };
-  state.organization.view.pending = [];
-  state.organization.view.authenticationRequired = false;
+  state.view.pending = [];
+  state.view.authenticationRequired = false;
   state.collaboratorRows.length = 0;
 }
 
@@ -254,7 +260,7 @@ describe("organization Revision 2", () => {
       .getState()
       .openEpicTab("closed-task", "Closed task");
     useEpicCanvasStore.setState({ openTabOrder: [], activeTabId: null });
-    state.organization.view.groups = {
+    state.view.groups = {
       version: "0",
       groups: [
         { groupId: "group-1", name: "Project", color: "#445566", position: 0 },
@@ -263,7 +269,7 @@ describe("organization Revision 2", () => {
         { taskId: "closed-member", groupId: "group-1", position: 0 },
       ],
     };
-    state.organization.view.appearances = [
+    state.view.appearances = [
       { taskId: "closed-member", version: "0", color: null, icon: null },
       { taskId: "closed-task", version: "0", color: null, icon: null },
     ];
@@ -304,10 +310,10 @@ describe("organization Revision 2", () => {
       openTabOrder: [openMemberTabId],
       activeTabId: openMemberTabId,
     });
-    state.organization.view.groups.memberships = [
+    state.view.groups.memberships = [
       { taskId: "open-member", groupId: "group-1", position: 0 },
     ];
-    state.organization.view.appearances = [
+    state.view.appearances = [
       { taskId: "open-member", version: "0", color: null, icon: null },
       { taskId: "closed-again", version: "0", color: null, icon: null },
     ];
@@ -431,8 +437,8 @@ describe("organization Revision 2", () => {
       labelId: "owned",
       name: "Owned",
     });
-    state.organization.view.catalog = [owned];
-    state.organization.view.taskLabels = {
+    state.view.catalog = [owned];
+    state.view.taskLabels = {
       "task-1": { labels: [appliedLabel(owned)], removed: [] },
     };
     const resolves: Array<() => void> = [];
@@ -470,7 +476,7 @@ describe("organization Revision 2", () => {
       expect(document.activeElement).toBe(document.body);
       checkbox.disabled = true;
     }
-    state.organization.view.taskLabels = {
+    state.view.taskLabels = {
       "task-1": {
         labels: [],
         removed: [
@@ -520,8 +526,8 @@ describe("organization Revision 2", () => {
       labelId: "owned",
       name: "Owned",
     });
-    state.organization.view.catalog = [owned];
-    state.organization.view.taskLabels = {
+    state.view.catalog = [owned];
+    state.view.taskLabels = {
       "task-1": { labels: [appliedLabel(owned)], removed: [] },
     };
     let resolveToggle: (() => void) | undefined;
@@ -609,7 +615,7 @@ describe("organization Revision 2", () => {
   });
 
   it("does not offer Reset when the task has no personal override", () => {
-    state.organization.view.appearances = [
+    state.view.appearances = [
       { taskId: "task-1", version: "0", color: null, icon: null },
     ];
     render(<TaskAppearancePicker taskId="task-1" />);
@@ -718,8 +724,8 @@ describe("organization Revision 2", () => {
       labelId: "foreign",
       name: "Shared",
     });
-    state.organization.view.catalog = [owned, second];
-    state.organization.view.taskLabels = {
+    state.view.catalog = [owned, second];
+    state.view.taskLabels = {
       "task-1": {
         labels: [appliedLabel(owned), appliedLabel(foreign)],
         removed: [],
@@ -764,7 +770,7 @@ describe("organization Revision 2", () => {
 
   it("omits self attribution for own-only labels and includes You for mixed owners", () => {
     const own = label({ ownerId: "user-1", labelId: "own", name: "Mine" });
-    state.organization.view.taskLabels = {
+    state.view.taskLabels = {
       "task-1": { labels: [appliedLabel(own)], removed: [] },
     };
     renderDialog({ kind: "labels", taskId: "task-1", canEdit: false });
@@ -777,7 +783,7 @@ describe("organization Revision 2", () => {
       labelId: "foreign",
       name: "Shared",
     });
-    state.organization.view.taskLabels = {
+    state.view.taskLabels = {
       "task-1": {
         labels: [appliedLabel(own), appliedLabel(foreign)],
         removed: [],
@@ -794,7 +800,7 @@ describe("organization Revision 2", () => {
       labelId: "owned",
       name: "Owned",
     });
-    state.organization.view.catalog = [owned];
+    state.view.catalog = [owned];
     renderDialog({ kind: "manage-labels" });
 
     const search = screen.getByRole("searchbox", { name: /labels/i });
@@ -830,7 +836,7 @@ describe("organization Revision 2", () => {
       labelId: "owned",
       name: "Owned",
     });
-    state.organization.view.catalog = [owned];
+    state.view.catalog = [owned];
     renderDialog({ kind: "manage-labels" });
 
     await user.click(screen.getByRole("button", { name: "Options for Owned" }));
@@ -849,8 +855,8 @@ describe("organization Revision 2", () => {
       labelId: "owned",
       name: "Owned",
     });
-    state.organization.view.catalog = [owned];
-    state.organization.view.pending = [
+    state.view.catalog = [owned];
+    state.view.pending = [
       { commandIds: ["command-1"], scope: "labels:task-1", status: "queued" },
       {
         commandIds: ["command-2"],
@@ -864,14 +870,14 @@ describe("organization Revision 2", () => {
     expect(screen.getByRole("status").textContent).toContain("Waiting to sync");
 
     cleanup();
-    state.organization.view.pending = [
+    state.view.pending = [
       { commandIds: ["command-5"], scope: "groups", status: "delivering" },
     ];
     render(<OrganizationSyncNote taskId="task-1" labels={[owned]} />);
     expect(screen.queryByRole("status")).toBeNull();
 
     cleanup();
-    state.organization.view.pending = [
+    state.view.pending = [
       { commandIds: ["command-6"], scope: "label:owned", status: "retrying" },
       { commandIds: ["command-7"], scope: "labels:task-1", status: "queued" },
     ];
@@ -888,12 +894,17 @@ describe("TaskOrganizationMenu while the host connection is not ready", () => {
     readonly supported: boolean;
     readonly hostSupport: boolean | null;
   }): void {
-    state.override.current = { ...state.organization, ...input };
+    state.override.current = {
+      ...state.organization,
+      supported: input.supported,
+      hostSupport: input.hostSupport,
+      readView: () => input.view,
+    };
   }
 
   function groupedView(): OrganizationView {
     return {
-      ...state.organization.view,
+      ...state.view,
       groups: {
         version: "0",
         groups: [

@@ -472,18 +472,6 @@ dispatch - is a Playwright spec in `browser-tests/` against a fixture page in
 with `bun run test:browser browser-tests/<file>.spec.ts`; CI runs them all in
 `browser-regressions.yml`. Everything else stays in Vitest.
 
-## Skills (use when matched)
-
-| Skill                             | When                           |
-| --------------------------------- | ------------------------------ |
-| `shadcn`                          | Init/add/primitives            |
-| `tailwind-v4-shadcn`              | Theme tokens, dark mode, TW v4 |
-| `react-best-practices`            | React / `.tsx`                 |
-| `frontend-design`                 | New UI / visual work           |
-| `vite` / `vitest` / `zod` / `bun` | As named                       |
-
-Materialized from `skills-lock.json` under `.agents/` / `.claude/`.
-
 ## Status colors
 
 Four status roles, each a `--<role>` / `--<role>-foreground` pair registered in

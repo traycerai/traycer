@@ -1,4 +1,3 @@
-import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
 import type { ReactNode } from "react";
 import { ArtifactProofRoute } from "@/routes/settings-dev-artifact-proof-route-components";
 import { CanvasProofRoute } from "@/routes/settings-dev-canvas-proof-route-components";
@@ -37,7 +36,6 @@ import { AgentsSettingsPanel } from "@/components/settings/panels/agents-setting
 import { AgentMemoriesSettingsPanel } from "@/components/settings/panels/agent-memories-settings-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
-import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { CreditsSettingsPanel } from "@/components/settings/panels/credits-settings-panel";
 import { SandboxesSettingsPanel } from "@/components/settings/environment/sandboxes-page-slot";
@@ -75,26 +73,23 @@ export function SettingsModalContent(
     : (RETIRED_SECTION_REPLACEMENTS[requested] ?? "general");
   return (
     <SettingsDensityContext.Provider value="compact">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <SoundtrackPlaybackControls placement="settings-modal" />
-        <div className="flex min-h-0 min-w-0 flex-1">
-          <SettingsSidebar
-            mode={{
-              kind: "modal",
-              activeSection: section,
-              onSelect: setSection,
-            }}
-            variant="rail"
-          />
-          {/* The pane a page result scrolls to the top: see
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <SettingsSidebar
+          mode={{
+            kind: "modal",
+            activeSection: section,
+            onSelect: setSection,
+          }}
+          variant="rail"
+        />
+        {/* The pane a page result scrolls to the top: see
               `useSettingsAnchorReveal`. Marked here, by the surface, rather
               than by each panel, so a bespoke panel cannot opt out of it. */}
-          <div
-            data-settings-panel-pane
-            className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
-          >
-            <SettingsPanelForSection section={section} />
-          </div>
+        <div
+          data-settings-panel-pane
+          className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
+        >
+          <SettingsPanelForSection section={section} />
         </div>
       </div>
     </SettingsDensityContext.Provider>
@@ -126,7 +121,8 @@ const SETTINGS_PANELS = {
   skills: SkillsSettingsPanel,
   "agent-definitions": AgentsSettingsPanel,
   "machine-setup": MachineSetupSettingsPanel,
-  notifications: NotificationsSettingsPanel,
+  // Retired with notification hooks; opens Alerts like its route.
+  notifications: AlertsSettingsPanel,
   permissions: PermissionsSettingsPanel,
   "agent-memories": AgentMemoriesSettingsPanel,
   agents: AgentsSettingsPanel,

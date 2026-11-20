@@ -17,6 +17,7 @@ import {
   botListResponseSchema,
   botListResponseSchemaV10,
   botListResponseSchemaV11,
+  botListResponseSchemaV12,
   botMemorySubscribeClientFrameSchema,
   botMemorySubscribeOpenRequestSchema,
   botMemorySubscribeServerFrameSchema,
@@ -25,6 +26,7 @@ import {
   botReadRequestSchema,
   botReadResponseSchema,
   botReadResponseSchemaV10,
+  botReadResponseSchemaV11,
   botSubscribeClientFrameSchema,
   botSubscribeOpenRequestSchema,
   botSubscribeServerFrameSchema,
@@ -63,6 +65,7 @@ import {
   botConversationSendRequestSchemaV12,
   botConversationSendRequestSchemaV13,
   botConversationSendRequestSchemaV14,
+  botConversationSendRequestSchemaV15,
   botConversationSendResponseSchema,
   botConversationSearchRequestSchema,
   botConversationSearchResponseSchema,
@@ -151,7 +154,7 @@ export const botListV12 = defineRpcContract({
   method: "bot.list",
   schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: botListRequestSchema,
-  responseSchema: botListResponseSchema,
+  responseSchema: botListResponseSchemaV12,
 });
 export const botListUpgradeV11ToV12 = defineUpgradePath<
   typeof botListV11,
@@ -159,6 +162,22 @@ export const botListUpgradeV11ToV12 = defineUpgradePath<
 >({
   from: botListV11.schemaVersion,
   to: botListV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const botListV13 = defineRpcContract({
+  method: "bot.list",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: botListRequestSchema,
+  responseSchema: botListResponseSchema,
+});
+export const botListUpgradeV12ToV13 = defineUpgradePath<
+  typeof botListV12,
+  typeof botListV13
+>({
+  from: botListV12.schemaVersion,
+  to: botListV13.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -175,7 +194,7 @@ export const botReadV11 = defineRpcContract({
   method: "bot.read",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: botReadRequestSchema,
-  responseSchema: botReadResponseSchema,
+  responseSchema: botReadResponseSchemaV11,
 });
 export const botReadUpgradeV10ToV11 = defineUpgradePath<
   typeof botReadV10,
@@ -183,6 +202,22 @@ export const botReadUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: botReadV10.schemaVersion,
   to: botReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const botReadV12 = defineRpcContract({
+  method: "bot.read",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botReadRequestSchema,
+  responseSchema: botReadResponseSchema,
+});
+export const botReadUpgradeV11ToV12 = defineUpgradePath<
+  typeof botReadV11,
+  typeof botReadV12
+>({
+  from: botReadV11.schemaVersion,
+  to: botReadV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -216,9 +251,9 @@ export const botUpdateReplyModeV10 = defineRpcContract({
 });
 
 /**
- * `bot.updateAppearance@1.0` (T147): the bot's icon, its colour and its
- * channel's background, each kept, set or cleared. Same optional posture as
- * the namespace: a host without it offers none of the three.
+ * `bot.updateAppearance@1.0` (T147): the bot's icon, its colour and what it
+ * wears, each kept, set or cleared. Same optional posture as the namespace: a
+ * host without it offers none of them.
  */
 export const botUpdateAppearanceV10 = defineRpcContract({
   method: "bot.updateAppearance",
@@ -439,7 +474,7 @@ export const botConversationSendUpgradeV13ToV14 = defineUpgradePath<
 export const botConversationSendV15 = defineRpcContract({
   method: "bot.conversation.send",
   schemaVersion: { major: 1, minor: 5 } as const,
-  requestSchema: botConversationSendRequestSchema,
+  requestSchema: botConversationSendRequestSchemaV15,
   responseSchema: botConversationSendResponseSchema,
 });
 export const botConversationSendUpgradeV14ToV15 = defineUpgradePath<
@@ -448,6 +483,26 @@ export const botConversationSendUpgradeV14ToV15 = defineUpgradePath<
 >({
   from: botConversationSendV14.schemaVersion,
   to: botConversationSendV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `bot.conversation.send@1.6` (T166): the message a member chose to reply to
+ * (`replyTo`). A 1.5 request replies to none.
+ */
+export const botConversationSendV16 = defineRpcContract({
+  method: "bot.conversation.send",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: botConversationSendRequestSchema,
+  responseSchema: botConversationSendResponseSchema,
+});
+export const botConversationSendUpgradeV15ToV16 = defineUpgradePath<
+  typeof botConversationSendV15,
+  typeof botConversationSendV16
+>({
+  from: botConversationSendV15.schemaVersion,
+  to: botConversationSendV16.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });

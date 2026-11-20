@@ -8,8 +8,10 @@ import {
 import {
   eligibleProfilesForShortcut,
   profileCommitId,
+  profileDropdownMinimumRows,
   type ProfileRowAdmission,
 } from "@/components/providers/provider-profile-model";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
   LEADER_SCOPE_MODEL_PICKER,
   notifyLeaderScopesChanged,
@@ -25,7 +27,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
 interface PickerLeaderScopeInput {
   /** While true, the picker owns ⌘ (rail), ⌥ (model settings), and
-   *  ⌘⇧ (profile dropdown, when the active provider has 2+ profiles). */
+   *  ⌘⇧ (profile dropdown, while it is drawn for the active provider). */
   readonly open: boolean;
   /** Ordered visible rail entries, mirroring what the rail renders. */
   readonly railEntries: ReadonlyArray<RailEntry>;
@@ -36,8 +38,9 @@ interface PickerLeaderScopeInput {
   /** The provider the profile dropdown is scoped to - always the locked
    *  provider while a fork lock is active (the rail can't browse away from it). */
   readonly activeProviderId: ProviderId;
-  /** Ordered profiles the dropdown renders, mirroring what it displays - empty
-   *  (or under 2) means no dropdown, hence no ⌘⇧-digit action. */
+  /** Ordered profiles the dropdown renders, mirroring what it displays - fewer
+   *  than `profileDropdownMinimumRows` means no dropdown, hence no ⌘⇧-digit
+   *  action. */
   readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
   /** Same admission override the dropdown renders rows with (`profile-
    *  dropdown.tsx`'s `admissionByProfileId`) - `null` for every caller outside
@@ -188,14 +191,17 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
         },
         {
           actionId: "model.profile.byDigit",
-          // Progressive disclosure: active only when the dropdown itself is
-          // rendered (2+ profiles) - otherwise there is nothing to hint or
-          // dispatch to, matching the rail/reasoning gates above.
+          // Active while the dropdown is drawn with a row to pick
+          // (`profileDropdownMinimumRows`) - otherwise there is nothing to
+          // hint or dispatch to.
           isActive: () =>
             eligibleProfilesForShortcut(
               stateRef.current.activeProviderProfiles,
               stateRef.current.profileEnablementPending,
-            ).length >= 2,
+            ).length >=
+            profileDropdownMinimumRows(
+              guiHarnessIdToProviderId(stateRef.current.activeProviderId),
+            ),
           dispatch: (digit) => {
             const profiles = eligibleProfilesForShortcut(
               stateRef.current.activeProviderProfiles,

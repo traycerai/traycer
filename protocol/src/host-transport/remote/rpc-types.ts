@@ -93,6 +93,8 @@ export class HostRpcError extends Error {
    * omitted it, or when it failed schema parse.
    */
   readonly staleWrite: EnvironmentStaleWrite | null;
+  /** In the shape a door refusal takes; `null` on every other answer: the socket stays up. */
+  readonly doorRefusal: FatalErrorDetails | null;
 
   constructor(details: {
     code: RpcErrorCode;
@@ -103,6 +105,7 @@ export class HostRpcError extends Error {
     holders?: readonly WorktreeBusyHolder[] | null;
     holdersRevision?: string | null;
     staleWrite?: EnvironmentStaleWrite | null;
+    doorRefusal?: FatalErrorDetails | null;
   }) {
     super(details.message);
     this.name = "HostRpcError";
@@ -120,6 +123,7 @@ export class HostRpcError extends Error {
       details.code === ENVIRONMENT_WRITE_STALE_CODE
         ? (details.staleWrite ?? null)
         : null;
+    this.doorRefusal = details.doorRefusal ?? null;
   }
 
   static fromErrorDetails(
@@ -149,10 +153,13 @@ export class HostRpcError extends Error {
       readonly holders?: unknown;
       readonly holdersRevision?: unknown;
       readonly staleWrite?: unknown;
+      readonly retryable?: boolean;
+      readonly doorReason?: string;
     },
     requestId: string,
     method: string,
   ): HostRpcError {
+    const doorReason = error.doorReason;
     return new HostRpcError({
       code: isRpcErrorCode(error.code) ? error.code : "RPC_ERROR",
       message: error.message,
@@ -165,6 +172,17 @@ export class HostRpcError extends Error {
         error.holdersRevision,
       ),
       staleWrite: staleWriteForCode(error.code, error.staleWrite),
+      doorRefusal:
+        doorReason === undefined
+          ? null
+          : {
+              code: error.code,
+              reason: error.message,
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+              ...(error.retryable === true ? { retryable: true } : {}),
+              doorReason,
+            },
     });
   }
 }
@@ -250,6 +268,7 @@ export class HostTransportFailureError extends HostRpcError {
     requestId: string;
     method: string;
     fatalDetails: FatalErrorDetails | null;
+    doorRefusal?: FatalErrorDetails | null;
   }) {
     super(details);
     this.name = "HostTransportFailureError";
@@ -280,6 +299,7 @@ export class RetryableTransportError extends HostTransportFailureError {
     requestId: string;
     method: string;
     fatalDetails: FatalErrorDetails | null;
+    doorRefusal?: FatalErrorDetails | null;
     replaySafetyFromKey: boolean;
   }) {
     super(details);
@@ -375,6 +395,36 @@ export function mayHaveReachedHost(error: unknown): boolean {
   return (
     error instanceof HostTransportFailureError && error.fatalDetails === null
   );
+}
+
+/**
+ * Failures that are the HOST's own answer: the error envelope of a response
+ * frame, marked where the session builds it. Every other `HostRpcError` a
+ * session rejects with is unmarked, whether this side raised it before
+ * dispatch (a version floor it refuses, a refusal it remembers for the
+ * connection, a degrade it answers locally, a request it cannot project or
+ * enqueue) or the request had already been sent (an answer it could not
+ * read, a fatal that ended the pending request, a post-send transport
+ * failure). Many share the class, and often the code, of an answer. Keyed by
+ * identity, like `reachedHostFailures`.
+ */
+const targetAnswers = new WeakSet<HostRpcError>();
+
+/** Records that `error` is the host's own answer to the request. */
+export function markTargetAnswer(error: HostRpcError): void {
+  targetAnswers.add(error);
+}
+
+/**
+ * Whether `error` is a marked response-frame error envelope: the host's own
+ * answer to the request. `false` says only that it is not one - never that the
+ * request was not sent; `mayHaveReachedHost` answers that. A caller that must
+ * not read a failure this side met as "the host said no" - a keyed resend of a
+ * request that may already have run there - asks this rather than the class or
+ * the code.
+ */
+export function isTargetAnswer(error: unknown): boolean {
+  return error instanceof HostRpcError && targetAnswers.has(error);
 }
 
 /**

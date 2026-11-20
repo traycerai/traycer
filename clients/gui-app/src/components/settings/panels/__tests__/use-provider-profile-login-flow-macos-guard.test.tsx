@@ -19,6 +19,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import type { AwaitLoginTestAnswer } from "./provider-profile-login-flow-test-support";
 import {
   providerHostBlockLabel,
   type ProviderHostBlock,
@@ -41,10 +42,7 @@ type StartLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.startLogin"
 >;
-type AwaitLoginResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "providers.awaitLogin"
->;
+type AwaitLoginResponse = AwaitLoginTestAnswer;
 type CancelLoginRequest = RequestOfMethod<
   HostRpcRegistry,
   "providers.cancelLogin"
@@ -70,7 +68,7 @@ function Harness(props: {
   readonly mode: ProviderProfileLoginFlowMode;
   readonly hostBlock: ProviderHostBlock | null;
   readonly autoStart: boolean;
-  readonly onFailed: (message: string) => void;
+  readonly onFailed: (message: string, hostSentence: boolean) => void;
 }): ReactNode {
   const startLogin = useMutation<
     StartLoginResponse,
@@ -105,7 +103,7 @@ function Harness(props: {
   const submitLoginCode = useMutation<
     ResponseOfMethod<HostRpcRegistry, "providers.submitLoginCode">,
     HostRpcError,
-    RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">
+    Omit<RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">, "code">
   >({
     mutationFn: () => Promise.resolve({ outcome: "accepted" }),
   });
@@ -140,6 +138,7 @@ function Harness(props: {
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode: () => undefined,
     touchLogin,
     ensurePack,
     failureMessages: {
@@ -196,7 +195,7 @@ afterEach(() => {
 
 describe("useProviderProfileLoginFlow - macOS host block", () => {
   it("refuses a click before startLogin or ensurePack and lands on failed with the sentence", async () => {
-    const onFailed = vi.fn<(message: string) => void>();
+    const onFailed = vi.fn<(message: string, hostSentence: boolean) => void>();
     mount(
       { mode: "create", hostBlock: MACOS_BLOCK, autoStart: false, onFailed },
       false,
@@ -211,7 +210,7 @@ describe("useProviderProfileLoginFlow - macOS host block", () => {
       expect(screen.getByTestId("state").textContent).toBe("failed"),
     );
     expect(screen.getByTestId("message").textContent).toBe(MACOS_13_SENTENCE);
-    expect(onFailed).toHaveBeenCalledWith(MACOS_13_SENTENCE);
+    expect(onFailed).toHaveBeenCalledWith(MACOS_13_SENTENCE, false);
     expect(spies.startLogin).not.toHaveBeenCalled();
     expect(spies.ensurePack).not.toHaveBeenCalled();
   });

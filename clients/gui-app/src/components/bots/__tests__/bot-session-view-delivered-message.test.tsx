@@ -132,6 +132,7 @@ function delivered(
     requestId: "req-delivered",
     senderUserId: SENDER_ID,
     postedAt: POSTED_AT,
+    images: [],
     ...overrides,
   };
 }
@@ -290,6 +291,7 @@ function mountThreadSessionWith(
               <BotSessionView
                 botId={BOT_ID}
                 hostId={HOST_ID}
+                boundHostId={null}
                 botTitle="Release Bot"
                 session={{
                   chatId: THREAD_SESSION_ID,

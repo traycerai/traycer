@@ -1,15 +1,33 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import type { HostRpcRegistry } from "@/lib/host";
+import {
+  providersAwaitLoginResponseSchema,
+  type ProvidersAwaitLoginResponse,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
   type RenderResult,
 } from "@testing-library/react";
 import { StrictMode } from "react";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type { AuthService } from "@/lib/auth/auth-service";
+import {
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  type SignInRequestFetchHarness,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
+import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
 
 type StartLoginData = {
   readonly started: boolean;
@@ -48,6 +66,7 @@ type AwaitLoginVariables = {
     readonly profileId: string | null;
   };
   readonly signal: AbortSignal | undefined;
+  readonly readsProfileOutcome: boolean;
 };
 type AwaitLoginCompletion = {
   // Absent from a host before `providers.awaitLogin@2.2`.
@@ -73,6 +92,56 @@ type AwaitLoginCompletion = {
     }[];
   } | null;
 };
+
+function asksToRecordSignIn(): ProvidersAwaitLoginResponse {
+  return providersAwaitLoginResponseSchema.parse({
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+    signInRequest: SIGN_IN_REQUEST_FIXTURE,
+  });
+}
+
+function authenticatedAwaitAnswer(): ProvidersAwaitLoginResponse {
+  const provider = fixtures.signInProvider;
+  return providersAwaitLoginResponseSchema.parse({
+    state: {
+      ...provider,
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+    },
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+  });
+}
+
+function onboardingRecordingClient(
+  answers: readonly ProvidersAwaitLoginResponse[],
+) {
+  let answerIndex = 0;
+  return buildEnvironmentClient({
+    hostId: "onboarding-sign-in-recording",
+    handlers: {
+      "providers.list": () => ({
+        providers: [fixtures.signInProvider],
+        native: null,
+      }),
+      "providers.awaitLogin": () => {
+        if (answerIndex >= answers.length)
+          throw new Error("onboarding scenario has no await answer");
+        const answer = answers[answerIndex];
+        answerIndex += 1;
+        return answer;
+      },
+    },
+  });
+}
 type AwaitLoginOptions = {
   readonly onSuccess: (completion: AwaitLoginCompletion) => void;
   readonly onError: () => void;
@@ -151,6 +220,10 @@ const fixtures = vi.hoisted(() => {
   };
   return {
     signInProvider,
+    realHostClient: null as HostClient<HostRpcRegistry> | null,
+    useRealProviderList: false,
+    useRealAwaitLogin: false,
+    realAwaitLoginSuccess: false,
     providers: [] as ProviderCliState[],
     startLoginMutate: vi.fn<StartLoginMutate>(),
     startLoginPending: false,
@@ -189,14 +262,70 @@ const fixtures = vi.hoisted(() => {
   };
 });
 
-vi.mock("@/hooks/providers/use-providers-list-query", () => ({
-  useProvidersList: () => ({
-    data: { providers: fixtures.providers },
-    isPending: false,
-    isError: false,
-    fetchStatus: "idle",
-  }),
-}));
+let authServiceForTest: AuthService | null = null;
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => fixtures.realHostClient,
+    useAuthService: currentAuthService,
+  };
+});
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    useHostClient: () => fixtures.realHostClient,
+    useAuthService: currentAuthService,
+  };
+});
+
+beforeEach(() => {
+  activeSignInFetch = installSignInRequestFetchHarness();
+  authServiceForTest = signInRequestAuthService(activeSignInFetch.client);
+});
+
+afterEach(() => {
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
+});
+
+vi.mock(
+  "@/hooks/providers/use-providers-list-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-list-query")
+      >();
+    return {
+      ...actual,
+      useProvidersList: (activity: {
+        readonly enabled: boolean;
+        readonly subscribed: boolean;
+      }) =>
+        fixtures.useRealProviderList
+          ? actual.useProvidersList(activity)
+          : {
+              data: { providers: fixtures.providers },
+              isPending: false,
+              isError: false,
+              fetchStatus: "idle",
+            },
+      useProvidersListForClient: actual.useProvidersListForClient,
+    };
+  },
+);
 
 vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
   useProvidersSetEnabled: () => ({
@@ -234,22 +363,36 @@ vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
   }),
 }));
 
-vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
-  useHostScopedProvidersAwaitLogin: () => ({
-    mutate: fixtures.awaitLoginMutate,
-    isPending: false,
-    isSuccess: fixtures.awaitLoginSuccess,
-    data: fixtures.awaitLoginData,
-    // Modelled as the real one behaves - clearing the result - rather than as a
-    // bare spy, so a test can assert the CONSEQUENCE (no stale verdict on the
-    // next attempt) instead of merely that a function was called.
-    reset: () => {
-      fixtures.awaitLoginReset();
-      fixtures.awaitLoginSuccess = false;
-      fixtures.awaitLoginData = undefined;
-    },
-  }),
-}));
+vi.mock(
+  "@/hooks/providers/use-providers-await-login-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-await-login-mutation")
+      >();
+    return {
+      ...actual,
+      useHostScopedProvidersAwaitLogin: () => {
+        if (fixtures.useRealAwaitLogin) {
+          const result = actual.useHostScopedProvidersAwaitLogin();
+          fixtures.realAwaitLoginSuccess = result.isSuccess;
+          return result;
+        }
+        return {
+          mutate: fixtures.awaitLoginMutate,
+          isPending: false,
+          isSuccess: fixtures.awaitLoginSuccess,
+          data: fixtures.awaitLoginData,
+          reset: () => {
+            fixtures.awaitLoginReset();
+            fixtures.awaitLoginSuccess = false;
+            fixtures.awaitLoginData = undefined;
+          },
+        };
+      },
+    };
+  },
+);
 
 vi.mock("@/hooks/providers/use-providers-submit-login-code-mutation", () => ({
   useProvidersSubmitLoginCode: () => ({
@@ -309,6 +452,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { OnboardingDetectedAgents } from "@/components/onboarding/onboarding-detected-agents";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
@@ -346,6 +490,14 @@ function providerButton(name: string, pressed: boolean): HTMLButtonElement {
   return screen.getByRole<HTMLButtonElement>("button", { name, pressed });
 }
 
+function RealProviderListObserver(): null {
+  useProvidersListForClient(fixtures.realHostClient, {
+    enabled: true,
+    subscribed: true,
+  });
+  return null;
+}
+
 /**
  * The whole mutable surface of `fixtures`, back to its declared state. Shared
  * by every block below: this suite mocks its hooks at module scope, so a value
@@ -353,6 +505,10 @@ function providerButton(name: string, pressed: boolean): HTMLButtonElement {
  */
 function resetFixtures(): void {
   cleanup();
+  fixtures.realHostClient = null;
+  fixtures.useRealProviderList = false;
+  fixtures.useRealAwaitLogin = false;
+  fixtures.realAwaitLoginSuccess = false;
   fixtures.providers = [];
   fixtures.startLoginMutate.mockReset();
   fixtures.startLoginPending = false;
@@ -785,10 +941,65 @@ describe("SignInToEnableButton declined sign-in", () => {
     expect(awaitCall[0]).toStrictEqual({
       request: { providerId: "codex", profileId: null },
       signal: undefined,
+      readsProfileOutcome: false,
     });
     // The options object carries the enable-on-authenticated chain; its
     // behaviour is pinned by the next test.
     expect(typeof awaitCall[1].onSuccess).toBe("function");
+  });
+
+  it("does not re-read providers.list for a named outcome on onboarding's real await path", async () => {
+    fixtures.useRealAwaitLogin = true;
+    fixtures.providers = [fixtures.signInProvider];
+    const { client, messenger } = buildEnvironmentClient({
+      hostId: "onboarding-await-outcome",
+      handlers: {
+        "providers.list": () => ({
+          providers: [fixtures.signInProvider],
+          native: null,
+        }),
+        "providers.awaitLogin": () =>
+          providersAwaitLoginResponseSchema.parse({
+            state: null,
+            profileOutcome: {
+              kind: "signed-in",
+              profileId: "not-in-list",
+            },
+          }),
+      },
+    });
+    fixtures.realHostClient = client;
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RealProviderListObserver />
+        <OnboardingDetectedAgents />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter((call) => call.method === "providers.list"),
+      ).toHaveLength(1);
+    });
+
+    fireEvent.click(signInButton());
+    const [, startOptions] = latestStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({ started: true });
+    });
+    await waitFor(() => expect(fixtures.realAwaitLoginSuccess).toBe(true));
+
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.list"),
+    ).toHaveLength(1);
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.awaitLogin"),
+    ).toHaveLength(1);
   });
 
   it("enables the provider only on an authenticated completion", async () => {
@@ -951,6 +1162,7 @@ describe("SignInToEnableButton declined sign-in", () => {
     expect(awaitCall[0]).toStrictEqual({
       request: { providerId: "codex", profileId: null },
       signal: undefined,
+      readsProfileOutcome: false,
     });
   });
 
@@ -2041,5 +2253,127 @@ describe("SignInToEnableButton with a Kimi sign-in", () => {
       enabled: true,
       profileAction: null,
     });
+  });
+});
+
+describe("OnboardingDetectedAgents sign-in request recording", () => {
+  beforeEach(resetFixtures);
+  afterEach(resetFixtures);
+
+  it("records a matching 200 receipt before enabling from the final await", async () => {
+    fixtures.useRealAwaitLogin = true;
+    fixtures.providers = [fixtures.signInProvider];
+    const { client, messenger } = onboardingRecordingClient([
+      asksToRecordSignIn(),
+      authenticatedAwaitAnswer(),
+    ]);
+    fixtures.realHostClient = client;
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <OnboardingDetectedAgents />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(signInButton());
+    const [, startOptions] = latestStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({ started: true });
+    });
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "providers.awaitLogin",
+        ),
+      ).toHaveLength(2);
+      expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
+    });
+
+    const awaitCalls = messenger.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+    expect(awaitCalls[0]?.params).not.toHaveProperty("recordedOperationId");
+    expect(awaitCalls[1]?.params).toMatchObject({
+      recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+    });
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledWith({
+      providerId: "codex",
+      enabled: true,
+      profileAction: null,
+    });
+  });
+
+  it("shows onboarding's existing did-not-complete state after a 403", async () => {
+    fixtures.useRealAwaitLogin = true;
+    fixtures.providers = [fixtures.signInProvider];
+    const { client, messenger } = onboardingRecordingClient([
+      asksToRecordSignIn(),
+    ]);
+    fixtures.realHostClient = client;
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(FORBIDDEN_SIGN_IN_REQUEST_REPLY);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <OnboardingDetectedAgents />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(signInButton());
+    const [, startOptions] = latestStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({ started: true });
+    });
+
+    expect(
+      await screen.findByText(
+        "Sign-in did not complete. This provider is still off.",
+      ),
+    ).toBeTruthy();
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.awaitLogin"),
+    ).toHaveLength(1);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps an older computer's await unchanged and makes no recording call", async () => {
+    fixtures.useRealAwaitLogin = true;
+    fixtures.providers = [fixtures.signInProvider];
+    const { client, messenger } = onboardingRecordingClient([
+      providersAwaitLoginResponseSchema.parse({
+        state: null,
+        profileOutcome: null,
+      }),
+    ]);
+    fixtures.realHostClient = client;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <OnboardingDetectedAgents />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(signInButton());
+    const [, startOptions] = latestStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({ started: true });
+    });
+
+    expect(
+      await screen.findByText(
+        "Sign-in did not complete. This provider is still off.",
+      ),
+    ).toBeTruthy();
+    const awaitCalls = messenger.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+    expect(awaitCalls).toHaveLength(1);
+    expect(awaitCalls[0]?.params).not.toHaveProperty("recordedOperationId");
+    expect(activeSignInFetch?.fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -111,6 +126,54 @@ describe("hostListReadiness", () => {
 });
 
 describe("deriveHostScopeStatus", () => {
+  it("blocks local and remote hosts whose own version is below the test floor", () => {
+    const local = hostScopeOptionFixture({
+      hostId: "local-old",
+      entry: { ...mockLocalHostEntry, hostId: "local-old", version: "1.5.4" },
+    });
+    const remoteBase = remoteEntry("remote-old", null);
+    const remoteBelowFloor: RemoteHostDirectoryEntry = {
+      ...remoteBase,
+      version: "2.0.0",
+      remoteStatus: { ...remoteBase.remoteStatus, appVersion: "1.5.4" },
+    };
+    const remote = hostScopeOptionFixture({
+      hostId: remoteBase.hostId,
+      isLocalMachine: false,
+      entry: remoteBelowFloor,
+    });
+
+    expect(derive({ host: local, isFollowing: true })).toBe("unreachable");
+    expect(derive({ host: remote, isFollowing: true })).toBe("unreachable");
+  });
+
+  it("admits equal, newer, and unknown local and remote versions using each host's version source", () => {
+    for (const version of ["2.0.0", "2.0.1", null]) {
+      const local = hostScopeOptionFixture({
+        hostId: `local-${version ?? "unknown"}`,
+        entry: {
+          ...mockLocalHostEntry,
+          hostId: `local-${version ?? "unknown"}`,
+          version,
+        },
+      });
+      const remoteBase = remoteEntry(`remote-${version ?? "unknown"}`, null);
+      const remoteAtVersion: RemoteHostDirectoryEntry = {
+        ...remoteBase,
+        version: "1.0.0",
+        remoteStatus: { ...remoteBase.remoteStatus, appVersion: version },
+      };
+      const remote = hostScopeOptionFixture({
+        hostId: remoteBase.hostId,
+        isLocalMachine: false,
+        entry: remoteAtVersion,
+      });
+
+      expect(derive({ host: local, isFollowing: true })).toBe("following");
+      expect(derive({ host: remote, isFollowing: true })).toBe("following");
+    }
+  });
+
   it("reports vanished before anything else, even when a host resolved", () => {
     // Precedence matters: a stale `host` alongside a vanished id must not be
     // read as usable. This ordering is what stops an administration surface

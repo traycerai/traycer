@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { useEffect, useMemo, useState } from "react";
 import type {
   ImportLegacyPlainTerminalRequest,
@@ -191,6 +192,7 @@ export function useEpicTerminalAuthority(args: {
   ]);
 
   const retryMigration = () => {
+    if (showHostUpdateNeededForGesture(args.node.hostId)) return;
     mutations.importLegacy.reset();
     setMigrationError(null);
     setAttempt((current) => current + 1);

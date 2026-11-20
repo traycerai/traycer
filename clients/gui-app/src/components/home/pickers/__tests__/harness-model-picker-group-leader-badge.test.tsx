@@ -10,6 +10,7 @@ import {
 } from "@/providers/keybinding-context";
 import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
 import { ProviderRail } from "@/components/home/pickers/harness-model-picker-group";
+import { EMPTY_REMOVED_PROFILES_BY_HARNESS_ID } from "@/components/home/pickers/harness-rail-providers";
 
 // The rail's `mod` leader hint lives on the SAME parent-accessible-name seam
 // as the reasoning footer's `alt` hint - see
@@ -67,6 +68,7 @@ function renderRail(args: {
         profilesByHarnessId={
           new Map<GuiHarnessId, ReadonlyArray<ProviderProfile>>()
         }
+        removedProfilesByHarnessId={EMPTY_REMOVED_PROFILES_BY_HARNESS_ID}
         activeProviderId={args.harnesses[0].id}
         activeProfileIdByHarnessId={new Map<GuiHarnessId, string | null>()}
         lockedHarnessId={args.lockedHarnessId}

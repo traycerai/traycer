@@ -6,6 +6,7 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import { useTerminalCreate } from "@/hooks/terminal/use-terminal-create-mutation";
 import { exactTerminalListQueryKey } from "@/lib/terminals/refresh-host-terminal-list";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 
 const toastFromHostError = vi.hoisted(() =>
   vi.fn<(error: HostRpcError, fallbackMessage: string) => void>(),
@@ -161,6 +162,25 @@ describe("useTerminalCreate lost-response recovery", () => {
           readonly homeCwd: string | null;
         }>(listKey)?.homeCwd,
       ).toBe("/fresh-home"),
+    );
+    expect(toastFromHostError).not.toHaveBeenCalled();
+  });
+
+  it("keeps floor rejection silent without starting isolated legacy discovery", async () => {
+    const belowMinimum = new HostBelowMinimumError({
+      requestId: "req-floor",
+      method: "terminal.create",
+    });
+    hostRequest.mockRejectedValue(belowMinimum);
+
+    const { result } = renderCreate();
+    await expect(result.current.mutateAsync(CREATE_REQUEST)).rejects.toBe(
+      belowMinimum,
+    );
+
+    expect(hostRequest).toHaveBeenCalledExactlyOnceWith(
+      "terminal.create",
+      CREATE_REQUEST,
     );
     expect(toastFromHostError).not.toHaveBeenCalled();
   });

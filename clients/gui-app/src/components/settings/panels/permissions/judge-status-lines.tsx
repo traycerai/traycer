@@ -25,7 +25,7 @@ import {
   type JudgeProviderBlocker,
   type JudgeWarningCause,
 } from "@/components/settings/panels/auto-judge-selection";
-import { judgePickAccount } from "@/components/settings/panels/permissions/judge-tile-state";
+import { judgeBilledAccount } from "@/components/settings/panels/permissions/judge-tile-state";
 import type {
   JudgeDroppedSwitch,
   JudgePendingSwitch,
@@ -198,8 +198,8 @@ function EffectiveModelLabel(props: {
 
 /**
  * The line under a picked judge that can run: who is billed, naming the
- * account only when its provider has more than one on this machine, as the
- * chip does. Copilot adds its measured rate.
+ * account only when its provider has more than one on this machine. Copilot
+ * adds its measured rate.
  */
 export function PickedStatus(props: {
   readonly selection: AutoJudgeSelection;
@@ -210,7 +210,7 @@ export function PickedStatus(props: {
   const providerLabel =
     props.harnesses?.find((row) => row.id === selection.harnessId)?.label ??
     selection.harnessId;
-  const account = judgePickAccount(props.providers, selection);
+  const account = judgeBilledAccount(props.providers, selection);
   return (
     <>
       <StatusLine tone="success" testId="auto-judge-picked-status">

@@ -1,8 +1,10 @@
 import type { SandboxLifecycleVerbFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { toastFromAuthError } from "@/lib/auth-error-toast";
+import { toastFromHostError } from "@/lib/host-error-toast";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -28,8 +30,28 @@ import {
   type FakeSandboxBinding,
   refusal,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { installHostConnectionRegistrySource } from "@traycer-clients/shared/host-client/host-connection-registry";
+import {
+  installHostDirectoryRows,
+  resetHostDirectoryRows,
+  sandboxHostEntry,
+  sandboxHostEntryWithoutOwner,
+} from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { sandboxMutationKeys } from "@/lib/query-keys";
+import {
+  fatalDoorRefusal,
+  signInForUnaryTest,
+  unaryDoorHarness,
+} from "@/lib/__tests__/fixtures/unary-door-harness";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
+import { toast } from "sonner";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
+import { isDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
 
 const HOST_ID = "host-sbx-1";
 
@@ -46,6 +68,13 @@ const mocks = vi.hoisted(() => ({
   /** `IRunnerHost.sandboxControlUnavailableReason`; `null` reaches the control plane. */
   unavailableReason: null as string | null,
 }));
+
+vi.mock("sonner", () => {
+  const base = vi.fn();
+  return {
+    toast: Object.assign(base, { error: vi.fn(), success: vi.fn() }),
+  };
+});
 
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-sbx-1",
@@ -209,6 +238,18 @@ function bodyWrapper(): HTMLElement {
   return wrapper;
 }
 
+function frozenOnThePersonsOwnSandbox(): void {
+  if (mocks.entry === null) throw new Error("expected a sandbox row");
+  mocks.entry = { ...mocks.entry, owner: { kind: "user", id: "u1" } };
+  installHostConnectionRegistrySource({
+    directory: {
+      findById: (hostId) => (hostId === HOST_ID ? mocks.entry : null),
+      onDirectoryChanged: () => ({ dispose: () => undefined }),
+    },
+    leases: null,
+  });
+}
+
 function overlayParagraph(
   overlay: HTMLElement,
   index: number,
@@ -231,11 +272,13 @@ beforeEach(() => {
   mocks.list = null;
   mocks.listError = false;
   mocks.listFetching = false;
-  mocks.listRefetch.mockClear();
   mocks.entryReads.mockClear();
   mocks.unavailableReason = null;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetHostDirectoryRows();
+});
 
 describe("<SandboxTileStateFrame /> around a chat tile", () => {
   it.each([
@@ -259,7 +302,32 @@ describe("<SandboxTileStateFrame /> around a chat tile", () => {
 });
 
 describe("<SandboxTileStateFrame />", () => {
-  it.each<{ label: string; failure: SandboxLifecycleVerbFetchResult }>([
+  it("tells the shortfall as nobody's own and offers no top-up while the row names no owner", async () => {
+    setSandboxEntry("suspended", false);
+    installHostDirectoryRows([sandboxHostEntryWithoutOwner(HOST_ID)]);
+    mocks.binding?.auth.runSandboxVerb.mockResolvedValue({
+      ...refusal(402, "insufficient_credit"),
+      shortfallMc: 210,
+      creditSource: "personal",
+    });
+    renderFrame(false);
+    fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "Couldn't resume build-box · not enough credits to wake this sandbox for an hour.",
+    );
+    expect(alert.textContent).not.toContain("$0.21");
+    expect(
+      within(alert).queryByRole("button", { name: "Add credits ↗" }),
+    ).toBeNull();
+  });
+
+  it.each<{
+    label: string;
+    failure: SandboxLifecycleVerbFetchResult;
+    ownerKnown: boolean;
+  }>([
     {
       label: "credits",
       failure: {
@@ -267,16 +335,20 @@ describe("<SandboxTileStateFrame />", () => {
         shortfallMc: 210,
         creditSource: "personal",
       },
+      ownerKnown: true,
     },
-    { label: "bearer", failure: { kind: "unauthorized" } },
+    { label: "bearer", failure: { kind: "unauthorized" }, ownerKnown: false },
     {
       label: "network",
       failure: { kind: "network-error", detail: "unreachable" },
+      ownerKnown: false,
     },
   ])(
     "keeps a visible named $label wake failure with remedies on the tile",
-    async ({ failure, label }) => {
+    async ({ failure, label, ownerKnown }) => {
       setSandboxEntry("suspended", false);
+      if (ownerKnown)
+        installHostDirectoryRows([sandboxHostEntry(HOST_ID, null)]);
       mocks.binding?.auth.runSandboxVerb.mockResolvedValue(failure);
       renderFrame(false);
       fireEvent.click(screen.getByTestId("sandbox-tile-overlay-wake"));
@@ -512,6 +584,7 @@ describe("<SandboxTileStateFrame />", () => {
   it("overlays a frozen sandbox with the frozen line and its destroy date, and offers no wake", () => {
     const frozenAt = new Date(2026, 9, 9, 12).getTime();
     setSandboxEntry("suspended", true);
+    frozenOnThePersonsOwnSandbox();
     mocks.list = {
       sandboxes: [
         sandboxSummaryFixture({
@@ -538,6 +611,7 @@ describe("<SandboxTileStateFrame />", () => {
 
   it("frames a frozen row without a destroy date when the server sent no frozenAt", () => {
     setSandboxEntry("stopped", true);
+    frozenOnThePersonsOwnSandbox();
     renderFrame(false);
     const overlay = screen.getByTestId("sandbox-tile-overlay");
     expect(overlay.textContent).toBe(
@@ -768,5 +842,149 @@ describe("<SandboxTileStateFrame />", () => {
       ).toBeNull();
       expect(screen.getByTestId("sandbox-tile-overlay-wake")).toBeDefined();
     });
+  });
+});
+
+describe("<SandboxTileStateFrame /> on a computer that refuses this account", () => {
+  function setWindowHost(hostId: string): void {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: hostId,
+      targetHostId: hostId,
+      effectiveHostId: hostId,
+      leases: [{ hostId, status: "ready", dead: null }],
+      selectionRevision: 1,
+    });
+  }
+
+  function tileButtons(): readonly (string | null)[] {
+    return within(screen.getByTestId("tile-door-cover"))
+      .queryAllByRole("button")
+      .map((button) => button.textContent);
+  }
+
+  beforeEach(() => {
+    mocks.entry = hostListItemToDirectoryEntry(
+      registryItem("personal"),
+      "wss://relay.example.test",
+    );
+    setWindowHost("window-host");
+  });
+  afterEach(() => {
+    useSelectionAuthorityStore.getState().reset();
+    useHostDoorStateStore.setState({ byHost: new Map() });
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it("covers the tile with message 3's words and Retry, keeps the body mounted and inert, and Retry reconnects to that computer", () => {
+    noteHostDoorState({
+      hostId: HOST_ID,
+      kind: "keys-unavailable",
+      detail: null,
+    });
+    renderFrame(false);
+    const body = screen.getByTestId("tile-body");
+
+    const cover = screen.getByTestId("tile-door-cover");
+    expect(
+      within(cover).getByText(
+        "This computer needs to connect once before it can verify access",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(cover).getByText("Check its connection, then retry."),
+    ).toBeTruthy();
+    expect(tileButtons()).toEqual(["Retry"]);
+    expect(bodyWrapper().hasAttribute("inert")).toBe(true);
+
+    const rebuildNow = vi.fn();
+    const stopHearing = onHostDoorRetry(HOST_ID, rebuildNow);
+    fireEvent.click(within(cover).getByRole("button", { name: "Retry" }));
+    stopHearing();
+    expect(rebuildNow).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useHostDoorStateStore.setState({ byHost: new Map() });
+    });
+    expect(screen.queryByTestId("tile-door-cover")).toBeNull();
+    expect(screen.getByTestId("tile-body")).toBe(body);
+    expect(bodyWrapper().hasAttribute("inert")).toBe(false);
+  });
+
+  it("offers Switch account, and nothing else, on message 8", () => {
+    noteHostDoorState({ hostId: HOST_ID, kind: "not-a-member", detail: null });
+    renderFrame(false);
+
+    expect(tileButtons()).toEqual(["Switch account"]);
+  });
+
+  it("offers no button on message 7", () => {
+    noteHostDoorState({
+      hostId: HOST_ID,
+      kind: "membership-removed",
+      detail: null,
+    });
+    renderFrame(false);
+
+    expect(
+      within(screen.getByTestId("tile-door-cover")).getByText(
+        "You no longer have access to this team's computer",
+      ),
+    ).toBeTruthy();
+    expect(tileButtons()).toEqual([]);
+  });
+
+  it("leaves the tile to the window's own cover when its computer is the window's", () => {
+    setWindowHost(HOST_ID);
+    noteHostDoorState({ hostId: HOST_ID, kind: "not-a-member", detail: null });
+    renderFrame(false);
+
+    expect(screen.queryByTestId("tile-door-cover")).toBeNull();
+    expect(bodyWrapper().hasAttribute("inert")).toBe(false);
+  });
+
+  it("keeps B's credential refusal quiet while B's tile cover is drawn", async () => {
+    signInForUnaryTest();
+    noteHostDoorState({ hostId: HOST_ID, kind: "not-admitted", detail: null });
+    renderFrame(false);
+    expect(screen.getByTestId("tile-door-cover")).toBeTruthy();
+    expect(isDoorCoverDrawn(HOST_ID)).toBe(true);
+
+    const harness = await unaryDoorHarness({
+      hostId: HOST_ID,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+      ],
+    });
+    const error = await harness.call();
+
+    expect(harness.sentBearers).toHaveLength(2);
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("says B's caller line when its refusal state has no drawn cover", async () => {
+    signInForUnaryTest();
+    expect(isDoorCoverDrawn(HOST_ID)).toBe(false);
+    const harness = await unaryDoorHarness({
+      hostId: HOST_ID,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+      ],
+    });
+    const error = await harness.call();
+
+    expect(harness.sentBearers).toHaveLength(2);
+    expect(useHostDoorStateStore.getState().byHost.get(HOST_ID)).toMatchObject({
+      kind: "not-admitted",
+    });
+    expect(isDoorCoverDrawn(HOST_ID)).toBe(false);
+    toastFromHostError(error, "Couldn't update this task.");
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't update this task.",
+      expect.objectContaining({ id: "host-error:UNAUTHORIZED:UNAUTHORIZED" }),
+    );
   });
 });

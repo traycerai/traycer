@@ -46,7 +46,6 @@ export type ChatSandboxState =
       readonly kind: "resting";
       readonly sandbox: SandboxSummary;
       readonly configuration: StageConfiguration | null;
-      readonly wakeChangesPayer: boolean;
     }
   | {
       readonly kind: "unreachable";

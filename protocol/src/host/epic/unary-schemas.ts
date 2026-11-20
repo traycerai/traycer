@@ -83,9 +83,9 @@ export const LatestTicketStatusSchema = getRecordSchema(
 
 /**
  * A role as it arrives: every value {@link LatestPermissionRoleSchema}
- * decodes, the retired `viewer` among them. Only a decoder reads this type.
+ * decodes, `viewer` among them. Only a decoder reads this type.
  * Turn it into access with `grantedRole` (`protocol/common/permission-role`),
- * which is the one place a retired role becomes no access.
+ * which is the one place a role becomes access: `viewer` as `editor`.
  */
 export type WirePermissionRole = z.infer<typeof LatestPermissionRoleSchema>;
 

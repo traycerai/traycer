@@ -28,7 +28,7 @@ export type TeamComputerInstallTokenResult =
   | {
       readonly kind: "refused";
       readonly status: number;
-      readonly code: MintRefusalCode;
+      readonly code: MintRefusalCode | null;
     }
   | { readonly kind: "network-error"; readonly detail: string };
 
@@ -53,6 +53,7 @@ export async function mintTeamComputerInstallTokenViaHttp(
           accept: "application/json",
         },
         body: JSON.stringify({ environmentId }),
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,
@@ -76,6 +77,13 @@ export async function mintTeamComputerInstallTokenViaHttp(
   if (status === 401) return { kind: "unauthorized" };
   if (status < 200 || status >= 300) {
     const refusal = mintRefusalSchema.safeParse(body);
+    if (status === 429) {
+      return {
+        kind: "refused",
+        status,
+        code: refusal.success ? refusal.data.code : null,
+      };
+    }
     return refusal.success
       ? { kind: "refused", status, code: refusal.data.code }
       : {

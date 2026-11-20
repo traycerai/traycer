@@ -29,6 +29,7 @@ import {
 } from "@/stores/comments/comment-threads-store";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useCreateCommentThreadForClient } from "@/hooks/comments/use-comment-thread-mutations";
+import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 import { CommentComposer } from "./comment-composer";
 
 export interface FloatingDraftPopoverProps {
@@ -93,6 +94,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
   // on pane focus — otherwise Escape typed in the focused partner would dismiss
   // this hidden draft.
   const paneFocused = usePaneFocused();
+  const insets = useSafeAreaCollisionPadding();
 
   const dismiss = useCallback(
     (force: boolean) => {
@@ -127,7 +129,22 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     const reposition = () => {
       void computePosition(virtualReference, floating, {
         placement: "bottom-start",
-        middleware: [offset(8), flip(), shift({ padding: 8 })],
+        // A selection taller than the pane has room neither below nor above
+        // it, so the box moves over the selection rather than out of view,
+        // clear of the device insets.
+        middleware: [
+          offset(8),
+          flip(),
+          shift({
+            crossAxis: true,
+            padding: {
+              top: insets.top + 8,
+              right: insets.right + 8,
+              bottom: insets.bottom + 8,
+              left: insets.left + 8,
+            },
+          }),
+        ],
       }).then(({ x, y }) => {
         floating.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
       });
@@ -138,7 +155,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     // null → the pane container), createPortal remounts the floating node, so
     // the positioning effect must re-run to bind `autoUpdate` to the live node
     // instead of the detached first-mount node.
-  }, [editor, ownedDraft, paneContainer]);
+  }, [editor, ownedDraft, paneContainer, insets]);
 
   // Esc cancels (with dirty-confirm) at the document level so the editor
   // doesn't have to forward keystrokes. The Tiptap editor's own Escape

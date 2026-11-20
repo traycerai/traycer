@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import { SingleCloudChatTree } from "@/components/epic-canvas/sidebar/__tests__/cloud-chat-tree";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
@@ -22,6 +22,12 @@ import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/publ
  * record-backed gate that makes a published copy visible only through its
  * composite tile id.
  */
+
+vi.mock("@tanstack/react-virtual", async (importOriginal) =>
+  (await import("@/__tests__/chat-tree-virtual-layout")).mockReactVirtual(
+    importOriginal,
+  ),
+);
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-a",
@@ -41,14 +47,6 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
     () => (_epicId: string, _tabId: string, prepare: () => unknown) =>
       prepare(),
 }));
-
-/** A leaf row: no subagents beneath it, so nothing to expand. */
-const LEAF_ROW = {
-  hasChildren: false,
-  expanded: false,
-  expansionId: "leaf",
-  onToggleExpanded: () => undefined,
-} as const;
 
 const CHAT: CloudChatSummary = {
   identity: {
@@ -84,13 +82,7 @@ afterEach(() => {
 function renderRow(tabId: string): HTMLElement {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <EpicSidebarCloudChatRow
-        chat={CHAT}
-        {...LEAF_ROW}
-        tabId={tabId}
-        depth={0}
-        selectionMode={false}
-      />
+      <SingleCloudChatTree chat={CHAT} tabId={tabId} />
     </QueryClientProvider>,
   );
   return screen.getByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`);
@@ -100,7 +92,7 @@ function rowStateOf(row: HTMLElement): {
   selected: string | null;
   highlighted: boolean;
 } {
-  const item = row.closest("li");
+  const item = row.closest('[role="treeitem"]');
   if (item === null) throw new Error("expected the row inside its treeitem");
   return {
     selected: item.getAttribute("aria-selected"),
