@@ -243,7 +243,7 @@ export function buildRawHostMessengerForTarget<
         localDoorHostTokens(params.hostTokens),
         noteHostTokenRefusal,
       ),
-      releasedSignOnFor: signInForReleasedRow(() => params.target),
+      releasedSignOnFor: signInForReleasedRow(() => params.target, params.auth),
     }),
     remoteTransport: null,
   };
@@ -459,7 +459,7 @@ class RuntimeHostMessenger<
         localDoorHostTokens(this.hostTokens),
         noteHostTokenRefusal,
       ),
-      releasedSignOnFor: signInForReleasedRow(this.resolveTarget),
+      releasedSignOnFor: signInForReleasedRow(this.resolveTarget, this.auth),
     });
     return this.localMessenger;
   }

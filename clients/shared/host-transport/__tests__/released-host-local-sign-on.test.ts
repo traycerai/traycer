@@ -520,7 +520,7 @@ describe("released personal host, local unary", () => {
       hostAttestationWindowMs: 0,
       evidence: NO_TRANSPORT_EVIDENCE,
       hostBearerFor: () => Promise.resolve(hostToken),
-      releasedSignOnFor: signInForReleasedRow(() => PERSONAL_ROW),
+      releasedSignOnFor: signInForReleasedRow(() => PERSONAL_ROW, null),
       doorFor: () => door,
     });
     const settled = client

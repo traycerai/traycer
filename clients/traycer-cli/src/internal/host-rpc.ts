@@ -492,8 +492,12 @@ async function requestWithHostToken<
     ...(releasedSignOn === null
       ? {}
       : {
-          releasedSignOnFor: async () =>
-            (await releasedSignOn.allowed()) ? releasedSignOn.signIn() : null,
+          releasedSignOnFor: async () => {
+            const signIn = releasedSignOn.signIn();
+            return signIn !== null && (await releasedSignOn.allowed())
+              ? { bearer: signIn, recovery: releasedSignOn.recovery }
+              : null;
+          },
         }),
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),

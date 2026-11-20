@@ -27,8 +27,15 @@ import {
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
-import { isReleasedHostTokenRefusal } from "./released-sign-on";
+import {
+  isReleasedHostTokenRefusal,
+  type ReleasedUnarySignOn,
+} from "./released-sign-on";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  revalidateStream,
+  type StreamAuthRevalidator,
+} from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -257,11 +264,12 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    * Asked only after a released host's typed refusal of the call's host-only
    * token, with the caller's authority: the sign-in lease to send the call with
    * once more, or `null` unless the host's row is that person's own personal
-   * computer (`opensReleasedWay`).
+   * computer (`opensReleasedWay`). If the host refuses the sign-in too, its
+   * `recovery` refreshes it and the call goes once more, as a released client's did.
    */
   readonly releasedSignOnFor?: (
     authority: HostRequestAuthority,
-  ) => Promise<OpenFrameBearerSource | null>;
+  ) => Promise<ReleasedUnarySignOn | null>;
 }
 
 /**
@@ -360,10 +368,15 @@ export class WsRpcClient<
     | undefined;
   private readonly hostBearerFor: WsRpcClientOptions<Registry>["hostBearerFor"];
   private readonly releasedSignOnFor: WsRpcClientOptions<Registry>["releasedSignOnFor"];
-  /** Authorities carrying the released way's sign-in; their refusals reach the door. */
-  private readonly signInAuthorities = new WeakSet<HostRequestAuthority>();
+  /** Authorities carrying the released way's sign-in, with its recovery while unspent. */
+  private readonly signInAuthorities = new WeakMap<
+    HostRequestAuthority,
+    StreamAuthRevalidator | null
+  >();
   /** A released host refused the host-only token, and the door has not heard of it. */
   private readonly releasedRefusals = new WeakSet<HostRpcError>();
+  /** A released host refused the sign-in, a recovery is left, and the door has not heard of it. */
+  private readonly signInRefusals = new WeakSet<HostRpcError>();
   private readonly reprobeErrors = new WeakSet<HostRpcError>();
   private readonly localRevisionByHost = new Map<string, number>();
   /** Counts `releaseIdleLocalSessions`, so a call can tell one ran during its token lookup. */
@@ -443,16 +456,28 @@ export class WsRpcClient<
             options.authority,
           ).catch(() => null);
           if (signIn === undefined || signIn === null) {
-            if (cause.fatalDetails !== null)
-              this.doorFor?.(options.authority.endpoint.hostId).refused(
-                cause.fatalDetails,
-              );
+            this.reportRefusal(options.authority.endpoint.hostId, cause);
             throw cause;
           }
-          const authority = { ...options.authority, bearer: signIn };
-          this.signInAuthorities.add(authority);
+          const authority = { ...options.authority, bearer: signIn.bearer };
+          this.signInAuthorities.set(authority, signIn.recovery);
           hostOptions = { ...options, authority };
           continue;
+        }
+        if (cause instanceof HostRpcError && this.signInRefusals.has(cause)) {
+          const authority = hostOptions.authority;
+          const recovery = this.signInAuthorities.get(authority) ?? null;
+          // Spent: a second refusal of this call's sign-in reaches the door.
+          this.signInAuthorities.set(authority, null);
+          const outcome =
+            recovery === null || cause.fatalDetails === null
+              ? "rejected"
+              : await revalidateStream(recovery, cause.fatalDetails).catch(
+                  () => "network-error" as const,
+                );
+          if (outcome === "rotated") continue;
+          this.reportRefusal(options.authority.endpoint.hostId, cause);
+          throw cause;
         }
         if (cause instanceof HostRpcError && cause.doorRefusal !== null)
           this.doorFor?.(options.authority.endpoint.hostId).refused(
@@ -498,6 +523,11 @@ export class WsRpcClient<
         fatalDetails: null,
       });
     return { ...options, authority: { ...options.authority, bearer } };
+  }
+
+  private reportRefusal(hostId: string, cause: HostRpcError): void {
+    if (cause.fatalDetails !== null)
+      this.doorFor?.(hostId).refused(cause.fatalDetails);
   }
 
   /** See `released-sign-on.ts`. */
@@ -815,8 +845,11 @@ export class WsRpcClient<
           usesSessionGrant,
           ackFrame.details,
         );
-        // Reported once the sign-in cannot be sent; the sign-in's own refusal is reported here.
-        if (!releasedWay)
+        const signInRefused =
+          isReleasedHostTokenRefusal(ackFrame.details) &&
+          (this.signInAuthorities.get(authority) ?? null) !== null;
+        // Reported once the sign-in, or its refresh, cannot answer it.
+        if (!releasedWay && !signInRefused)
           this.doorFor?.(selected.hostId).refused(ackFrame.details);
         if (
           ackFrame.details.code === SESSION_GRANT_REQUIRED &&
@@ -836,6 +869,7 @@ export class WsRpcClient<
           "beforeRequest",
         );
         if (releasedWay) this.releasedRefusals.add(error);
+        if (signInRefused) this.signInRefusals.add(error);
         if (
           usesSessionGrant &&
           this.localOpenAuth !== undefined &&

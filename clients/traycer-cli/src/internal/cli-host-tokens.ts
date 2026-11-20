@@ -23,9 +23,8 @@ import {
 } from "@traycer-clients/shared/auth/host-token-source";
 import { isUsableHostToken } from "@traycer-clients/shared/auth/host-token-store";
 import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
-import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
 import {
-  opensReleasedWay,
+  releasedSignOnFromRegistry,
   type ReleasedSignOn,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { config } from "../config";
@@ -333,43 +332,19 @@ export interface CliHostSession {
   dispose(): void;
 }
 
-/**
- * The host's row is read from authn only after a released host refused the
- * host-only token, and kept once authn answers it. An unreachable authn, or one
- * that refuses the stored sign-in, answers `false` for that refusal and is
- * asked again on the next. `hostId` is the host the client dials now.
- */
+/** The stored sign-in, refreshed under the credentials lock, for `releasedSignOnFromRegistry`. */
 export function cliReleasedSignOn(
   authnBaseUrl: string,
   hostId: () => string | null,
   lease: BearerLease,
   tokens: Pick<CliHostTokens, "refreshSignIn">,
 ): ReleasedSignOn {
-  const answered = new Map<string, boolean>();
-  return {
-    signIn: () => lease,
+  return releasedSignOnFromRegistry({
+    authnBaseUrl,
+    hostId,
+    signIn: () => (readLeaseBearer(lease) === null ? null : lease),
     recovery: { revalidateForReconnect: () => tokens.refreshSignIn() },
-    allowed: async () => {
-      const id = hostId();
-      if (id === null) return false;
-      const known = answered.get(id);
-      if (known !== undefined) return known;
-      const signIn = readLeaseBearer(lease);
-      if (signIn === null) return false;
-      const row = await readHostOwnershipViaHttp(authnBaseUrl, signIn, id);
-      if (row.kind === "network-error" || row.kind === "unauthorized")
-        return false;
-      const allowed =
-        row.kind === "ok" &&
-        row.host.kind !== "sandbox" &&
-        opensReleasedWay(
-          { owner: row.host.owner, sandbox: null },
-          lease.identity.userId,
-        );
-      answered.set(id, allowed);
-      return allowed;
-    },
-  };
+  });
 }
 
 export type CliHostSessionResult =
