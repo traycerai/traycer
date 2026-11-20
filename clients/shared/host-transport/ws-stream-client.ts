@@ -16,6 +16,7 @@ import {
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
   getMemoizedStreamMethodSupport,
@@ -3212,14 +3213,18 @@ class StreamSession<
     const releasedWay = this.answersReleasedWay(details);
     // The probe carried no credential of the person's: a current host's answer
     // to it is not theirs to see, and the dial goes on as with no token.
-    if (this.probing && !releasedWay) {
+    if (
+      this.probing &&
+      !releasedWay &&
+      readDoorReason(details.doorReason) !== "absent"
+    ) {
       this.probeAnsweredAsCurrent = true;
       this.teardownSocket(1000, "no-host-token-probe");
       this.dropAndReconnect(details);
       return;
     }
     // Answered by the sign-in, or reported once its recovery gives up.
-    if (!releasedWay) this.config.door?.refused(details);
+    if (!releasedWay && !this.probing) this.config.door?.refused(details);
     const localAuth = this.config.localOpenAuth;
     if (localAuth !== undefined && this.openFrameHostId !== null) {
       if (this.openFrameBearer !== null) {

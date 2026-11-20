@@ -306,6 +306,9 @@ export async function provisionInstalledHostCredential(
   // sign-in, as a released CLI's probe opened it, so the probe goes on. It
   // explains the end only if that does not provision the host.
   let signInAfterNotAdmitted: CliHostTokenFailure | null = null;
+  // An open was admitted after it: the host took the sign-in, so a later 404
+  // for the host-only token is expected and explains nothing.
+  let admittedAfterNotAdmitted = false;
   let wakeOnMintRefusal: (() => void) | null = null;
   let stopMintRefusals: () => void = () => undefined;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
@@ -391,6 +394,7 @@ export async function provisionInstalledHostCredential(
         mintRefusal = failure;
         if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
       };
+      if (failure.kind === "not-admitted" && admittedAfterNotAdmitted) return;
       if (failure.kind !== "not-admitted" || signInAfterNotAdmitted !== null) {
         refuse();
         return;
@@ -459,6 +463,7 @@ export async function provisionInstalledHostCredential(
         refused: () => undefined,
         admitted: () => {
           doorRetried = false;
+          if (signInAfterNotAdmitted !== null) admittedAfterNotAdmitted = true;
           if (endpoint !== null)
             tokens.streamRecovery(endpoint.hostId).admitted();
         },
@@ -532,7 +537,8 @@ export async function provisionInstalledHostCredential(
       if (credentialRejected || tokens.signInRejected()) {
         return { kind: "unauthorized" };
       }
-      const refusal = mintRefusal ?? signInAfterNotAdmitted;
+      const refusal =
+        mintRefusal ?? (admittedAfterNotAdmitted ? null : signInAfterNotAdmitted);
       if (refusal !== null) return mintRefusalOutcome(refusal);
       if (mintUnavailable) {
         return { kind: "mint-unavailable" };
@@ -594,7 +600,7 @@ export async function provisionInstalledHostCredential(
       !credentialRejected &&
       !tokens.signInRejected() &&
       mintRefusal === null &&
-      signInAfterNotAdmitted === null &&
+      (signInAfterNotAdmitted === null || admittedAfterNotAdmitted) &&
       !mintUnavailable &&
       !mintProvisioned &&
       !mintInvoked &&
@@ -760,7 +766,8 @@ export async function provisionInstalledHostCredential(
           // incompatible ack settles the lap as `state` first, and lands in
           // `unsupported` through the withheld-mint path instead.)
           const reason = observation.reason;
-          if (signInAfterNotAdmitted !== null) return await settleAfterRecovery();
+          if (signInAfterNotAdmitted !== null && !admittedAfterNotAdmitted)
+            return await settleAfterRecovery();
           if (reason !== null && reason.kind === "fatalError") {
             const admissionError = localTeamAdmissionCliError(reason.details);
             if (admissionError !== null)

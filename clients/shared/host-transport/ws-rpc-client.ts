@@ -27,6 +27,7 @@ import {
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import {
   isReleasedHostTokenRefusal,
   NO_HOST_TOKEN_PROBE,
@@ -495,6 +496,13 @@ export class WsRpcClient<
           cause instanceof HostRpcError &&
           this.probeAuthorities.has(hostOptions.authority)
         ) {
+          // Only a refusal naming its reason is a current host's answer; a
+          // transport failure or any other answer leaves the next call to probe again.
+          if (
+            cause.fatalDetails === null ||
+            readDoorReason(cause.fatalDetails.doorReason) === "absent"
+          )
+            throw cause;
           this.probeAnsweredAsCurrent.add(options.authority.endpoint.hostId);
           throw noHostTokenError(this.requestIdProvider(), method);
         }
