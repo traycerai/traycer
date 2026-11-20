@@ -98,6 +98,10 @@ import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
 import { backoffFor } from "./backoff";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
+import {
+  isReleasedHostTokenRefusal,
+  type ReleasedSignOn,
+} from "./released-sign-on";
 
 /**
  * Options for constructing the shared `/stream` transport.
@@ -138,6 +142,12 @@ export interface WsStreamClientOptions<
   readonly bearer: BearerSourceProvider;
   readonly localOpenAuth?: LocalOpenAuth;
   readonly door?: SessionDoorObserver;
+  /**
+   * Set only for the person's own personal computer (`opensReleasedWay`): the
+   * sign-in a released host takes in place of the host-only token `bearer`
+   * serves, presented on the dial after that host's typed refusal of it.
+   */
+  readonly releasedSignOn?: ReleasedSignOn | null;
   /**
    * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
    * asserted to the host on every `open` frame and updated in place through
@@ -385,6 +395,8 @@ export class WsStreamClient<
    * missing-bearer paths, which report no host evidence.
    */
   private readonly bearer: BearerSourceProvider;
+  /** `options.releasedSignOn`, its sign-in bound to `options.userId`. */
+  private readonly releasedSignOn: ReleasedSignOn | null;
   /**
    * `options.cloudAuthorized`, bound to `options.userId`: `false` while the
    * live bearer is not this client's user. Every session reads it at its open
@@ -515,6 +527,15 @@ export class WsStreamClient<
   constructor(options: WsStreamClientOptions<Registry>) {
     this.options = options;
     this.bearer = bearerSourceForUser(options.bearer, options.userId);
+    const releasedSignOn = options.releasedSignOn;
+    this.releasedSignOn =
+      releasedSignOn === undefined || releasedSignOn === null
+        ? null
+        : {
+            signIn: bearerSourceForUser(releasedSignOn.signIn, options.userId),
+            recovery: releasedSignOn.recovery,
+            allowed: releasedSignOn.allowed,
+          };
     const cloudAuthorized = options.cloudAuthorized;
     this.cloudAuthorized =
       cloudAuthorized === undefined
@@ -611,6 +632,7 @@ export class WsStreamClient<
       bearer: this.bearer,
       localOpenAuth: this.options.localOpenAuth,
       door: this.options.door,
+      releasedSignOn: this.releasedSignOn,
       cloudAuthorized: this.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
@@ -1644,6 +1666,7 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly bearer: BearerSourceProvider;
   readonly localOpenAuth: LocalOpenAuth | undefined;
   readonly door: SessionDoorObserver | undefined;
+  readonly releasedSignOn: ReleasedSignOn | null;
   /** See `WsStreamClientOptions.cloudAuthorized`. */
   readonly cloudAuthorized: (() => boolean) | undefined;
   readonly auth: StreamAuthRevalidator | null;
@@ -1840,6 +1863,12 @@ class StreamSession<
   private grantReprobed = false;
   private grantOpenAcknowledged = false;
   private openFrameBearer: OpenFrameBearerSource | null = null;
+  /**
+   * `sign-in-next` after a released host's typed refusal of the host-only token;
+   * the dial after a `sign-in` one starts on the token again.
+   */
+  private releasedPlan: "host-token" | "sign-in-next" | "sign-in" =
+    "host-token";
   private credentialSocketSequence = 0;
   private openFrameToken: string | null = null;
   /**
@@ -2334,7 +2363,12 @@ class StreamSession<
       this.transitionTo("connecting", null, null);
     }
 
-    const bearer = this.config.bearer();
+    this.releasedPlan =
+      this.releasedPlan === "sign-in-next" &&
+      (this.config.releasedSignOn?.signIn() ?? null) !== null
+        ? "sign-in"
+        : "host-token";
+    const bearer = this.wireBearer();
     this.openFrameBearer = bearer;
     this.usesSessionGrant = false;
     let token: string;
@@ -2359,7 +2393,7 @@ class StreamSession<
     // advisory only - the reactive UNAUTHORIZED path stays the authority for
     // everything it cannot see (revocation, config mismatch), and an
     // undecodable token falls through to a normal dial.
-    const auth = this.config.auth;
+    const auth = this.credentialRecovery();
     const expiresAtMs = readAccessTokenExpiryMs(token);
     if (auth !== null && expiresAtMs !== null && expiresAtMs <= Date.now()) {
       // THE EXPIRY READ IS A COMPARISON AGAINST `Date.now()`, so on a machine
@@ -2374,6 +2408,8 @@ class StreamSession<
       console.debug(
         `[stream] pre-dial bearer already expired; revalidating before dial method=${String(this.config.method)}`,
       );
+      // The redial after the refresh presents the sign-in again.
+      if (this.releasedPlan === "sign-in") this.releasedPlan = "sign-in-next";
       this.transitionTo("reconnecting", null, null);
       void this.revalidateThenReconnect(
         auth,
@@ -2391,6 +2427,7 @@ class StreamSession<
 
     if (
       bearer !== null &&
+      this.releasedPlan === "host-token" &&
       this.config.localOpenAuth?.requiresSessionGrant(selected.hostId)
     ) {
       void this.connectWithSessionGrant(
@@ -3128,7 +3165,9 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
-    this.config.door?.refused(details);
+    const releasedWay = this.answersReleasedWay(details);
+    // Answered by the sign-in, or reported once its recovery gives up.
+    if (!releasedWay) this.config.door?.refused(details);
     const localAuth = this.config.localOpenAuth;
     if (localAuth !== undefined && this.openFrameHostId !== null) {
       if (this.openFrameBearer !== null) {
@@ -3209,6 +3248,10 @@ class StreamSession<
       this.dropAndReconnect(details);
       return;
     }
+    if (releasedWay) {
+      this.answerReleasedWay(details);
+      return;
+    }
     // A credential refusal is recoverable when an auth revalidator is wired:
     // the host rejected our token (e.g. it expired during an overnight sleep),
     // but a single-flight revalidation may rotate a fresh one that the next
@@ -3225,6 +3268,74 @@ class StreamSession<
       return;
     }
     this.goTerminal(details);
+  }
+
+  /** See `released-sign-on.ts`. With no sign-in to present, the refusal takes the token's own path. */
+  private answersReleasedWay(details: FatalErrorDetails): boolean {
+    const released = this.config.releasedSignOn;
+    return (
+      released !== null &&
+      !this.usesSessionGrant &&
+      isReleasedHostTokenRefusal(details) &&
+      (this.releasedPlan === "sign-in" || released.signIn() !== null)
+    );
+  }
+
+  /**
+   * A released host refused the host-only token: redial at once with the sign-in.
+   * It refused the sign-in: recover that as a released app did, and report the
+   * refusal only if the recovery gives up.
+   */
+  private answerReleasedWay(details: FatalErrorDetails): void {
+    const released = this.config.releasedSignOn;
+    if (released === null) return;
+    const recovery = released.recovery;
+    if (this.releasedPlan === "host-token") {
+      this.teardownSocket(1000, "released-host-sign-on");
+      this.resetForReconnect(null);
+      void released
+        .allowed()
+        .catch(() => false)
+        .then((allowed) => {
+          if (this.disposed) return;
+          if (!allowed) {
+            this.config.door?.refused(details);
+            this.goTerminal(details);
+            return;
+          }
+          this.releasedPlan = "sign-in-next";
+          this.connect();
+        });
+      return;
+    }
+    this.releasedPlan = "sign-in-next";
+    if (recovery === null) {
+      this.config.door?.refused(details);
+      this.goTerminal(details);
+      return;
+    }
+    const door = this.config.door;
+    this.handleUnauthorizedFatalError(details, {
+      revalidateForReconnect: async () => {
+        const outcome = await revalidateStream(recovery, details);
+        if (outcome === "rejected" || outcome === "local-plane-retained")
+          door?.refused(details);
+        return outcome;
+      },
+    });
+  }
+
+  /** The lease this dial presents, or the next one will: the host-only token, or the sign-in. */
+  private wireBearer(): OpenFrameBearerSource | null {
+    return this.releasedPlan === "host-token"
+      ? this.config.bearer()
+      : (this.config.releasedSignOn?.signIn() ?? null);
+  }
+
+  private credentialRecovery(): StreamAuthRevalidator | null {
+    return this.releasedPlan === "sign-in"
+      ? (this.config.releasedSignOn?.recovery ?? null)
+      : this.config.auth;
   }
 
   /**
@@ -3535,7 +3646,7 @@ class StreamSession<
 
   private currentUserBearerToken(): string | null {
     try {
-      return extractBearerForOpenFrame(this.config.bearer());
+      return extractBearerForOpenFrame(this.wireBearer());
     } catch {
       return null;
     }

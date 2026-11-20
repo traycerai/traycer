@@ -9,6 +9,10 @@ import {
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
+import {
+  opensReleasedWay,
+  signInForReleasedRow,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { v4 as uuidv4 } from "uuid";
 import type {
@@ -181,6 +185,7 @@ export function buildRawHostMessengerForTarget<
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       hostTokens: params.hostTokens,
+      opensReleasedWay: opensReleasedWay(params.target, params.userId),
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -238,6 +243,7 @@ export function buildRawHostMessengerForTarget<
         localDoorHostTokens(params.hostTokens),
         noteHostTokenRefusal,
       ),
+      releasedSignOnFor: signInForReleasedRow(() => params.target),
     }),
     remoteTransport: null,
   };
@@ -453,6 +459,7 @@ class RuntimeHostMessenger<
         localDoorHostTokens(this.hostTokens),
         noteHostTokenRefusal,
       ),
+      releasedSignOnFor: signInForReleasedRow(this.resolveTarget),
     });
     return this.localMessenger;
   }

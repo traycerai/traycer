@@ -1,6 +1,7 @@
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import { hostTokenFailureCliError } from "../internal/host-door-words";
 import {
+  cliReleasedSignOn,
   createCliHostTokens,
   type CliHostTokenFailure,
 } from "../internal/cli-host-tokens";
@@ -360,7 +361,8 @@ export async function provisionInstalledHostCredential(
       lease,
       signal: probeAbort.signal,
     });
-    // The stored sign-in is spent at authn alone; the host sees this CLI's host-only token.
+    // The stored sign-in is spent at authn; the host sees this CLI's host-only
+    // token, or the sign-in only as `cliReleasedSignOn` allows.
     const tokens = createCliHostTokens({
       lease,
       refresh: () => revalidator.revalidateCurrentContext(),
@@ -424,6 +426,12 @@ export async function provisionInstalledHostCredential(
       bearer: () =>
         endpoint === null ? null : tokens.streamBearer(endpoint.hostId)(),
       userId: lease.identity.userId,
+      releasedSignOn: cliReleasedSignOn(
+        options.auth.authnBaseUrl,
+        () => endpoint?.hostId ?? null,
+        lease,
+        tokens,
+      ),
       auth: streamAuth,
       // Each admitted open resets the host's recovery, so the one fresh token
       // is earned again after a good open.

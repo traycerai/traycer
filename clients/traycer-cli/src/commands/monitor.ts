@@ -5,12 +5,14 @@ import {
   hostTokenFailureCliError,
 } from "../internal/host-door-words";
 import {
+  cliReleasedSignOn,
   createCliHostTokens,
   type CliHostTokenFailure,
   type SignInRevalidator,
   type CliMintRefusalListener,
 } from "../internal/cli-host-tokens";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
+import type { ReleasedSignOn } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
 import {
   hostStreamRpcRegistry,
@@ -239,6 +241,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     bearer: () =>
       endpoint === null ? null : credential.bearer(endpoint.hostId)(),
     userId: credential.userId,
+    releasedSignOn: credential.releasedSignOn(() => endpoint?.hostId ?? null),
     // `auth: null` opts out of the WsStreamClient's built-in stream-auth
     // recovery: the monitor runs its OWN recovery loop in
     // `runInboxSubscription` (a fresh token, then re-subscribe on `rotated` /
@@ -330,6 +333,8 @@ interface MonitorCredential {
   readonly signInRejected: () => boolean;
   readonly onMintRefused: (listener: CliMintRefusalListener) => () => void;
   readonly hostCredentialMint: HostCredentialMintFlow | null;
+  /** `null` for the agent session capability: a released host takes that one as it is. */
+  readonly releasedSignOn: (hostId: () => string | null) => ReleasedSignOn | null;
   /** `onRenewed` pushes a renewed token onto the open stream. */
   readonly startUpkeep: (
     hostId: () => string | null,
@@ -339,8 +344,8 @@ interface MonitorCredential {
 }
 
 /**
- * Spent at authn alone: the host receives this CLI's host-only token, never the
- * sign-in. `inCapabilitylessSession` presents nothing and reads no sign-in.
+ * Spent at authn, and presented to a host only as `cliReleasedSignOn` allows:
+ * otherwise the host receives this CLI's host-only token. `inCapabilitylessSession` presents nothing and reads no sign-in.
  */
 async function signInMonitorCredential(
   logger: ILogger,
@@ -393,6 +398,8 @@ async function signInMonitorCredential(
     admitted: (hostId) => hostTokens.streamRecovery(hostId).admitted(),
     signInRejected: () => hostTokens.signInRejected(),
     onMintRefused: (listener) => hostTokens.onMintRefused(listener),
+    releasedSignOn: (hostId) =>
+      cliReleasedSignOn(auth.authnBaseUrl, hostId, lease, hostTokens),
     // Delegated host-credential provisioning. `monitor` is the CLI command
     // that most needs it: the host it watches should keep serving after this
     // process exits. Provisioning is silent, so this works the same whether
@@ -464,6 +471,7 @@ function capabilityMonitorCredential(
     signInRejected: () => false,
     onMintRefused: () => () => undefined,
     hostCredentialMint: null,
+    releasedSignOn: () => null,
     startUpkeep: () => undefined,
     stopUpkeep: () => undefined,
   };

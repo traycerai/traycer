@@ -23,6 +23,11 @@ import {
 } from "@traycer-clients/shared/auth/host-token-source";
 import { isUsableHostToken } from "@traycer-clients/shared/auth/host-token-store";
 import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
+import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
+import {
+  opensReleasedWay,
+  type ReleasedSignOn,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import { config } from "../config";
 import {
   CREDENTIALS_LOCK_WAIT_MS,
@@ -317,10 +322,53 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
 
 export interface CliHostSession {
   readonly bearer: OpenFrameBearerSource;
-  /** The stored sign-in, for authn alone: never presented to a host. */
+  /**
+   * The stored sign-in, for authn, and for a released host on this person's own
+   * personal computer through {@link releasedSignOn}.
+   */
   readonly signInLease: BearerLease;
   readonly tokens: CliHostTokens;
+  /** This session's host's answer to a released host's refusal of the host-only token. */
+  readonly releasedSignOn: ReleasedSignOn;
   dispose(): void;
+}
+
+/**
+ * The host's row is read from authn only after a released host refused the
+ * host-only token, and kept once authn answers; an unreachable authn answers
+ * `false` for that refusal and is asked again on the next. `hostId` is the host
+ * the client dials now.
+ */
+export function cliReleasedSignOn(
+  authnBaseUrl: string,
+  hostId: () => string | null,
+  lease: BearerLease,
+  tokens: Pick<CliHostTokens, "refreshSignIn">,
+): ReleasedSignOn {
+  const answered = new Map<string, boolean>();
+  return {
+    signIn: () => lease,
+    recovery: { revalidateForReconnect: () => tokens.refreshSignIn() },
+    allowed: async () => {
+      const id = hostId();
+      if (id === null) return false;
+      const known = answered.get(id);
+      if (known !== undefined) return known;
+      const signIn = readLeaseBearer(lease);
+      if (signIn === null) return false;
+      const row = await readHostOwnershipViaHttp(authnBaseUrl, signIn, id);
+      if (row.kind === "network-error") return false;
+      const allowed =
+        row.kind === "ok" &&
+        row.host.kind !== "sandbox" &&
+        opensReleasedWay(
+          { owner: row.host.owner, sandbox: null },
+          lease.identity.userId,
+        );
+      answered.set(id, allowed);
+      return allowed;
+    },
+  };
 }
 
 export type CliHostSessionResult =
@@ -369,6 +417,12 @@ export async function openCliHostSession(
       bearer: held.bearer,
       signInLease: lease,
       tokens,
+      releasedSignOn: cliReleasedSignOn(
+        auth.authnBaseUrl,
+        () => hostId,
+        lease,
+        tokens,
+      ),
       dispose: () => store.dispose(),
     },
   };

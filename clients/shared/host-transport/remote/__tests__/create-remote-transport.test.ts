@@ -98,6 +98,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     VersionedStreamRpcRegistry
   >({
     clientIdentity: TEST_CLIENT_IDENTITY,
+    opensReleasedWay: false,
     hostId: "host-null-bearer-test",
     userId: "user-null-bearer-test",
     relayAttachUrl: "wss://relay.invalid/attach",
@@ -265,6 +266,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         VersionedStreamRpcRegistry
       >({
         clientIdentity: TEST_CLIENT_IDENTITY,
+        opensReleasedWay: false,
         hostId: "host-gate-b-test",
         userId: "user-gate-b-test",
         relayAttachUrl: "wss://relay.invalid/attach",
@@ -380,6 +382,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
         VersionedStreamRpcRegistry
       >({
         clientIdentity: TEST_CLIENT_IDENTITY,
+        opensReleasedWay: false,
         hostId: "host-gate-c-test",
         userId: "user-gate-c-test",
         relayAttachUrl: "wss://relay.invalid/attach",
@@ -714,6 +717,7 @@ describe("createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close"
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
+      opensReleasedWay: false,
       hostId,
       userId: bearerSource.identity.userId,
       relayAttachUrl: "wss://relay.invalid/attach",
@@ -886,6 +890,7 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
+      opensReleasedWay: false,
       hostId,
       userId,
       relayAttachUrl: "wss://relay.invalid/attach",
@@ -986,6 +991,7 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
+      opensReleasedWay: false,
       hostId,
       userId,
       relayAttachUrl: "wss://relay.invalid/attach",
@@ -1064,6 +1070,7 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
+      opensReleasedWay: false,
       hostId,
       userId,
       relayAttachUrl: "wss://relay.invalid/attach",

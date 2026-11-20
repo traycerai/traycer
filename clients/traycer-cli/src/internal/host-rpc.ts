@@ -7,6 +7,7 @@ import {
 } from "./agent-session-capability";
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import { openCliHostSession } from "./cli-host-tokens";
+import type { ReleasedSignOn } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   hostDoorRefusalCliError,
   hostTokenFailureCliError,
@@ -326,6 +327,7 @@ export async function callHostRpcWithAgentCredential<
       endpoint,
       capability.bearer,
       capability.recovery,
+      null,
       dispatch.failFast
         ? NO_RETRY_TRANSPORT_POLICY
         : DEFAULT_TRANSPORT_RETRY_POLICY,
@@ -462,6 +464,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       endpoint,
       session.bearer,
       session.tokens.unaryRecovery(endpoint.hostId),
+      session.releasedSignOn,
       retryPolicy,
       dispatch,
       () => session.tokens.signInRejected(),
@@ -479,12 +482,19 @@ async function requestWithHostToken<
   endpoint: HostTransportEndpoint,
   bearer: OpenFrameBearerSource,
   recovery: RefusalAwareAuthRevalidator,
+  releasedSignOn: ReleasedSignOn | null,
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
   signInRejected: () => boolean,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const client = new WsRpcClient<HostRpcRegistry>({
+    ...(releasedSignOn === null
+      ? {}
+      : {
+          releasedSignOnFor: async () =>
+            (await releasedSignOn.allowed()) ? releasedSignOn.signIn() : null,
+        }),
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),
     webSocketFactory: createWhatwgWebSocketFactory(),

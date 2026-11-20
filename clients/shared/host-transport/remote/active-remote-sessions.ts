@@ -111,8 +111,15 @@ export interface RemoteSessionIdentity {
    * `pool-bearer` is a session to the server pool (`createPoolHostTransport`):
    * the user bearer on a direct leg with no grant behind it. It never shares a
    * connection with a host's session, whatever else matches.
+   *
+   * `session-grant-or-sign-in` is the person's own personal computer: the
+   * session grant, and the sign-in only after a released host refuses it.
    */
-  readonly openAuth: "user-bearer" | "session-grant" | "pool-bearer";
+  readonly openAuth:
+    | "user-bearer"
+    | "session-grant"
+    | "session-grant-or-sign-in"
+    | "pool-bearer";
 }
 
 interface CacheEntry {

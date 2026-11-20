@@ -47,6 +47,10 @@ import {
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
+import {
+  opensReleasedWay,
+  releasedSignOnForRow,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -352,6 +356,7 @@ export function buildHostStreamClient(params: {
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       hostTokens: params.hostTokens,
+      opensReleasedWay: opensReleasedWay(params.target, params.userId),
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -407,6 +412,12 @@ export function buildHostStreamClient(params: {
       params.bearer,
       hostId,
       noteHostTokenRefusal,
+    ),
+    releasedSignOn: releasedSignOnForRow(
+      params.target,
+      params.userId,
+      params.bearer,
+      params.auth,
     ),
     // The user every owner builds this client for: the tile cache key, the
     // app-wide stream's effect dependency, the transport key at open.

@@ -178,6 +178,7 @@ async function deleteWithHostToken(
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
     bearer: () => bearer,
+    releasedSignOn: session.releasedSignOn,
     userId: bearer.identity.userId,
     auth: null,
     clock: null,

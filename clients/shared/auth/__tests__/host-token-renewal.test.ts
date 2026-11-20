@@ -251,6 +251,7 @@ describe("host-token renewal", () => {
       relayTokens.era(USER_A),
     );
     const remote = createRemoteHostTransport({
+      opensReleasedWay: false,
       hostId: relayHostId,
       userId: USER_A,
       relayAttachUrl: "wss://relay.test/attach",

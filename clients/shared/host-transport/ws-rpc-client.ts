@@ -27,6 +27,7 @@ import {
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
+import { isReleasedHostTokenRefusal } from "./released-sign-on";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
@@ -252,6 +253,15 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
     hostId: string,
     signIn: OpenFrameBearerSource,
   ) => Promise<OpenFrameBearerSource | null>;
+  /**
+   * Asked only after a released host's typed refusal of the call's host-only
+   * token, with the caller's authority: the sign-in lease to send the call with
+   * once more, or `null` unless the host's row is that person's own personal
+   * computer (`opensReleasedWay`).
+   */
+  readonly releasedSignOnFor?: (
+    authority: HostRequestAuthority,
+  ) => Promise<OpenFrameBearerSource | null>;
 }
 
 /**
@@ -349,6 +359,11 @@ export class WsRpcClient<
     | ((hostId: string) => SessionDoorObserver)
     | undefined;
   private readonly hostBearerFor: WsRpcClientOptions<Registry>["hostBearerFor"];
+  private readonly releasedSignOnFor: WsRpcClientOptions<Registry>["releasedSignOnFor"];
+  /** Authorities carrying the released way's sign-in; their refusals reach the door. */
+  private readonly signInAuthorities = new WeakSet<HostRequestAuthority>();
+  /** A released host refused the host-only token, and the door has not heard of it. */
+  private readonly releasedRefusals = new WeakSet<HostRpcError>();
   private readonly reprobeErrors = new WeakSet<HostRpcError>();
   private readonly localRevisionByHost = new Map<string, number>();
   /** Counts `releaseIdleLocalSessions`, so a call can tell one ran during its token lookup. */
@@ -358,6 +373,7 @@ export class WsRpcClient<
     this.localOpenAuth = options.localOpenAuth;
     this.doorFor = options.doorFor;
     this.hostBearerFor = options.hostBearerFor;
+    this.releasedSignOnFor = options.releasedSignOnFor;
     this.registry = options.registry;
     this.requestIdProvider = options.requestId;
     this.webSocketFactory = options.webSocketFactory;
@@ -405,7 +421,7 @@ export class WsRpcClient<
     const hostBearerFor = this.hostBearerFor;
     const releasesBeforeLookup = this.localReleases;
     // With no token to look up, the claim stays in the caller's tick.
-    const hostOptions =
+    let hostOptions =
       hostBearerFor === undefined
         ? options
         : await this.withHostBearer(hostBearerFor, options, method);
@@ -422,6 +438,22 @@ export class WsRpcClient<
         releasedDuringLookup = false;
         return await pending;
       } catch (cause) {
+        if (cause instanceof HostRpcError && this.releasedRefusals.has(cause)) {
+          const signIn = await this.releasedSignOnFor?.(options.authority).catch(
+            () => null,
+          );
+          if (signIn === undefined || signIn === null) {
+            if (cause.fatalDetails !== null)
+              this.doorFor?.(options.authority.endpoint.hostId).refused(
+                cause.fatalDetails,
+              );
+            throw cause;
+          }
+          const authority = { ...options.authority, bearer: signIn };
+          this.signInAuthorities.add(authority);
+          hostOptions = { ...options, authority };
+          continue;
+        }
         if (cause instanceof HostRpcError && cause.doorRefusal !== null)
           this.doorFor?.(options.authority.endpoint.hostId).refused(
             cause.doorRefusal,
@@ -466,6 +498,20 @@ export class WsRpcClient<
         fatalDetails: null,
       });
     return { ...options, authority: { ...options.authority, bearer } };
+  }
+
+  /** See `released-sign-on.ts`. */
+  private answersReleasedWay(
+    authority: HostRequestAuthority,
+    usesSessionGrant: boolean,
+    details: FatalErrorDetails,
+  ): boolean {
+    return (
+      this.releasedSignOnFor !== undefined &&
+      !usesSessionGrant &&
+      !this.signInAuthorities.has(authority) &&
+      isReleasedHostTokenRefusal(details)
+    );
   }
 
   private async requestWithResponseTimeoutInternal<
@@ -764,7 +810,14 @@ export class WsRpcClient<
       const ackFrame = await session.next(this.frameTimeoutMs);
 
       if (ackFrame.kind === "fatalError") {
-        this.doorFor?.(selected.hostId).refused(ackFrame.details);
+        const releasedWay = this.answersReleasedWay(
+          authority,
+          usesSessionGrant,
+          ackFrame.details,
+        );
+        // Reported once the sign-in cannot be sent; the sign-in's own refusal is reported here.
+        if (!releasedWay)
+          this.doorFor?.(selected.hostId).refused(ackFrame.details);
         if (
           ackFrame.details.code === SESSION_GRANT_REQUIRED &&
           !usesSessionGrant
@@ -782,6 +835,7 @@ export class WsRpcClient<
           method,
           "beforeRequest",
         );
+        if (releasedWay) this.releasedRefusals.add(error);
         if (
           usesSessionGrant &&
           this.localOpenAuth !== undefined &&

@@ -15,7 +15,14 @@ import {
 import type {
   PoolSessionAuth,
   RemoteSessionAuth,
+  RemoteSessionAuthRecoveryOutcome,
+  RemoteSessionOpenAuth,
 } from "@traycer/protocol/host-transport/remote/auth";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import {
+  isReleasedHostTokenRefusal,
+  type ReleasedSignOn,
+} from "../released-sign-on";
 import { OPEN_AUTHZ_SESSION_GRANT_VERSION } from "@traycer/protocol/host-transport/mux";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import type { RemoteTrafficSnapshot } from "@traycer/protocol/host-transport/remote/traffic-accounting";
@@ -166,12 +173,19 @@ export interface RemoteSessionOptions<
   /**
    * The host-only token, for every host kind: `OPEN` presents it in `authz`
    * v2 with an EMPTY bearer, and a `CREDENTIAL_UPDATE` carries a renewed one
-   * in `bearer`. The sign-in token never reaches a host.
+   * in `bearer`. The sign-in token reaches a host only through
+   * {@link releasedSignOn}.
    */
   readonly hostToken: () => string | null;
   readonly auth: StreamAuthRevalidator | null;
   readonly door: SessionDoorObserver | null;
   readonly evidence: TransportEvidenceReporter;
+  /**
+   * The person's own sign-in for their own personal computer, `null` for every
+   * other row. Presented only on the dial after this host refused the host-only
+   * token the released way (`isReleasedHostTokenRefusal`).
+   */
+  readonly releasedSignOn: ReleasedSignOn | null;
 }
 
 /**
@@ -240,24 +254,36 @@ function bearerReader(bearer: BearerSourceProvider): () => string | null {
   };
 }
 
+function hostTokenOpenAuth(
+  readHostToken: () => string | null,
+): RemoteSessionOpenAuth | null {
+  const grant = readHostToken();
+  if (grant === null) {
+    return null;
+  }
+  return {
+    bearer: "",
+    authz: { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant },
+    fingerprint: grant,
+  };
+}
+
 function createHostTokenRemoteSessionAuth(
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: SessionDoorObserver | null,
+  releasedSignOn: ReleasedSignOn | null,
 ): RemoteSessionAuth {
+  if (releasedSignOn !== null)
+    return createReleasedSignOnSessionAuth(
+      readHostToken,
+      auth,
+      door,
+      releasedSignOn,
+    );
   return {
     missingOpenAuthCause: "missing-host-token",
-    readOpenAuth: () => {
-      const grant = readHostToken();
-      if (grant === null) {
-        return null;
-      }
-      return {
-        bearer: "",
-        authz: { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant },
-        fingerprint: grant,
-      };
-    },
+    readOpenAuth: () => hostTokenOpenAuth(readHostToken),
     readCredentialUpdateBearer: readHostToken,
     currentFingerprint: readHostToken,
     // A wrapper over nothing would turn "no revalidator" into an endless retry.
@@ -266,6 +292,95 @@ function createHostTokenRemoteSessionAuth(
         ? null
         : (refusal) => revalidateStream(auth, refusal),
     ...(door === null ? {} : { door }),
+  };
+}
+
+/**
+ * Every dial presents the host-only token first. A released host's typed refusal
+ * of it makes the next dial present the sign-in, `authz: null`, as a released app
+ * did; that connection's credential pushes carry the sign-in. The dial after it
+ * starts on the token again, so an updated host is never handed the sign-in.
+ */
+function createReleasedSignOnSessionAuth(
+  readHostToken: () => string | null,
+  auth: StreamAuthRevalidator | null,
+  door: SessionDoorObserver | null,
+  releasedSignOn: ReleasedSignOn,
+): RemoteSessionAuth {
+  const readSignIn = bearerReader(releasedSignOn.signIn);
+  let plan: "host-token" | "sign-in-next" | "sign-in" = "host-token";
+  // With no sign-in to present, the refusal takes the host-only token's own path.
+  const answersReleasedWay = (refusal: FatalErrorDetails): boolean =>
+    isReleasedHostTokenRefusal(refusal) &&
+    (plan === "sign-in" || readSignIn() !== null);
+  const recoverSignIn = async (
+    refusal: FatalErrorDetails,
+  ): Promise<RemoteSessionAuthRecoveryOutcome> => {
+    const recovery = releasedSignOn.recovery;
+    const outcome =
+      recovery === null
+        ? "rejected"
+        : await revalidateStream(recovery, refusal);
+    if (outcome === "rotated" || outcome === "network-error") {
+      plan = "sign-in-next";
+      return outcome;
+    }
+    door?.refused(refusal);
+    return outcome;
+  };
+  const recoverHostToken = (
+    refusal: FatalErrorDetails,
+  ): Promise<RemoteSessionAuthRecoveryOutcome> => {
+    plan = "host-token";
+    return auth === null
+      ? Promise.resolve("rejected")
+      : revalidateStream(auth, refusal);
+  };
+  const answerHostTokenRefusal = async (
+    refusal: FatalErrorDetails,
+  ): Promise<RemoteSessionAuthRecoveryOutcome> => {
+    const allowed = await releasedSignOn.allowed().catch(() => false);
+    if (allowed) {
+      plan = "sign-in-next";
+      return "rotated";
+    }
+    door?.refused(refusal);
+    return recoverHostToken(refusal);
+  };
+  return {
+    missingOpenAuthCause: "missing-host-token",
+    readOpenAuth: () => {
+      if (plan === "sign-in-next") {
+        const signIn = readSignIn();
+        if (signIn !== null) {
+          plan = "sign-in";
+          return { bearer: signIn, authz: null, fingerprint: signIn };
+        }
+      }
+      plan = "host-token";
+      return hostTokenOpenAuth(readHostToken);
+    },
+    readCredentialUpdateBearer: () =>
+      plan === "sign-in" ? readSignIn() : readHostToken(),
+    currentFingerprint: () =>
+      plan === "host-token" ? readHostToken() : readSignIn(),
+    revalidateForReconnect: (refusal) => {
+      if (answersReleasedWay(refusal)) {
+        if (plan === "sign-in") return recoverSignIn(refusal);
+        return answerHostTokenRefusal(refusal);
+      }
+      return recoverHostToken(refusal);
+    },
+    door: {
+      // Answered by the next dial, or reported once its recovery gives up.
+      refused: (details) => {
+        if (answersReleasedWay(details)) return;
+        door?.refused(details);
+      },
+      admitted: () => {
+        door?.admitted();
+      },
+    },
   };
 }
 
@@ -324,10 +439,15 @@ function toProtocolSessionOptions<
       auth: createClientPoolSessionAuth(bearer, auth),
     };
   }
-  const { hostToken, auth, door, ...coreOptions } = options;
+  const { hostToken, auth, door, releasedSignOn, ...coreOptions } = options;
   return {
     ...coreOptions,
     ...clientWiring,
-    auth: createHostTokenRemoteSessionAuth(hostToken, auth, door),
+    auth: createHostTokenRemoteSessionAuth(
+      hostToken,
+      auth,
+      door,
+      releasedSignOn,
+    ),
   };
 }
