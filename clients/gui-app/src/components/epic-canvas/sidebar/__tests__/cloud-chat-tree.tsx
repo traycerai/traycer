@@ -29,6 +29,8 @@ const NO_LOCAL_TREE: EpicTreeIndex = {
 };
 const ANY_TYPE = (): boolean => true;
 const NOTHING_EXPANDED: ReadonlySet<string> = new Set();
+/** A cloud row that leaves fades out, as the panel has it. */
+const NO_ROW_GONE = (): boolean => false;
 
 interface CloudChatTreeProps {
   readonly listEntries: readonly UnifiedChatEntry[];
@@ -74,6 +76,7 @@ export function CloudChatTree(props: CloudChatTreeProps): ReactNode {
           scrollElement={scrollElement}
           regionRef={regionRef}
           renderRow={renderRow}
+          isRowGone={NO_ROW_GONE}
         />
       </div>
     </div>

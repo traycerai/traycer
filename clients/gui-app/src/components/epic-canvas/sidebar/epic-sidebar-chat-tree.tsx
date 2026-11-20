@@ -386,6 +386,9 @@ const EMPTY_OWN_CLOUD_CHATS: ReadonlyMap<string, CloudChatSummary> = new Map();
  * fold of local ids onto cloud rows, whether this task has an audience).
  * Resolved once in `ChatTreePanelBody` and read by the rows.
  */
+/** The panel's scroller, as a motion element so it can be a layout scroller. */
+const MotionSidebarContent = m.create(SidebarContent);
+
 const SidebarChatSharingContext = createContext<SidebarChatSharingValue>({
   visibilitySupported: false,
   ownCloudChatByLocalId: EMPTY_OWN_CLOUD_CHATS,
@@ -1250,6 +1253,14 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(
     null,
   );
+  // A local row whose node left the task goes at once: its row drew nothing
+  // from the moment the node was gone. Pending rows were never in a group.
+  const isRowGone = useCallback(
+    (row: ChatTreeRow): boolean =>
+      row.kind === "pending" ||
+      (row.kind === "local" && !Object.hasOwn(tree.nodeById, row.nodeId)),
+    [tree],
+  );
   const renderRow = useCallback(
     (row: ChatTreeRow): ReactNode => {
       switch (row.kind) {
@@ -1448,6 +1459,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
               scrollElement={scrollElement}
               regionRef={treeRegionRef}
               renderRow={renderRow}
+              isRowGone={isRowGone}
             />
           </m.div>
         )}
@@ -1481,7 +1493,13 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                       {/* One clock for the tree's rows, owner cards and name labels
                     alike: the first waits, the next row's opens at once. */}
                       <HoverCardGroup>
-                        <SidebarContent ref={setScrollElement}>
+                        {/* A layout scroller, so a row's slide is measured against the
+                        scroll it ends at: the list may move the scroll in the
+                        same frame to keep the rows in view where they were. */}
+                        <MotionSidebarContent
+                          layoutScroll
+                          ref={setScrollElement}
+                        >
                           <SidebarGroup className="min-h-0 flex-1">
                             <SidebarGroupContent
                               ref={treeRegionRef}
@@ -1492,7 +1510,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
                               {messageHits.node}
                             </SidebarGroupContent>
                           </SidebarGroup>
-                        </SidebarContent>
+                        </MotionSidebarContent>
                       </HoverCardGroup>
                     </SidebarFilterVisibilityContext.Provider>
                   </SidebarSortClockContext.Provider>
