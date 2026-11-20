@@ -64,7 +64,7 @@ export interface ChatTreeCloudRow extends ChatTreeRowBase {
   readonly expansionId: string;
 }
 
-export interface ChatTreePendingRow extends ChatTreeRowBase {
+interface ChatTreePendingRow extends ChatTreeRowBase {
   readonly kind: "pending";
   readonly nodeId: null;
   readonly name: string;

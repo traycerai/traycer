@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { chatTreeLayout } from "@/__tests__/chat-tree-virtual-layout";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -95,7 +101,15 @@ describe("a row's own state while it is scrolled out of the window", () => {
   });
 
   it("keeps an open delete confirmation after the row scrolls far out of the window", async () => {
-    await chooseFromMenu("c2", "epic-sidebar-delete");
+    // Opened from the context menu, so no row takes focus and only the
+    // confirmation's own pin holds the row.
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-c2"), {
+      clientX: 40,
+      clientY: 12,
+    });
+    await userEvent
+      .setup()
+      .click(await screen.findByTestId("epic-sidebar-context-delete-c2"));
     expect(await screen.findByText(/Delete .*Title c2/)).toBeTruthy();
 
     chatTreeLayout.scrollTo(FAR_OFFSET_PX);

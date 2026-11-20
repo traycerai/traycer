@@ -1715,9 +1715,11 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
-  // Both are this row's own state, so the row stays mounted while either is
-  // open, wherever the list scrolls.
-  useVirtualRowPin(rowKey, isRenaming || confirmDeleteOpen);
+  // The confirmation is this row's own state, so the row stays mounted while
+  // it is open, wherever the list scrolls. A rename needs no pin of its own:
+  // its input holds focus until a blur commits it, and the focused row stays
+  // mounted.
+  useVirtualRowPin(rowKey, confirmDeleteOpen);
   const deletePending = anyMutationPending([
     deleteChat.isPending,
     deleteTerminalAgent.isPending,

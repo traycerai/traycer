@@ -4,7 +4,7 @@ import type { ChatTreeRowModel } from "@/components/epic-canvas/sidebar/chat-tre
 
 export type ChatTreeVirtualizer = Virtualizer<HTMLDivElement, HTMLLIElement>;
 
-export type ChatTreeScrollAlign = "auto" | "start" | "center" | "end";
+type ChatTreeScrollAlign = "auto" | "start" | "center" | "end";
 
 /**
  * What the rendered chat tree exposes to the hooks that work on it: reveal,
