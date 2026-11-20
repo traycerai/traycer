@@ -1,3 +1,4 @@
+import { NO_HOST_TOKEN_PROBE } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import type { HostPidMetadata } from "../pid-metadata";
@@ -15,7 +16,13 @@ const HOST_TOKEN = "host-only-token";
 const SIGN_IN = "person-sign-in";
 const HOST_CREDENTIAL = "provisioned-host-credential";
 
-type Ownership = "personal" | "team" | "network";
+type Ownership =
+  | "personal"
+  | "team"
+  | "network"
+  | "missing"
+  | "current"
+  | "team-missing";
 
 const harness = vi.hoisted(() => {
   class ScriptSocket {
@@ -213,7 +220,10 @@ function jsonResponse(body: unknown, status: number): Response {
 }
 
 function ownershipBody(): unknown {
-  if (harness.state.ownership === "team") {
+  if (
+    harness.state.ownership === "team" ||
+    harness.state.ownership === "team-missing"
+  ) {
     return {
       hosts: [
         {
@@ -237,6 +247,30 @@ function ownershipBody(): unknown {
   };
 }
 
+function namedRefusal(): {
+  readonly kind: "fatalError";
+  readonly details: {
+    readonly code: "UNAUTHORIZED";
+    readonly reason: string;
+    readonly doorReason: "not_admitted";
+    readonly retryable: false;
+    readonly incompatibleMethods: null;
+    readonly upgradeGuidance: null;
+  };
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "current-host-refusal",
+      doorReason: "not_admitted",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
 function installFetch(): void {
   vi.stubGlobal(
     "fetch",
@@ -250,9 +284,22 @@ function installFetch(): void {
         if (harness.state.ownership === "network") {
           throw new TypeError("authn unreachable");
         }
+        if (
+          harness.state.ownership === "missing" ||
+          harness.state.ownership === "current"
+        ) {
+          return jsonResponse({ message: "missing" }, 404);
+        }
         return jsonResponse(ownershipBody(), 200);
       }
       if (method === "POST" && url.pathname.endsWith("/session-grant")) {
+        if (
+          harness.state.ownership === "missing" ||
+          harness.state.ownership === "current" ||
+          harness.state.ownership === "team-missing"
+        ) {
+          return jsonResponse({ message: "missing" }, 404);
+        }
         return jsonResponse(
           {
             session_grant: HOST_TOKEN,
@@ -313,7 +360,11 @@ async function answerReleasedHost(
         continue;
       }
       answered.add(socket);
-      if (open.token === SIGN_IN && ownership === "personal") {
+      const admitsSignIn =
+        ownership === "personal" ||
+        ownership === "network" ||
+        ownership === "missing";
+      if (open.token === SIGN_IN && admitsSignIn) {
         signInAcks += 1;
         socket.fireText({
           kind: "openAck",
@@ -321,6 +372,10 @@ async function answerReleasedHost(
           capabilities: ["hostCredentialProvision"],
           hostCredentialState: signInAcks === 1 ? "missing" : "active",
         });
+        continue;
+      }
+      if (open.token === SIGN_IN && ownership === "current") {
+        socket.fireText(namedRefusal());
         continue;
       }
       socket.fireText(releasedRefusal());
@@ -402,14 +457,46 @@ describe("CLI credential probe against a released host", () => {
     expect(provisionFrames()).toEqual([]);
   }, 15_000);
 
-  it("never sends the sign-in when authn cannot be reached for that refusal", async () => {
-    const outcome = await probe("network", 8_000);
-    expect(openTokens()).toEqual([HOST_TOKEN]);
-    expect(outcome).toEqual({
-      kind: "error",
-      message:
-        "the host closed the connection before authorization was confirmed",
-    });
+  it("opens with the sign-in when authn cannot be reached for that refusal", async () => {
+    const outcome = await probe("network", 20_000);
+    const tokens = openTokens();
+    const firstSignIn = tokens.indexOf(SIGN_IN);
+    expect(outcome).toEqual({ kind: "active", minted: true });
+    expect(tokens[0]).toBe(HOST_TOKEN);
+    expect(firstSignIn).toBeGreaterThan(0);
+    expect(tokens[firstSignIn + 1]).toBe(HOST_TOKEN);
+    expect(tokens[tokens.length - 1]).toBe(SIGN_IN);
+    expect(provisionFrames()).toHaveLength(1);
+  }, 30_000);
+
+  it("opens with the sign-in when authn has no row, and still sends hostCredentialProvision", async () => {
+    const outcome = await probe("missing", 20_000);
+    const tokens = openTokens();
+    expect(outcome).toEqual({ kind: "active", minted: true });
+    expect(tokens[0]).toBe(NO_HOST_TOKEN_PROBE);
+    const signInAt = tokens.indexOf(SIGN_IN);
+    expect(signInAt).toBeGreaterThan(0);
+    expect(
+      tokens.every(
+        (token) => token === NO_HOST_TOKEN_PROBE || token === SIGN_IN,
+      ),
+    ).toBe(true);
+    expect(provisionFrames()).toHaveLength(1);
+  }, 30_000);
+
+  it("sends the sign-in once when a current host names its refusal, then ends on the second 404", async () => {
+    const outcome = await probe("current", 20_000);
+    expect(outcome).toEqual({ kind: "mint-unavailable" });
+    expect(openTokens().filter((token) => token === SIGN_IN)).toEqual([
+      SIGN_IN,
+    ]);
+    expect(provisionFrames()).toEqual([]);
+  }, 30_000);
+
+  it("ends on the first 404 when authn says the computer is a team's", async () => {
+    const outcome = await probe("team-missing", 8_000);
+    expect(outcome).toEqual({ kind: "mint-unavailable" });
+    expect(openTokens()).not.toContain(SIGN_IN);
     expect(provisionFrames()).toEqual([]);
   }, 15_000);
 });
