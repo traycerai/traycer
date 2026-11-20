@@ -60,7 +60,9 @@ export function opensReleasedWay(
  * `doorReason`, not retryable. A current host always names its reason, so this
  * never matches one; the message text is never read.
  */
-export function isReleasedHostTokenRefusal(details: FatalErrorDetails): boolean {
+export function isReleasedHostTokenRefusal(
+  details: FatalErrorDetails,
+): boolean {
   return (
     details.code === "UNAUTHORIZED" &&
     hostDoorStateOfRefusal(details) === "older-host"

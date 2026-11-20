@@ -439,9 +439,9 @@ export class WsRpcClient<
         return await pending;
       } catch (cause) {
         if (cause instanceof HostRpcError && this.releasedRefusals.has(cause)) {
-          const signIn = await this.releasedSignOnFor?.(options.authority).catch(
-            () => null,
-          );
+          const signIn = await this.releasedSignOnFor?.(
+            options.authority,
+          ).catch(() => null);
           if (signIn === undefined || signIn === null) {
             if (cause.fatalDetails !== null)
               this.doorFor?.(options.authority.endpoint.hostId).refused(

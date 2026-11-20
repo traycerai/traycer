@@ -334,7 +334,9 @@ interface MonitorCredential {
   readonly onMintRefused: (listener: CliMintRefusalListener) => () => void;
   readonly hostCredentialMint: HostCredentialMintFlow | null;
   /** `null` for the agent session capability: a released host takes that one as it is. */
-  readonly releasedSignOn: (hostId: () => string | null) => ReleasedSignOn | null;
+  readonly releasedSignOn: (
+    hostId: () => string | null,
+  ) => ReleasedSignOn | null;
   /** `onRenewed` pushes a renewed token onto the open stream. */
   readonly startUpkeep: (
     hostId: () => string | null,
