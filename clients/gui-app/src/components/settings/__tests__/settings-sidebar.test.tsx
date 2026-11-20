@@ -10,6 +10,7 @@ import {
 } from "@/lib/settings-sections";
 import { setMobileApp } from "@/lib/mobile-app";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import {
   resetEnvironmentSectionReads,
   windowHostRunsPersonal,
@@ -1187,6 +1188,16 @@ describe("<SettingsSidebar /> Environment pick", () => {
     hostName: "Old laptop",
   } as const;
   const SECRETS_LIST = "environment.secrets.list";
+  /** The window's host list names the picked computer, as a listed one is. */
+  function listLocalPickHost(): void {
+    globalScopeOverrides.current = {
+      client: null,
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: LOCAL_PICK.hostId }),
+      ],
+    };
+  }
   const secretsHit = (): Element | null =>
     document.querySelector("[data-testid^='settings-search-result-secrets:']");
 
@@ -1216,6 +1227,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
   it("keeps MCP servers, Skills, Sandboxes and Storage visible under a Local pick, and hides Members", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
     recordNegotiatedHostMethods(LOCAL_PICK.hostId, [SECRETS_LIST]);
 
     await renderRail();
@@ -1235,6 +1247,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
   it("offers no Secrets row under a Local pick until its host serves the list, then offers it and keeps it", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
     await renderRail();
 
     expect(present("secrets")).toBe(false);
@@ -1249,6 +1262,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
   it("offers no Secrets row under a Local pick whose host answered without the list", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
     recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
 
     await renderRail();
@@ -1322,6 +1336,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
   it("offers a Secrets search result only where the pick's source serves the page", async () => {
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
     recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
     const router = buildRouter("/settings/general");
     render(
@@ -1348,6 +1363,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
   it("offers the phone's settings list no Secrets row under a Local pick whose host does not serve the list", async () => {
     setMobileApp(true);
     useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
     const router = buildVariantRouter(["/settings"], "mobile-list");
     render(
       <KeybindingProvider router={router}>

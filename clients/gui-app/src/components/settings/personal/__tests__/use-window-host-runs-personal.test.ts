@@ -76,7 +76,7 @@ describe("useWindowHostRunsPersonal", () => {
 
   it("leaves the cloud road for a host whose status names Personal as its principal", () => {
     reads.version = { major: 1, minor: 3 };
-    reads.data = environmentStatusFixture({ principal: { kind: "personal" } });
+    reads.data = environmentStatusFixture({});
 
     const { result } = renderHook(() =>
       useWindowHostRunsPersonal(hostScopeFixture({ host: HOST })),
