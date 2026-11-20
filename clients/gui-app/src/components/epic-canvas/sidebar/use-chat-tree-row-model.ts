@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import {
   flattenChatTreeRows,
   indexRowsByKey,
@@ -8,12 +8,6 @@ import {
   type ChatTreeRowModel,
   type FlattenChatTreeRowsInput,
 } from "@/components/epic-canvas/sidebar/chat-tree-rows";
-
-interface HeldModel {
-  /** The flatten the model was last built from. */
-  readonly source: readonly ChatTreeRow[];
-  readonly model: ChatTreeRowModel;
-}
 
 function nextModel(
   previous: ChatTreeRowModel,
@@ -28,6 +22,40 @@ function nextModel(
     rows,
     revision: previous.revision + 1,
     indexByKey: indexRowsByKey(rows),
+  };
+}
+
+interface RowModelCache {
+  readonly modelFor: (fresh: readonly ChatTreeRow[]) => ChatTreeRowModel;
+  readonly commit: (model: ChatTreeRowModel) => void;
+}
+
+/**
+ * Every model is built from the last COMMITTED model and the current flatten
+ * alone, so a render React throws away (a StrictMode re-run, an interrupted
+ * concurrent render) never changes what a committed render returns. A row
+ * object is reused only where its values equal the committed row of the same
+ * key, and the revision moves only when the key sequence differs from the
+ * committed one. The same flatten gets the same model, so a render run twice
+ * reads one model.
+ */
+function createRowModelCache(): RowModelCache {
+  let committed: ChatTreeRowModel | null = null;
+  let source: readonly ChatTreeRow[] | null = null;
+  let built: ChatTreeRowModel | null = null;
+  return {
+    modelFor: (fresh) => {
+      if (fresh === source && built !== null) return built;
+      built =
+        committed === null
+          ? { rows: fresh, revision: 0, indexByKey: indexRowsByKey(fresh) }
+          : nextModel(committed, fresh);
+      source = fresh;
+      return built;
+    },
+    commit: (model) => {
+      committed = model;
+    },
   };
 }
 
@@ -72,22 +100,10 @@ export function useChatTreeRowModel(
       clock,
     ],
   );
-  const [held, setHeld] = useState<HeldModel>(() => ({
-    source: fresh,
-    model: {
-      rows: fresh,
-      revision: 0,
-      indexByKey: indexRowsByKey(fresh),
-    },
-  }));
-  // Derived from the previous render's model, so it is updated during render
-  // (React re-runs this component at once, before committing anything). It is
-  // stored only when the rows differ: an input rebuilt with the same content
-  // on every render must not re-render this forever.
-  if (held.source !== fresh) {
-    const model = nextModel(held.model, fresh);
-    if (model !== held.model) setHeld({ source: fresh, model });
-    return model;
-  }
-  return held.model;
+  const [cache] = useState(createRowModelCache);
+  const model = cache.modelFor(fresh);
+  useLayoutEffect(() => {
+    cache.commit(model);
+  }, [cache, model]);
+  return model;
 }
