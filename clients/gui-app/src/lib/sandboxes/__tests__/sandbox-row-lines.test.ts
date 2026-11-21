@@ -857,11 +857,13 @@ describe("sandboxTodayCost", () => {
   });
 
   it("uses today's ledger total for a size that grows across a day rollover", () => {
+    // Grown to 4/8: two hours at its current rate would read `$0.53 so far`.
+    const twoHoursMs = 2 * 60 * 60_000;
     const growing = sandboxSummaryFixture({
       state: "awake",
       grows: { cpus: 16, memoryMb: 65_536 },
       priceMcPerHour: {
-        awakeMc: 135,
+        awakeMc: 263,
         suspendedMc: 7,
         stoppedMc: 7,
         offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
@@ -869,7 +871,7 @@ describe("sandboxTodayCost", () => {
     });
     const ledger: SandboxCost = {
       sandboxId: "sbx-1",
-      currentRateMillicreditsPerHour: 135,
+      currentRateMillicreditsPerHour: 263,
       state: "awake",
       frozen: false,
       charged: {
@@ -884,21 +886,28 @@ describe("sandboxTodayCost", () => {
       history: [],
     };
 
-    expect(sandboxTodayCost(growing, ledger, 0)).toBe("under $0.01 so far");
-    expect(sandboxTodayCost(growing, null, 0)).toBeNull();
+    expect(sandboxTodayCost(growing, ledger, twoHoursMs)).toBe(
+      "under $0.01 so far",
+    );
+    expect(sandboxTodayCost(growing, null, twoHoursMs)).toBeNull();
     expect(
-      sandboxTodayCost(growing, { ...ledger, todayMillicredits: 3 }, 0),
+      sandboxTodayCost(
+        growing,
+        { ...ledger, todayMillicredits: 3 },
+        twoHoursMs,
+      ),
     ).toBe("under $0.01 so far");
   });
 });
 
 describe("sandboxShapeAndCostLine", () => {
   it("shows a growing size's full range in the row", () => {
+    // Grown to 4/8: the range still starts at the start's rate.
     const summary = sandboxSummaryFixture({
       state: "awake",
       grows: { cpus: 16, memoryMb: 65_536 },
       priceMcPerHour: {
-        awakeMc: 135,
+        awakeMc: 263,
         suspendedMc: 7,
         stoppedMc: 7,
         offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
@@ -1246,7 +1255,7 @@ describe("team credits in the resource line", () => {
       state: "awake",
       grows: { cpus: 16, memoryMb: 65_536 },
       priceMcPerHour: {
-        awakeMc: 135,
+        awakeMc: 263,
         suspendedMc: 7,
         stoppedMc: 7,
         offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },

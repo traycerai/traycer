@@ -946,7 +946,11 @@ describe("useStagedSandboxSend's line after a refusal", () => {
       });
       mount(vi.fn());
 
-      expect(refusalButtons()).not.toContain("Choose a smaller shape");
+      expect(refusalButtons()).toEqual([
+        "Add credits ↗",
+        "Use This computer",
+        "Cancel the message",
+      ]);
     });
 
     it("offers Choose a smaller shape on a 4/8 start when the balance covers 2/4", () => {
@@ -968,7 +972,12 @@ describe("useStagedSandboxSend's line after a refusal", () => {
       });
       mount(vi.fn());
 
-      expect(refusalButtons()).toContain("Choose a smaller shape");
+      expect(refusalButtons()).toEqual([
+        "Add credits ↗",
+        "Choose a smaller shape",
+        "Use This computer",
+        "Cancel the message",
+      ]);
     });
   });
 

@@ -828,7 +828,6 @@ describe("useSandboxStaging New rows", () => {
     expect(composer.newRows[0]?.subLine).toBe(
       "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour while awake · uses your credits",
     );
-    expect(composer.newRows[0]?.subLine).not.toContain("1 vCPU · 1 GB");
     act(() => {
       composer.onPickNew("personal");
     });

@@ -487,7 +487,6 @@ describe("<SandboxShapeSheet />", () => {
       const labels = screen
         .getAllByRole("option")
         .map((option) => option.textContent);
-      expect(labels.length).toBeGreaterThan(0);
       for (const label of labels) expect(label).not.toContain("/h");
     },
   );

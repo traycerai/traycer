@@ -163,8 +163,9 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
       const growing = {
         ...base.sandbox,
         grows: { cpus: 16, memoryMb: 65_536 },
+        // Last awake at 4/8; the range still starts at the start's rate.
         priceMcPerHour: {
-          awakeMc: 135,
+          awakeMc: 263,
           suspendedMc: 7,
           stoppedMc: 7,
           offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },

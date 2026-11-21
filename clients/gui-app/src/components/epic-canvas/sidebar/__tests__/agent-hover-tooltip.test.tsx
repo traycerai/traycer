@@ -702,7 +702,7 @@ describe("AgentHoverTooltip host section", () => {
       sandboxRow({
         grows: { cpus: 16, memoryMb: 65_536 },
         priceMcPerHour: {
-          awakeMc: 135,
+          awakeMc: 263,
           suspendedMc: 7,
           stoppedMc: 7,
           offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },

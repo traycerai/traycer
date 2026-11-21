@@ -388,7 +388,7 @@ describe("team cost view", () => {
     );
 
     expect(screen.getByTestId("sandbox-card-shape").textContent).toBe(
-      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · 50 GB disk",
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · 30 GB disk",
     );
   });
 
