@@ -282,7 +282,10 @@ function providerGrows(provider: SandboxCatalogueProvider): boolean {
   return provider.shapes?.some((rung) => rung.grows !== undefined) ?? false;
 }
 
-/** The form's disk in MB, or why it is outside the provider's bounds. */
+/**
+ * The form's disk in MB, or why it is outside the provider's bounds. A blank
+ * field reads as 0, which every catalogue's positive minimum refuses.
+ */
 function diskOfForm(
   form: ShapeForm,
   provider: SandboxCatalogueProvider,
@@ -290,7 +293,6 @@ function diskOfForm(
   const diskGb = Number(form.diskGb);
   const diskMb = diskGb * MB_PER_GIB;
   if (
-    form.diskGb.trim().length === 0 ||
     !Number.isInteger(diskGb) ||
     diskMb < provider.shape.diskMinMb ||
     diskMb > provider.shape.diskMaxMb

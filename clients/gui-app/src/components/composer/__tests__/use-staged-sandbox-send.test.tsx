@@ -1063,12 +1063,14 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
   it.each([
     {
       size: "fixed",
+      state: "suspended" as const,
       row: { priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 } },
       line: "$0.21",
     },
     {
       // A 2/4 start on the 50 GB default disk, last awake at 4/8.
       size: "grown",
+      state: "suspended" as const,
       row: {
         cpus: 2,
         memoryMb: 4_096,
@@ -1085,8 +1087,8 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
     },
   ])(
     "prices a resting sandbox of a $size size from its list row, exactly",
-    ({ row, line }) => {
-      mocks.sandboxes = [sandboxSummaryFixture({ id: "sbx-1", ...row })];
+    ({ row, line, state }) => {
+      mocks.sandboxes = [sandboxSummaryFixture({ id: "sbx-1", state, ...row })];
       stageExisting();
       mount(vi.fn());
 

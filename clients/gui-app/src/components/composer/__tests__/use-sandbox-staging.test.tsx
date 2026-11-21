@@ -2028,7 +2028,7 @@ describe("useSandboxStaging In this task, agent sandboxes the task's hosts omit"
 describe("useSandboxStaging a staged resting sandbox's block", () => {
   const PRICED = { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 };
 
-  /** A 2/4 start on the 50 GB default disk, last awake at 4/8. */
+  /** A 2/4 start at 50 GB, last awake at 4/8. */
   const GROWN: Parameters<typeof sandboxSummaryFixture>[0] = {
     cpus: 2,
     memoryMb: 4_096,

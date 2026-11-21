@@ -164,7 +164,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
         ...base.sandbox,
         diskMb: 51_200,
         grows: { cpus: 16, memoryMb: 65_536 },
-        // Last awake at 4/8; the range still starts at the start's rate.
+        // Last awake at 4/8; the range starts at the 2/4 quote.
         priceMcPerHour: {
           awakeMc: 263,
           suspendedMc: 7,

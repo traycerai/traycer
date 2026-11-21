@@ -1,10 +1,25 @@
 import type {
   SandboxCatalogue,
+  SandboxSummary,
   SandboxShapeRung,
 } from "@traycer/protocol/host/sandbox-control";
 
 const GIB = 1024;
 const GROWS_TO = { cpus: 16, memoryMb: 64 * GIB } as const;
+
+export const AUTO_SIZING_GROWING_SUMMARY_OVERRIDES: Partial<SandboxSummary> = {
+  cpus: 2,
+  memoryMb: 4 * GIB,
+  diskMb: 50 * GIB,
+  grows: GROWS_TO,
+  priceMcPerHour: {
+    // A 2/4 start, last awake at 4/8.
+    awakeMc: 263,
+    suspendedMc: 7,
+    stoppedMc: 7,
+    offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+  },
+};
 
 export const AUTO_SIZING_RUNGS: readonly SandboxShapeRung[] = [
   {

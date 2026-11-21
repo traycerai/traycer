@@ -18,6 +18,7 @@ import { SANDBOX_LIST_FAILED } from "@/lib/sandboxes/sandbox-strings";
 import { getDetailsProvider } from "@/lib/settings-details-entry";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { beginEnvironmentCloudOperation } from "@/hooks/environment/use-environment-cloud";
+import { AUTO_SIZING_GROWING_SUMMARY_OVERRIDES } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 
 const NOW = 1_791_100_000_000;
 
@@ -133,9 +134,7 @@ describe("sandboxDetailsEntry", () => {
   it("shows a growing size in the Details Shape row", () => {
     const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
-        cpus: 2,
-        memoryMb: 4_096,
-        grows: { cpus: 16, memoryMb: 65_536 },
+        ...AUTO_SIZING_GROWING_SUMMARY_OVERRIDES,
       }),
       cost: null,
       wakeString: null,
@@ -546,12 +545,10 @@ describe("the Settings Details drawer's sandbox provider", () => {
 
   it("shows the state, growing size and server region label in the status summary", async () => {
     const summary = sandboxSummaryFixture({
+      ...AUTO_SIZING_GROWING_SUMMARY_OVERRIDES,
       id: "sbx-1",
       region: "us-west-3",
       regionLabel: "United States (West)",
-      cpus: 2,
-      memoryMb: 4_096,
-      grows: { cpus: 16, memoryMb: 65_536 },
     });
     const queryClient = await listedOnce([{ sandboxes: [summary] }], "u-me");
 
