@@ -359,8 +359,14 @@ export type HostProfileSyncFetchResponse = z.infer<
   typeof hostProfileSyncFetchResponseSchema
 >;
 
-/** The most computers one linked group names; past it the group never opens. */
+/** The most holder folders one linked group names; past it the group never
+ * opens. */
 export const PROFILE_SYNC_MAX_GROUP_HOLDERS = 32;
+
+/** The most link ids a groupHolders walk carries as visited; a group of 32
+ * holder folders cannot reach it in practice, and past it the walk is
+ * incomplete. */
+export const PROFILE_SYNC_MAX_GROUP_LINKS = 256;
 
 const stopClaimIdSchema = lazySchema(() => z.string().uuid());
 
@@ -371,9 +377,11 @@ const stopClaimIdSchema = lazySchema(() => z.string().uuid());
  * hands its copy to the keeper with `handoff` and keeps it; the keeper alone
  * commits once it holds every member's copy, and `status` asks it whether it
  * has. Only then does a member erase, against the keeper's `receipt`, and
- * send `closed`. `abort` drops a claim that did not commit. Every step is a
- * direct call between two computers of the claim: `linkId` is the receiver's
- * own link, which finds its folder. Each step is answered from what the
+ * send `closed`. `abort` drops a claim that did not commit. A member is a
+ * folder: one computer can hold two folders of the chain, each its own
+ * member. Every step is a direct call between two computers of the claim:
+ * `linkId` is the receiver's own link, which finds its folder, and the
+ * member steps name the sender's folder by `profileId`. Each step is answered from what the
  * receiver persisted, so each is safe to send again. A host that predates
  * this method refuses it, which is how the caller learns the peer is on
  * 1.5.4.
@@ -388,21 +396,33 @@ export const hostProfileSyncStopLinkRequestSchema = lazySchema(() =>
         claimId: stopClaimIdSchema,
         claimantHostId: profileSyncHostIdSchema,
         keeperHostId: profileSyncHostIdSchema,
-        /** Every updated holder of the group, the keeper and the receiver
-         * included, each with a link it has for the folder. */
+        /** The keeper's folder on `keeperHostId`. */
+        keeperProfileId: profileSyncSourceProfileIdSchema,
+        /** Every updated holder folder of the group, the keeper and the
+         * receiver included, each with a link it has for the folder; unique
+         * by `hostId` and `profileId`. */
         members: z
           .array(
             z.strictObject({
               hostId: profileSyncHostIdSchema,
+              profileId: profileSyncSourceProfileIdSchema,
               linkId: linkIdSchema,
             }),
           )
           .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
+        /** The one 1.5.4 computer the keeper hands over to once every member
+         * closed, and through which it passes a late copy on; null when the
+         * group has none. */
+        gatewayHostId: profileSyncHostIdSchema.nullable(),
       }),
-      /** `credential` null: the giver holds no sign-in the wire carries. */
+      /** `credential` null: the giver holds no sign-in of the chain the wire
+       * carries. `profileId`, here and on `status` and `closed`: the
+       * sender's folder, which with the sender's host names its member
+       * entry. */
       z.strictObject({
         kind: z.literal("handoff"),
         claimId: stopClaimIdSchema,
+        profileId: profileSyncSourceProfileIdSchema,
         accountId: accountIdSchema,
         generation: generationSchema,
         credential: profileSyncCredentialSchemaV10.nullable(),
@@ -410,10 +430,12 @@ export const hostProfileSyncStopLinkRequestSchema = lazySchema(() =>
       z.strictObject({
         kind: z.literal("status"),
         claimId: stopClaimIdSchema,
+        profileId: profileSyncSourceProfileIdSchema,
       }),
       z.strictObject({
         kind: z.literal("closed"),
         claimId: stopClaimIdSchema,
+        profileId: profileSyncSourceProfileIdSchema,
         generation: generationSchema,
       }),
       z.strictObject({
@@ -481,8 +503,9 @@ export type HostProfileSyncStopLinkResponse = z.infer<
 
 /**
  * Which computers share a linked folder's chain, asked over the caller's own
- * link. The answering host asks each of its own linked peers not already in
- * `visited`, over its own link, so every hop is between two recorded peers.
+ * link. `visited`: the link ids the walk has already asked over or is asking
+ * over. The answering folder asks over each of its own group links of the
+ * asked link's pin that is not in it, passing it on with its own links added.
  * `onward` false asks about the asked link alone: the answering host asks no
  * one, so a check of a link between two computers already visited never
  * walks on. A host without this method (1.5.4) refuses it.
@@ -491,9 +514,7 @@ export const hostProfileSyncGroupHoldersRequestSchema = lazySchema(() =>
   z.strictObject({
     linkId: linkIdSchema,
     providerId: profileSyncProviderSchema,
-    visited: z
-      .array(profileSyncHostIdSchema)
-      .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
+    visited: z.array(linkIdSchema).max(PROFILE_SYNC_MAX_GROUP_LINKS),
     onward: z.boolean().default(true),
   }),
 );
@@ -504,13 +525,16 @@ export type HostProfileSyncGroupHoldersRequest = z.infer<
 /**
  * One updated computer of the group, as the walk reached it. `linkId`: the
  * link it was reached over, the same id at both ends, so a direct call can
- * name its folder. `oldPeers`: its own links, pinned like the walked chain, to
- * computers that refuse this method. `terminal`: its own folder shares the
- * chain with its Terminal account.
+ * name its folder. `profileId`: the answering folder's own id; a computer
+ * holding two folders of the chain is two holders. `oldPeers`: its own links,
+ * pinned like the walked chain, to computers that refuse this method.
+ * `terminal`: its folder is the computer's own Terminal account; a managed
+ * folder that received from one is not.
  */
 export const profileSyncGroupHolderSchema = lazySchema(() =>
   z.strictObject({
     hostId: profileSyncHostIdSchema,
+    profileId: profileSyncSourceProfileIdSchema,
     linkId: linkIdSchema,
     oldPeers: z
       .array(profileSyncHostIdSchema)
@@ -534,7 +558,8 @@ export type ProfileSyncGroupHolder = z.infer<
  * as the asker binds its own end; null when that end pins no account.
  * `split`: the links the answer covers whose two ends pin different accounts.
  * `mixed`: some folder the answer covers pins its group links to more than
- * one account. Each defaults to its empty value when absent.
+ * one account. `twoFolders`: some computer the answer covers holds more than
+ * one folder of the chain. Each defaults to its empty value when absent.
  */
 export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
   z.strictObject({
@@ -553,6 +578,7 @@ export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
       .max(PROFILE_SYNC_MAX_GROUP_HOLDERS * PROFILE_SYNC_MAX_GROUP_HOLDERS)
       .default([]),
     mixed: z.boolean().default(false),
+    twoFolders: z.boolean().default(false),
   }),
 );
 export type HostProfileSyncGroupHoldersResponse = z.infer<
