@@ -65,6 +65,10 @@ import {
   providersPreviewProfileMoveV10,
 } from "./profile-move-schemas";
 import {
+  providersSyncLinksListV10,
+  providersSyncLinksStopV10,
+} from "./sync-links-schemas";
+import {
   defineDowngradePath,
   defineFloorAwareVersionedRpcRegistry,
   defineRpcContract,
@@ -13656,6 +13660,32 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersCommitProfileMoveV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.syncLinks.list": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSyncLinksListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.syncLinks.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSyncLinksStopV10,
           upgradeFromPreviousVersion: null,
         },
       },

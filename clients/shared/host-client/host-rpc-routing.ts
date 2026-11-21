@@ -767,6 +767,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "providers.startLogin": "target-host",
   "providers.startTerminalLogin": "target-host",
   "providers.submitLoginCode": "target-host",
+  "providers.syncLinks.list": "target-host",
+  "providers.syncLinks.stop": "target-host",
   "providers.touchLogin": "target-host",
   "providers.usePackVersion": "target-host",
   "resources.kill": "target-host",
