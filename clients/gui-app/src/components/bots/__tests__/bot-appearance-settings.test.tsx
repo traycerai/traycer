@@ -139,6 +139,22 @@ function botRow(appearance: BotAppearance): BotDirectoryRecord {
 }
 
 /**
+ * The icon the host stores for a requested one: a picture keeps the mascot
+ * shape the bot held beside it.
+ */
+function storedMark(
+  held: BotAppearance["mark"],
+  requested: BotUpdateAppearanceRequest["mark"],
+): BotAppearance["mark"] {
+  if (requested === undefined) return held;
+  if (requested === null || requested.kind !== "picture") return requested;
+  let kept: BotMascotShape | null = null;
+  if (held?.kind === "mascot") kept = held.shape;
+  else if (held?.kind === "picture") kept = held.mascotShape;
+  return { ...requested, mascotShape: kept };
+}
+
+/**
  * What the host stores when `request` is applied to `appearance`: a cleared
  * colour is the colour the bot was created with, which the host keeps.
  */
@@ -148,7 +164,7 @@ function applied(
 ): BotAppearance {
   const created = appearance.createdColor ?? null;
   return {
-    mark: request.mark === undefined ? appearance.mark : request.mark,
+    mark: storedMark(appearance.mark, request.mark),
     createdColor: created,
     color:
       request.color === undefined

@@ -1,6 +1,7 @@
 import { createContext, use } from "react";
 import { isBotColorHex } from "@traycer/protocol/host/bot/colors";
 import type {
+  BotAppearanceMark,
   BotAppearance,
   BotListResponse,
 } from "@traycer/protocol/host/bot/schemas";
@@ -78,10 +79,31 @@ function withChosen(
   held: BotAppearance | null,
   chosen: BotLookChange,
 ): BotAppearance {
-  const look = { ...(held ?? NO_LOOK), ...chosen };
+  const { mark, ...rest } = chosen;
+  const kept = { ...(held ?? NO_LOOK), ...rest };
+  const look: BotAppearance =
+    mark === undefined ? kept : { ...kept, mark: drawnMark(held, mark) };
   return chosen.color === null
     ? { ...look, color: creationColorOf(held) }
     : look;
+}
+
+/**
+ * A chosen mark as a look carries it: a picture keeps the mascot shape the
+ * bot held, which is what the host stores beside it.
+ */
+function drawnMark(
+  held: BotAppearance | null,
+  mark: BotAppearanceMark | null,
+): BotAppearance["mark"] {
+  if (mark === null || mark.kind !== "picture") return mark;
+  const before = held?.mark ?? null;
+  if (before === null) return { ...mark, mascotShape: null };
+  if (before.kind === "mascot") return { ...mark, mascotShape: before.shape };
+  return {
+    ...mark,
+    mascotShape: before.kind === "picture" ? before.mascotShape : null,
+  };
 }
 
 /** The directory's own row, so an unchanged directory selects the same value. */

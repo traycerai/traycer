@@ -904,6 +904,12 @@ function chosenShape(
   mark: BotAppearance["mark"],
 ): MascotShape {
   if (mark === null) return own;
+  if (mark.kind === "picture") {
+    // Drawn while the picture is not held: the shape kept beside it. A look
+    // read at an equal method version arrives unparsed, so it is checked.
+    const kept: unknown = mark.mascotShape;
+    return MASCOT_SHAPES.find((drawn) => drawn === kept) ?? own;
+  }
   if (mark.kind !== "mascot") return DEFAULT_MASCOT_SHAPE;
   return isDrawn(mark.shape) ? mark.shape : own;
 }

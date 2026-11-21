@@ -1,4 +1,5 @@
 import {
+  useState,
   useSyncExternalStore,
   type CSSProperties,
   type ReactElement,
@@ -17,6 +18,7 @@ import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import { TracyGlyph } from "@/components/bots/tracy-glyph";
 import {
   BotMascotFrame,
+  BotPictureFrame,
   type IdentityAvatarSize,
 } from "@/components/bots/bot-mascot-frame";
 import {
@@ -31,6 +33,7 @@ import {
   useBotActivityForHost,
 } from "@/hooks/bots/use-bot-activity";
 import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
+import { useBotPictureLink } from "@/hooks/bots/use-bot-picture";
 
 /**
  * Who a picture is of, in a bot's channel and everywhere a bot appears:
@@ -103,6 +106,22 @@ function BotIdentityAvatar(props: {
   const look = useBotLook(botId);
   const main = useBotIsMain(botId);
   const beat = useWorkingBeat(expression === "working");
+  const picture = useBotPictureLink(botId, look);
+  // The link whose picture could not be drawn: the mascot stands in for it,
+  // and a new link is tried afresh.
+  const [undrawn, setUndrawn] = useState<string | null>(null);
+  if (picture !== null && picture !== undrawn) {
+    return (
+      <BotPictureFrame
+        src={picture}
+        expression={expression}
+        dimmed={beat % 2 === 1}
+        size={size}
+        testId={testId}
+        onError={() => setUndrawn(picture)}
+      />
+    );
+  }
   return (
     <BotMascotFrame
       mascot={botMascot(botId, look, main)}

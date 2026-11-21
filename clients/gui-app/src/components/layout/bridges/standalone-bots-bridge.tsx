@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotPictureLoads } from "@/hooks/bots/use-bot-picture";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
@@ -67,6 +68,13 @@ export function StandaloneBotsBridge(): null {
       }),
     [environmentData, botData],
   );
+  const reachability = useHostReachability(hostKey);
+  useBotPictureLoads(
+    client,
+    useHostMethodSupport(hostId, "bot.readPicture") === true,
+    reachability.status === "reachable",
+    botData === undefined ? null : model,
+  );
   // A signed-out viewer never reads the environments, and has no feed to name.
   const listsSettled =
     (environments.isFetched || viewerUserId.length === 0) && bots.isFetched;
@@ -78,7 +86,6 @@ export function StandaloneBotsBridge(): null {
   const setups = teamSetups.setups;
   const readsSettled =
     hostId === null || support === false || (supported && teamSetups.settled);
-  const reachability = useHostReachability(hostKey);
   const directoryWait = useBoundedHostLoad({
     hostId: hostKey,
     hostLabel: null,

@@ -1,7 +1,9 @@
 import type { ReactElement } from "react";
 import { Avatar } from "@/components/ui/avatar";
+import { cn } from "@/lib/utils";
 import {
   drawMascotMark,
+  type MascotExpression,
   type MascotLook,
   type MascotMarkSize,
   type MascotPose,
@@ -35,6 +37,48 @@ export function BotMascotFrame(props: {
       data-identity="bot"
     >
       <MascotMarkSvg mascot={mascot} pose={pose} size={MASCOT_SIZE[size]} />
+    </Avatar>
+  );
+}
+
+/**
+ * A picture a bot wears in place of its mascot, cropped to the bot's box.
+ * It has no eyes to say what the bot is doing, so the whole picture does:
+ * grey and faded while the bot is away, and fading on every other beat while
+ * it works. The beat stays on its first for a person who asks for reduced
+ * motion, which holds the picture still.
+ */
+export function BotPictureFrame(props: {
+  readonly src: string;
+  readonly expression: MascotExpression;
+  /** Whether a working bot's picture is on its faded beat. */
+  readonly dimmed: boolean;
+  readonly size: IdentityAvatarSize;
+  readonly testId: string;
+  /** Told when the picture cannot be drawn, so the caller draws the mascot. */
+  readonly onError: () => void;
+}): ReactElement {
+  const { src, expression, dimmed, size, testId, onError } = props;
+  return (
+    <Avatar
+      shape="squircle"
+      size={size}
+      data-testid={testId}
+      data-identity="bot"
+      data-expression={expression}
+    >
+      <img
+        src={src}
+        alt=""
+        draggable={false}
+        data-slot="bot-picture"
+        onError={onError}
+        className={cn(
+          "size-full object-cover motion-safe:transition-opacity motion-safe:duration-500 [clip-path:var(--avatar-clip)]",
+          expression === "away" && "opacity-55 grayscale",
+          expression === "working" && dimmed && "opacity-55",
+        )}
+      />
     </Avatar>
   );
 }

@@ -1,9 +1,16 @@
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
+import {
+  botPictureLink,
+  keepBotPictures,
+  nextWantedBotPicture,
+  settleBotPictureRead,
+  wantBotPicture,
+} from "@/lib/bots/bot-picture-cache";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -608,6 +615,53 @@ describe("<EpicSessionLifecycleBridge />", () => {
     expect(useSandboxDetailsStore.getState().sandboxId).toBeNull();
     expect(useSandboxesPageStore.getState().requestedConfiguration).toBeNull();
   });
+
+  it.each([
+    [
+      "user-switch",
+      () => {
+        resetAuth("signed-in", "bob@example.com", "user-bob");
+      },
+    ],
+    [
+      "sign-out",
+      () => {
+        resetAuth("signed-out", null, null);
+      },
+    ],
+  ])(
+    "drops every held bot picture and revokes its link on %s",
+    (_name, change) => {
+      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:alice-picture");
+      const revoke = vi
+        .spyOn(URL, "revokeObjectURL")
+        .mockImplementation(() => undefined);
+      const hash = "d".repeat(64);
+      keepBotPictures(new Map([["bot_alice", hash]]));
+      const withdraw = wantBotPicture(hash, "bot_alice");
+      const read = nextWantedBotPicture();
+      if (read === null) throw new Error("no picture is wanted");
+      settleBotPictureRead(read, {
+        mediaType: "image/png",
+        bytesBase64: "AAAA",
+      });
+      withdraw();
+      render(
+        <EpicSessionLifecycleBridge>
+          <div />
+        </EpicSessionLifecycleBridge>,
+      );
+      expect(botPictureLink(hash)).toBe("blob:alice-picture");
+
+      act(() => {
+        change();
+      });
+
+      expect(botPictureLink(hash)).toBeNull();
+      expect(revoke).toHaveBeenCalledWith("blob:alice-picture");
+      vi.restoreAllMocks();
+    },
+  );
 
   it("drops the shared watch-host pick on sign-out", () => {
     useWatchHostStore.getState().setScopedHostId("host-owned-by-alice");

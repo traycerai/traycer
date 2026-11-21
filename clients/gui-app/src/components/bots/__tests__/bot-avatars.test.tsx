@@ -10,16 +10,28 @@
  * `env_personal`, and the team main bots of `env_team_a` and `env_team_s`.
  */
 import type { ReactElement } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BOT_APPEARANCE_UNRECOGNISED,
   BOT_UNRECOGNISED_MARK,
   type BotAppearance,
   type BotDirectoryRecord,
+  type BotMascotShape,
   type BotListResponse,
 } from "@traycer/protocol/host/bot/schemas";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
+import {
+  clearBotPictures,
+  nextWantedBotPicture,
+  settleBotPictureRead,
+} from "@/lib/bots/bot-picture-cache";
 import {
   DEFAULT_MASCOT_RAMP,
   DEFAULT_MASCOT_SHAPE,
@@ -28,6 +40,8 @@ import {
   botMascot,
   drawMascotMark,
   mascotRampOf,
+  ownMascotShape,
+  type MascotExpression,
   type MascotPose,
 } from "@/lib/bots/mascot-mark";
 import {
@@ -795,5 +809,231 @@ describe("a bot's picture while it works", () => {
       pathsOf(TEAM_S_MAIN_BOT_ID, null, { expression: "away", beat: 0 }),
     );
     expect(away.paths).not.toEqual(idle.paths);
+  });
+});
+
+describe("a bot's picture when it wears an uploaded one", () => {
+  const BOT_ID = TEAM_S_MAIN_BOT_ID;
+  const HASH = "c".repeat(64);
+  const PNG = { mediaType: "image/png", bytesBase64: "AAAA" };
+
+  function wearing(
+    mascotShape: BotMascotShape | null,
+    expression: MascotExpression,
+  ): ReactElement {
+    return wearingHash(HASH, mascotShape, expression);
+  }
+
+  function wearingHash(
+    sha256: string,
+    mascotShape: BotMascotShape | null,
+    expression: MascotExpression,
+  ): ReactElement {
+    const look: BotAppearance = {
+      mark: { kind: "picture", sha256, mascotShape },
+      color: null,
+    };
+    return (
+      <BotLooksContext
+        value={botLooksOf({ bots: [botRow(BOT_ID, look)], mainBotIds: null })}
+      >
+        <InBotContext title="Team Tracy">
+          <ExpressiveBotAvatar size="sm" expression={expression} />
+        </InBotContext>
+      </BotLooksContext>
+    );
+  }
+
+  /** Settles the read the drawn picture asked for, as the loader would. */
+  const settleWith = (answer: {
+    readonly mediaType: unknown;
+    readonly bytesBase64: unknown;
+  }): void => {
+    const read = nextWantedBotPicture();
+    if (read === null) throw new Error("no picture is wanted");
+    act(() => {
+      settleBotPictureRead(read, answer);
+    });
+  };
+  const holdPicture = (): void => {
+    settleWith(PNG);
+  };
+  const picture = (): HTMLElement =>
+    screen
+      .getByTestId("bot-avatar")
+      .querySelector<HTMLElement>('[data-slot="bot-picture"]') ??
+    screen.getByTestId("no picture drawn");
+  const drawsPicture = (): boolean =>
+    screen
+      .getByTestId("bot-avatar")
+      .querySelector('[data-slot="bot-picture"]') !== null;
+
+  beforeEach(() => {
+    let made = 0;
+    vi.spyOn(URL, "createObjectURL").mockImplementation(
+      () => `blob:picture-${String((made += 1))}`,
+    );
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    clearBotPictures();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("draws the picture in the squircle once its link is held, with no mascot", () => {
+    render(wearing("cat", "idle"));
+    holdPicture();
+
+    expect(picture().getAttribute("src")).toBe("blob:picture-1");
+    const avatar = screen.getByTestId("bot-avatar");
+    expect(avatarShape(avatar)).toBe("squircle");
+    expect(avatar.querySelector('[data-slot="bot-mascot"]')).toBeNull();
+  });
+
+  it("draws the mascot with the shape kept beside the picture until its link is held, then the picture", () => {
+    expect(ownMascotShape(BOT_ID)).not.toBe("cat");
+    render(wearing("cat", "idle"));
+
+    expect(drawsPicture()).toBe(false);
+    expect(drawn()[0].paths).toEqual(
+      drawMascotMark(
+        { ...botMascot(BOT_ID, null, false), shape: "cat" },
+        24,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.path),
+    );
+    holdPicture();
+
+    expect(drawsPicture()).toBe(true);
+  });
+
+  it("draws the mascot in the picture's place when the picture cannot be drawn, and draws a new link for the same bot afresh", () => {
+    const { rerender } = render(wearing("cat", "idle"));
+    holdPicture();
+    expect(drawsPicture()).toBe(true);
+
+    fireEvent.error(picture());
+
+    expect(drawsPicture()).toBe(false);
+    expect(
+      screen
+        .getByTestId("bot-avatar")
+        .querySelector('[data-slot="bot-mascot"]'),
+    ).not.toBeNull();
+
+    rerender(wearingHash("d".repeat(64), "cat", "idle"));
+    holdPicture();
+
+    expect(picture().getAttribute("src")).toBe("blob:picture-2");
+  });
+
+  it("fades the picture with a transition and duration only for a person who has not asked for reduced motion", () => {
+    render(wearing(null, "idle"));
+    holdPicture();
+    const classes = [...picture().classList];
+
+    expect(classes).toContain("motion-safe:transition-opacity");
+    expect(classes).toContain("motion-safe:duration-500");
+    expect(
+      classes.filter(
+        (name) => name.startsWith("transition") || name.startsWith("duration-"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps the mascot when the answer that was read is no picture, drawing the shape kept beside it", () => {
+    render(wearing("cat", "idle"));
+
+    settleWith({ mediaType: "text/html", bytesBase64: "AAAA" });
+
+    expect(drawsPicture()).toBe(false);
+    expect(drawn()[0].paths).toEqual(
+      drawMascotMark(
+        { ...botMascot(BOT_ID, null, false), shape: "cat" },
+        24,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.path),
+    );
+  });
+
+  it("draws the bot's own shape, not the default one, when the picture keeps none", () => {
+    expect(ownMascotShape(BOT_ID)).not.toBe(DEFAULT_MASCOT_SHAPE);
+    render(wearing(null, "idle"));
+
+    expect(drawn()[0].paths).toEqual(pathsOf(BOT_ID, null, MASCOT_AT_REST));
+    expect(drawn()[0].paths).not.toEqual(
+      drawMascotMark(
+        { ...botMascot(BOT_ID, null, false), shape: DEFAULT_MASCOT_SHAPE },
+        24,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.path),
+    );
+  });
+
+  it("greys and fades the picture while the bot is away, and not while it is idle", () => {
+    render(wearing(null, "idle"));
+    holdPicture();
+    expect(picture().classList.contains("grayscale")).toBe(false);
+    expect(picture().classList.contains("opacity-55")).toBe(false);
+    cleanup();
+
+    // The unmount withdrew the want and dropped the link, so it is read again.
+    render(wearing(null, "away"));
+    holdPicture();
+
+    expect(picture().classList.contains("grayscale")).toBe(true);
+    expect(picture().classList.contains("opacity-55")).toBe(true);
+  });
+
+  /** The narrow stub of the reduced-motion preference the clock reads. */
+  function stubReducedMotion(reduced: boolean): void {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: reduced && query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  }
+
+  it("fades the picture on every other beat while the bot works, and never greys it", () => {
+    vi.useFakeTimers();
+    stubReducedMotion(false);
+    render(wearing(null, "working"));
+    holdPicture();
+    const faded = (): boolean => picture().classList.contains("opacity-55");
+
+    expect(faded()).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(faded()).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(faded()).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(faded()).toBe(true);
+    expect(picture().classList.contains("grayscale")).toBe(false);
+  });
+
+  it("holds the picture still, with no timer running, for a person who asked for reduced motion", () => {
+    vi.useFakeTimers();
+    stubReducedMotion(true);
+    render(wearing(null, "working"));
+    holdPicture();
+
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(picture().classList.contains("opacity-55")).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
