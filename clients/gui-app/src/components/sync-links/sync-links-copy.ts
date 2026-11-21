@@ -40,31 +40,19 @@ export function askMoveDetail(names: readonly string[]): string {
     : "Move all to Personal: they keep working on every computer. Each computer moves too.";
 }
 
-export function askStopDetail(names: readonly string[]): string {
-  return names.length === 1
-    ? `Stop syncing: they stay on this computer. ${atSentenceStart(names[0])} signs in again.`
-    : "Stop syncing: they stay on this computer. The others sign in again.";
-}
-
 /**
- * The Stop line when a linked computer is still on 1.5.4: this computer gives
- * up its copy, and the computers on 1.5.4 keep theirs (I6).
+ * The Stop line. Stop only ends the sync and removes nothing on any computer;
+ * an account that renews may later need a sign-in on one of them. Two
+ * computers read "both"; three or more read "every".
  */
-export function askStopDetailPeerNeedsUpdate(
-  namesNeedingUpdate: readonly string[],
+export function askStopDetail(
+  holdsRenewingAccount: boolean,
+  peerCount: number,
 ): string {
-  return `Stop syncing: they stay on ${joinComputerNames(namesNeedingUpdate)}. This computer signs in again.`;
-}
-
-/**
- * The Stop line when two or more linked computers of one account are still
- * on 1.5.4 (board 11). Held: its words wait for a ruling, so only this
- * changes when it comes.
- */
-export function askStopDetailPeersNeedUpdate(
-  namesNeedingUpdate: readonly string[],
-): string {
-  return `Stop syncing: they stay on ${joinComputerNames(namesNeedingUpdate)}. This computer signs in again.`;
+  const computers = peerCount === 1 ? "both computers" : "every computer";
+  return holdsRenewingAccount
+    ? `Stop syncing: they stay on ${computers}. One of them may need to sign in again later.`
+    : `Stop syncing: they keep working on ${computers}.`;
 }
 
 export function peerNeedsUpdateText(name: string): string {
@@ -87,9 +75,3 @@ function atSentenceStart(name: string | undefined): string {
   if (name === UNNAMED_PEER_NAME) return "Another computer";
   return name ?? "";
 }
-
-/**
- * The Sign in button on an account this computer gave up when Stop syncing
- * was pressed (board 6). Every other signed-out row keeps "Sign in".
- */
-export const SIGN_IN_AGAIN_AFTER_STOP_TEXT = "Sign in again";
