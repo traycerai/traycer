@@ -7,10 +7,12 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ExternalToast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -144,6 +146,8 @@ function mountAsk(input: {
   readonly teamComputer: boolean;
   readonly folders: readonly SyncLinksFolder[];
   readonly negotiateList: boolean;
+  readonly listAfterFirst?: SyncLinksListResponse;
+  readonly stopError?: HostRpcError;
 }): AskReads & { rerender: () => void } {
   const reads: AskReads = {
     listCalls: 0,
@@ -156,10 +160,14 @@ function mountAsk(input: {
   const handlers: MockHandlerMap<HostRpcRegistry> = {
     "providers.syncLinks.list": () => {
       reads.listCalls += 1;
+      if (reads.listCalls > 1 && input.listAfterFirst !== undefined) {
+        return input.listAfterFirst;
+      }
       return reads.listAnswer;
     },
     "providers.syncLinks.stop": (request) => {
       reads.stopRequests.push(request);
+      if (input.stopError !== undefined) throw input.stopError;
       const accounts = reads.listAnswer.folders.map((folder) => ({
         providerId: folder.providerId,
         profileId: folder.profileId,
@@ -300,9 +308,18 @@ describe("<SyncLinksAskController />", () => {
   });
 
   it("Stop syncing sends one stop and the ask goes after the list is read again", async () => {
+    const held: SyncLinksFolder = {
+      providerId: "grok",
+      profileId: "22222222-2222-4222-8222-222222222222",
+      label: "Studio",
+      accountClass: "renewing",
+      hold: "held-for-personal",
+      peers: [PEER],
+    };
+    const [claude, codex] = linkedFolders();
     const reads = mountAsk({
       teamComputer: false,
-      folders: linkedFolders(),
+      folders: [claude, held, codex],
       negotiateList: true,
     });
     await openAsk();
@@ -312,11 +329,79 @@ describe("<SyncLinksAskController />", () => {
     fireEvent.click(screen.getByRole("button", { name: STOP }));
 
     await waitFor(() => expect(reads.listCalls).toBeGreaterThan(listed));
-    expect(reads.stopRequests).toEqual([{ scope: { kind: "all" } }]);
+    expect(reads.stopRequests).toEqual([
+      {
+        scope: {
+          kind: "folders",
+          folders: [
+            { providerId: "claude-code", profileId: "ambient" },
+            { providerId: "codex", profileId: WORK_PROFILE_ID },
+          ],
+        },
+      },
+    ]);
     await waitFor(() =>
       expect(screen.queryByRole("heading", { name: DIALOG_TITLE })).toBeNull(),
     );
     expect(toastMock).toHaveBeenCalledTimes(toasts);
+  });
+
+  it("a changed list reloads the dialog and shows no refusal line", async () => {
+    const message = "Sync links changed";
+    const [claude, codex] = linkedFolders();
+    const reads = mountAsk({
+      teamComputer: false,
+      folders: [claude, codex],
+      negotiateList: true,
+      listAfterFirst: { teamComputer: false, folders: [codex] },
+      stopError: new HostRpcError({
+        code: "sync-links-changed",
+        message,
+        requestId: "r",
+        method: "providers.syncLinks.stop",
+        fatalDetails: null,
+      }),
+    });
+    await openAsk();
+    const listed = reads.listCalls;
+
+    fireEvent.click(screen.getByRole("button", { name: STOP }));
+
+    await waitFor(() => expect(reads.listCalls).toBeGreaterThan(listed));
+    expect(screen.getByRole("heading", { name: DIALOG_TITLE })).toBeTruthy();
+    expect(screen.getByText(CODEX_ROW)).toBeTruthy();
+    expect(screen.queryByText(CLAUDE_ROW)).toBeNull();
+    expect(screen.queryByText(message)).toBeNull();
+    expect(within(screen.getByRole("dialog")).queryByRole("status")).toBeNull();
+  });
+
+  it("any other refusal stays in the dialog as a status line", async () => {
+    const message = "Stop could not be saved";
+    const [claude, codex] = linkedFolders();
+    const reads = mountAsk({
+      teamComputer: false,
+      folders: [claude, codex],
+      negotiateList: true,
+      listAfterFirst: { teamComputer: false, folders: [codex] },
+      stopError: new HostRpcError({
+        code: "RPC_ERROR",
+        message,
+        requestId: "r",
+        method: "providers.syncLinks.stop",
+        fatalDetails: null,
+      }),
+    });
+    await openAsk();
+    const listed = reads.listCalls;
+
+    fireEvent.click(screen.getByRole("button", { name: STOP }));
+
+    await waitFor(() => expect(reads.listCalls).toBeGreaterThan(listed));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("status").textContent).toBe(message);
+    expect(screen.getByRole("heading", { name: DIALOG_TITLE })).toBeTruthy();
+    expect(screen.getByText(CODEX_ROW)).toBeTruthy();
+    expect(screen.queryByText(CLAUDE_ROW)).toBeNull();
   });
 
   it("Move both to Personal opens this computer's move sheet and closes the ask", async () => {

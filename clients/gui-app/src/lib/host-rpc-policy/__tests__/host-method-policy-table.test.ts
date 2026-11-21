@@ -131,6 +131,7 @@ const EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS = [
   "host.profileSync.fetchCredential",
   "host.profileSync.groupHolders",
   "host.profileSync.offerCredential",
+  "host.profileSync.stopLink",
   "providers.profileSync.acceptAccount",
   "providers.profileSync.overview",
   "providers.profileSync.setKeepInSync",

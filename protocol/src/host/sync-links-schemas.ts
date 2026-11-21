@@ -88,14 +88,25 @@ export const syncLinksListResponseSchema = lazySchema(() =>
 );
 export type SyncLinksListResponse = z.infer<typeof syncLinksListResponseSchema>;
 
+/**
+ * The folders the ask showed, exactly. The host refuses the whole request,
+ * changing nothing, when any of them is not listed now or is already
+ * stopping.
+ */
 export const syncLinksStopRequestSchema = lazySchema(() =>
   z.strictObject({
     scope: z.discriminatedUnion("kind", [
-      z.strictObject({ kind: z.literal("all") }),
       z.strictObject({
-        kind: z.literal("folder"),
-        providerId: syncLinksProviderIdSchema,
-        profileId: syncLinksProfileIdSchema,
+        kind: z.literal("folders"),
+        folders: z
+          .array(
+            z.strictObject({
+              providerId: syncLinksProviderIdSchema,
+              profileId: syncLinksProfileIdSchema,
+            }),
+          )
+          .min(1)
+          .max(PROFILE_SYNC_MAX_PROFILES),
       }),
     ]),
   }),
@@ -109,8 +120,12 @@ export const syncLinksStopResponseSchema = lazySchema(() =>
         z.strictObject({
           providerId: syncLinksProviderIdSchema,
           profileId: syncLinksProfileIdSchema,
-          /** `kept`: it keeps working here. `gave-up-copy`: it reads "Sign in again" here. */
-          outcome: z.enum(["kept", "gave-up-copy"]),
+          /**
+           * `kept`: it keeps working here. `gave-up-copy`: it reads "Sign in
+           * again" here. `waiting-for-peer`: a linked computer has not
+           * answered yet, so the account keeps syncing with it until it does.
+           */
+          outcome: z.enum(["kept", "gave-up-copy", "waiting-for-peer"]),
         }),
       )
       .max(PROFILE_SYNC_MAX_PROFILES),

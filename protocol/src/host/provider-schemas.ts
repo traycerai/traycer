@@ -1727,8 +1727,8 @@ const providerProfileProjectionSchemaV1010 = lazySchema(() =>
  * Read projection: a future row is one disabled, explained row, never a lost
  * inventory.
  *
- * The four 10.11 keys live only here, so mutation echoes and released lines never carry them; each
- * falls back at its own field.
+ * The four 10.11 keys and `syncStop` live only here, so mutation echoes and released lines never
+ * carry them; each falls back at its own field.
  */
 export const providerProfileProjectionSchema = lazySchema(() =>
   providerProfileProjectionObjectSchemaV1010
@@ -1743,6 +1743,9 @@ export const providerProfileProjectionSchema = lazySchema(() =>
       terminalOnThisComputer: z.boolean().optional().catch(undefined),
       // Empty once a person has chosen one (`providers.answerProfileName`).
       otherNames: z.array(z.string().min(1)).optional().catch(undefined),
+      // This computer gave up its renewing copy when syncing with a linked computer stopped, and the
+      // account is not signed in here; a sign-in clears it. Absent from an older host reads as none.
+      syncStop: z.enum(["gave-up-copy"]).nullable().optional().catch(undefined),
     })
     .catch((context) => unreadableProjectedProfile(context.input)),
 );

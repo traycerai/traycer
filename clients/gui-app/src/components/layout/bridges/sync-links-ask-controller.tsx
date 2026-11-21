@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { SyncLinksFolder } from "@traycer/protocol/host/sync-links-schemas";
 import { ActionToastContent } from "@/components/layout/bridges/action-toast-content";
 import {
@@ -8,6 +9,7 @@ import {
   useSurfaceReadiness,
   windowNarratorOwns,
 } from "@/components/layout/host-readiness-controller-context";
+import type { ConfigurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import { useThisComputer } from "@/components/settings/move/this-computer";
 import { useMoveAskHoldsAnnouncements } from "@/components/settings/move/use-move-ask-holds-announcements";
 import { SyncLinksAskDialog } from "@/components/sync-links/sync-links-ask-dialog";
@@ -77,6 +79,17 @@ function useAskGates(): {
 }
 
 /**
+ * What a failed Stop shows in the modal. `sync-links-changed` (a named folder
+ * is no longer listed, or is already stopping) shows nothing: the settled
+ * Stop re-reads the list, and the modal re-renders with the folders that are
+ * still there. Every other failure says what the host said.
+ */
+function stopFailureIssue(error: HostRpcError | null): ConfigurationWriteIssue {
+  if (error === null || error.code === "sync-links-changed") return null;
+  return { kind: "refused", line: error.message };
+}
+
+/**
  * Asks, on a computer a 1.5.4 "Sync profiles" linked to others, whether to
  * move the linked accounts into Personal or stop syncing them (design D5,
  * canvas sync-links-ask). The toast is shown the way the session-import
@@ -142,6 +155,10 @@ export function SyncLinksAskController(): ReactNode {
         description: null,
         duration: Infinity,
         cancel: null,
+        // Board 1 offers only "Choose…": an unanswered ask is not closed or
+        // swiped away, so the app Toaster's close button is turned off here.
+        closeButton: false,
+        dismissible: false,
       },
     );
   }, [title, toastShown]);
@@ -159,12 +176,20 @@ export function SyncLinksAskController(): ReactNode {
       folders={folders}
       teamComputer={teamComputer}
       stopPending={stop.isPending}
-      stopIssue={
-        stop.isError ? { kind: "refused", line: stop.error.message } : null
-      }
+      stopIssue={stopFailureIssue(stop.error)}
       onStop={() => {
+        // Exactly the folders this dialog shows: the host refuses a request
+        // naming any folder it no longer lists.
         stop.mutate(
-          { scope: { kind: "all" } },
+          {
+            scope: {
+              kind: "folders",
+              folders: folders.map(({ providerId, profileId }) => ({
+                providerId,
+                profileId,
+              })),
+            },
+          },
           {
             onSuccess: () => {
               setDialogOpen(false);
