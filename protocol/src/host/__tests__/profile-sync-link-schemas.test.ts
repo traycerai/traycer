@@ -298,202 +298,61 @@ describe("released peer-transfer credential slots", () => {
   });
 });
 
-const CLAIM_ID = "22222222-2222-4222-8222-222222222222";
-const MEMBER_LINK_ID = "33333333-3333-4333-8333-333333333333";
 const PROFILE_ID = "44444444-4444-4444-8444-444444444444";
-const member = (index: number, profileId: string): Record<string, unknown> => ({
-  hostId: `host-${index}`,
-  profileId,
-  linkId: MEMBER_LINK_ID,
-});
-const MANY_MEMBERS = Array.from({ length: 33 }, (_, index) =>
-  member(index, PROFILE_ID),
-);
 
-const PREPARE = {
-  kind: "prepare",
-  claimId: CLAIM_ID,
-  claimantHostId: "host-a",
-  keeperHostId: "host-b",
-  keeperProfileId: PROFILE_ID,
-  gatewayHostId: "host-c",
-  members: [member(1, PROFILE_ID), member(2, "ambient")],
-};
+const stopRequest = {
+  linkId: LINK_ID,
+  providerId: "codex",
+} as const;
 
-const STOP_STEPS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
-  ["prepare", PREPARE],
-  [
-    "handoff",
-    {
-      kind: "handoff",
-      claimId: CLAIM_ID,
-      profileId: PROFILE_ID,
-      accountId: "acct",
-      generation: 4,
-      credential: CREDENTIALS["codex"],
-    },
-  ],
-  ["status", { kind: "status", claimId: CLAIM_ID, profileId: "ambient" }],
-  [
-    "closed",
-    { kind: "closed", claimId: CLAIM_ID, profileId: PROFILE_ID, generation: 4 },
-  ],
-  ["abort", { kind: "abort", claimId: CLAIM_ID }],
-  ["leave", { kind: "leave" }],
-];
-
-const STOP_RESPONSES: ReadonlyArray<
-  readonly [string, Record<string, unknown>]
-> = [
-  ["prepared", { result: "prepared" }],
-  ["no-chain", { result: "no-chain" }],
-  ["converted", { result: "converted" }],
-  ["held", { result: "held", claimId: CLAIM_ID, claimantHostId: "host-a" }],
-  ["committed", { result: "committed" }],
-  ["unknown", { result: "unknown" }],
-  ["receipt", { result: "receipt", generation: 4, held: "renewing" }],
-  ["closed", { result: "closed" }],
-  ["ok", { result: "ok" }],
-  ["refused", { result: "refused", reason: "removed-on-device" }],
-];
-
-function stopRequest(step: Record<string, unknown>): Record<string, unknown> {
-  return { linkId: LINK_ID, providerId: "codex", step };
-}
-
-const parsesRequest = (request: Record<string, unknown>): boolean =>
-  hostProfileSyncStopLinkRequestSchema.safeParse(request).success;
-const parsesResponse = (response: Record<string, unknown>): boolean =>
-  hostProfileSyncStopLinkResponseSchema.safeParse(response).success;
-
-describe("stopLink one-keeper steps", () => {
-  it.each(STOP_STEPS)("round-trips the %s step", (_name, step) => {
-    const request = stopRequest(step);
-    expect(hostProfileSyncStopLinkRequestSchema.parse(request)).toEqual(
-      request,
+describe("stopLink", () => {
+  it("round-trips the one-step request and its answers", () => {
+    expect(hostProfileSyncStopLinkRequestSchema.parse(stopRequest)).toEqual(
+      stopRequest,
     );
+    for (const response of [
+      { result: "ended" },
+      { result: "refused", reason: "removed-on-device" },
+    ]) {
+      expect(hostProfileSyncStopLinkResponseSchema.parse(response)).toEqual(
+        response,
+      );
+    }
   });
 
-  it("refuses a request without linkId, a claim step, a cross step and a prepare with an extra key", () => {
-    // The receiver's own link is named by every request.
-    expect(parsesRequest(stopRequest(PREPARE))).toBe(true);
-    expect(parsesRequest({ providerId: "codex", step: PREPARE })).toBe(false);
-    const claim = {
-      kind: "claim",
-      claimId: CLAIM_ID,
-      claimantHostId: "host-a",
-      root: "host-a",
-      uplink: "root",
-      visited: ["host-a"],
-    };
-    const cross = { kind: "cross", claimId: CLAIM_ID, root: "host-a" };
-    expect(
-      [claim, cross].map((step) => parsesRequest(stopRequest(step))),
-    ).toEqual([false, false]);
-    expect(
-      parsesRequest(stopRequest({ ...PREPARE, visited: ["host-a"] })),
-    ).toBe(false);
+  it("refuses a request without linkId and any retired step", () => {
+    const parses = (request: Record<string, unknown>): boolean =>
+      hostProfileSyncStopLinkRequestSchema.safeParse(request).success;
+    expect(parses({ providerId: "codex" })).toBe(false);
+    for (const step of [
+      { kind: "leave" },
+      { kind: "status", claimId: LINK_ID, profileId: "ambient" },
+      { kind: "claim", claimId: LINK_ID },
+    ]) {
+      expect(parses({ ...stopRequest, step })).toBe(false);
+    }
   });
 
-  it("refuses a leave step that carries a claimId", () => {
-    expect(parsesRequest(stopRequest({ kind: "leave" }))).toBe(true);
-    expect(
-      parsesRequest(stopRequest({ kind: "leave", claimId: CLAIM_ID })),
-    ).toBe(false);
-  });
-
-  it.each(STOP_RESPONSES)("round-trips the %s response", (_name, response) => {
-    expect(hostProfileSyncStopLinkResponseSchema.parse(response)).toEqual(
-      response,
-    );
-  });
-
-  it("refuses the old stance response and a prepared answer carrying acks", () => {
-    expect(parsesResponse({ result: "prepared" })).toBe(true);
-    expect(
-      parsesResponse({
-        result: "stance",
-        stance: { kind: "converted" },
-      }),
-    ).toBe(false);
-    expect(parsesResponse({ result: "prepared", acks: [] })).toBe(false);
-  });
-
-  it("accepts 32 members and refuses 33 or one without a linkId", () => {
-    expect(
-      parsesRequest(
-        stopRequest({ ...PREPARE, members: MANY_MEMBERS.slice(0, 32) }),
-      ),
-    ).toBe(true);
-    expect(
-      parsesRequest(stopRequest({ ...PREPARE, members: MANY_MEMBERS })),
-    ).toBe(false);
-    expect(
-      parsesRequest(
-        stopRequest({ ...PREPARE, members: [{ hostId: "host-1" }] }),
-      ),
-    ).toBe(false);
-  });
-
-  it("round-trips a prepare whose gateway is null", () => {
-    const request = stopRequest({ ...PREPARE, gatewayHostId: null });
-    expect(hostProfileSyncStopLinkRequestSchema.parse(request)).toEqual(
-      request,
-    );
-  });
-
-  it("refuses a prepare without keeperProfileId or without gatewayHostId", () => {
-    const { keeperProfileId: _keeper, ...withoutKeeper } = PREPARE;
-    const { gatewayHostId: _gateway, ...withoutGateway } = PREPARE;
-    expect(parsesRequest(stopRequest(PREPARE))).toBe(true);
-    expect(parsesRequest(stopRequest(withoutKeeper))).toBe(false);
-    expect(parsesRequest(stopRequest(withoutGateway))).toBe(false);
-    expect(
-      parsesRequest(stopRequest({ ...PREPARE, keeperProfileId: "folder" })),
-    ).toBe(false);
-  });
-
-  it("refuses a member without a profileId, or one that is neither a uuid nor ambient", () => {
-    const { profileId: _profile, ...withoutProfile } = member(1, PROFILE_ID);
-    expect(
-      parsesRequest(stopRequest({ ...PREPARE, members: [member(1, "ambient")] })),
-    ).toBe(true);
-    expect(
-      parsesRequest(stopRequest({ ...PREPARE, members: [withoutProfile] })),
-    ).toBe(false);
-    expect(
-      parsesRequest(
-        stopRequest({ ...PREPARE, members: [member(1, "folder-1")] }),
-      ),
-    ).toBe(false);
-  });
-
-  it.each(["handoff", "status", "closed"])(
-    "refuses a %s step without the sender's profileId, or with one that is neither a uuid nor ambient",
-    (kind) => {
-      const step = STOP_STEPS.find(([name]) => name === kind)?.[1];
-      if (step === undefined) throw new Error(`no ${kind} step`);
-      const { profileId: _profile, ...without } = step;
-      expect(parsesRequest(stopRequest(step))).toBe(true);
-      expect(parsesRequest(stopRequest(without))).toBe(false);
-      expect(
-        parsesRequest(stopRequest({ ...step, profileId: "folder-1" })),
-      ).toBe(false);
-    },
-  );
-
-  it("keeps the answer literals out of the link reasons", () => {
-    // `link.reason` is read by 1.5.4 with this enum.
-    for (const literal of [
-      "converted",
+  it("refuses the retired answers", () => {
+    for (const result of [
+      "prepared",
+      "no-chain",
       "held",
       "committed",
-      "no-chain",
-      "prepared",
       "unknown",
+      "receipt",
+      "closed",
+      "ok",
     ]) {
-      expect(profileSyncReasonSchema.options).not.toContain(literal);
+      expect(
+        hostProfileSyncStopLinkResponseSchema.safeParse({ result }).success,
+      ).toBe(false);
     }
+  });
+
+  it("keeps the ended answer out of the link reasons", () => {
+    // `link.reason` is read by 1.5.4 with this enum.
+    expect(profileSyncReasonSchema.options).not.toContain("ended");
   });
 });
 

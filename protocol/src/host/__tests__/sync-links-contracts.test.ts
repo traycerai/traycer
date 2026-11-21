@@ -226,7 +226,7 @@ describe("providers.syncLinks.stop schema", () => {
     ).toBe(false);
   });
 
-  it("parses kept and gave-up-copy outcomes", () => {
+  it("parses the kept outcome and refuses the retired ones", () => {
     const response = {
       accounts: [
         {
@@ -234,13 +234,17 @@ describe("providers.syncLinks.stop schema", () => {
           profileId: CLAUDE_PROFILE,
           outcome: "kept" as const,
         },
-        {
-          providerId: "codex" as const,
-          profileId: CODEX_PROFILE,
-          outcome: "gave-up-copy" as const,
-        },
       ],
     };
     expect(stopContract.responseSchema.parse(response)).toEqual(response);
+    for (const outcome of ["gave-up-copy", "waiting-for-peer"]) {
+      expect(
+        stopContract.responseSchema.safeParse({
+          accounts: [
+            { providerId: "codex", profileId: CODEX_PROFILE, outcome },
+          ],
+        }).success,
+      ).toBe(false);
+    }
   });
 });
