@@ -142,6 +142,17 @@ export type HostTokenStateSink = (
   kind: HostDoorStateKind,
 ) => void;
 
+// A token is held and past its end: one the host refused as expired reads the
+// same as the stream's recovery reads it, never as no token at all.
+function holdsExpiredToken(
+  tokens: TrackedHostTokens,
+  userId: string,
+  hostId: string,
+): boolean {
+  const held = tokens.current(userId, hostId);
+  return held !== null && !isUsableHostToken(held, Date.now());
+}
+
 function stateOfFailedMint(
   outcome: Exclude<HostTokenMintOutcome, { readonly kind: "ok" }>,
   heldTokenExpired: boolean,
@@ -172,7 +183,10 @@ export function hostTokenBearer(
           if (outcome.kind === "ok") return;
           if (heldWhileAuthnUnreachable(tokens, userId, hostId) !== null)
             return;
-          const state = stateOfFailedMint(outcome, false);
+          const state = stateOfFailedMint(
+            outcome,
+            holdsExpiredToken(tokens, userId, hostId),
+          );
           if (state !== null) onState(hostId, state);
         },
         () => undefined,
@@ -216,7 +230,10 @@ export function hostTokenBearerFor(
       outcome.kind !== "ok" &&
       heldWhileAuthnUnreachable(tokens, userId, hostId) === null
     ) {
-      const state = stateOfFailedMint(outcome, false);
+      const state = stateOfFailedMint(
+        outcome,
+        holdsExpiredToken(tokens, userId, hostId),
+      );
       if (state !== null) onState(hostId, state);
       return null;
     }

@@ -1925,6 +1925,11 @@ class StreamSession<
   private credentialSocketSequence = 0;
   private openFrameToken: string | null = null;
   /**
+   * The token the host holds for this connection: the open frame's, then the
+   * last `credentialUpdate`'s. A refusal of it names this token.
+   */
+  private presentedToken: string | null = null;
+  /**
    * The verdict this connection's `open` frame actually carried, or `undefined`
    * when it carried none (a client with no verdict source).
    *
@@ -2249,7 +2254,9 @@ class StreamSession<
     };
     if (!this.sendControlText(socket, frame)) {
       this.onSendFailure(socket);
+      return;
     }
+    this.presentedToken = token;
   }
 
   /**
@@ -2743,6 +2750,7 @@ class StreamSession<
       return;
     }
     this.openFrameToken = token;
+    this.presentedToken = liveBearer;
     const manifest = buildStreamManifest(
       this.config.registry,
       CLIENT_SERVED_STREAM_MAJORS,
@@ -3299,9 +3307,9 @@ class StreamSession<
       reason === "token_expired" &&
       this.releasedPlan === "host-token" &&
       !this.probing &&
-      this.openFrameToken !== null
+      this.presentedToken !== null
     )
-      released?.heldTokenRefused(this.openFrameToken);
+      released?.heldTokenRefused(this.presentedToken);
     // The probe carried no credential of the person's: a current host's answer
     // to it is not theirs to see. `owner_sign_in` is followed by the sign-in
     // only while no host-only token can be had; otherwise (a mint ended `ok`
@@ -4142,6 +4150,7 @@ class StreamSession<
     this.retractSession();
     this.activeSocket = null;
     this.openFrameToken = null;
+    this.presentedToken = null;
     this.openFrameHostId = null;
     this.supportsCredentialUpdate = false;
     // Reset with its siblings. Not currently reachable - the push is gated on
@@ -4209,6 +4218,7 @@ class StreamSession<
     this.retractSession();
     this.activeSocket = null;
     this.openFrameToken = null;
+    this.presentedToken = null;
     this.openFrameHostId = null;
     this.pendingBinaryEnvelope = null;
     if (socket === null) {
