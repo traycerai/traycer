@@ -2315,6 +2315,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A read of this computer's linked folders. Identical in-flight calls coalesce.
+  "providers.syncLinks.list": { ...LATEST_SCHEDULING, poll: null },
+  // A stop ends links and may give up a copy; an identical repeat must not coalesce.
+  "providers.syncLinks.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Profile eligibility is persisted provider configuration.
   "providers.setProfileEnabled": {
     mode: "fifo",
