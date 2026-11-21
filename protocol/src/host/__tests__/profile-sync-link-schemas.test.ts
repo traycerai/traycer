@@ -432,7 +432,7 @@ describe("stopLink one-keeper steps", () => {
   });
 });
 
-describe("groupHolders moving, stopping and pinned", () => {
+describe("groupHolders answers", () => {
   it("keeps the answering end's pinned link and refuses one that is not a link ref", () => {
     const answer = {
       holders: [],
@@ -451,33 +451,41 @@ describe("groupHolders moving, stopping and pinned", () => {
     ).toBe(false);
   });
 
-  it("defaults moving, stopping and pinned when absent and keeps them when given", () => {
+  it("defaults every flag, the split links and the pin when absent", () => {
+    const holder = {
+      hostId: "host-a",
+      linkId: LINK_ID,
+      oldPeers: [],
+      terminal: false,
+    };
     expect(
       hostProfileSyncGroupHoldersResponseSchema.parse({
-        holders: ["host-a"],
+        holders: [holder],
         complete: true,
         terminal: false,
-        converted: false,
       }),
     ).toEqual({
-      holders: ["host-a"],
+      holders: [holder],
       complete: true,
       terminal: false,
       converted: false,
       moving: false,
+      groupConverted: false,
       stopping: false,
       pinned: null,
+      split: [],
+      mixed: false,
     });
+  });
+
+  it("refuses a holder named by its host id alone", () => {
     expect(
-      hostProfileSyncGroupHoldersResponseSchema.parse({
+      hostProfileSyncGroupHoldersResponseSchema.safeParse({
         holders: ["host-a"],
         complete: true,
         terminal: false,
-        converted: false,
-        moving: true,
-        stopping: true,
-      }),
-    ).toMatchObject({ moving: true, stopping: true });
+      }).success,
+    ).toBe(false);
   });
 });
 
