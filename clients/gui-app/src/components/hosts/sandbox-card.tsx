@@ -447,9 +447,7 @@ function SandboxFacts(props: {
   return (
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-ui-xs">
       <dt className="text-muted-foreground">Size</dt>
-      <dd data-testid="sandbox-card-shape">
-        {formatShape(summary)}
-      </dd>
+      <dd data-testid="sandbox-card-shape">{formatShape(summary)}</dd>
       {regionLabel === null ? null : (
         <>
           <dt className="text-muted-foreground">Region</dt>

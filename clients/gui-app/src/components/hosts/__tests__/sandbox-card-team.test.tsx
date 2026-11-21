@@ -378,9 +378,7 @@ describe("team cost view", () => {
     );
     render(<SandboxCostsPanel sandbox={{ ...sandbox, teamOwned: true }} />);
 
-    expect(
-      screen.getByText("$0.14–$1.44 an hour while awake"),
-    ).toBeTruthy();
+    expect(screen.getByText("$0.14–$1.44 an hour while awake")).toBeTruthy();
   });
 
   it("shows the growing size and chosen disk on the team card", () => {

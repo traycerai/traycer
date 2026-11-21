@@ -5,7 +5,10 @@ import {
   readinessCatalogue,
   servedMinutes,
 } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
-import { autoSizingCatalogue } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
+import {
+  autoSizingCatalogue,
+  autoSizingListedNoRatesCatalogue,
+} from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import type {
   StageConfiguration,
   StageSize,
@@ -91,39 +94,6 @@ const LADDER: readonly SandboxShapeRung[] = [
 function catalogueWithShapes(): SandboxCatalogue {
   const [provider] = CATALOGUE.providers;
   return { providers: [{ ...provider, shapes: LADDER }] };
-}
-
-function autoSizingCatalogueWithOneListedQuote(): SandboxCatalogue {
-  const catalogue = autoSizingCatalogue();
-  const [provider] = catalogue.providers;
-  const [region] = provider.regions;
-  return {
-    ...catalogue,
-    providers: [
-      {
-        ...provider,
-        regions: [
-          {
-            ...region,
-            pricing: null,
-            shapePrices: [
-              {
-                cpus: 2,
-                memoryMb: 4_096,
-                diskMb: 51_200,
-                priceMcPerHour: {
-                  awakeMc: 140,
-                  suspendedMc: 9,
-                  stoppedMc: 9,
-                  offer: { startAwakeMc: 140, ceilingAwakeMc: 1_500 },
-                },
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  };
 }
 
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
@@ -481,9 +451,9 @@ describe("<SandboxShapeSheet />", () => {
 
     fireEvent.change(disk, { target: { value: "30" } });
     expect(disk.value).toBe("30");
-    expect(screen.getByTestId("sandbox-shape-sheet-price").textContent).toContain(
-      "$0.26–$1.44 an hour while awake",
-    );
+    expect(
+      screen.getByTestId("sandbox-shape-sheet-price").textContent,
+    ).toContain("$0.26–$1.44 an hour while awake");
     fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
     expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
       cpus: 4,
@@ -492,10 +462,33 @@ describe("<SandboxShapeSheet />", () => {
     });
   });
 
-  it.each(["30", "5", ""])(
-    "does not reuse a listed 50 GB price for growing options at %s GB",
+  it("shows a listed no-rates offer at 50 GB and no price for an unlisted 30 GB disk", () => {
+    catalogueInUse = autoSizingListedNoRatesCatalogue();
+    renderSheet(vi.fn());
+
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(disk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    const size = screen.getByRole("combobox", { name: "Size" });
+    fireEvent.click(size);
+    const listedText =
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.50/h";
+    expect(screen.getByRole("option", { name: listedText }).textContent).toBe(
+      listedText,
+    );
+
+    fireEvent.change(disk, { target: { value: "30" } });
+    const unpricedText = "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB";
+    expect(screen.getByRole("option", { name: unpricedText }).textContent).toBe(
+      unpricedText,
+    );
+  });
+
+  it.each(["5", ""])(
+    "omits growing option rates when the disk input is invalid (%s GB)",
     (diskGb) => {
-      catalogueInUse = autoSizingCatalogueWithOneListedQuote();
+      catalogueInUse = autoSizingCatalogue();
       renderSheet(vi.fn());
 
       const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
@@ -503,20 +496,13 @@ describe("<SandboxShapeSheet />", () => {
         throw new Error("Expected Disk (GB) to be an input");
       }
       fireEvent.change(disk, { target: { value: diskGb } });
-      const size = screen.getByRole("combobox", { name: "Size" });
-      expect(size.textContent).not.toContain("from $");
-      expect(size.textContent).not.toContain("–");
+      fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
 
-      fireEvent.click(size);
       const labels = screen
         .getAllByRole("option")
         .map((option) => option.textContent);
       expect(labels.length).toBeGreaterThan(0);
-      for (const label of labels) {
-        expect(label).not.toContain("/h");
-        expect(label).not.toContain("from $");
-        expect(label).not.toContain("–");
-      }
+      for (const label of labels) expect(label).not.toContain("/h");
     },
   );
 

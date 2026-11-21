@@ -220,9 +220,7 @@ describe("<SandboxDefaultsSection /> on a build with a server pool", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
 
     await waitFor(() => {
-      expect(
-        harness.paramsOf("environment.configuration.items.put"),
-      ).toEqual([
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
         {
           environmentId: "env-acme",
           kind: "sandbox_defaults",

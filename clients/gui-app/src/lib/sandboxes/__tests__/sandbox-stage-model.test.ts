@@ -3,6 +3,7 @@ import { READY_SENTENCE } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixt
 import {
   AUTO_SIZING_RUNGS,
   autoSizingCatalogue,
+  autoSizingListedNoRatesCatalogue,
 } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { describe, expect, it } from "vitest";
 import {
@@ -19,6 +20,7 @@ import {
   stageSmallestShape,
   stageSizeIsRung,
   type ConsequencesInput,
+  type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   sandboxCatalogueSchema,
@@ -760,7 +762,9 @@ const SERVED_LAUNCH_FORM = {
 describe("growing Linux starting sizes", () => {
   const catalogue = autoSizingCatalogue();
 
-  function catalogueWithRegion(region: SandboxCatalogueRegion): SandboxCatalogue {
+  function catalogueWithRegion(
+    region: SandboxCatalogueRegion,
+  ): SandboxCatalogue {
     const base = autoSizingCatalogue();
     const [provider] = base.providers;
     return {
@@ -800,7 +804,11 @@ describe("growing Linux starting sizes", () => {
   });
 
   it("keeps a remembered growing start at its chosen disk", () => {
-    const remembered = size(4, 8, 30);
+    const remembered: StageShape = {
+      ...size(4, 8, 30),
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: 10_080,
+    };
     expect(
       rememberedOrConfigurationStageShape(catalogue, remembered, null),
     ).toBe(remembered);
@@ -813,15 +821,18 @@ describe("growing Linux starting sizes", () => {
     [8, 32, 726],
     [16, 32, 1_028],
     [16, 64, 1_444],
-  ])("prices the %i/%i start and its 16/64 ceiling at 50 GB", (cpus, memory, start) => {
-    expect(stagePrice(catalogue, size(cpus, memory, 50))).toMatchObject({
-      awakeMcPerHour: start,
-      suspendedMcPerHour: 7,
-      stoppedMcPerHour: 7,
-      exact: true,
-      offer: { startAwakeMc: start, ceilingAwakeMc: 1_444 },
-    });
-  });
+  ])(
+    "prices the %i/%i start and its 16/64 ceiling at 50 GB",
+    (cpus, memory, start) => {
+      expect(stagePrice(catalogue, size(cpus, memory, 50))).toMatchObject({
+        awakeMcPerHour: start,
+        suspendedMcPerHour: 7,
+        stoppedMcPerHour: 7,
+        exact: true,
+        offer: { startAwakeMc: start, ceilingAwakeMc: 1_444 },
+      });
+    },
+  );
 
   it("uses the selected disk for both prices and matches the smallest start without disk", () => {
     const thirtyGb = size(4, 8, 30);
@@ -829,15 +840,18 @@ describe("growing Linux starting sizes", () => {
       awakeMcPerHour: 261,
       offer: { startAwakeMc: 261, ceilingAwakeMc: 1_442 },
     });
-    expect(
-      stagePrice(catalogue, size(2, 4, 200))?.offer,
-    ).toEqual({ startAwakeMc: 156, ceilingAwakeMc: 1_465 });
-    expect(
-      stageSmallestShape(catalogue, size(4, 8, 30)),
-    ).toEqual({ isStaged: false, awakeMcPerHour: 133 });
-    expect(
-      stageSmallestShape(catalogue, size(2, 4, 30)),
-    ).toEqual({ isStaged: true, awakeMcPerHour: 133 });
+    expect(stagePrice(catalogue, size(2, 4, 200))?.offer).toEqual({
+      startAwakeMc: 156,
+      ceilingAwakeMc: 1_465,
+    });
+    expect(stageSmallestShape(catalogue, size(4, 8, 30))).toEqual({
+      isStaged: false,
+      awakeMcPerHour: 133,
+    });
+    expect(stageSmallestShape(catalogue, size(2, 4, 30))).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 133,
+    });
   });
 
   it("uses the served offer at its listed disk and rates at an unlisted disk", () => {
@@ -879,28 +893,10 @@ describe("growing Linux starting sizes", () => {
   });
 
   it("uses an exact listed offer without unit rates and leaves an unlisted disk unpriced", () => {
-    const [provider] = catalogue.providers;
+    const listed = autoSizingListedNoRatesCatalogue();
+    const [provider] = listed.providers;
     const [region] = provider.regions;
     const offer = { startAwakeMc: 140, ceilingAwakeMc: 1_500 };
-    const listedPrice = {
-      awakeMc: 140,
-      suspendedMc: 9,
-      stoppedMc: 9,
-      offer,
-    };
-    const listedRegion = {
-      ...region,
-      pricing: null,
-      shapePrices: [
-        {
-          cpus: 2,
-          memoryMb: 4_096,
-          diskMb: 51_200,
-          priceMcPerHour: listedPrice,
-        },
-      ],
-    };
-    const listed = catalogueWithRegion(listedRegion);
 
     expect(stagePrice(listed, size(2, 4, 50))).toEqual({
       awakeMcPerHour: 140,
@@ -912,7 +908,7 @@ describe("growing Linux starting sizes", () => {
     expect(stagePrice(listed, size(2, 4, 30))).toBeNull();
     expect(
       stagePrice(
-        catalogueWithRegion({ ...listedRegion, shapePrices: undefined }),
+        catalogueWithRegion({ ...region, shapePrices: undefined }),
         size(2, 4, 50),
       ),
     ).toBeNull();

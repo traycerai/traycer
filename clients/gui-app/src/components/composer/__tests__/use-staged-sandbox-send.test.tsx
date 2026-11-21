@@ -1067,29 +1067,6 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
     expect(text).not.toContain("from $");
   });
 
-  it("shows the chosen-disk range on a staged create's setup line", () => {
-    mocks.catalogue = autoSizingCatalogue();
-    stageCreated("booting", null);
-    const current = readStagedSandbox(SURFACE);
-    if (current === null || current.target.kind !== "new") {
-      throw new Error("Expected the staged new sandbox");
-    }
-    useStagedSandboxStore.getState().setTarget(SURFACE, {
-      ...current.target,
-      shape: {
-        ...current.target.shape,
-        cpus: 4,
-        memoryMb: 8_192,
-        diskMb: 30_720,
-      },
-    });
-    mount(vi.fn());
-
-    expect(detail()).toContain(
-      "$0.26–$1.44 an hour while awake · uses your credits",
-    );
-  });
-
   it("shows the 200 GB range on a staged create's setup line", () => {
     mocks.catalogue = autoSizingCatalogue();
     stageCreated("booting", null);

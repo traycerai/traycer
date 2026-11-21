@@ -806,9 +806,7 @@ function rungLabel(
     cpus: rung.cpus,
     memoryMb: rung.memoryMb,
     diskMb:
-      rung.grows === undefined
-        ? rung.diskMb
-        : Number(form.diskGb) * MB_PER_GIB,
+      rung.grows === undefined ? rung.diskMb : Number(form.diskGb) * MB_PER_GIB,
   });
   if (price === null) return size;
   const label = shortAwakePriceLabel(price.awakeMcPerHour, price.offer);

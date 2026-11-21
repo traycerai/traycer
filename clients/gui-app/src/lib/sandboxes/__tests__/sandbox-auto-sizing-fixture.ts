@@ -7,12 +7,48 @@ const GIB = 1024;
 const GROWS_TO = { cpus: 16, memoryMb: 64 * GIB } as const;
 
 export const AUTO_SIZING_RUNGS: readonly SandboxShapeRung[] = [
-  { cpus: 2, memoryMb: 4 * GIB, diskMb: 50 * GIB, default: true, grows: GROWS_TO },
-  { cpus: 4, memoryMb: 8 * GIB, diskMb: 50 * GIB, default: false, grows: GROWS_TO },
-  { cpus: 8, memoryMb: 16 * GIB, diskMb: 50 * GIB, default: false, grows: GROWS_TO },
-  { cpus: 8, memoryMb: 32 * GIB, diskMb: 50 * GIB, default: false, grows: GROWS_TO },
-  { cpus: 16, memoryMb: 32 * GIB, diskMb: 50 * GIB, default: false, grows: GROWS_TO },
-  { cpus: 16, memoryMb: 64 * GIB, diskMb: 50 * GIB, default: false, grows: GROWS_TO },
+  {
+    cpus: 2,
+    memoryMb: 4 * GIB,
+    diskMb: 50 * GIB,
+    default: true,
+    grows: GROWS_TO,
+  },
+  {
+    cpus: 4,
+    memoryMb: 8 * GIB,
+    diskMb: 50 * GIB,
+    default: false,
+    grows: GROWS_TO,
+  },
+  {
+    cpus: 8,
+    memoryMb: 16 * GIB,
+    diskMb: 50 * GIB,
+    default: false,
+    grows: GROWS_TO,
+  },
+  {
+    cpus: 8,
+    memoryMb: 32 * GIB,
+    diskMb: 50 * GIB,
+    default: false,
+    grows: GROWS_TO,
+  },
+  {
+    cpus: 16,
+    memoryMb: 32 * GIB,
+    diskMb: 50 * GIB,
+    default: false,
+    grows: GROWS_TO,
+  },
+  {
+    cpus: 16,
+    memoryMb: 64 * GIB,
+    diskMb: 50 * GIB,
+    default: false,
+    grows: GROWS_TO,
+  },
 ];
 
 export function autoSizingCatalogue(): SandboxCatalogue {
@@ -61,3 +97,35 @@ export function autoSizingCatalogue(): SandboxCatalogue {
   };
 }
 
+export function autoSizingListedNoRatesCatalogue(): SandboxCatalogue {
+  const catalogue = autoSizingCatalogue();
+  const [provider] = catalogue.providers;
+  const [region] = provider.regions;
+  return {
+    ...catalogue,
+    providers: [
+      {
+        ...provider,
+        regions: [
+          {
+            ...region,
+            pricing: null,
+            shapePrices: [
+              {
+                cpus: 2,
+                memoryMb: 4_096,
+                diskMb: 51_200,
+                priceMcPerHour: {
+                  awakeMc: 140,
+                  suspendedMc: 9,
+                  stoppedMc: 9,
+                  offer: { startAwakeMc: 140, ceilingAwakeMc: 1_500 },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}

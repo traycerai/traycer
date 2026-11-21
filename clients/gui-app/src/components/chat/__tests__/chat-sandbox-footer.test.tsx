@@ -158,7 +158,8 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     "shows the offered range for an auto-sized sandbox that is %s",
     (state) => {
       const base = resting(state, { team: false });
-      if (base.kind !== "resting") throw new Error("Expected a resting sandbox");
+      if (base.kind !== "resting")
+        throw new Error("Expected a resting sandbox");
       const growing = {
         ...base.sandbox,
         grows: { cpus: 16, memoryMb: 65_536 },
@@ -169,7 +170,9 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
           offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
         },
       };
-      render(<ChatSandboxFooter line={lineOf({ ...base, sandbox: growing })} />);
+      render(
+        <ChatSandboxFooter line={lineOf({ ...base, sandbox: growing })} />,
+      );
 
       expect(document.body.textContent).toContain(
         "$0.14–$1.44 an hour while awake · uses your credits",

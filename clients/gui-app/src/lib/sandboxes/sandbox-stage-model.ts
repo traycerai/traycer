@@ -203,7 +203,11 @@ export function stageQuotedSize(
     if (rung === undefined) return null;
     if (rung.grows === undefined) {
       return {
-        shape: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: rung.diskMb },
+        shape: {
+          cpus: rung.cpus,
+          memoryMb: rung.memoryMb,
+          diskMb: rung.diskMb,
+        },
         exact: true,
         grows: null,
       };
@@ -595,7 +599,12 @@ export function stageSmallestShape(
   const selected = stageQuotedSize(provider, shape);
   if (minimum === null || selected === null) return null;
   if (selected.grows !== null) {
-    return growingSmallestShape(catalogue, shape, selected.shape, minimum.shape);
+    return growingSmallestShape(
+      catalogue,
+      shape,
+      selected.shape,
+      minimum.shape,
+    );
   }
   const exact = exactShapePrice(region, minimum.shape);
   if (
