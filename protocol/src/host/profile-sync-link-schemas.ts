@@ -496,29 +496,57 @@ export type HostProfileSyncGroupHoldersRequest = z.infer<
 >;
 
 /**
- * `holders`: every computer the answering host reached through the group, its
- * own linked peers included. `complete`: every one of them answered. `terminal`:
- * some computer in the group shares the chain with its Terminal account.
- * `converted`: the answering host's own folder has converted too; absent from
- * a host that predates it. `moving`: some computer the answer covers is
- * converting or has converted. `stopping`: some computer the answer covers is
- * under a Stop claim. Both are absent from a host that predates them.
+ * One updated computer of the group, as the walk reached it. `linkId`: the
+ * link it was reached over, the same id at both ends, so a direct call can
+ * name its folder. `oldPeers`: its own links, pinned like the walked chain, to
+ * computers that refuse this method. `terminal`: its own folder shares the
+ * chain with its Terminal account.
+ */
+export const profileSyncGroupHolderSchema = lazySchema(() =>
+  z.strictObject({
+    hostId: profileSyncHostIdSchema,
+    linkId: linkIdSchema,
+    oldPeers: z
+      .array(profileSyncHostIdSchema)
+      .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
+    terminal: z.boolean(),
+  }),
+);
+export type ProfileSyncGroupHolder = z.infer<
+  typeof profileSyncGroupHolderSchema
+>;
+
+/**
+ * `holders`: the answering host's own record and every updated computer it
+ * reached past it. `complete`: every link it asked about was answered.
+ * `terminal`: some computer in the group shares the chain with its Terminal
+ * account. `converted`: the answering host's own end of the asked link was
+ * ended by its conversion. `moving`: some computer the answer covers is
+ * converting or has converted; `groupConverted`: one has converted.
+ * `stopping`: some computer the answer covers is under a Stop claim.
  * `pinned`: the asked link bound to the account the answering end pins it to,
- * as the asker binds its own end; null when that end pins no account or the
- * host predates it. The asker walks no further over an edge whose two ends
- * differ.
+ * as the asker binds its own end; null when that end pins no account.
+ * `split`: the links the answer covers whose two ends pin different accounts.
+ * `mixed`: some folder the answer covers pins its group links to more than
+ * one account. Each defaults to its empty value when absent.
  */
 export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
   z.strictObject({
     holders: z
-      .array(profileSyncHostIdSchema)
+      .array(profileSyncGroupHolderSchema)
       .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
     complete: z.boolean(),
     terminal: z.boolean(),
     converted: z.boolean().default(false),
     moving: z.boolean().default(false),
+    groupConverted: z.boolean().default(false),
     stopping: z.boolean().default(false),
     pinned: z.string().uuid().nullable().default(null),
+    split: z
+      .array(linkIdSchema)
+      .max(PROFILE_SYNC_MAX_GROUP_HOLDERS * PROFILE_SYNC_MAX_GROUP_HOLDERS)
+      .default([]),
+    mixed: z.boolean().default(false),
   }),
 );
 export type HostProfileSyncGroupHoldersResponse = z.infer<
