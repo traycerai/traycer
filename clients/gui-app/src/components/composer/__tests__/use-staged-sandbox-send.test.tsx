@@ -1090,6 +1090,29 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
     );
   });
 
+  it("shows the 200 GB range on a staged create's setup line", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    stageCreated("booting", null);
+    const current = readStagedSandbox(SURFACE);
+    if (current === null || current.target.kind !== "new") {
+      throw new Error("Expected the staged new sandbox");
+    }
+    useStagedSandboxStore.getState().setTarget(SURFACE, {
+      ...current.target,
+      shape: {
+        ...current.target.shape,
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 204_800,
+      },
+    });
+    mount(vi.fn());
+
+    expect(detail()).toContain(
+      "$0.28–$1.47 an hour while awake · uses your credits",
+    );
+  });
+
   it("says the hour is billed, unpriced, when the row names no rate", () => {
     mocks.sandboxes = [
       sandboxSummaryFixture({ id: "sbx-1", priceMcPerHour: null }),

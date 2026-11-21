@@ -41,6 +41,10 @@ import {
   sandboxOperationFixture,
   sandboxSummaryFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  expectGrowingRestingAwakeRateCard,
+  GROWING_RESTING_CARD_OVERRIDES,
+} from "@/components/hosts/__tests__/sandbox-growing-card-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { SANDBOX_VERB_FETCH_TIMEOUT_MS } from "@traycer-clients/shared/host-client/sandbox-control";
 
@@ -758,6 +762,12 @@ describe("rates", () => {
       expect(screen.queryByTestId("sandbox-card-cost-now")).toBeNull();
     },
   );
+
+  it("shows a growing sandbox's awake range on its resting card", () => {
+    renderCard(sandboxOf("suspended", false, GROWING_RESTING_CARD_OVERRIDES));
+
+    expectGrowingRestingAwakeRateCard();
+  });
 
   it("does not mistake an unpriced ledger zero for no billing", () => {
     mocks.costs = {

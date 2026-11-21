@@ -592,9 +592,9 @@ export function sandboxTodayCost(
 }
 
 /**
- * What an awake row has accrued: a fixed shape's rate times its time awake.
- * A size that grows changes its rate as it grows, so its accrual is the
- * ledger's charged total; unknown until the ledger is read.
+ * What an awake row has accrued today: a fixed shape's rate times its time
+ * awake. A size that grows changes its rate as it grows, so its accrual is
+ * the ledger's today (UTC day) amount; unknown until the ledger is read.
  */
 function sandboxAccruedMc(
   summary: SandboxSummary,
@@ -605,12 +605,7 @@ function sandboxAccruedMc(
   if (summary.grows === undefined) {
     return (awakeMc * awakeTodayMs) / MS_PER_HOUR;
   }
-  if (cost === null) return null;
-  return (
-    cost.charged.computeMillicredits +
-    cost.charged.storageMillicredits +
-    cost.pendingMillicredits
-  );
+  return cost === null ? null : cost.todayMillicredits;
 }
 
 function idleMinutesOf(summary: SandboxSummary): number {

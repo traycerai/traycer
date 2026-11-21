@@ -856,7 +856,7 @@ describe("sandboxTodayCost", () => {
     expect(sandboxTodayCost(awake, null, 30 * 60_000)).toBe("$0.06 so far");
   });
 
-  it("uses the charged ledger total for a size that grows", () => {
+  it("uses today's ledger total for a size that grows across a day rollover", () => {
     const growing = sandboxSummaryFixture({
       state: "awake",
       grows: { cpus: 16, memoryMb: 65_536 },
@@ -873,18 +873,22 @@ describe("sandboxTodayCost", () => {
       state: "awake",
       frozen: false,
       charged: {
-        computeMillicredits: 100,
-        storageMillicredits: 50,
+        computeMillicredits: 5_000,
+        storageMillicredits: 1_000,
         sinceCreatedAt: NOW,
       },
-      pendingMillicredits: 50,
+      pendingMillicredits: 500,
       segments: [],
       todayMillicredits: 0,
       todayAwakeMs: null,
       history: [],
     };
 
-    expect(sandboxTodayCost(growing, ledger, 0)).toBe("$0.20 so far");
+    expect(sandboxTodayCost(growing, ledger, 0)).toBe("under $0.01 so far");
+    expect(sandboxTodayCost(growing, null, 0)).toBeNull();
+    expect(
+      sandboxTodayCost(growing, { ...ledger, todayMillicredits: 3 }, 0),
+    ).toBe("under $0.01 so far");
   });
 });
 

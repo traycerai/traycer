@@ -369,17 +369,49 @@ export function configurationStageShape(
     destroyAfterRestingMinutes: defaults.restingMinutes,
   };
   const provider = stageProviderFor(catalogue, defaults.os);
-  if (provider !== null && stageQuotedSize(provider, defaults) !== null) {
+  const size = provider === null ? null : defaultsSize(provider, defaults);
+  if (provider !== null && size !== null) {
     return {
       os: defaults.os,
-      cpus: defaults.cpus,
-      memoryMb: defaults.memoryMb,
-      diskMb: defaults.diskMb,
+      ...size,
       region: provider.regions[0].id,
       ...periods,
     };
   }
   return fallback === null ? null : { ...fallback, ...periods };
+}
+
+/**
+ * The size a configuration's defaults name, while the provider still offers
+ * it. Defaults choose a starting size that grows by cpus and memory alone
+ * and take its listed disk, so a default saved at another disk (an older
+ * fixed 20 GB shape, say) opens on the start the editor lists. A person's
+ * own disk for one create is staged apart from the defaults and kept.
+ */
+function defaultsSize(
+  provider: SandboxCatalogueProvider,
+  defaults: SandboxConfigurationDefaults,
+): Pick<StageShape, "cpus" | "memoryMb" | "diskMb"> | null {
+  const growing = provider.shapes?.find(
+    (rung) =>
+      rung.grows !== undefined &&
+      rung.cpus === defaults.cpus &&
+      rung.memoryMb === defaults.memoryMb,
+  );
+  if (growing !== undefined) {
+    return {
+      cpus: growing.cpus,
+      memoryMb: growing.memoryMb,
+      diskMb: growing.diskMb,
+    };
+  }
+  return stageQuotedSize(provider, defaults) === null
+    ? null
+    : {
+        cpus: defaults.cpus,
+        memoryMb: defaults.memoryMb,
+        diskMb: defaults.diskMb,
+      };
 }
 
 /**
@@ -594,7 +626,7 @@ export function stagePrice(
   const quoted = stageQuotedSize(provider, shape);
   if (region === undefined || quoted === null) return null;
   if (quoted.grows !== null) {
-    return growingStagePrice(provider, region, quoted, quoted.grows);
+    return growingStagePrice(region, quoted, quoted.grows);
   }
   const exact = exactShapePrice(region, quoted.shape);
   if (exact !== null)
@@ -654,43 +686,27 @@ function growingAwakeMc(
 /**
  * A starting size's price at its chosen disk: the served exact price and its
  * offer when the catalogue lists that disk, else the region's rates applied
- * to the start and to the size it grows to. Without rates, the price the
- * catalogue lists for the start's own disk, as a lower bound.
+ * to the start and to the size it grows to. Without rates, a disk the
+ * catalogue does not list is unpriced: another disk's price is not this
+ * one's, not even as a lower bound.
  */
 function growingStagePrice(
-  provider: SandboxCatalogueProvider,
   region: SandboxCatalogueRegion,
   quoted: QuotedStageSize,
   grows: SandboxGrowth,
 ): StagePrice | null {
+  const rates = region.pricing;
   const exact = exactShapePrice(region, quoted.shape);
-  if (exact?.offer !== undefined) {
+  if (exact !== null && (exact.offer !== undefined || rates === null)) {
     return {
       awakeMcPerHour: exact.awakeMc,
       suspendedMcPerHour: exact.suspendedMc,
       stoppedMcPerHour: exact.stoppedMc,
       exact: quoted.exact,
-      offer: exact.offer,
+      offer: exact.offer ?? null,
     };
   }
-  const rates = region.pricing;
-  if (rates === null) {
-    const rung = provider.shapes?.find(
-      (candidate) =>
-        candidate.cpus === quoted.shape.cpus &&
-        candidate.memoryMb === quoted.shape.memoryMb,
-    );
-    const listed =
-      rung === undefined ? null : exactShapePrice(region, rung);
-    if (listed === null) return null;
-    return {
-      awakeMcPerHour: listed.awakeMc,
-      suspendedMcPerHour: listed.suspendedMc,
-      stoppedMcPerHour: listed.stoppedMc,
-      exact: rung?.diskMb === quoted.shape.diskMb,
-      offer: listed.offer ?? null,
-    };
-  }
+  if (rates === null) return null;
   const storage = growingStorageMc(rates, quoted.shape.diskMb);
   const start = growingAwakeMc(rates, quoted.shape);
   return {

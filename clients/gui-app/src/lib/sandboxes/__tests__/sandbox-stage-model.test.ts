@@ -779,6 +779,33 @@ describe("growing Linux starting sizes", () => {
     };
   }
 
+  it("resolves legacy defaults to the growing rung's disk and keeps its periods", () => {
+    expect(
+      configurationStageShape(catalogue, {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 20_480,
+        idleMinutes: 30,
+        restingMinutes: null,
+      }),
+    ).toMatchObject({
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4_096,
+      diskMb: 51_200,
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: null,
+    });
+  });
+
+  it("keeps a remembered growing start at its chosen disk", () => {
+    const remembered = size(4, 8, 30);
+    expect(
+      rememberedOrConfigurationStageShape(catalogue, remembered, null),
+    ).toBe(remembered);
+  });
+
   it.each([
     [2, 4, 135],
     [4, 8, 263],
@@ -851,7 +878,7 @@ describe("growing Linux starting sizes", () => {
     });
   });
 
-  it("uses a listed offer without unit rates and leaves the start unpriced without either source", () => {
+  it("uses an exact listed offer without unit rates and leaves an unlisted disk unpriced", () => {
     const [provider] = catalogue.providers;
     const [region] = provider.regions;
     const offer = { startAwakeMc: 140, ceilingAwakeMc: 1_500 };
@@ -882,13 +909,7 @@ describe("growing Linux starting sizes", () => {
       exact: true,
       offer,
     });
-    expect(stagePrice(listed, size(2, 4, 30))).toEqual({
-      awakeMcPerHour: 140,
-      suspendedMcPerHour: 9,
-      stoppedMcPerHour: 9,
-      exact: false,
-      offer,
-    });
+    expect(stagePrice(listed, size(2, 4, 30))).toBeNull();
     expect(
       stagePrice(
         catalogueWithRegion({ ...listedRegion, shapePrices: undefined }),

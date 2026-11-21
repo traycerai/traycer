@@ -788,29 +788,28 @@ function sizeValue(
 /**
  * `2 vCPU · 4 GB · 20 GB · $0.12/h`, priced in the form's region; a start
  * that grows, `2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h`,
- * priced at the form's disk while it is one the bounds allow.
+ * priced at the form's disk, and unpriced while that disk is one the
+ * catalogue cannot price.
  */
 function rungLabel(
   catalogue: SandboxCatalogue,
   form: ShapeForm,
   rung: SandboxShapeRung,
 ): string {
-  const formDiskMb = Number(form.diskGb) * MB_PER_GIB;
   const size =
     rung.grows === undefined
       ? `${sandboxShapeLabel(rung.cpus, rung.memoryMb)} · ${formatMemory(rung.diskMb)}`
       : sandboxSizeLabel(rung.cpus, rung.memoryMb, rung.grows);
-  const at = {
+  const price = stagePrice(catalogue, {
     os: form.os,
     region: form.region,
     cpus: rung.cpus,
     memoryMb: rung.memoryMb,
-  };
-  const price =
-    (rung.grows === undefined
-      ? null
-      : stagePrice(catalogue, { ...at, diskMb: formDiskMb })) ??
-    stagePrice(catalogue, { ...at, diskMb: rung.diskMb });
+    diskMb:
+      rung.grows === undefined
+        ? rung.diskMb
+        : Number(form.diskGb) * MB_PER_GIB,
+  });
   if (price === null) return size;
   const label = shortAwakePriceLabel(price.awakeMcPerHour, price.offer);
   return `${size} · ${price.exact ? label : `from ${label}`}`;

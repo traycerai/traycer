@@ -28,6 +28,10 @@ import {
   type FakeSandboxBinding,
 } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import {
+  expectGrowingRestingAwakeRateCard,
+  GROWING_RESTING_CARD_OVERRIDES,
+} from "@/components/hosts/__tests__/sandbox-growing-card-test-support";
 import { formatSandboxDate } from "@/lib/sandboxes/sandbox-row-lines";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -366,31 +370,37 @@ describe("team creator and billing identity", () => {
 });
 
 describe("team cost view", () => {
-  it("shows the growing size, chosen disk, and range on the team rate", () => {
-    const sandbox = sandboxOf("suspended", false, {
-        cpus: 2,
-        memoryMb: 4_096,
-        diskMb: 51_200,
-        grows: { cpus: 16, memoryMb: 65_536 },
-        priceMcPerHour: {
-          awakeMc: 135,
-          suspendedMc: 7,
-          stoppedMc: 7,
-          offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
-        },
-      });
-    renderCard(sandbox, true);
+  it("shows the growing awake rate in the team costs panel", () => {
+    const sandbox = sandboxOf(
+      "suspended",
+      false,
+      GROWING_RESTING_CARD_OVERRIDES,
+    );
     render(<SandboxCostsPanel sandbox={{ ...sandbox, teamOwned: true }} />);
+
+    expect(
+      screen.getByText("$0.14–$1.44 an hour while awake"),
+    ).toBeTruthy();
+  });
+
+  it("shows the growing size and chosen disk on the team card", () => {
+    renderCard(
+      sandboxOf("suspended", false, GROWING_RESTING_CARD_OVERRIDES),
+      true,
+    );
 
     expect(screen.getByTestId("sandbox-card-shape").textContent).toBe(
       "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · 50 GB disk",
     );
-    expect(screen.getByTestId("sandbox-card-other-rate").textContent).toBe(
-      "$0.14–$1.44 an hour",
+  });
+
+  it("shows a growing sandbox's awake range on its resting team card", () => {
+    renderCard(
+      sandboxOf("suspended", false, GROWING_RESTING_CARD_OVERRIDES),
+      true,
     );
-    expect(
-      screen.getByText("$0.14–$1.44 an hour while awake"),
-    ).toBeTruthy();
+
+    expectGrowingRestingAwakeRateCard();
   });
 
   it("opens the team Secrets page from Manage", () => {

@@ -1086,6 +1086,38 @@ describe("useSandboxStaging New rows", () => {
     });
   });
 
+  it("stages a legacy 2/4 default at the growing rung's 50 GB disk", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    mocks.defaults = {
+      personal: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 20_480,
+        idleMinutes: 30,
+        restingMinutes: null,
+      },
+    };
+    const { composer } = mount([LAPTOP]);
+
+    act(() => {
+      composer.onPickNew("personal");
+    });
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 51_200,
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
+      },
+    });
+  });
+
   it("stages the configuration's defaults, not the person's remembered pick", () => {
     mocks.defaults = { "team-1": TEAM_DEFAULTS };
     useSandboxShapeMemoryStore.getState().remember(MEMORY_HOST, "team-1", {
