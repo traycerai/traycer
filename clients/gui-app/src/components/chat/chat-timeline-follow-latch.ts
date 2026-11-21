@@ -3445,16 +3445,26 @@ export function useChatTimelineFollowLatch(
       followEndIfPermitted();
     });
     resizeObserver.observe(node);
-    // The list writes its new content height in a commit just after it
-    // measures a grown row. That resize sits shallower than the row it
-    // follows, so its observer callback comes a frame late. The style write
-    // itself is seen before that frame paints.
-    const contentStyleObserver = new MutationObserver(() => {
-      followEndIfPermitted();
-    });
     const content = node.querySelector(
       `:scope > .${LEGEND_LIST_CONTENT_CONTAINER_CLASS}`,
     );
+    // The list writes its new content height in a commit just after it
+    // measures a grown row. That resize sits shallower than the row it
+    // follows, so its observer callback comes a frame late. The style write
+    // itself is seen before that frame paints. Only writes on the container
+    // and its rows move the tail: status animations write inline styles deep
+    // inside rows on every clock tick, and following each of those forces a
+    // layout for nothing.
+    const contentStyleObserver = new MutationObserver((records) => {
+      if (
+        records.some(
+          (record) =>
+            record.target === content || record.target.parentNode === content,
+        )
+      ) {
+        followEndIfPermitted();
+      }
+    });
     if (content !== null) {
       resizeObserver.observe(content);
       contentStyleObserver.observe(content, {

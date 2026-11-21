@@ -7886,6 +7886,75 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
+  describe("a style write inside the legend-list content container", () => {
+    function followingWithRow() {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const content = document.createElement("div");
+      content.className = "legend-list-content-container";
+      const row = document.createElement("div");
+      const indicator = document.createElement("span");
+      row.appendChild(indicator);
+      content.appendChild(row);
+      node.appendChild(content);
+      const listRef = makeFakeListRef(node);
+      renderHook(() =>
+        useChatTimelineFollowLatch(
+          listRef,
+          true,
+          true,
+          DEFAULT_FOLLOW_LATCH_OPTIONS,
+        ),
+      );
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      return { content, row, indicator, listRef };
+    }
+
+    /** Resolves once a style write under `content` has been delivered.
+     *  Observers are notified in creation order, so the latch's callback,
+     *  created at mount, has run by then. */
+    function styleWriteDelivered(content: Element): Promise<void> {
+      return new Promise((resolve) => {
+        const probe = new MutationObserver(() => {
+          probe.disconnect();
+          resolve();
+        });
+        probe.observe(content, {
+          attributes: true,
+          attributeFilter: ["style"],
+          subtree: true,
+        });
+      });
+    }
+
+    it("does not follow a status animation tick deep inside a row", async () => {
+      const { content, indicator, listRef } = followingWithRow();
+
+      const delivered = styleWriteDelivered(content);
+      indicator.style.backgroundPosition = "40% 0";
+      await delivered;
+
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["the container's height", "content"],
+      ["a row's placement", "row"],
+    ] as const)("follows a write of %s", async (_label, target) => {
+      const mounted = followingWithRow();
+
+      const delivered = styleWriteDelivered(mounted.content);
+      mounted[target].style.height = "1700px";
+      await delivered;
+
+      expect(mounted.listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("a detached reader with no scroll report of their own", () => {
     const VIEW_HEIGHT_PX = 500;
     const DETACHED_TOP_PX = 900;
