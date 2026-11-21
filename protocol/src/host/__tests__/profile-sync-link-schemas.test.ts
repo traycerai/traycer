@@ -298,14 +298,137 @@ describe("released peer-transfer credential slots", () => {
   });
 });
 
-describe("stopLink converted stance", () => {
-  it("parses a converted stance", () => {
+const CLAIM_ID = "22222222-2222-4222-8222-222222222222";
+const MEMBER_LINK_ID = "33333333-3333-4333-8333-333333333333";
+const member = (index: number): Record<string, unknown> => ({
+  hostId: `host-${index}`,
+  linkId: MEMBER_LINK_ID,
+});
+const MANY_MEMBERS = Array.from({ length: 33 }, (_, index) => member(index));
+
+const PREPARE = {
+  kind: "prepare",
+  claimId: CLAIM_ID,
+  claimantHostId: "host-a",
+  keeperHostId: "host-b",
+  members: [member(1), member(2)],
+};
+
+const STOP_STEPS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+  ["prepare", PREPARE],
+  [
+    "handoff",
+    {
+      kind: "handoff",
+      claimId: CLAIM_ID,
+      accountId: "acct",
+      generation: 4,
+      credential: CREDENTIALS["codex"],
+    },
+  ],
+  ["status", { kind: "status", claimId: CLAIM_ID }],
+  ["closed", { kind: "closed", claimId: CLAIM_ID, generation: 4 }],
+  ["abort", { kind: "abort", claimId: CLAIM_ID }],
+];
+
+const STOP_RESPONSES: ReadonlyArray<
+  readonly [string, Record<string, unknown>]
+> = [
+  ["prepared", { result: "prepared" }],
+  ["no-chain", { result: "no-chain" }],
+  ["converted", { result: "converted" }],
+  ["held", { result: "held", claimId: CLAIM_ID, claimantHostId: "host-a" }],
+  ["committed", { result: "committed" }],
+  ["unknown", { result: "unknown" }],
+  ["receipt", { result: "receipt", generation: 4, held: "renewing" }],
+  ["closed", { result: "closed" }],
+  ["ok", { result: "ok" }],
+  ["refused", { result: "refused", reason: "removed-on-device" }],
+];
+
+function stopRequest(step: Record<string, unknown>): Record<string, unknown> {
+  return { linkId: LINK_ID, providerId: "codex", step };
+}
+
+const parsesRequest = (request: Record<string, unknown>): boolean =>
+  hostProfileSyncStopLinkRequestSchema.safeParse(request).success;
+const parsesResponse = (response: Record<string, unknown>): boolean =>
+  hostProfileSyncStopLinkResponseSchema.safeParse(response).success;
+
+describe("stopLink one-keeper steps", () => {
+  it.each(STOP_STEPS)("round-trips the %s step", (_name, step) => {
+    const request = stopRequest(step);
+    expect(hostProfileSyncStopLinkRequestSchema.parse(request)).toEqual(
+      request,
+    );
+  });
+
+  it("refuses a request without linkId, a claim step, a cross step and a prepare with an extra key", () => {
+    // The receiver's own link is named by every request.
+    expect(parsesRequest(stopRequest(PREPARE))).toBe(true);
+    expect(parsesRequest({ providerId: "codex", step: PREPARE })).toBe(false);
+    const claim = {
+      kind: "claim",
+      claimId: CLAIM_ID,
+      claimantHostId: "host-a",
+      root: "host-a",
+      uplink: "root",
+      visited: ["host-a"],
+    };
+    const cross = { kind: "cross", claimId: CLAIM_ID, root: "host-a" };
     expect(
-      hostProfileSyncStopLinkResponseSchema.parse({
+      [claim, cross].map((step) => parsesRequest(stopRequest(step))),
+    ).toEqual([false, false]);
+    expect(
+      parsesRequest(stopRequest({ ...PREPARE, visited: ["host-a"] })),
+    ).toBe(false);
+  });
+
+  it.each(STOP_RESPONSES)("round-trips the %s response", (_name, response) => {
+    expect(hostProfileSyncStopLinkResponseSchema.parse(response)).toEqual(
+      response,
+    );
+  });
+
+  it("refuses the old stance response and a prepared answer carrying acks", () => {
+    expect(parsesResponse({ result: "prepared" })).toBe(true);
+    expect(
+      parsesResponse({
         result: "stance",
         stance: { kind: "converted" },
       }),
-    ).toEqual({ result: "stance", stance: { kind: "converted" } });
+    ).toBe(false);
+    expect(parsesResponse({ result: "prepared", acks: [] })).toBe(false);
+  });
+
+  it("accepts 32 members and refuses 33 or one without a linkId", () => {
+    expect(
+      parsesRequest(
+        stopRequest({ ...PREPARE, members: MANY_MEMBERS.slice(0, 32) }),
+      ),
+    ).toBe(true);
+    expect(
+      parsesRequest(stopRequest({ ...PREPARE, members: MANY_MEMBERS })),
+    ).toBe(false);
+    expect(
+      parsesRequest(
+        stopRequest({ ...PREPARE, members: [{ hostId: "host-1" }] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the answer literals out of the link reasons", () => {
+    // `link.reason` is read by 1.5.4 with this enum.
+    for (const literal of [
+      "converted",
+      "held",
+      "committed",
+      "no-chain",
+      "prepared",
+      "unknown",
+    ]) {
+      expect(profileSyncReasonSchema.options).not.toContain(literal);
+    }
   });
 });
 
@@ -317,9 +440,9 @@ describe("groupHolders moving, stopping and pinned", () => {
       terminal: false,
       pinned: LINK_ID,
     };
-    expect(
-      hostProfileSyncGroupHoldersResponseSchema.parse(answer).pinned,
-    ).toBe(LINK_ID);
+    expect(hostProfileSyncGroupHoldersResponseSchema.parse(answer).pinned).toBe(
+      LINK_ID,
+    );
     expect(
       hostProfileSyncGroupHoldersResponseSchema.safeParse({
         ...answer,
@@ -355,23 +478,6 @@ describe("groupHolders moving, stopping and pinned", () => {
         stopping: true,
       }),
     ).toMatchObject({ moving: true, stopping: true });
-  });
-});
-
-describe("stopLink cross step", () => {
-  it("parses a cross step naming the claim and its root", () => {
-    const request = {
-      linkId: "11111111-1111-4111-8111-111111111111",
-      providerId: "codex",
-      step: {
-        kind: "cross",
-        claimId: "22222222-2222-4222-8222-222222222222",
-        root: "host-a",
-      },
-    };
-    expect(hostProfileSyncStopLinkRequestSchema.parse(request)).toEqual(
-      request,
-    );
   });
 });
 
