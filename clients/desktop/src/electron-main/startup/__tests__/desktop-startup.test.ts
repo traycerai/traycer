@@ -2,6 +2,7 @@ import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -581,6 +582,23 @@ function startupReleasedRefusal(): {
   };
 }
 
+function startupProbeDeclined(): {
+  readonly kind: "fatalError";
+  readonly details: FatalErrorDetails;
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "Session grant verification failed: ERR_JWS_INVALID",
+      doorReason: "not_admitted",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
 function readStartupFrame(raw: string): Record<string, unknown> {
   const value: unknown = JSON.parse(raw);
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -593,7 +611,7 @@ function readStartupFrame(raw: string): Record<string, unknown> {
   return frame;
 }
 
-function openStartupStream(): {
+function openStartupStream(hostToken: string | null): {
   readonly sockets: StubStreamWebSocket[];
 } {
   const { factory, sockets } = makeStubSocketFactory();
@@ -605,14 +623,17 @@ function openStartupStream(): {
       websocketUrl: "ws://127.0.0.1:9/rpc",
     }),
     hostId: RELEASED_HOST_ID,
-    bearer: () => new MutableBearerLease(RELEASED_HOST_TOKEN, RELEASED_USER_ID),
+    bearer: () =>
+      hostToken === null
+        ? null
+        : new MutableBearerLease(hostToken, RELEASED_USER_ID),
     userId: RELEASED_USER_ID,
     releasedSignOn: {
       signIn: () => new MutableBearerLease(RELEASED_SIGN_IN, RELEASED_USER_ID),
       recovery: null,
       allowed: () => Promise.resolve(true),
-      hostTokenUnobtainable: () => false,
-      ownerSignInEligible: () => false,
+      hostTokenUnobtainable: () => hostToken === null,
+      ownerSignInEligible: () => hostToken === null,
       heldTokenRefused: () => false,
       forgetHeldRefusal: () => undefined,
       hosts: processReleasedHosts,
@@ -652,7 +673,7 @@ async function openStartupFrame(
 }
 
 async function admitStartupSignIn(): Promise<void> {
-  const { sockets } = openStartupStream();
+  const { sockets } = openStartupStream(RELEASED_HOST_TOKEN);
   await vi.waitFor(
     () => expect(sockets.length).toBeGreaterThanOrEqual(1),
     RELEASED_WAIT,
@@ -678,7 +699,7 @@ async function admitStartupSignIn(): Promise<void> {
 }
 
 async function firstStartupOpenToken(): Promise<unknown> {
-  const { sockets } = openStartupStream();
+  const { sockets } = openStartupStream(RELEASED_HOST_TOKEN);
   await vi.waitFor(
     () => expect(sockets.length).toBeGreaterThanOrEqual(1),
     RELEASED_WAIT,
@@ -699,8 +720,24 @@ describe("released host memory across a desktop sign-out", () => {
     vi.useRealTimers();
   });
 
-  it("starts the next dial with the host-only token after the auth session signs out", async () => {
-    await admitStartupSignIn();
+  it("probes again after auth-session sign-out clears a declined probe", async () => {
+    const first = openStartupStream(null);
+    await vi.waitFor(
+      () => expect(first.sockets).toHaveLength(1),
+      RELEASED_WAIT,
+    );
+    const initialProbe = first.sockets[0];
+    if (initialProbe === undefined) throw new Error("probe dial missing");
+    const initialOpen = await openStartupFrame(initialProbe);
+    expect(initialOpen.token).toBe(NO_HOST_TOKEN_PROBE);
+    initialProbe.fireText(startupProbeDeclined());
+    await vi.waitFor(() =>
+      expect(
+        processReleasedHosts.probeDeclined(RELEASED_USER_ID, RELEASED_HOST_ID),
+      ).toBe(true),
+    );
+    startupClients[0]?.close("probe declined");
+
     const startup = import("../desktop-startup").then((mod) =>
       mod.runDesktopStartup(),
     );
@@ -717,6 +754,15 @@ describe("released host memory across a desktop sign-out", () => {
       },
     });
     session.set({ status: "signed-out", token: null, profile: null });
-    expect(await firstStartupOpenToken()).toBe(RELEASED_HOST_TOKEN);
+    expect(
+      processReleasedHosts.probeDeclined(RELEASED_USER_ID, RELEASED_HOST_ID),
+    ).toBe(false);
+    const next = openStartupStream(null);
+    await vi.waitFor(() => expect(next.sockets).toHaveLength(1), RELEASED_WAIT);
+    const nextSocket = next.sockets[0];
+    if (nextSocket === undefined) throw new Error("post-sign-out dial missing");
+    expect((await openStartupFrame(nextSocket)).token).toBe(
+      NO_HOST_TOKEN_PROBE,
+    );
   });
 });
