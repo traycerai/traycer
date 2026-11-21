@@ -33,7 +33,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { providerDisplayName } from "@/lib/provider-ordering";
 
 /**
@@ -145,14 +144,6 @@ export function SyncLinksAskDialog(props: {
             onClick={props.onStop}
           >
             {ASK_STOP}
-            {props.stopPending ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-                tone="muted"
-              />
-            ) : null}
           </Button>
           {props.teamComputer ? null : (
             <Button

@@ -87,3 +87,9 @@ function atSentenceStart(name: string | undefined): string {
   if (name === UNNAMED_PEER_NAME) return "Another computer";
   return name ?? "";
 }
+
+/**
+ * The Sign in button on an account this computer gave up when Stop syncing
+ * was pressed (board 6). Every other signed-out row keeps "Sign in".
+ */
+export const SIGN_IN_AGAIN_AFTER_STOP_TEXT = "Sign in again";
