@@ -552,6 +552,7 @@ export class WsStreamClient<
             hostTokenUnobtainable: releasedSignOn.hostTokenUnobtainable,
             ownerSignInEligible: releasedSignOn.ownerSignInEligible,
             heldTokenRefused: releasedSignOn.heldTokenRefused,
+            forgetHeldRefusal: releasedSignOn.forgetHeldRefusal,
             hosts: releasedSignOn.hosts,
           };
     const cloudAuthorized = options.cloudAuthorized;
@@ -2490,6 +2491,7 @@ class StreamSession<
           this.probeWithoutHostToken(released);
           return;
         }
+        if (this.releasedPlan === "host-token") released?.forgetHeldRefusal();
         this.scheduleReconnect();
         return;
       }
@@ -3518,6 +3520,8 @@ class StreamSession<
    */
   private declineProbe(reason: HostDoorReasonReading): void {
     const released = this.config.releasedSignOn;
+    // No owner's sign-in follows, so a held token the host refused is presented again.
+    released?.forgetHeldRefusal();
     const userId = released?.signIn()?.identity.userId ?? null;
     if (
       reason === "owner_sign_in" ||
@@ -3580,6 +3584,7 @@ class StreamSession<
         this.noHostTokenCheck = false;
         if (this.disposed) return;
         if (!allowed) {
+          released.forgetHeldRefusal();
           this.scheduleReconnect();
           return;
         }

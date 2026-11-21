@@ -377,6 +377,7 @@ export function createRemoteHostTransport<
               hostTokenUnobtainable: () => false,
               ownerSignInEligible: () => false,
               heldTokenRefused: () => false,
+              forgetHeldRefusal: () => undefined,
               hosts: processReleasedHosts,
             }
           : null,

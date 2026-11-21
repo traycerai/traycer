@@ -522,6 +522,7 @@ async function requestWithHostToken<
           },
           heldTokenRefusedFor: (_authority, presented) =>
             releasedSignOn.heldTokenRefused(presented),
+          forgetHeldRefusalFor: () => releasedSignOn.forgetHeldRefusal(),
           releasedHosts: releasedSignOn.hosts,
           surfacesNotProvisioned: true,
         }),

@@ -301,6 +301,8 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
     authority: HostRequestAuthority,
     presented: string,
   ) => boolean;
+  /** No owner's sign-in follows that refusal: see `TrackedHostTokens.forgetHeldRefused`. */
+  readonly forgetHeldRefusalFor?: (authority: HostRequestAuthority) => void;
 }
 
 /**
@@ -409,6 +411,7 @@ export class WsRpcClient<
   private readonly releasedHosts: ReleasedHostMemory;
   private readonly surfacesNotProvisioned: boolean;
   private readonly heldTokenRefusedFor: WsRpcClientOptions<Registry>["heldTokenRefusedFor"];
+  private readonly forgetHeldRefusalFor: WsRpcClientOptions<Registry>["forgetHeldRefusalFor"];
   /** Authorities carrying the sign-in a current host invited (`owner_sign_in`), with its recovery while unspent. */
   private readonly ownerSignInAuthorities = new WeakMap<
     HostRequestAuthority,
@@ -439,6 +442,7 @@ export class WsRpcClient<
     this.releasedHosts = options.releasedHosts ?? createReleasedHostMemory();
     this.surfacesNotProvisioned = options.surfacesNotProvisioned === true;
     this.heldTokenRefusedFor = options.heldTokenRefusedFor;
+    this.forgetHeldRefusalFor = options.forgetHeldRefusalFor;
     this.registry = options.registry;
     this.requestIdProvider = options.requestId;
     this.webSocketFactory = options.webSocketFactory;
@@ -609,6 +613,7 @@ export class WsRpcClient<
             hostOptions = { ...options, authority };
             continue;
           }
+          this.forgetHeldRefusalFor?.(options.authority);
           if (reason !== "owner_sign_in" && reason !== "not_provisioned")
             this.releasedHosts.declineProbe(
               options.authority.bearer.identity.userId,
@@ -668,33 +673,31 @@ export class WsRpcClient<
       }
     }
     const bearer = await hostBearerFor(hostId, options.authority.bearer);
-    if (
-      bearer === null &&
-      !this.releasedHosts.probeDeclined(
-        options.authority.bearer.identity.userId,
-        hostId,
-      )
-    ) {
-      const signIn = await this.releasedSignOnFor?.(
-        options.authority,
-        "no-host-token",
-      ).catch(() => null);
-      // Only a host that answers the probe the released way is then sent the sign-in.
-      if (signIn !== undefined && signIn !== null) {
-        const authority: HostRequestAuthority = {
-          ...options.authority,
-          bearer: {
-            identity: options.authority.bearer.identity,
-            getBearerToken: () => NO_HOST_TOKEN_PROBE,
-          },
-        };
-        this.probeAuthorities.add(authority);
-        return { ...options, authority };
-      }
+    if (bearer !== null)
+      return { ...options, authority: { ...options.authority, bearer } };
+    const signIn = this.releasedHosts.probeDeclined(
+      options.authority.bearer.identity.userId,
+      hostId,
+    )
+      ? null
+      : await this.releasedSignOnFor?.(
+          options.authority,
+          "no-host-token",
+        ).catch(() => null);
+    // Only a host that answers the probe the released way is then sent the sign-in.
+    if (signIn !== undefined && signIn !== null) {
+      const authority: HostRequestAuthority = {
+        ...options.authority,
+        bearer: {
+          identity: options.authority.bearer.identity,
+          getBearerToken: () => NO_HOST_TOKEN_PROBE,
+        },
+      };
+      this.probeAuthorities.add(authority);
+      return { ...options, authority };
     }
-    if (bearer === null)
-      throw noHostTokenError(this.requestIdProvider(), method);
-    return { ...options, authority: { ...options.authority, bearer } };
+    this.forgetHeldRefusalFor?.(options.authority);
+    throw noHostTokenError(this.requestIdProvider(), method);
   }
 
   private reportRefusal(hostId: string, cause: HostRpcError): void {
@@ -1030,11 +1033,13 @@ export class WsRpcClient<
           ownerSignIn &&
           reason === "token_expired" &&
           (this.ownerSignInAuthorities.get(authority) ?? null) !== null;
-        if (ownerSignIn && named && reason !== "token_expired")
+        if (ownerSignIn && named && reason !== "token_expired") {
           this.releasedHosts.declineProbe(
             authority.bearer.identity.userId,
             selected.hostId,
           );
+          this.forgetHeldRefusalFor?.(authority);
+        }
         const heldRefused =
           reason === "token_expired" &&
           !probe &&

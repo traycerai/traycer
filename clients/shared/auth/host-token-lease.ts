@@ -55,6 +55,12 @@ export interface TrackedHostTokens extends HostTokenAccess {
     presented: string,
   ) => void;
   readonly heldRefused: (userId: string, hostId: string) => boolean;
+  /**
+   * The refusal noted above makes way only for the owner's sign-in. Where that
+   * cannot follow, the held token is presented again: the host admits it once
+   * it, too, cannot reach authn.
+   */
+  readonly forgetHeldRefused: (userId: string, hostId: string) => void;
 }
 
 export function trackHostTokenMints(
@@ -76,6 +82,9 @@ export function trackHostTokenMints(
       failures.get(keyOf(userId, hostId)) ?? null,
     noteHeldRefused: (userId, hostId, presented) => {
       refusedHeld.set(keyOf(userId, hostId), presented);
+    },
+    forgetHeldRefused: (userId, hostId) => {
+      refusedHeld.delete(keyOf(userId, hostId));
     },
     heldRefused: (userId, hostId) => {
       const refused = refusedHeld.get(keyOf(userId, hostId));

@@ -49,6 +49,8 @@ export interface ReleasedSignOn {
    * one presented because authn did not answer the mint.
    */
   readonly heldTokenRefused: (presented: string) => boolean;
+  /** No owner's sign-in can follow that refusal: see `TrackedHostTokens.forgetHeldRefused`. */
+  readonly forgetHeldRefusal: () => void;
   /** What this process has seen of each host's answers; see {@link ReleasedHostMemory}. */
   readonly hosts: ReleasedHostMemory;
 }
@@ -235,6 +237,7 @@ export function releasedSignOnForLocalRow(
         ownerSignInEligible: () => ownerSignInEligible(tokens, userId, hostId),
         heldTokenRefused: (presented) =>
           heldTokenRefused(tokens, userId, hostId, presented),
+        forgetHeldRefusal: () => tokens.forgetHeldRefused(userId, hostId),
         hosts,
       }
     : null;
@@ -294,6 +297,7 @@ export function releasedLocalSignOnFromRegistry(deps: {
   readonly hostTokenUnobtainable: () => boolean;
   readonly ownerSignInEligible: () => boolean;
   readonly heldTokenRefused: (presented: string) => boolean;
+  readonly forgetHeldRefusal: () => void;
   readonly hosts: ReleasedHostMemory;
 }): ReleasedSignOn {
   const answered = new Map<string, boolean>();
@@ -303,6 +307,7 @@ export function releasedLocalSignOnFromRegistry(deps: {
     hostTokenUnobtainable: deps.hostTokenUnobtainable,
     ownerSignInEligible: deps.ownerSignInEligible,
     heldTokenRefused: deps.heldTokenRefused,
+    forgetHeldRefusal: deps.forgetHeldRefusal,
     hosts: deps.hosts,
     allowed: async () => {
       const id = deps.hostId();

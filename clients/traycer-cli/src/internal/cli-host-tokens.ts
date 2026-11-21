@@ -130,6 +130,8 @@ export interface CliHostTokens {
   ownerSignInEligible(hostId: string): boolean;
   /** See `ReleasedSignOn.heldTokenRefused`. */
   heldTokenRefused(hostId: string, presented: string): boolean;
+  /** See `ReleasedSignOn.forgetHeldRefusal`. */
+  forgetHeldRefusal(hostId: string): void;
 }
 
 function createSource(signIn: VerifiedSignIn | null): HostTokenSource {
@@ -324,6 +326,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       ownerSignInEligible(source, userId, hostId),
     heldTokenRefused: (hostId, presented) =>
       heldTokenRefused(source, userId, hostId, presented),
+    forgetHeldRefusal: (hostId) => source.forgetHeldRefused(userId, hostId),
     onMintRefused: (listener) => {
       listeners.add(listener);
       return () => {
@@ -369,6 +372,7 @@ export function cliReleasedSignOn(
     | "hostTokenUnobtainable"
     | "ownerSignInEligible"
     | "heldTokenRefused"
+    | "forgetHeldRefusal"
   >,
 ): ReleasedSignOn {
   return releasedLocalSignOnFromRegistry({
@@ -387,6 +391,10 @@ export function cliReleasedSignOn(
     heldTokenRefused: (presented) => {
       const id = hostId();
       return id !== null && tokens.heldTokenRefused(id, presented);
+    },
+    forgetHeldRefusal: () => {
+      const id = hostId();
+      if (id !== null) tokens.forgetHeldRefusal(id);
     },
     hosts: processReleasedHosts,
   });

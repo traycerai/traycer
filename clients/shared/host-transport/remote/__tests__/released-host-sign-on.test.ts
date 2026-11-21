@@ -162,6 +162,7 @@ function signOnFor(
         hostTokenUnobtainable: () => false,
         ownerSignInEligible: () => false,
         heldTokenRefused: () => false,
+        forgetHeldRefusal: () => undefined,
         hosts: createReleasedHostMemory(),
       }
     : null;
@@ -369,6 +370,7 @@ describe("released personal host, remote door", () => {
         hostTokenUnobtainable: () => false,
         ownerSignInEligible: () => false,
         heldTokenRefused: () => false,
+        forgetHeldRefusal: () => undefined,
         hosts,
       },
       door,

@@ -501,6 +501,8 @@ export function createLocalHostInventoryStreamClient(deps: {
           ownerSignInEligible(hostTokens, userId, endpoint.hostId),
         heldTokenRefused: (presented) =>
           heldTokenRefused(hostTokens, userId, endpoint.hostId, presented),
+        forgetHeldRefusal: () =>
+          hostTokens.forgetHeldRefused(userId, endpoint.hostId),
         hosts: processReleasedHosts,
       }),
       ...hostTokenSessionAuth(

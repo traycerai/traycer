@@ -1056,6 +1056,7 @@ function localDoorBearers(
   | "releasedSignOnFor"
   | "releasedHosts"
   | "heldTokenRefusedFor"
+  | "forgetHeldRefusalFor"
 > {
   const tracked = trackHostTokenMints(tokens);
   return {
@@ -1068,6 +1069,11 @@ function localDoorBearers(
         authority.bearer.identity.userId,
         authority.endpoint.hostId,
         presented,
+      ),
+    forgetHeldRefusalFor: (authority) =>
+      tracked.forgetHeldRefused(
+        authority.bearer.identity.userId,
+        authority.endpoint.hostId,
       ),
   };
 }
