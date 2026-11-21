@@ -129,6 +129,7 @@ function checkResponse(
 const EXPECTED_PROTOCOL_RETAINED_PROFILE_SYNC_METHODS = [
   "host.profileSync.apply",
   "host.profileSync.fetchCredential",
+  "host.profileSync.groupHolders",
   "host.profileSync.offerCredential",
   "providers.profileSync.acceptAccount",
   "providers.profileSync.overview",

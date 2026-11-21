@@ -358,3 +358,43 @@ export const hostProfileSyncFetchResponseSchema = lazySchema(() =>
 export type HostProfileSyncFetchResponse = z.infer<
   typeof hostProfileSyncFetchResponseSchema
 >;
+
+/** The most computers one linked group names; past it the group never opens. */
+export const PROFILE_SYNC_MAX_GROUP_HOLDERS = 32;
+
+/**
+ * Which computers share a linked folder's chain, asked over the caller's own
+ * link. The answering host asks each of its own linked peers not already in
+ * `visited`, over its own link, so every hop is between two recorded peers.
+ * A host without this method (1.5.4) refuses it.
+ */
+export const hostProfileSyncGroupHoldersRequestSchema = lazySchema(() =>
+  z.strictObject({
+    linkId: linkIdSchema,
+    providerId: profileSyncProviderSchema,
+    visited: z
+      .array(profileSyncHostIdSchema)
+      .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
+  }),
+);
+export type HostProfileSyncGroupHoldersRequest = z.infer<
+  typeof hostProfileSyncGroupHoldersRequestSchema
+>;
+
+/**
+ * `holders`: every computer the answering host reached through the group, its
+ * own linked peers included. `complete`: every one of them answered. `terminal`:
+ * some computer in the group shares the chain with its Terminal account.
+ */
+export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
+  z.strictObject({
+    holders: z
+      .array(profileSyncHostIdSchema)
+      .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
+    complete: z.boolean(),
+    terminal: z.boolean(),
+  }),
+);
+export type HostProfileSyncGroupHoldersResponse = z.infer<
+  typeof hostProfileSyncGroupHoldersResponseSchema
+>;
