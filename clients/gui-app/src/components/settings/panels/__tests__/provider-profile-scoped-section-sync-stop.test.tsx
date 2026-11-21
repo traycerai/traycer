@@ -106,7 +106,7 @@ function renderSection(input: {
   });
   clientMock.current = client;
   const manifest = {
-    "providers.list": { major: 10, minor: 14 },
+    "providers.list": { major: 10, minor: 13 },
     "providers.startLogin": { major: 1, minor: 5 },
     "providers.awaitLogin": { major: 2, minor: 4 },
     ...(input.syncLinks === null
