@@ -1,45 +1,29 @@
 import { useEffect, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
-import { QueryClientProvider } from "@tanstack/react-query";
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  RouterProvider,
-} from "@tanstack/react-router";
-import { LazyMotion, domMax, frame } from "motion/react";
-import * as Y from "yjs";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { frame } from "motion/react";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  HostRuntimeProvider,
-  hostRpcRegistry,
-  type HostRpcRegistry,
-  type MessengerFactory,
-} from "@/lib/host";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import * as Y from "yjs";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { createAppQueryClient } from "@/lib/query-client";
 import {
   EpicSessionContext,
   EpicSessionHostClientContext,
-  getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
-import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatProjection, TreeNode } from "@/stores/epics/open-epic/types";
+import { FixtureProviders } from "./chat-tree-fixture-providers";
+import {
+  ROW_QUERY_HANDLERS,
+  captureFixtureErrors,
+  createFixtureMessengerFactory,
+  createFixtureRunnerHost,
+  createFixtureSessionHostClient,
+  mountFixturePage,
+  openFixtureSession,
+} from "./chat-tree-fixture-session";
 import "@/lib/theme-applier";
 import "@/index.css";
 /**
@@ -92,31 +76,12 @@ function seedDoc(): Uint8Array {
   epic.set("chats", new Y.Map<unknown>());
   return Y.encodeStateAsUpdate(donor);
 }
-function openSession() {
-  const captured: { value: EpicStreamCallbacks | null } = { value: null };
-  const factory: EpicStreamClientFactory = (_id, callbacks) => {
-    captured.value = callbacks;
-    return {
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => undefined,
-    };
-  };
-  const handle = openStoreForTest({
-    epicId: EPIC_ID,
-    userId: USER_ID,
-    factories: { streamClientFactory: factory, laneSelection: null },
-    writeCommand: null,
-  });
-  if (captured.value === null) throw new Error("factory not invoked");
-  captured.value.onSnapshot(meta(), seedDoc());
-  getOpenEpicRegistry().acquire(EPIC_ID, () => handle);
-  return handle;
-}
-const SESSION = openSession();
+const SESSION = openFixtureSession({
+  epicId: EPIC_ID,
+  userId: USER_ID,
+  meta: meta(),
+  seedDoc: seedDoc(),
+});
 /**
  * Root ids and each parent's child ids. The tree sorts newest first, ties by
  * id, so `updatedAt` (an id's activity time, 1 when absent or unlisted) and
@@ -367,21 +332,7 @@ function clickChevron(id: string): void {
     new MouseEvent("click", { bubbles: true, cancelable: true }),
   );
 }
-const errors: string[] = [];
-window.addEventListener("error", (event) => {
-  errors.push(
-    event.error instanceof Error
-      ? (event.error.stack ?? event.message)
-      : event.message,
-  );
-});
-window.addEventListener("unhandledrejection", (event) => {
-  errors.push(
-    event.reason instanceof Error
-      ? (event.reason.stack ?? event.reason.message)
-      : String(event.reason),
-  );
-});
+const errors = captureFixtureErrors();
 /** What one React commit rendered; see the counting hook in the html. */
 interface CommitCount {
   readonly rows: number;
@@ -467,65 +418,21 @@ const probe = {
 };
 Reflect.set(window, "__chatTreeMotion", probe);
 const queryClient = createAppQueryClient();
-function createHostClient(): HostClient<HostRpcRegistry> {
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: createHostQueryInvalidator(queryClient),
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "chat-tree-motion",
-      handlers: {
-        "epic.listCloudChats": () => Promise.resolve(listedCloudChats()),
-        // Answered as a host would: a row the window mounts asks for these,
-        // and a key left with no data is fetched again on every mount, its
-        // failure re-rendering every row that reads it.
-        "epic.listTaskHosts": () => ({ hosts: [] }),
-        "epic.listCollaborators": () => ({
-          collaborators: [],
-          collaboratorsAvailable: true,
-        }),
-      },
-    }),
-  });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
-  return spine.createRequester(mockLocalHostEntry);
-}
-const HOST_CLIENT = createHostClient();
-const runnerHost = new MockRunnerHost({
-  signInUrl: "http://127.0.0.1:9/sign-in",
-  authnBaseUrl: "http://127.0.0.1:9",
-  localHost: null,
-  hosts: [],
-  workspaceFolderPickerPaths: undefined,
-  hasLocalHost: undefined,
-  traycerCli: undefined,
+const HOST_CLIENT = createFixtureSessionHostClient({
+  queryClient,
+  requestId: () => "chat-tree-motion",
+  bearerToken: "tok-1",
+  handlers: {
+    "epic.listCloudChats": () => Promise.resolve(listedCloudChats()),
+    ...ROW_QUERY_HANDLERS,
+  },
 });
-let requestCounter = 0;
-const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
-  new MockHostMessenger<HostRpcRegistry>({
-    registry,
-    requestId: () => `chat-tree-motion-${String(++requestCounter)}`,
-    handlers: {
-      "host.notifications.indicatorState": () => ({
-        epics: {},
-        chats: {},
-        complete: true,
-      }),
-      "epic.getTaskContexts": () => ({ tasks: {} }),
-      // Answered as a host would: a row the window mounts asks for these,
-      // and a key left with no data is fetched again on every mount, its
-      // failure re-rendering every row that reads it.
-      "epic.listTaskHosts": () => ({ hosts: [] }),
-      "epic.listCollaborators": () => ({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      }),
-    },
-  });
+const runnerHost = createFixtureRunnerHost();
+const messengerFactory = createFixtureMessengerFactory({
+  requestIdPrefix: "chat-tree-motion",
+  extra: {},
+});
+
 export function Fixture(): ReactNode {
   useEffect(() => {
     probe.ready = true;
@@ -547,48 +454,24 @@ export function Fixture(): ReactNode {
 }
 export function Providers(props: { readonly children: ReactNode }): ReactNode {
   return (
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostProvider runnerHost={runnerHost}>
-        <HostRuntimeProvider
-          registry={hostRpcRegistry}
-          messengerFactory={messengerFactory}
-          invalidator={null}
-          requestId={null}
-          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
-          fallback={<div data-fixture-runtime-fallback />}
-        >
-          <LazyMotion features={domMax}>
-            <TooltipProvider>
-              <SidebarProvider>
-                <EpicSessionContext value={SESSION}>
-                  <EpicSessionHostClientContext value={HOST_CLIENT}>
-                    {props.children}
-                  </EpicSessionHostClientContext>
-                </EpicSessionContext>
-              </SidebarProvider>
-            </TooltipProvider>
-          </LazyMotion>
-        </HostRuntimeProvider>
-      </RunnerHostProvider>
-    </QueryClientProvider>
+    <FixtureProviders
+      queryClient={queryClient}
+      runnerHost={runnerHost}
+      messengerFactory={messengerFactory}
+    >
+      <SidebarProvider>
+        <EpicSessionContext value={SESSION}>
+          <EpicSessionHostClientContext value={HOST_CLIENT}>
+            {props.children}
+          </EpicSessionHostClientContext>
+        </EpicSessionContext>
+      </SidebarProvider>
+    </FixtureProviders>
   );
 }
-const rootRoute = createRootRoute({
-  component: () => (
-    <Providers>
-      <Fixture />
-    </Providers>
-  ),
-});
-const indexRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/",
-  component: () => null,
-});
-const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute]),
-  history: createMemoryHistory({ initialEntries: ["/"] }),
-});
-const container = document.getElementById("root");
-if (container === null) throw new Error("no #root");
-createRoot(container).render(<RouterProvider router={router} />);
+
+mountFixturePage(() => (
+  <Providers>
+    <Fixture />
+  </Providers>
+));

@@ -80,9 +80,9 @@ const NO_SCROLL_SPAN_MS = 250;
  * missed, or no `scroll` event for `NO_SCROLL_SPAN_MS`. The second covers an
  * action that scrolls nothing and a scroll the list writes straight to
  * `scrollTop` after a `scrollend` (its own anchor correction), which ends
- * without another `scrollend`. Only for a scroll the action itself starts: a
- * scroll that starts after React work can begin after the quiet span has
- * already passed.
+ * without another `scrollend`. For a scroll already running, or one the action
+ * starts synchronously: a scroll that starts after React work can begin after
+ * the quiet span has already passed.
  */
 async function afterScrollEnds(
   page: Page,

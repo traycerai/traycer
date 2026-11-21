@@ -1,47 +1,30 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { useDndContext } from "@dnd-kit/core";
-import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  RouterProvider,
-} from "@tanstack/react-router";
-import { LazyMotion, domMax } from "motion/react";
-import * as Y from "yjs";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { QueryClient } from "@tanstack/react-query";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { recordNegotiatedHostMethods } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
-import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import * as Y from "yjs";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { EpicLeftPanelHost } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  HostRuntimeProvider,
-  hostRpcRegistry,
-  type HostRpcRegistry,
-  type MessengerFactory,
-} from "@/lib/host";
-import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   EpicSessionContext,
-  getOpenEpicRegistry,
   handleHostClients,
   handleHostIds,
 } from "@/lib/registries/epic-session-registry";
-import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
-import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
-import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatProjection, TreeNode } from "@/stores/epics/open-epic/types";
+import { FixtureProviders } from "./chat-tree-fixture-providers";
+import {
+  captureFixtureErrors,
+  createFixtureMessengerFactory,
+  createFixtureRunnerHost,
+  createFixtureSessionHostClient,
+  mountFixturePage,
+  openFixtureSession,
+} from "./chat-tree-fixture-session";
 import "@/lib/theme-applier";
 import "@/index.css";
 
@@ -221,121 +204,68 @@ const reparentRequests: Array<{
   readonly newParentId: string | null;
 }> = [];
 
-function openSession() {
-  const captured: { value: EpicStreamCallbacks | null } = { value: null };
-  const streamClientFactory: EpicStreamClientFactory = (_id, callbacks) => {
-    captured.value = callbacks;
-    return {
-      applyUpdate: () => undefined,
-      awareness: () => undefined,
-      applyArtifactRoomUpdate: () => undefined,
-      artifactRoomAwareness: () => undefined,
-      retryMigration: () => undefined,
-      close: () => undefined,
-    };
-  };
-  const handle = openStoreForTest({
-    epicId: EPIC_ID,
-    userId: null,
-    factories: { streamClientFactory, laneSelection: null },
-    writeCommand: null,
-  });
-  if (captured.value === null) throw new Error("stream factory not invoked");
-  captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
-  const seeded = seed();
-  handle.store.setState({
-    tree: seeded.tree,
-    chats: { allIds: Object.keys(seeded.chats), byId: seeded.chats },
-  });
-  getOpenEpicRegistry().acquire(EPIC_ID, () => handle);
-  return handle;
-}
-
-const SESSION = openSession();
+const SESSION = openFixtureSession({
+  epicId: EPIC_ID,
+  userId: null,
+  meta: makeMeta(),
+  seedDoc: Y.encodeStateAsUpdate(new Y.Doc()),
+});
+const seeded = seed();
+SESSION.store.setState({
+  tree: seeded.tree,
+  chats: { allIds: Object.keys(seeded.chats), byId: seeded.chats },
+});
 handleHostIds.set(SESSION, HOST_ID);
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
-const runnerHost = new MockRunnerHost({
-  signInUrl: "http://127.0.0.1:9/sign-in",
-  authnBaseUrl: "http://127.0.0.1:9",
-  localHost: null,
-  hosts: [],
-  workspaceFolderPickerPaths: undefined,
-  hasLocalHost: undefined,
-  traycerCli: undefined,
-});
+const runnerHost = createFixtureRunnerHost();
 
 let requestCounter = 0;
-const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
-  new MockHostMessenger<HostRpcRegistry>({
-    registry,
-    requestId: () => `chat-tree-drag-${String(++requestCounter)}`,
-    handlers: {
-      "host.status": () => ({
-        ready: true,
-        hostVersion: "1.2.3",
-        protocolVersion: { major: 1, minor: 2 },
-        busy: false,
-        busySessionCount: 0,
-        updateProgress: null,
-        busyBreakdown: null,
-        updateOperation: null,
-        updateTransaction: null,
-        storeFormats: null,
-        install: null,
-        processMemory: null,
-        crossHostMessaging: null,
-        sessions: null,
-        updatesExternallyManaged: null,
-        previousExit: null,
-      }),
-      "host.notifications.indicatorState": () => ({
-        epics: {},
-        chats: {},
-        complete: true,
-      }),
-      "epic.getTaskContexts": () => ({ tasks: {} }),
-      // Every row that mounts asks for these. Unanswered, each failure
-      // re-renders every mounted row in one long task, which an auto-scroll
-      // that mounts rows every few frames would read as a stall.
-      "epic.listTaskHosts": () => ({ hosts: [] }),
-      "epic.listCollaborators": () => ({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      }),
-    },
-  });
+const messengerFactory = createFixtureMessengerFactory({
+  requestIdPrefix: "chat-tree-drag",
+  extra: {
+    "host.status": () => ({
+      ready: true,
+      hostVersion: "1.2.3",
+      protocolVersion: { major: 1, minor: 2 },
+      busy: false,
+      busySessionCount: 0,
+      updateProgress: null,
+      busyBreakdown: null,
+      updateOperation: null,
+      updateTransaction: null,
+      storeFormats: null,
+      install: null,
+      processMemory: null,
+      crossHostMessaging: null,
+      sessions: null,
+      updatesExternallyManaged: null,
+      previousExit: null,
+    }),
+  },
+});
 
 // The session's own host client: the one the drop commit sends
 // `epic.reparentChat` through.
-const spine = new HostClient({
-  registry: hostRpcRegistry,
-  invalidator: createHostQueryInvalidator(queryClient),
-  messenger: new MockHostMessenger({
-    registry: hostRpcRegistry,
-    requestId: () => `chat-tree-drag-session-${String(++requestCounter)}`,
-    handlers: {
-      "epic.reparentChat": (params) => {
-        reparentRequests.push({
-          chatId: params.chatId,
-          newParentId: params.newParentId,
-        });
-        // The host's answer: the record moves and the tree is told, as the
-        // record channel's push would.
-        moveChat(params.chatId, params.newParentId);
-        return { updated: true };
-      },
+const sessionHostClient = createFixtureSessionHostClient({
+  queryClient,
+  requestId: () => `chat-tree-drag-session-${String(++requestCounter)}`,
+  bearerToken: "token",
+  handlers: {
+    "epic.reparentChat": (params) => {
+      reparentRequests.push({
+        chatId: params.chatId,
+        newParentId: params.newParentId,
+      });
+      // The host's answer: the record moves and the tree is told, as the
+      // record channel's push would.
+      moveChat(params.chatId, params.newParentId);
+      return { updated: true };
     },
-  }),
-  findHostById: (hostId) =>
-    hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+  },
 });
-const sessionHostClient = spine.createRequester(mockLocalHostEntry);
-sessionHostClient.setRequestContext(
-  createRendererContextFixture({ bearerToken: "token" }),
-);
 recordNegotiatedHostMethods(mockLocalHostEntry.hostId, ["epic.reparentChat"]);
 handleHostClients.set(SESSION, sessionHostClient);
 
@@ -545,62 +475,22 @@ export function Fixture(): ReactNode {
   );
 }
 
-const fixtureErrors: string[] = [];
-window.addEventListener("error", (event) => {
-  fixtureErrors.push(
-    event.error instanceof Error
-      ? (event.error.stack ?? event.message)
-      : event.message,
-  );
-});
-window.addEventListener("unhandledrejection", (event) => {
-  fixtureErrors.push(
-    event.reason instanceof Error
-      ? (event.reason.stack ?? event.reason.message)
-      : String(event.reason),
-  );
-});
-Reflect.set(window, "__chatTreeDragErrors", fixtureErrors);
+Reflect.set(window, "__chatTreeDragErrors", captureFixtureErrors());
 
-const rootRoute = createRootRoute({
-  component: () => (
-    <QueryClientProvider client={queryClient}>
-      <RunnerHostProvider runnerHost={runnerHost}>
-        <HostRuntimeProvider
-          registry={hostRpcRegistry}
-          messengerFactory={messengerFactory}
-          invalidator={null}
-          requestId={null}
-          remoteFetcher={() => Promise.resolve({ kind: "hosts", entries: [] })}
-          fallback={<div data-fixture-runtime-fallback />}
-        >
-          <LazyMotion features={domMax}>
-            <TooltipProvider>
-              <EpicSessionContext value={SESSION}>
-                <SnapshotLoadingProvider
-                  value={{ snapshotLoaded: true, snapshotFetchError: null }}
-                >
-                  <RootDndProvider>
-                    <Fixture />
-                  </RootDndProvider>
-                </SnapshotLoadingProvider>
-              </EpicSessionContext>
-            </TooltipProvider>
-          </LazyMotion>
-        </HostRuntimeProvider>
-      </RunnerHostProvider>
-    </QueryClientProvider>
-  ),
-});
-const indexRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/",
-  component: () => null,
-});
-const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute]),
-  history: createMemoryHistory({ initialEntries: ["/"] }),
-});
-const container = document.getElementById("root");
-if (container === null) throw new Error("no #root");
-createRoot(container).render(<RouterProvider router={router} />);
+mountFixturePage(() => (
+  <FixtureProviders
+    queryClient={queryClient}
+    runnerHost={runnerHost}
+    messengerFactory={messengerFactory}
+  >
+    <EpicSessionContext value={SESSION}>
+      <SnapshotLoadingProvider
+        value={{ snapshotLoaded: true, snapshotFetchError: null }}
+      >
+        <RootDndProvider>
+          <Fixture />
+        </RootDndProvider>
+      </SnapshotLoadingProvider>
+    </EpicSessionContext>
+  </FixtureProviders>
+));
