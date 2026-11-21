@@ -222,6 +222,8 @@ interface ShapeForm {
   readonly cpus: string;
   readonly memoryGb: string;
   readonly diskGb: string;
+  /** Disk to restore after a fixed rung uses its listed disk. */
+  readonly growingDiskGb: string;
   readonly region: string;
   readonly idleMinutes: string;
   /** Empty: kept until it is destroyed. */
@@ -260,6 +262,7 @@ function formOf(
     cpus: String(size?.cpus ?? shape.cpus),
     memoryGb: String((size?.memoryMb ?? shape.memoryMb) / MB_PER_GIB),
     diskGb: size === undefined ? "" : String(size.diskMb / MB_PER_GIB),
+    growingDiskGb: "",
     region: shape.region,
     idleMinutes: String(shape.idleMinutes),
     ...restingFields(shape.destroyAfterRestingMinutes),
@@ -277,20 +280,15 @@ function rungFields(
   };
 }
 
-/** Whether a ladder lists starting sizes that grow, whose disk is chosen apart. */
-function ladderGrows(shapes: readonly SandboxShapeRung[]): boolean {
-  return shapes.some((rung) => rung.grows !== undefined);
-}
-
 /**
  * The form's disk in MB, or why it is outside the provider's bounds. A blank
  * field reads as 0, which every catalogue's positive minimum refuses.
  */
 function diskOfForm(
-  form: ShapeForm,
+  diskGbInput: string,
   provider: SandboxCatalogueProvider,
 ): { readonly diskMb: number } | { readonly problem: string } {
-  const diskGb = Number(form.diskGb);
+  const diskGb = Number(diskGbInput);
   const diskMb = diskGb * MB_PER_GIB;
   if (
     !Number.isInteger(diskGb) ||
@@ -321,6 +319,22 @@ function rungOfForm(
   return shapes.find((rung) => stageSizeIsRung(rung, size)) ?? null;
 }
 
+function resolveRung(
+  form: ShapeForm,
+  shapes: readonly SandboxShapeRung[] | null,
+): {
+  readonly rung: SandboxShapeRung | null;
+  readonly value: string;
+  readonly grows: boolean;
+} {
+  const rung = shapes === null ? null : rungOfForm(form, shapes);
+  return {
+    rung,
+    value: rung === null ? "" : rungKey(rung),
+    grows: rung?.grows !== undefined,
+  };
+}
+
 type FormSize = Pick<StageShape, "cpus" | "memoryMb" | "diskMb">;
 
 /**
@@ -331,16 +345,16 @@ type FormSize = Pick<StageShape, "cpus" | "memoryMb" | "diskMb">;
 function sizeOfForm(
   form: ShapeForm,
   provider: SandboxCatalogueProvider,
+  rung: SandboxShapeRung | null,
 ): { readonly size: FormSize } | { readonly problem: string } {
   if (provider.shapes !== null) {
-    const rung = rungOfForm(form, provider.shapes);
     if (rung === null) return { problem: "Pick a size." };
     if (rung.grows === undefined) {
       return {
         size: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: rung.diskMb },
       };
     }
-    const disk = diskOfForm(form, provider);
+    const disk = diskOfForm(form.diskGb, provider);
     if ("problem" in disk) return disk;
     return {
       size: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: disk.diskMb },
@@ -376,8 +390,9 @@ function sizeOfForm(
 function shapeOfForm(
   form: ShapeForm,
   provider: SandboxCatalogueProvider,
+  rung: SandboxShapeRung | null,
 ): { readonly shape: StageShape } | { readonly problem: string } {
-  const sized = sizeOfForm(form, provider);
+  const sized = sizeOfForm(form, provider, rung);
   if ("problem" in sized) return sized;
   const idleMinutes = Number(form.idleMinutes);
   if (!Number.isInteger(idleMinutes) || idleMinutes < IDLE_FLOOR_MINUTES) {
@@ -440,7 +455,9 @@ function ShapeSheetForm(props: {
       </p>
     );
   }
-  const result = shapeOfForm(form, provider);
+  const selection = resolveRung(form, provider.shapes);
+  const selectedRungGrows = selection.grows;
+  const result = shapeOfForm(form, provider, selection.rung);
   const shape = "shape" in result ? result.shape : null;
   const price = shape === null ? null : stagePrice(props.catalogue, shape);
   const wake = wakeString(provider.suspendFidelity);
@@ -496,6 +513,7 @@ function ShapeSheetForm(props: {
                 ...form,
                 os,
                 region: next.regions[0].id,
+                growingDiskGb: "",
                 ...(rung === null
                   ? { diskGb: String(next.shape.diskDefaultMb / MB_PER_GIB) }
                   : rungFields(rung)),
@@ -566,7 +584,7 @@ function ShapeSheetForm(props: {
                 <ShapeSelect
                   id={`${ids}-size`}
                   label="Size"
-                  value={sizeValue(form, provider.shapes)}
+                  value={selection.value}
                   options={provider.shapes.map((rung) => ({
                     value: rungKey(rung),
                     label: rungLabel(props.catalogue, form, rung),
@@ -577,20 +595,34 @@ function ShapeSheetForm(props: {
                     );
                     if (rung === undefined) return;
                     setSizeCommitted(true);
-                    // A start that grows keeps the disk the person chose.
-                    setForm(
-                      rung.grows === undefined
-                        ? { ...form, ...rungFields(rung) }
-                        : {
-                            ...form,
-                            cpus: String(rung.cpus),
-                            memoryGb: String(rung.memoryMb / MB_PER_GIB),
-                          },
-                    );
+                    const fields = rungFields(rung);
+                    if (rung.grows === undefined) {
+                      setForm({
+                        ...form,
+                        ...fields,
+                        growingDiskGb: selectedRungGrows
+                          ? form.diskGb
+                          : form.growingDiskGb,
+                      });
+                      return;
+                    }
+                    let diskGb = fields.diskGb;
+                    if (selectedRungGrows) {
+                      diskGb = form.diskGb;
+                    } else {
+                      const rememberedDisk = diskOfForm(
+                        form.growingDiskGb,
+                        provider,
+                      );
+                      if (!("problem" in rememberedDisk)) {
+                        diskGb = form.growingDiskGb;
+                      }
+                    }
+                    setForm({ ...form, ...fields, diskGb });
                   }}
                 />
               </div>
-              {ladderGrows(provider.shapes) ? (
+              {selectedRungGrows ? (
                 <ShapeNumber
                   id={`${ids}-disk`}
                   label="Disk (GB)"
@@ -777,14 +809,6 @@ function ShapeStartupPreview(props: {
       )}
     </>
   );
-}
-
-function sizeValue(
-  form: ShapeForm,
-  shapes: readonly SandboxShapeRung[],
-): string {
-  const rung = rungOfForm(form, shapes);
-  return rung === null ? "" : rungKey(rung);
 }
 
 /**

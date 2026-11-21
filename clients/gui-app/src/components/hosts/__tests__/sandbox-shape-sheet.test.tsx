@@ -15,6 +15,7 @@ import {
 } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import type {
   StageConfiguration,
+  StageShape,
   StageSize,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -155,26 +156,61 @@ afterEach(() => {
 });
 
 function renderSheet(onUseShape: Mock) {
+  return renderSheetWithInitialShape(onUseShape, {
+    os: "linux",
+    cpus: 2,
+    memoryMb: 4096,
+    diskMb: null,
+    region: "us-east",
+    idleMinutes: 30,
+    destroyAfterRestingMinutes: 10_080,
+  });
+}
+
+function renderSheetWithInitialShape(
+  onUseShape: Mock,
+  initialShape: StageShape,
+) {
   return renderWithQueryClient(
     <SandboxShapeSheet
       open
       onOpenChange={() => undefined}
       configuration={{ kind: "personal" }}
       defaults={null}
-      initialShape={{
-        os: "linux",
-        cpus: 2,
-        memoryMb: 4096,
-        diskMb: null,
-        region: "us-east",
-        idleMinutes: 30,
-        destroyAfterRestingMinutes: 10_080,
-      }}
+      initialShape={initialShape}
       initialName=""
       context={{ audience: "private", reachHost: null, unmovedComputer: null }}
       onUseShape={onUseShape}
     />,
   );
+}
+
+function mixedLadderCatalogue(
+  fixedDiskGb: number,
+  providerDefaultDiskGb: number,
+): SandboxCatalogue {
+  const base = autoSizingCatalogue();
+  const [provider] = base.providers;
+  const [growingRung, fixedCandidate] = AUTO_SIZING_RUNGS;
+  const fixedRung: SandboxShapeRung = {
+    cpus: fixedCandidate.cpus,
+    memoryMb: fixedCandidate.memoryMb,
+    diskMb: fixedDiskGb * GIB,
+    default: false,
+  };
+  return {
+    ...base,
+    providers: [
+      {
+        ...provider,
+        shape: {
+          ...provider.shape,
+          diskDefaultMb: providerDefaultDiskGb * GIB,
+        },
+        shapes: [growingRung, fixedRung],
+      },
+    ],
+  };
 }
 
 describe("<SandboxShapeSheet />", () => {
@@ -480,27 +516,97 @@ describe("<SandboxShapeSheet />", () => {
     ).toBe("2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h");
   });
 
-  it("shows Disk when a listed ladder contains both growing and fixed rungs", () => {
-    const base = autoSizingCatalogue();
-    const [provider] = base.providers;
-    const [growingRung, fixedCandidate] = AUTO_SIZING_RUNGS;
-    const fixedRung: SandboxShapeRung = {
-      cpus: fixedCandidate.cpus,
-      memoryMb: fixedCandidate.memoryMb,
-      diskMb: fixedCandidate.diskMb,
-      default: false,
-    };
-    catalogueInUse = {
-      ...base,
-      providers: [{ ...provider, shapes: [growingRung, fixedRung] }],
-    };
-    renderSheet(vi.fn());
+  it("keeps a chosen growing disk through a fixed rung and back", () => {
+    catalogueInUse = mixedLadderCatalogue(50, 50);
+    const onUseShape = vi.fn();
+    renderSheet(onUseShape);
 
-    expect(screen.getByRole("spinbutton", { name: "Disk (GB)" })).toBeDefined();
-    const size = screen.getByRole("combobox", { name: "Size" });
-    expect(size.textContent).toBe(
-      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    const useShape = screen.getByRole("button", { name: USE_THIS_SHAPE });
+    const startingDisk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(startingDisk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    fireEvent.change(startingDisk, { target: { value: "30" } });
+    fireEvent.blur(startingDisk);
+    const chosenDisk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(chosenDisk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    expect(chosenDisk.value).toBe("30");
+    expect(useShape.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(useShape);
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 30 * GIB,
+    });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+    fireEvent.click(
+      screen.getByRole("option", { name: /4 vCPU · 8 GB · 50 GB/ }),
     );
+    expect(screen.queryByRole("spinbutton", { name: "Disk (GB)" })).toBeNull();
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(useShape.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(useShape);
+    expect(onUseShape.mock.calls[1]?.[0]).toMatchObject({
+      cpus: 4,
+      memoryMb: 8 * GIB,
+      diskMb: 50 * GIB,
+    });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+    fireEvent.click(
+      screen.getByRole("option", {
+        name: /2 vCPU · 4 GB, grows to 16 vCPU · 64 GB/,
+      }),
+    );
+    const restoredDisk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(restoredDisk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    expect(restoredDisk.value).toBe("30");
+    expect(useShape.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(useShape);
+    expect(onUseShape.mock.calls[2]?.[0]).toMatchObject({
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 30 * GIB,
+    });
+  });
+
+  it("uses the growing rung's disk when switching from fixed without a saved growing disk", () => {
+    catalogueInUse = mixedLadderCatalogue(60, 70);
+    const onUseShape = vi.fn();
+    renderSheetWithInitialShape(onUseShape, {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8 * GIB,
+      diskMb: 60 * GIB,
+      region: "us-east",
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: 10_080,
+    });
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+    fireEvent.click(
+      screen.getByRole("option", {
+        name: /2 vCPU · 4 GB, grows to 16 vCPU · 64 GB/,
+      }),
+    );
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(disk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    expect(disk.value).toBe("50");
+    const useShape = screen.getByRole("button", { name: USE_THIS_SHAPE });
+    expect(useShape.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(useShape);
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 2,
+      memoryMb: 4 * GIB,
+      diskMb: 50 * GIB,
+    });
   });
 
   it("prices a selected nonfirst region from its unit rates", () => {
