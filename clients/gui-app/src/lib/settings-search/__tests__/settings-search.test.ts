@@ -3,6 +3,7 @@ import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-h
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { searchSettings } from "@/lib/settings-search/settings-search";
+import { everySectionShown } from "@/lib/settings-search/__tests__/every-section-shown";
 
 const soundtrackOfferedMock = vi.hoisted(() => ({ value: true }));
 
@@ -88,7 +89,9 @@ function labelsFor(
   query: string,
   context: SettingsAvailabilityContext,
 ): ReadonlyArray<string> {
-  return searchSettings(query, context).map((result) => result.entry.label);
+  return searchSettings(query, context, everySectionShown).map(
+    (result) => result.entry.label,
+  );
 }
 
 /** The first result's page + anchor — what a click would actually do. */
@@ -96,7 +99,7 @@ function landingFor(
   query: string,
   context: SettingsAvailabilityContext,
 ): string {
-  const results = searchSettings(query, context);
+  const results = searchSettings(query, context, everySectionShown);
   if (results.length === 0) return "<no results>";
   const first = results[0];
   return `${first.entry.section}#${first.entry.anchor ?? "<top>"}`;
@@ -107,7 +110,7 @@ function launchesFor(
   query: string,
   context: SettingsAvailabilityContext,
 ): ReadonlyArray<string> {
-  return searchSettings(query, context).flatMap((result) =>
+  return searchSettings(query, context, everySectionShown).flatMap((result) =>
     result.entry.launch === null ? [] : [result.entry.launch],
   );
 }
@@ -116,12 +119,16 @@ describe("settings search", () => {
   it("returns nothing for a query that asks for nothing", () => {
     // Not "everything": the caller renders its ordinary section list in this
     // state, and a blank query is not a search with a hundred equal answers.
-    expect(searchSettings("", DESKTOP)).toEqual([]);
-    expect(searchSettings("   ", DESKTOP)).toEqual([]);
+    expect(searchSettings("", DESKTOP, everySectionShown)).toEqual([]);
+    expect(searchSettings("   ", DESKTOP, everySectionShown)).toEqual([]);
   });
 
   it("describes the Variables and shells page by what Personal shares", () => {
-    const shell = searchSettings("Variables and shells", DESKTOP).find(
+    const shell = searchSettings(
+      "Variables and shells",
+      DESKTOP,
+      everySectionShown,
+    ).find(
       (result) =>
         result.entry.section === "shell" && result.entry.anchor === null,
     );
@@ -171,7 +178,9 @@ describe("settings search", () => {
     ]) {
       for (const context of [DESKTOP, MOBILE]) {
         expect(
-          searchSettings(query, context).map((result) => result.entry.section),
+          searchSettings(query, context, everySectionShown).map(
+            (result) => result.entry.section,
+          ),
           query,
         ).not.toContain("notifications");
       }
@@ -189,7 +198,7 @@ describe("settings search", () => {
   it.each(["archived", "idle"])(
     "reaches the Storage page for %s, which its two groups and their When rows fold into",
     (query) => {
-      const storage = searchSettings(query, DESKTOP).filter(
+      const storage = searchSettings(query, DESKTOP, everySectionShown).filter(
         (result) => result.entry.section === "storage",
       );
       expect(storage.map((result) => result.entry.label)).toEqual(["Storage"]);
@@ -207,7 +216,11 @@ describe("settings search", () => {
   it("prefers the specific row over the group that contains it", () => {
     // "Terminal cursor" is a row inside the "Terminal" group. The row is what
     // someone typing the full name means to change.
-    const results = searchSettings("terminal cursor", DESKTOP);
+    const results = searchSettings(
+      "terminal cursor",
+      DESKTOP,
+      everySectionShown,
+    );
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].entry.kind).toBe("setting");
     expect(results[0].entry.anchor).toBe("appearance-terminal-cursor");
@@ -252,7 +265,7 @@ describe("settings search", () => {
   it("distinguishes the two pages that share a name by their scope", () => {
     // Both "Diagnostics" pages match "diagnostics" — the results have to carry
     // enough to tell them apart, which is what the scope label is for.
-    const scopes = searchSettings("diagnostics", DESKTOP)
+    const scopes = searchSettings("diagnostics", DESKTOP, everySectionShown)
       .filter((result) => result.entry.kind === "section")
       .map((result) => result.scopeLabel);
     expect(scopes).toContain("Application");
@@ -268,7 +281,7 @@ describe("settings search", () => {
       section: string,
       label: string,
     ): string | undefined =>
-      searchSettings(query, DESKTOP).find(
+      searchSettings(query, DESKTOP, everySectionShown).find(
         (result) =>
           result.entry.kind === "section" &&
           result.entry.section === section &&
@@ -294,7 +307,7 @@ describe("settings search", () => {
   });
 
   it("finds the Members page when searching for the viewer role", () => {
-    const members = searchSettings("viewer", DESKTOP).find(
+    const members = searchSettings("viewer", DESKTOP, everySectionShown).find(
       (result) =>
         result.entry.kind === "section" &&
         result.entry.section === "members" &&
@@ -303,6 +316,25 @@ describe("settings search", () => {
 
     expect(members?.entry.label).toBe("Members");
   });
+
+  it.each(["secrets", "members"] as const)(
+    "drops every %s hit while the pick does not offer that section",
+    (section) => {
+      const query = section === "secrets" ? "secrets" : "viewer";
+      const offered = (candidate: string): boolean => candidate !== section;
+
+      const sections = searchSettings(query, DESKTOP, offered).map(
+        (result) => result.entry.section,
+      );
+
+      expect(
+        searchSettings(query, DESKTOP, everySectionShown).map(
+          (result) => result.entry.section,
+        ),
+      ).toContain(section);
+      expect(sections).not.toContain(section);
+    },
+  );
 
   it("opens Browser agent access on the Permissions Browser tab, and Secrets on its own words", () => {
     expect(landingFor("browser agent access", DESKTOP)).toBe(
@@ -318,7 +350,7 @@ describe("settings search", () => {
 
   it("no longer offers Machine setup as a page of its own", () => {
     expect(
-      searchSettings("machine setup", DESKTOP).some(
+      searchSettings("machine setup", DESKTOP, everySectionShown).some(
         (result) => result.entry.section === "machine-setup",
       ),
     ).toBe(false);
@@ -332,7 +364,11 @@ describe("settings search", () => {
     expect(landingFor("office default view", DESKTOP)).toBe(
       "appearance#appearance-agent-office-default-view",
     );
-    const results = searchSettings("office default view", DESKTOP);
+    const results = searchSettings(
+      "office default view",
+      DESKTOP,
+      everySectionShown,
+    );
     expect(results[0].entry.kind).toBe("setting");
     expect(results[0].entry.label).toBe("Agent office default view");
     expect(results[0].entry.group).toBe("Tasks");
@@ -354,13 +390,15 @@ describe("settings search", () => {
       expect(landingFor(query, DESKTOP), query).toBe(
         "appearance#appearance-start-page",
       );
-      const pageHits = searchSettings(query, DESKTOP).filter(
+      const pageHits = searchSettings(query, DESKTOP, everySectionShown).filter(
         (result) =>
           result.entry.section === "appearance" && result.entry.anchor === null,
       );
       expect(pageHits, query).toEqual([]);
     }
-    expect(searchSettings("Effect strength", DESKTOP)[0].entry).toMatchObject({
+    expect(
+      searchSettings("Effect strength", DESKTOP, everySectionShown)[0].entry,
+    ).toMatchObject({
       section: "appearance",
       kind: "group",
       label: "Start page",
@@ -376,12 +414,14 @@ describe("settings search", () => {
   });
 
   it("returns nothing for a query with no plausible match", () => {
-    expect(searchSettings("qqzzxwv", DESKTOP)).toEqual([]);
+    expect(searchSettings("qqzzxwv", DESKTOP, everySectionShown)).toEqual([]);
   });
 
   it("caps the result list", () => {
     // A loose fuzzy threshold means a short query weak-matches a long tail.
-    expect(searchSettings("e", DESKTOP).length).toBeLessThanOrEqual(12);
+    expect(
+      searchSettings("e", DESKTOP, everySectionShown).length,
+    ).toBeLessThanOrEqual(12);
   });
 
   describe("Layout", () => {
@@ -404,7 +444,7 @@ describe("settings search", () => {
       // loose enough that a two-word query weak-matches unrelated rows on the
       // page, which says nothing about where the minimap lives.
       expect(
-        searchSettings("minimap position", DESKTOP).filter(
+        searchSettings("minimap position", DESKTOP, everySectionShown).filter(
           (result) =>
             result.entry.section === "appearance" &&
             result.entry.label === "Minimap position",
@@ -518,7 +558,9 @@ describe("settings search", () => {
         query: string,
         context: SettingsAvailabilityContext,
       ): ReadonlyArray<string> =>
-        searchSettings(query, context).map((result) => result.entry.section);
+        searchSettings(query, context, everySectionShown).map(
+          (result) => result.entry.section,
+        );
       for (const [query, context] of [
         ["push", MOBILE],
         ["push", DESKTOP],
@@ -536,9 +578,11 @@ describe("settings search", () => {
     });
 
     it("finds the Needs action kind row by its anchor", () => {
-      const hit = searchSettings("Needs action", DESKTOP).find(
-        (result) => result.entry.anchor === "alerts-needs-action",
-      );
+      const hit = searchSettings(
+        "Needs action",
+        DESKTOP,
+        everySectionShown,
+      ).find((result) => result.entry.anchor === "alerts-needs-action");
       expect(hit?.entry.section).toBe("alerts");
     });
 
@@ -546,13 +590,13 @@ describe("settings search", () => {
       "finds the Music row under %s only in a build that offers the soundtrack",
       (query) => {
         const offered = { ...DESKTOP, soundtrackOffered: true };
-        const hit = searchSettings(query, offered).find(
+        const hit = searchSettings(query, offered, everySectionShown).find(
           (result) => result.entry.anchor === "sounds-soundtrack-music",
         );
         expect(hit?.entry.section).toBe("app-notifications");
 
         expect(
-          searchSettings(query, DESKTOP).filter(
+          searchSettings(query, DESKTOP, everySectionShown).filter(
             (result) => result.entry.anchor === "sounds-soundtrack-music",
           ),
         ).toEqual([]);
@@ -563,7 +607,7 @@ describe("settings search", () => {
       "finds the Playback controls row under %s only while Music is on",
       (query) => {
         const anchorOf = (context: SettingsAvailabilityContext) =>
-          searchSettings(query, context).filter(
+          searchSettings(query, context, everySectionShown).filter(
             (result) =>
               result.entry.anchor === "sounds-soundtrack-playback-controls",
           );
@@ -700,7 +744,11 @@ describe("settings search", () => {
         "terminal shell",
         "host environment",
       ]) {
-        const cardHits = searchSettings(query, DESKTOP).filter(
+        const cardHits = searchSettings(
+          query,
+          DESKTOP,
+          everySectionShown,
+        ).filter(
           (result) =>
             (result.entry.section === "diagnostics" ||
               result.entry.section === "shell") &&
@@ -717,7 +765,7 @@ function landingsFor(
   query: string,
   context: SettingsAvailabilityContext,
 ): ReadonlyArray<string> {
-  return searchSettings(query, context).map(
+  return searchSettings(query, context, everySectionShown).map(
     (result) => `${result.entry.section}#${result.entry.anchor ?? "<top>"}`,
   );
 }

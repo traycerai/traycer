@@ -6,18 +6,29 @@
  *     shortcut even though the palette row opens a section picker)
  *
  * Settings sub-page: one row per section this build offers
- * (`visibleSettingsSections`), with the current section filtered
- * out on `/settings/<id>` routes.
+ * (`visibleSettingsSections`) and the Environment pick offers
+ * (`useEnvironmentSectionShown`, as the rail and search filter), with
+ * the current section filtered out on `/settings/<id>` routes. The pick and
+ * its host are read only while the sub-page is open; the root entry's
+ * keywords name every section this build offers, so typing a section's name
+ * reaches the entry without that read.
  *
  * Runs as a `ReactCommandSource` so the Open-Settings chord
  * refreshes live when the user rebinds `app.settings.open`.
  */
 import { useMemo } from "react";
+import { useEnvironmentPickerModel } from "@/components/settings/environment/use-environment-picker-model";
+import { useEnvironmentSectionShown } from "@/components/settings/environment/use-environment-section-shown";
+import {
+  useHostScopeFor,
+  WINDOW_HOST_SELECTION,
+} from "@/components/settings/host-scope/use-host-scope";
 import {
   SETTINGS_SECTION_GROUPS,
   visibleSettingsSections,
   type SettingsSection,
   type SettingsSectionGroupId,
+  type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { withSubpageLabels } from "@/lib/commands/sub-page-keywords";
@@ -34,16 +45,20 @@ export const navigationSource: ReactCommandSource = {
     const settingsChord = useKeybindingStore(
       (state) => state.bindings["app.settings.open"] ?? null,
     );
-    const sectionItems = SETTINGS_SUBPAGE.useItems(ctx);
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       const items: Array<CommandItem> = [];
       if (ctx.pathname !== "/epics") items.push(OPEN_EPICS_ITEM);
-      items.push(buildSettingsEntryItem(settingsChord, sectionItems));
+      items.push(
+        buildSettingsEntryItem(
+          settingsChord,
+          settingsSectionItems(ctx.pathname, everySectionShown),
+        ),
+      );
       if (import.meta.env.DEV) {
         items.push(ARTIFACT_PROOF_ITEM);
       }
       return items;
-    }, [ctx.pathname, settingsChord, sectionItems]);
+    }, [ctx.pathname, settingsChord]);
   },
 };
 
@@ -76,17 +91,31 @@ const OPEN_EPICS_ITEM: CommandItem = {
 const SETTINGS_SUBPAGE: CommandSubpage = {
   id: "nav:settings",
   title: "Open settings",
-  useItems: (ctx: CommandContext) =>
-    useMemo<ReadonlyArray<CommandItem>>(
-      () =>
-        visibleSettingsSections().flatMap((section) =>
-          ctx.pathname !== `/settings/${section.id}`
-            ? [buildSectionItem(section)]
-            : [],
-        ),
-      [ctx.pathname],
-    ),
+  useItems: (ctx: CommandContext) => {
+    const windowScope = useHostScopeFor(WINDOW_HOST_SELECTION);
+    useEnvironmentPickerModel(windowScope);
+    const sectionShown = useEnvironmentSectionShown(windowScope);
+    return useMemo<ReadonlyArray<CommandItem>>(
+      () => settingsSectionItems(ctx.pathname, sectionShown),
+      [ctx.pathname, sectionShown],
+    );
+  },
 };
+
+function everySectionShown(): boolean {
+  return true;
+}
+
+function settingsSectionItems(
+  pathname: string,
+  sectionShown: (section: SettingsSectionId) => boolean,
+): ReadonlyArray<CommandItem> {
+  return visibleSettingsSections().flatMap((section) =>
+    pathname !== `/settings/${section.id}` && sectionShown(section.id)
+      ? [buildSectionItem(section)]
+      : [],
+  );
+}
 
 function buildSettingsEntryItem(
   shortcut: string | null,

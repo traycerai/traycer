@@ -1,11 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import { ChevronDown } from "lucide-react";
 import {
-  isStaleLocalPick,
   LOCAL_BADGE_TOOLTIP,
   personalSubtitle,
-  type EnvironmentPickerModel,
   type LocalPickerRow,
 } from "@/components/settings/environment/environment-picker-model";
 import {
@@ -20,7 +18,7 @@ import {
   usePickedTeamLabel,
 } from "@/components/settings/environment/team-pick-label";
 import { TeamRows } from "@/components/settings/environment/team-rows";
-import { useEnvironmentStatusModel } from "@/components/settings/environment/use-environment-status-model";
+import { useEnvironmentPickerModel } from "@/components/settings/environment/use-environment-picker-model";
 import {
   useHostScopeFor,
   WINDOW_HOST_SELECTION,
@@ -56,34 +54,6 @@ import {
   useMoveSheetStore,
   type MoveSheetTarget,
 } from "@/stores/settings/move-sheet-store";
-
-/**
- * The model the Environment dropdown draws, from each computer's
- * `environment.status` (`isEnvironmentComputer`). Also keeps the window's
- * default pick current and drops a Local pick whose computer has since moved:
- * the store is what every Environment page reads (`useEnvironmentPick`), and
- * this is the one place that knows each computer's state.
- */
-function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
-  const model = useEnvironmentStatusModel(scope);
-  const pick = useSettingsEnvironmentPickStore((state) => state.pick);
-  const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
-  const setDefaultPick = useSettingsEnvironmentPickStore(
-    (state) => state.setDefaultPick,
-  );
-  const statuses = model.statuses;
-  const stale = isStaleLocalPick(pick, model.picker, statuses);
-  const { defaultPick } = model.picker;
-  // Syncs host-reported state into the window's pick: the store is read by
-  // pages that do not mount this hook.
-  useEffect(() => {
-    setDefaultPick(defaultPick, scope.activeHostId);
-  }, [defaultPick, setDefaultPick, scope.activeHostId]);
-  useEffect(() => {
-    if (stale) setPick(null);
-  }, [stale, setPick]);
-  return model.picker;
-}
 
 /**
  * The dropdown's pick upkeep for while the dropdown is not on screen: a phone

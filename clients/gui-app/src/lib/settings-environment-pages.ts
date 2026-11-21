@@ -125,17 +125,40 @@ const PAGES_HIDDEN_BY_PICK: Readonly<
   team: new Set(),
 };
 
-/**
- * Whether the Environment group shows `section`'s row under `pick`. A section
- * of the group that is not one of the registry's pages is shown under every
- * pick; the retired ones (`RETIRED_SETTINGS_SECTION_IDS`) are never offered.
- */
-export function environmentSectionShown(
+function sectionHiddenByPick(
   pick: EnvironmentPick,
   section: SettingsSectionId,
 ): boolean {
   const pageId = pageIdForSection(section);
-  return pageId === null || !PAGES_HIDDEN_BY_PICK[pick.kind].has(pageId);
+  return pageId !== null && PAGES_HIDDEN_BY_PICK[pick.kind].has(pageId);
+}
+
+/**
+ * What the picked configuration's source can draw, beyond what its kind
+ * decides (`useEnvironmentSectionShown` reads them).
+ *
+ * `secretsServed`: Secrets is offered where its page can draw — on the cloud,
+ * and on a host that advertises `environment.secrets.list`. False while the
+ * source, or that host's answer, is still unknown: a row that appears once is
+ * steadier than one that is offered and then taken away under the pointer.
+ */
+export interface EnvironmentPageFacts {
+  readonly secretsServed: boolean;
+}
+
+/**
+ * Whether Settings offers `section` under `pick`, in the Environment group's
+ * rows and in search. A section that is not one of the registry's pages is
+ * offered under every pick; the retired ones (`RETIRED_SETTINGS_SECTION_IDS`)
+ * are never offered.
+ */
+export function environmentSectionShown(
+  pick: EnvironmentPick,
+  section: SettingsSectionId,
+  facts: EnvironmentPageFacts,
+): boolean {
+  if (sectionHiddenByPick(pick, section)) return false;
+  return pageIdForSection(section) !== "secrets" || facts.secretsServed;
 }
 
 /**
@@ -164,7 +187,7 @@ export function moveEnvironmentPick(input: {
   input.setPick(input.next);
   if (
     input.activeSection !== null &&
-    !environmentSectionShown(input.next, input.activeSection)
+    sectionHiddenByPick(input.next, input.activeSection)
   ) {
     input.moveSurface("providers");
   }

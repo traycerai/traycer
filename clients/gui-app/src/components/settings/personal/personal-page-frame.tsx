@@ -41,9 +41,8 @@ import {
   ConfigurationSourceBoundary,
   type CloudConfigurationTarget,
 } from "@/components/settings/environment/configuration-source-boundary";
-import { hostRunsPersonal } from "@/components/settings/environment/environment-picker-model";
+import { useWindowHostRunsPersonal } from "@/components/settings/personal/use-window-host-runs-personal";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { UnresolvedEnvironmentPage } from "@/components/settings/environment/unresolved-environment-page";
@@ -195,7 +194,7 @@ function PersonalSourceFrame(props: {
   readonly pick: EnvironmentPick;
   readonly children: ReactNode;
 }): ReactNode {
-  const runs = useWindowHostRunsPersonal();
+  const runs = useWindowHostRunsPersonal(usePersonalHostScope());
   if (runs === null) {
     return (
       <AgentSpinningDots
@@ -219,34 +218,6 @@ function PersonalSourceFrame(props: {
     >
       {props.children}
     </CloudPageFrame>
-  );
-}
-
-/**
- * Whether the window's host runs Personal; `null` while it is unknown: no
- * handshake yet, or a host that serves `environment.status` and has not
- * answered. A window with no host runs nothing, and neither does one whose
- * host cannot be reached: its pages read the cloud rather than wait for a
- * handshake that cannot happen.
- */
-function useWindowHostRunsPersonal(): boolean | null {
-  const scope = usePersonalHostScope();
-  const status = useEnvironmentStatusRead(scope.client, scope.hostId, true);
-  const version = useHostNegotiatedMethodVersion(
-    scope.client,
-    "environment.status",
-  );
-  if (scope.hostId === null) return false;
-  if (scope.status === "unreachable" || scope.status === "vanished")
-    return false;
-  if (version === null) return null;
-  if (version !== false && status.data === null && !status.isError) {
-    return null;
-  }
-  return hostRunsPersonal(
-    { hostId: scope.hostId, name: scope.hostLabel },
-    status.data,
-    version,
   );
 }
 
