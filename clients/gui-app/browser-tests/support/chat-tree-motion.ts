@@ -230,36 +230,41 @@ export async function seedCloud(
 const ROW_COMPONENT = "ChatRowButton";
 const PANEL_COMPONENT = "ChatTreePanelBody";
 /**
- * How many rows one commit after a change may mount: a window mount adds the
- * one row a change brought into view; a scroll brings in as many as it shows.
+ * What a recording's change is, for the commits it may make:
+ * - `tree`: the tree changes, so its first commit renders the panel and the
+ *   rows; after it, each commit mounts at most the one row a window mount
+ *   brings into view;
+ * - `scroll`: only the window moves, so from its first commit on it renders
+ *   neither, and mounts as many rows as it brings into view.
  */
-type MountsPerCommit = "one" | "any";
+type Change = "tree" | "scroll";
 /**
- * After the commit that makes the change, no commit renders a row that was
- * already there or the panel, and a commit mounts at most `mounts` rows. The
- * cause this holds off: a host query the mock host left unanswered was fetched
- * again whenever a row mounted into the window, and each failure re-rendered
- * every row in a long task, so the motion stalled and jumped.
+ * No commit renders a row that was already there or the panel, but the first
+ * commit of a `tree` change, and mounts are bounded as `change` says. The
+ * cause this holds off: a host query the mock host left unanswered
+ * was fetched again whenever a row mounted into the window, and each failure
+ * re-rendered every row in a long task, so the motion stalled and jumped.
  */
 function expectOnlyMountsRender(
   commits: readonly CommitCount[],
-  mounts: MountsPerCommit,
+  change: Change,
 ): void {
   expect(commits.length, "commits after the change").toBeGreaterThan(0);
   const trail = JSON.stringify(commits);
-  commits.slice(1).forEach((commit, i) => {
+  commits.forEach((commit, i) => {
+    if (change === "tree" && i === 0) return;
     expect(
       commit.rows,
-      `commit ${String(i + 1)} re-rendered rows (all commits: ${trail})`,
+      `commit ${String(i)} re-rendered rows (all commits: ${trail})`,
     ).toBe(0);
     expect(
       commit.panel,
-      `commit ${String(i + 1)} re-rendered the panel (all commits: ${trail})`,
+      `commit ${String(i)} re-rendered the panel (all commits: ${trail})`,
     ).toBe(0);
-    if (mounts === "one") {
+    if (change === "tree") {
       expect(
         commit.mounted,
-        `commit ${String(i + 1)} mounted rows (all commits: ${trail})`,
+        `commit ${String(i)} mounted rows (all commits: ${trail})`,
       ).toBeLessThanOrEqual(1);
     }
   });
@@ -271,7 +276,7 @@ function expectOnlyMountsRender(
  */
 async function guarded(
   page: Page,
-  mounts: MountsPerCommit,
+  change: Change,
   record: () => Promise<Recording>,
 ): Promise<Recording> {
   await page.evaluate(
@@ -288,7 +293,7 @@ async function guarded(
     if (probe === undefined) throw new Error("no probe");
     return probe.stopCommitCount();
   });
-  expectOnlyMountsRender(commits, mounts);
+  expectOnlyMountsRender(commits, change);
   CHANGE_COMMITTED_AT.set(recording, commits[0].at);
   return recording;
 }
@@ -307,7 +312,7 @@ export function recordCloud(
   page: Page,
   specs: readonly CloudSpec[],
 ): Promise<Recording> {
-  return guarded(page, "one", () =>
+  return guarded(page, "tree", () =>
     page.evaluate(
       ([list, frames]) => {
         const probe = window.__chatTreeMotion;
@@ -319,7 +324,7 @@ export function recordCloud(
   );
 }
 export function recordShape(page: Page, next: Shape): Promise<Recording> {
-  return guarded(page, "one", () =>
+  return guarded(page, "tree", () =>
     page.evaluate(
       ([shape, frames]) => {
         const probe = window.__chatTreeMotion;
@@ -336,7 +341,7 @@ export function recordHide(
   next: Shape,
   kept: readonly string[],
 ): Promise<Recording> {
-  return guarded(page, "one", () =>
+  return guarded(page, "tree", () =>
     page.evaluate(
       ([shape, ids, frames]) => {
         const probe = window.__chatTreeMotion;
@@ -348,7 +353,7 @@ export function recordHide(
   );
 }
 export function recordChevron(page: Page, id: string): Promise<Recording> {
-  return guarded(page, "one", () =>
+  return guarded(page, "tree", () =>
     page.evaluate(
       ([target, frames]) => {
         const probe = window.__chatTreeMotion;
@@ -360,7 +365,7 @@ export function recordChevron(page: Page, id: string): Promise<Recording> {
   );
 }
 export function recordScroll(page: Page, top: number): Promise<Recording> {
-  return guarded(page, "any", () =>
+  return guarded(page, "scroll", () =>
     page.evaluate(
       ([offset, frames]) => {
         const probe = window.__chatTreeMotion;
@@ -382,7 +387,6 @@ const FADED = 0.05;
 /**
  * How far into the tree's 160 ms slide or fade (`useTreeRowMotion`) a row is
  * still on the way: its easing has covered under 95% of the distance by then.
- * The sampler reads a frame late, which only puts a sample earlier on its way.
  */
 const MID_TRANSITION_MS = 90;
 /**
@@ -490,7 +494,8 @@ function isBetween(top: number, start: number, end: number): boolean {
  *   end yet: a snap or a rushed slide fails. `anchor` is the change's commit,
  *   or the leaving row's last drawn sample for a slide that closes its gap;
  * - (ii) at least one sample after `anchor` is between the two places, unless
- *   the gap before its first moved sample is over `HIDING_GAP_MS`.
+ *   the time to its first moved sample, from the sample before it or from
+ *   `anchor` if that is later, is over `HIDING_GAP_MS`.
  * A window a stall leaves empty is skipped, and the skip is noted; the commit
  * count every recording holds catches what causes such a stall.
  */
@@ -527,8 +532,10 @@ function expectGlide(
   );
   expect(moved, `${id} leaves its place`).toBeGreaterThanOrEqual(0);
   const departed = after[moved];
-  const before =
-    moved > 0 ? after[moved - 1].at : sampledAt(recording, departed.frame - 1);
+  const before = Math.max(
+    anchor,
+    moved > 0 ? after[moved - 1].at : sampledAt(recording, departed.frame - 1),
+  );
   if (departed.at - before > HIDING_GAP_MS) {
     noteWindow("slide (ii)", id, "skipped: gap before its first move");
     return;
@@ -597,24 +604,37 @@ export function expectVanishesAtOnce(recording: Recording, id: string): void {
   ).toEqual([]);
 }
 /**
- * The row fades where it stood: it stays at its place, never brightens, and is
- * gone before the recording ends. Its fade cannot begin before the change's
- * commit:
- * - (i) no sample in the first `MID_TRANSITION_MS` after that commit is faded
- *   out yet: a cut or a rushed fade fails;
- * - (ii) at least one sample is part faded, unless the gap before the row is
- *   gone or first fades is over `HIDING_GAP_MS`; then how faint it got and
- *   how far it drifted left are asserted too, unless a stall over `STALL_MS`
- *   came just before it went.
- * Each skip is noted.
+ * The row fades where it stood, and stays at its place while it does; see
+ * `expectFadesOut`.
  */
 export function expectFadesInPlace(recording: Recording, id: string): void {
   const start = startTop(recording, id);
   const rows = drawn(recording, id).filter((row) => row.frame > 0);
-  expect(rows.length, `${id} is drawn after the change`).toBeGreaterThan(0);
   for (const row of rows) {
     expect(row.top, `${id} frame ${String(row.frame)}`).toBeCloseTo(start, 0);
   }
+  expectFadesOut(recording, id, rows);
+}
+/**
+ * `rows`, the samples after the change of a copy of row `id` that leaves the
+ * page: it never brightens, and is gone before the recording ends. Its fade
+ * cannot begin before the change's commit:
+ * - (i) the first frame the copy is gone from comes more than
+ *   `MID_TRANSITION_MS` after that commit, and no sample in that window is
+ *   faded out yet: a cut or a rushed fade fails;
+ * - (ii) at least one sample is part faded, unless the time to the frame the
+ *   copy is gone from or first fades, from the sample before it or from that
+ *   commit if that is later, is over `HIDING_GAP_MS`; then how faint it got and
+ *   how far it drifted left are asserted too, unless a stall over `STALL_MS`
+ *   came just before it went.
+ * Each skip is noted.
+ */
+export function expectFadesOut(
+  recording: Recording,
+  id: string,
+  rows: readonly Drawn[],
+): void {
+  expect(rows.length, `${id} is drawn after the change`).toBeGreaterThan(0);
   for (let i = 1; i < rows.length; i += 1) {
     expect(
       rows[i].opacity,
@@ -626,11 +646,19 @@ export function expectFadesInPlace(recording: Recording, id: string): void {
     recording.length - 1,
   );
   const committed = changeCommittedAt(recording);
+  const gone = sampledAt(recording, last.frame + 1);
+  expect(
+    gone - committed,
+    `${id} is gone at ${String(gone)} ms, ${String(MID_TRANSITION_MS)} ms or less after the change's commit at ${String(committed)} ms`,
+  ).toBeGreaterThan(MID_TRANSITION_MS);
   const early = rows.filter(
     (row) => row.at >= committed && row.at - committed <= MID_TRANSITION_MS,
   );
-  if (early.length === 0) noteWindow("fade (i)", id, "skipped: empty window");
-  else noteWindow("fade (i)", id, "evaluated");
+  if (early.length === 0) {
+    noteWindow("fade (i)", id, "skipped: empty window (gone checked)");
+  } else {
+    noteWindow("fade (i)", id, "evaluated");
+  }
   for (const row of early) {
     expect(
       row.opacity,
@@ -638,10 +666,11 @@ export function expectFadesInPlace(recording: Recording, id: string): void {
     ).toBeGreaterThan(FADED);
   }
   const fading = rows.findIndex((row) => row.opacity < 0.99);
-  const gone = sampledAt(recording, last.frame + 1);
   const shown = fading === -1 ? last.at : rows[fading].at;
-  const beforeShown =
-    fading > 0 ? rows[fading - 1].at : sampledAt(recording, rows[0].frame - 1);
+  const beforeShown = Math.max(
+    committed,
+    fading > 0 ? rows[fading - 1].at : sampledAt(recording, rows[0].frame - 1),
+  );
   if (
     fading === -1
       ? gone - last.at > HIDING_GAP_MS
@@ -852,12 +881,16 @@ export function expectSlidesBack(
 }
 
 /**
- * The row moves out towards `from` until frame `afterFrame`, never turning
- * back, gets at least half a row of the way there, then moves back and ends
- * at `to`, never turning back either: a row that slides while another fades
- * and closes the gap once the fade ends. Where it is on `afterFrame` itself is
- * not asserted: the sampler can read the slide a frame late. How far it got
- * is not asserted when a gap over `TURN_GAP_MS` spans the turn; that is noted.
+ * The row moves out towards `from`, never turning back, gets at least half a
+ * row of the way there, then moves back and ends at `to`, never turning back
+ * either: a row that slides while another fades and closes the gap once the
+ * fade ends. `afterFrame` is the leaving row's last drawn frame. The turn is
+ * the farthest-out sample up to the first frame after it (ties go to the
+ * later): the row's way back starts from its full outward place once the
+ * copy has gone, so a long gap leading into that frame cannot read the full
+ * outward place as a wrong-way return. The row keeps its outward course up to
+ * `afterFrame`. How far it got is not asserted when a gap over `TURN_GAP_MS`
+ * leads into or out of the turn; that is noted.
  */
 export function expectOutAndBack(
   recording: Recording,
@@ -866,33 +899,38 @@ export function expectOutAndBack(
 ): void {
   const { from, to, afterFrame } = glide;
   const rows = drawn(recording, id);
-  const out = rows.filter((row) => row.frame <= afterFrame);
-  const back = rows.filter((row) => row.frame >= afterFrame);
-  expect(
-    out.length,
-    `${id} is drawn up to frame ${String(afterFrame)}`,
-  ).toBeGreaterThan(0);
-  expect(
-    back.length,
-    `${id} is drawn from frame ${String(afterFrame)}`,
-  ).toBeGreaterThan(0);
   const outward = Math.sign(from - to);
-  for (let i = 1; i < out.length; i += 1) {
+  const firstAfter = rows.findIndex((row) => row.frame > afterFrame);
+  expect(
+    firstAfter,
+    `${id} is drawn after frame ${String(afterFrame)}`,
+  ).toBeGreaterThan(0);
+  const reach = (row: Drawn): number => (row.top - to) * outward;
+  const farthest = Math.max(...rows.slice(0, firstAfter + 1).map(reach));
+  let turnIndex = firstAfter;
+  while (reach(rows[turnIndex]) < farthest - SUBPIXEL_PX) turnIndex -= 1;
+  const turn = rows[turnIndex];
+  expect(
+    turn.frame,
+    `${id} keeps moving out until frame ${String(afterFrame)}, when the copy goes (it turns on frame ${String(turn.frame)})`,
+  ).toBeGreaterThanOrEqual(afterFrame);
+  for (let i = 1; i <= turnIndex; i += 1) {
     expect(
-      (out[i].top - out[i - 1].top) * outward,
-      `${id} moves out without turning (frame ${String(out[i].frame)})`,
+      (rows[i].top - rows[i - 1].top) * outward,
+      `${id} moves out without turning (frame ${String(rows[i].frame)})`,
     ).toBeGreaterThanOrEqual(-SUBPIXEL_PX);
   }
-  for (let i = 1; i < back.length; i += 1) {
+  for (let i = turnIndex + 1; i < rows.length; i += 1) {
     expect(
-      (back[i].top - back[i - 1].top) * outward,
-      `${id} comes back without turning (frame ${String(back[i].frame)})`,
+      (rows[i].top - rows[i - 1].top) * outward,
+      `${id} comes back without turning (frame ${String(rows[i].frame)})`,
     ).toBeLessThanOrEqual(SUBPIXEL_PX);
   }
-  const turn = out[out.length - 1];
-  const next = back.find((row) => row.frame > afterFrame);
-  if (next !== undefined && next.at - turn.at > TURN_GAP_MS) {
-    noteWindow("turn", id, "skipped: gap spanning the turn");
+  const into = turnIndex > 0 ? turn.at - rows[turnIndex - 1].at : 0;
+  const outOf =
+    turnIndex < rows.length - 1 ? rows[turnIndex + 1].at - turn.at : 0;
+  if (Math.max(into, outOf) > TURN_GAP_MS) {
+    noteWindow("turn", id, "skipped: gap into or out of the turn");
   } else {
     noteWindow("turn", id, "evaluated");
     expect(
@@ -900,7 +938,7 @@ export function expectOutAndBack(
       `${id} turns at ${String(turn.top)}, at least half a row towards ${String(from)}`,
     ).toBeGreaterThanOrEqual(0);
   }
-  expect(back[back.length - 1].top, `${id} ends the slide at`).toBeCloseTo(
+  expect(rows[rows.length - 1].top, `${id} ends the slide at`).toBeCloseTo(
     to,
     0,
   );
