@@ -495,7 +495,9 @@ export type HostProfileSyncGroupHoldersRequest = z.infer<
  * own linked peers included. `complete`: every one of them answered. `terminal`:
  * some computer in the group shares the chain with its Terminal account.
  * `converted`: the answering host's own folder has converted too; absent from
- * a host that predates it.
+ * a host that predates it. `moving`: some computer the answer covers is
+ * converting or has converted. `stopping`: some computer the answer covers is
+ * under a Stop claim. Both are absent from a host that predates them.
  */
 export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
   z.strictObject({
@@ -505,6 +507,8 @@ export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
     complete: z.boolean(),
     terminal: z.boolean(),
     converted: z.boolean().default(false),
+    moving: z.boolean().default(false),
+    stopping: z.boolean().default(false),
   }),
 );
 export type HostProfileSyncGroupHoldersResponse = z.infer<
