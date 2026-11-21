@@ -300,18 +300,24 @@ describe("released peer-transfer credential slots", () => {
 
 const CLAIM_ID = "22222222-2222-4222-8222-222222222222";
 const MEMBER_LINK_ID = "33333333-3333-4333-8333-333333333333";
-const member = (index: number): Record<string, unknown> => ({
+const PROFILE_ID = "44444444-4444-4444-8444-444444444444";
+const member = (index: number, profileId: string): Record<string, unknown> => ({
   hostId: `host-${index}`,
+  profileId,
   linkId: MEMBER_LINK_ID,
 });
-const MANY_MEMBERS = Array.from({ length: 33 }, (_, index) => member(index));
+const MANY_MEMBERS = Array.from({ length: 33 }, (_, index) =>
+  member(index, PROFILE_ID),
+);
 
 const PREPARE = {
   kind: "prepare",
   claimId: CLAIM_ID,
   claimantHostId: "host-a",
   keeperHostId: "host-b",
-  members: [member(1), member(2)],
+  keeperProfileId: PROFILE_ID,
+  gatewayHostId: "host-c",
+  members: [member(1, PROFILE_ID), member(2, "ambient")],
 };
 
 const STOP_STEPS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
@@ -321,13 +327,17 @@ const STOP_STEPS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
     {
       kind: "handoff",
       claimId: CLAIM_ID,
+      profileId: PROFILE_ID,
       accountId: "acct",
       generation: 4,
       credential: CREDENTIALS["codex"],
     },
   ],
-  ["status", { kind: "status", claimId: CLAIM_ID }],
-  ["closed", { kind: "closed", claimId: CLAIM_ID, generation: 4 }],
+  ["status", { kind: "status", claimId: CLAIM_ID, profileId: "ambient" }],
+  [
+    "closed",
+    { kind: "closed", claimId: CLAIM_ID, profileId: PROFILE_ID, generation: 4 },
+  ],
   ["abort", { kind: "abort", claimId: CLAIM_ID }],
   ["leave", { kind: "leave" }],
 ];
@@ -425,6 +435,53 @@ describe("stopLink one-keeper steps", () => {
     ).toBe(false);
   });
 
+  it("round-trips a prepare whose gateway is null", () => {
+    const request = stopRequest({ ...PREPARE, gatewayHostId: null });
+    expect(hostProfileSyncStopLinkRequestSchema.parse(request)).toEqual(
+      request,
+    );
+  });
+
+  it("refuses a prepare without keeperProfileId or without gatewayHostId", () => {
+    const { keeperProfileId: _keeper, ...withoutKeeper } = PREPARE;
+    const { gatewayHostId: _gateway, ...withoutGateway } = PREPARE;
+    expect(parsesRequest(stopRequest(PREPARE))).toBe(true);
+    expect(parsesRequest(stopRequest(withoutKeeper))).toBe(false);
+    expect(parsesRequest(stopRequest(withoutGateway))).toBe(false);
+    expect(
+      parsesRequest(stopRequest({ ...PREPARE, keeperProfileId: "folder" })),
+    ).toBe(false);
+  });
+
+  it("refuses a member without a profileId, or one that is neither a uuid nor ambient", () => {
+    const { profileId: _profile, ...withoutProfile } = member(1, PROFILE_ID);
+    expect(
+      parsesRequest(stopRequest({ ...PREPARE, members: [member(1, "ambient")] })),
+    ).toBe(true);
+    expect(
+      parsesRequest(stopRequest({ ...PREPARE, members: [withoutProfile] })),
+    ).toBe(false);
+    expect(
+      parsesRequest(
+        stopRequest({ ...PREPARE, members: [member(1, "folder-1")] }),
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["handoff", "status", "closed"])(
+    "refuses a %s step without the sender's profileId, or with one that is neither a uuid nor ambient",
+    (kind) => {
+      const step = STOP_STEPS.find(([name]) => name === kind)?.[1];
+      if (step === undefined) throw new Error(`no ${kind} step`);
+      const { profileId: _profile, ...without } = step;
+      expect(parsesRequest(stopRequest(step))).toBe(true);
+      expect(parsesRequest(stopRequest(without))).toBe(false);
+      expect(
+        parsesRequest(stopRequest({ ...step, profileId: "folder-1" })),
+      ).toBe(false);
+    },
+  );
+
   it("keeps the answer literals out of the link reasons", () => {
     // `link.reason` is read by 1.5.4 with this enum.
     for (const literal of [
@@ -462,6 +519,7 @@ describe("groupHolders answers", () => {
   it("defaults every flag, the split links and the pin when absent", () => {
     const holder = {
       hostId: "host-a",
+      profileId: "ambient",
       linkId: LINK_ID,
       oldPeers: [],
       terminal: false,
@@ -483,7 +541,39 @@ describe("groupHolders answers", () => {
       pinned: null,
       split: [],
       mixed: false,
+      twoFolders: false,
     });
+  });
+
+  it("keeps twoFolders when the answer says so", () => {
+    const answer = { holders: [], complete: true, terminal: false };
+    expect(
+      hostProfileSyncGroupHoldersResponseSchema.parse({
+        ...answer,
+        twoFolders: true,
+      }).twoFolders,
+    ).toBe(true);
+  });
+
+  it("refuses a holder without a profileId, and more than 32 holders", () => {
+    const holder = {
+      hostId: "host-a",
+      profileId: PROFILE_ID,
+      linkId: LINK_ID,
+      oldPeers: [],
+      terminal: false,
+    };
+    const { profileId: _profile, ...withoutProfile } = holder;
+    const answer = (holders: unknown[]): boolean =>
+      hostProfileSyncGroupHoldersResponseSchema.safeParse({
+        holders,
+        complete: true,
+        terminal: false,
+      }).success;
+    expect(answer([holder])).toBe(true);
+    expect(answer([withoutProfile])).toBe(false);
+    expect(answer(Array.from({ length: 32 }, () => holder))).toBe(true);
+    expect(answer(Array.from({ length: 33 }, () => holder))).toBe(false);
   });
 
   it("refuses a holder named by its host id alone", () => {
@@ -502,7 +592,7 @@ describe("groupHolders onward", () => {
     const request = {
       linkId: LINK_ID,
       providerId: "codex",
-      visited: ["host-a"],
+      visited: [LINK_ID],
     };
     expect(hostProfileSyncGroupHoldersRequestSchema.parse(request).onward).toBe(
       true,
@@ -513,5 +603,18 @@ describe("groupHolders onward", () => {
         onward: false,
       }).onward,
     ).toBe(false);
+  });
+
+  it("takes link ids as visited, refuses a host id, and bounds them at 256", () => {
+    const request = (visited: unknown[]): boolean =>
+      hostProfileSyncGroupHoldersRequestSchema.safeParse({
+        linkId: LINK_ID,
+        providerId: "codex",
+        visited,
+      }).success;
+    expect(request([LINK_ID])).toBe(true);
+    expect(request(["host-a"])).toBe(false);
+    expect(request(Array.from({ length: 256 }, () => LINK_ID))).toBe(true);
+    expect(request(Array.from({ length: 257 }, () => LINK_ID))).toBe(false);
   });
 });
