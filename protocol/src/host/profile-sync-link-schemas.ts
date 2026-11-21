@@ -447,6 +447,9 @@ export const hostProfileSyncStopLinkResponseSchema = lazySchema(() =>
         }),
         /** The peer's account renews nothing (a key): nothing to hand off. */
         z.strictObject({ kind: z.literal("no-chain") }),
+        /** The folder's group has started moving to Personal: the claim is
+         * dropped, and the folders stay linked. */
+        z.strictObject({ kind: z.literal("converted") }),
       ]),
     }),
     /** The answer to `handoff`: the peer holds a renewing copy at

@@ -10,6 +10,7 @@ import {
   hostProfileSyncFetchResponseSchema,
   hostProfileSyncGroupHoldersResponseSchema,
   hostProfileSyncOfferRequestSchema,
+  hostProfileSyncStopLinkResponseSchema,
   profileSyncCredentialFitsProvider,
   profileSyncCredentialSchema,
   profileSyncNowRequestSchema,
@@ -292,6 +293,17 @@ describe("released peer-transfer credential slots", () => {
         credential,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("stopLink converted stance", () => {
+  it("parses a converted stance", () => {
+    expect(
+      hostProfileSyncStopLinkResponseSchema.parse({
+        result: "stance",
+        stance: { kind: "converted" },
+      }),
+    ).toEqual({ result: "stance", stance: { kind: "converted" } });
   });
 });
 
