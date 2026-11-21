@@ -8,6 +8,7 @@ import {
   PROFILE_SYNC_MAX_CREDENTIAL_BYTES,
   hostProfileSyncApplyRequestSchema,
   hostProfileSyncFetchResponseSchema,
+  hostProfileSyncGroupHoldersResponseSchema,
   hostProfileSyncOfferRequestSchema,
   profileSyncCredentialFitsProvider,
   profileSyncCredentialSchema,
@@ -291,5 +292,35 @@ describe("released peer-transfer credential slots", () => {
         credential,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("groupHolders moving and stopping", () => {
+  it("defaults moving and stopping to false and keeps true", () => {
+    expect(
+      hostProfileSyncGroupHoldersResponseSchema.parse({
+        holders: ["host-a"],
+        complete: true,
+        terminal: false,
+        converted: false,
+      }),
+    ).toEqual({
+      holders: ["host-a"],
+      complete: true,
+      terminal: false,
+      converted: false,
+      moving: false,
+      stopping: false,
+    });
+    expect(
+      hostProfileSyncGroupHoldersResponseSchema.parse({
+        holders: ["host-a"],
+        complete: true,
+        terminal: false,
+        converted: false,
+        moving: true,
+        stopping: true,
+      }),
+    ).toMatchObject({ moving: true, stopping: true });
   });
 });
