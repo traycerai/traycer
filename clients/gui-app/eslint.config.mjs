@@ -2672,7 +2672,7 @@ export default tseslint.config(
     // the last COMMITTED value, so a row whose values did not change keeps its
     // object and its memoised row does not re-render. That value is read from
     // a ref during render to derive the next one, and written only in a
-    // layout effect or by an event handler, never during render. The
+    // layout effect or by a callback outside render, never during render. The
     // derivation is idempotent: the same committed value and inputs give an
     // equal result, so a render React throws away (a StrictMode re-run, an
     // interrupted concurrent render) changes nothing a committed render

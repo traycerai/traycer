@@ -17,6 +17,12 @@ import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useTaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import {
+  SharedTaskCollaboratorsContext,
+  SharedTaskHostsContext,
+  type SharedTaskCollaborators,
+  type SharedTaskHosts,
+} from "@/hooks/epic/task-shared-reads-context";
+import {
   HostDirectoryReadingContext,
   useHostDirectoryReading,
 } from "@/hooks/host/use-host-directory-reading";
@@ -985,6 +991,16 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const canEdit = isEditableRole(permissionRole);
   const canMutate = canEdit && !isDisconnected;
   const taskHostsView = useTaskHostsView(epicId);
+  // Held here for every row: a row mounting as the window moves reads these
+  // rather than observing them, so a refused read is not asked again per row.
+  const sharedTaskHosts = useMemo<SharedTaskHosts>(
+    () => ({ epicId, view: taskHostsView }),
+    [epicId, taskHostsView],
+  );
+  const sharedCollaborators = useMemo<SharedTaskCollaborators>(
+    () => ({ epicId, collaborators: collaboratorsQuery.data }),
+    [epicId, collaboratorsQuery.data],
+  );
   // Read once here for every row under the tree: a row's owner-host
   // reachability and its role claims otherwise each subscribe to a query per
   // row, and a branch of forty rows expanding is forty observers joining,
@@ -1483,40 +1499,46 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       <SidebarChatSharingContext.Provider value={chatSharingValue}>
         <TaskHostReachContext value={unreachableHostIds}>
           <TaskHostsViewContext value={taskHostsView}>
-            <HostDirectoryReadingContext value={directoryReading}>
-              <AgentRolesEnabledContext value={agentRolesEnabled}>
-                <SidebarSortContext.Provider value={comparator}>
-                  <SidebarSortClockContext.Provider value={sortClock}>
-                    <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                      {searchOpen &&
-                      !selectionMode &&
-                      surfaceSearchQuery === null ? (
-                        <ChatSearchHeaderInput
-                          tabId={tabId}
-                          resultCount={searchResultCount}
-                        />
-                      ) : null}
-                      {/* One clock for the tree's rows, owner cards and name labels
-                    alike: the first waits, the next row's opens at once. */}
-                      <HoverCardGroup>
-                        <SidebarContent ref={setScrollElement}>
-                          <SidebarGroup className="min-h-0 flex-1">
-                            <SidebarGroupContent
-                              ref={treeRegionRef}
-                              className="flex min-h-0 flex-1 flex-col"
-                              data-testid="epic-chat-tree-region"
-                            >
-                              {panelContent}
-                              {messageHits.node}
-                            </SidebarGroupContent>
-                          </SidebarGroup>
-                        </SidebarContent>
-                      </HoverCardGroup>
-                    </SidebarFilterVisibilityContext.Provider>
-                  </SidebarSortClockContext.Provider>
-                </SidebarSortContext.Provider>
-              </AgentRolesEnabledContext>
-            </HostDirectoryReadingContext>
+            <SharedTaskHostsContext value={sharedTaskHosts}>
+              <SharedTaskCollaboratorsContext value={sharedCollaborators}>
+                <HostDirectoryReadingContext value={directoryReading}>
+                  <AgentRolesEnabledContext value={agentRolesEnabled}>
+                    <SidebarSortContext.Provider value={comparator}>
+                      <SidebarSortClockContext.Provider value={sortClock}>
+                        <SidebarFilterVisibilityContext.Provider
+                          value={visibleIds}
+                        >
+                          {searchOpen &&
+                          !selectionMode &&
+                          surfaceSearchQuery === null ? (
+                            <ChatSearchHeaderInput
+                              tabId={tabId}
+                              resultCount={searchResultCount}
+                            />
+                          ) : null}
+                          {/* One clock for the tree's rows, owner cards and name labels
+                        alike: the first waits, the next row's opens at once. */}
+                          <HoverCardGroup>
+                            <SidebarContent ref={setScrollElement}>
+                              <SidebarGroup className="min-h-0 flex-1">
+                                <SidebarGroupContent
+                                  ref={treeRegionRef}
+                                  className="flex min-h-0 flex-1 flex-col"
+                                  data-testid="epic-chat-tree-region"
+                                >
+                                  {panelContent}
+                                  {messageHits.node}
+                                </SidebarGroupContent>
+                              </SidebarGroup>
+                            </SidebarContent>
+                          </HoverCardGroup>
+                        </SidebarFilterVisibilityContext.Provider>
+                      </SidebarSortClockContext.Provider>
+                    </SidebarSortContext.Provider>
+                  </AgentRolesEnabledContext>
+                </HostDirectoryReadingContext>
+              </SharedTaskCollaboratorsContext>
+            </SharedTaskHostsContext>
           </TaskHostsViewContext>
         </TaskHostReachContext>
       </SidebarChatSharingContext.Provider>
