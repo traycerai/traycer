@@ -561,6 +561,7 @@ describe("runPreReady - scheme/crash-reporter ordering", () => {
 });
 
 const RELEASED_HOST_ID = "desktop-startup-released-host";
+const PROBE_DECLINE_HOST_ID = "desktop-startup-probe-decline-host";
 const RELEASED_USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const RELEASED_HOST_TOKEN = "desktop-host-token";
 const RELEASED_SIGN_IN = "desktop-person-sign-in";
@@ -611,18 +612,22 @@ function readStartupFrame(raw: string): Record<string, unknown> {
   return frame;
 }
 
-function openStartupStream(hostToken: string | null): {
+function openStartupStream(
+  hostToken: string | null,
+  hostId: string,
+): {
   readonly sockets: StubStreamWebSocket[];
+  readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
 } {
   const { factory, sockets } = makeStubSocketFactory();
   const client = new WsStreamClient({
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => ({
-      hostId: RELEASED_HOST_ID,
+      hostId,
       websocketUrl: "ws://127.0.0.1:9/rpc",
     }),
-    hostId: RELEASED_HOST_ID,
+    hostId,
     bearer: () =>
       hostToken === null
         ? null
@@ -653,12 +658,12 @@ function openStartupStream(hostToken: string | null): {
   });
   startupClients.push(client);
   client.subscribe("git.subscribeStatus", {
-    hostId: RELEASED_HOST_ID,
+    hostId,
     runningDir: "/repo",
     ignoreWhitespace: false,
     freshNonce: null,
   });
-  return { sockets };
+  return { sockets, client };
 }
 
 async function openStartupFrame(
@@ -673,7 +678,7 @@ async function openStartupFrame(
 }
 
 async function admitStartupSignIn(): Promise<void> {
-  const { sockets } = openStartupStream(RELEASED_HOST_TOKEN);
+  const { sockets } = openStartupStream(RELEASED_HOST_TOKEN, RELEASED_HOST_ID);
   await vi.waitFor(
     () => expect(sockets.length).toBeGreaterThanOrEqual(1),
     RELEASED_WAIT,
@@ -699,7 +704,7 @@ async function admitStartupSignIn(): Promise<void> {
 }
 
 async function firstStartupOpenToken(): Promise<unknown> {
-  const { sockets } = openStartupStream(RELEASED_HOST_TOKEN);
+  const { sockets } = openStartupStream(RELEASED_HOST_TOKEN, RELEASED_HOST_ID);
   await vi.waitFor(
     () => expect(sockets.length).toBeGreaterThanOrEqual(1),
     RELEASED_WAIT,
@@ -720,8 +725,29 @@ describe("released host memory across a desktop sign-out", () => {
     vi.useRealTimers();
   });
 
+  it("starts the next dial with the host-only token after the auth session signs out", async () => {
+    await admitStartupSignIn();
+    const startup = import("../desktop-startup").then((mod) =>
+      mod.runDesktopStartup(),
+    );
+    await expect(startup).rejects.toThrow("stop-after-released-host-listener");
+    const session = capturedAuthSessions.sessions[0];
+    if (session === undefined) throw new Error("auth session missing");
+    session.set({
+      status: "signed-in",
+      token: RELEASED_SIGN_IN,
+      profile: {
+        userId: RELEASED_USER_ID,
+        userName: "person",
+        email: "person@example.com",
+      },
+    });
+    session.set({ status: "signed-out", token: null, profile: null });
+    expect(await firstStartupOpenToken()).toBe(RELEASED_HOST_TOKEN);
+  });
+
   it("probes again after auth-session sign-out clears a declined probe", async () => {
-    const first = openStartupStream(null);
+    const first = openStartupStream(null, PROBE_DECLINE_HOST_ID);
     await vi.waitFor(
       () => expect(first.sockets).toHaveLength(1),
       RELEASED_WAIT,
@@ -733,10 +759,13 @@ describe("released host memory across a desktop sign-out", () => {
     initialProbe.fireText(startupProbeDeclined());
     await vi.waitFor(() =>
       expect(
-        processReleasedHosts.probeDeclined(RELEASED_USER_ID, RELEASED_HOST_ID),
+        processReleasedHosts.probeDeclined(
+          RELEASED_USER_ID,
+          PROBE_DECLINE_HOST_ID,
+        ),
       ).toBe(true),
     );
-    startupClients[0]?.close("probe declined");
+    first.client.close("probe declined");
 
     const startup = import("../desktop-startup").then((mod) =>
       mod.runDesktopStartup(),
@@ -755,9 +784,12 @@ describe("released host memory across a desktop sign-out", () => {
     });
     session.set({ status: "signed-out", token: null, profile: null });
     expect(
-      processReleasedHosts.probeDeclined(RELEASED_USER_ID, RELEASED_HOST_ID),
+      processReleasedHosts.probeDeclined(
+        RELEASED_USER_ID,
+        PROBE_DECLINE_HOST_ID,
+      ),
     ).toBe(false);
-    const next = openStartupStream(null);
+    const next = openStartupStream(null, PROBE_DECLINE_HOST_ID);
     await vi.waitFor(() => expect(next.sockets).toHaveLength(1), RELEASED_WAIT);
     const nextSocket = next.sockets[0];
     if (nextSocket === undefined) throw new Error("post-sign-out dial missing");
