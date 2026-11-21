@@ -2,9 +2,10 @@ import { defineRpcContract } from "../framework/index";
 import * as schemas from "./profile-sync-link-schemas";
 
 /** Profile sync: the app asks the source host for statuses and intent; the
- * `host.*` methods carry a sign-in between two linked hosts of one user and
- * never answer an app. `host.profileSync.stopLink` exists only on hosts after
- * 1.5.4: a 1.5.4 host refuses it. */
+ * three @1.0 `host.*` methods carry a sign-in between two linked hosts of one
+ * user and never answer an app. `host.profileSync.stopLink` and
+ * `host.profileSync.groupHolders` exist only on hosts after 1.5.4: a 1.5.4
+ * host refuses them. */
 export const PROFILE_SYNC_LINK_RPC_METHODS = {
   "providers.profileSync.overview": {
     degrade: { kind: "unsupported" },
@@ -143,6 +144,24 @@ export const PROFILE_SYNC_LINK_RPC_METHODS = {
             schemaVersion: { major: 1, minor: 0 },
             requestSchema: schemas.hostProfileSyncStopLinkRequestSchema,
             responseSchema: schemas.hostProfileSyncStopLinkResponseSchema,
+          }),
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.profileSync.groupHolders": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: defineRpcContract({
+            method: "host.profileSync.groupHolders",
+            schemaVersion: { major: 1, minor: 0 },
+            requestSchema: schemas.hostProfileSyncGroupHoldersRequestSchema,
+            responseSchema: schemas.hostProfileSyncGroupHoldersResponseSchema,
           }),
           upgradeFromPreviousVersion: null,
         },
