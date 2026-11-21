@@ -16,6 +16,10 @@ import {
   type RuntimeHostMessengerBinding,
 } from "../host-messenger";
 import { heldHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+} from "@traycer-clients/shared/auth/host-token-source";
 
 const echoV10 = defineRpcContract({
   method: "host.echo",
@@ -294,6 +298,133 @@ describe("runtime host messenger release during dial", () => {
       ),
     ).rejects.toThrow("Host messenger has been disposed");
     expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("re-presents a refused held token on a team local unary call", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    FakeWebSocket.reset();
+    const teamEntry: HostDirectoryEntry = {
+      ...localEntry,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    };
+    const heldToken = "team-held-expired-token";
+    let mintCalls = 0;
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve({
+          kind: "unavailable",
+          detail: "authn offline",
+        });
+      },
+      signIn: (userId) =>
+        userId === bearer.identity.userId ? bearer.getBearerToken() : null,
+      now: () => Date.now(),
+    });
+    await hostTokens.adopt(
+      bearer.identity.userId,
+      teamEntry.hostId,
+      { token: heldToken, expiresAtMs: Date.now() - 11 * 60_000 },
+      hostTokens.era(bearer.identity.userId),
+    );
+    const binding = buildRuntimeHostMessenger<typeof registry>({
+      registry,
+      resolveTarget: (hostId) =>
+        hostId === teamEntry.hostId ? teamEntry : null,
+      auth: null,
+      authnBaseUrl: "https://authn.invalid",
+      hostTokens,
+      requestId: () => "req-team-held-token",
+      onRemoteAvailabilityRecovered: () => undefined,
+      onRemoteSessionTerminal: () => undefined,
+    });
+    const firstArrived = FakeWebSocket.nextInstance();
+    const firstCall = binding.messenger.request(
+      "host.echo",
+      { message: "first" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: authority(),
+      },
+    );
+    const firstSocket = await firstArrived;
+    const firstOpenSent = firstSocket.nextSend();
+    firstSocket.emit("open", { type: "open" });
+    const firstOpen = await firstOpenSent;
+    if (firstOpen.kind !== "open") throw new Error("expected first open frame");
+    expect(firstOpen.token).toBe(heldToken);
+    firstSocket.emit("message", {
+      data: JSON.stringify({
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "host token expired",
+          doorReason: "token_expired",
+          retryable: false,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      }),
+    });
+    await expect(firstCall).rejects.toThrow();
+
+    const secondCall = binding.messenger.request(
+      "host.echo",
+      { message: "second" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: authority(),
+      },
+    );
+    let secondSettled = false;
+    void secondCall.then(
+      () => {
+        secondSettled = true;
+      },
+      () => {
+        secondSettled = true;
+      },
+    );
+    await vi.waitFor(
+      () =>
+        expect(FakeWebSocket.instances.length === 2 || secondSettled).toBe(
+          true,
+        ),
+      { timeout: 2_000, interval: 10 },
+    );
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const secondSocket = FakeWebSocket.instances.at(1);
+    if (secondSocket === undefined) throw new Error("second socket missing");
+    const secondOpenSent = secondSocket.nextSend();
+    secondSocket.emit("open", { type: "open" });
+    const secondOpen = await secondOpenSent;
+    if (secondOpen.kind !== "open")
+      throw new Error("expected second open frame");
+    expect(secondOpen.token).toBe(heldToken);
+    const requestSent = secondSocket.nextSend();
+    secondSocket.emit("message", { data: openAckFor(secondOpen) });
+    const request = await requestSent;
+    if (request.kind !== "request") throw new Error("expected request frame");
+    secondSocket.emit("message", {
+      data: responseFor(request, "team-held-token"),
+    });
+    await expect(secondCall).resolves.toEqual({ echoed: "team-held-token" });
+    expect(mintCalls).toBeGreaterThan(0);
+    const opens = FakeWebSocket.instances.flatMap((socket) =>
+      socket.sent
+        .map((raw) => JSON.parse(raw) as Record<string, unknown>)
+        .filter((frame) => frame.kind === "open")
+        .map((frame) => frame.token),
+    );
+    expect(opens).toEqual([heldToken, heldToken]);
+    expect(opens).not.toContain("bearer-token");
+    expect(opens).not.toContain("no-host-only-token");
+    binding.dispose();
   });
 
   it("closes the socket after reset during the dial and keeps a later call's socket", async () => {

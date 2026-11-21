@@ -30,6 +30,7 @@ import {
 import { noteHostTokenRenewal } from "@/lib/host/host-door-observer";
 import { deriveWindowNarration } from "@/lib/host/window-narration";
 import { DEFAULT_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-transport/transport-config";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 
 type HostTokenRevalidatorDependencies = Parameters<
   typeof import("@traycer-clients/shared/auth/host-token-lease").hostTokenRevalidator
@@ -530,13 +531,155 @@ describe("local stream host-token open frame", () => {
     await vi.waitFor(() =>
       expect(sentFramesOfKind(recoveredSocket, "open")).toHaveLength(1),
     );
-    const recoveredOpen = sentFramesOfKind(recoveredSocket, "open")[0];
-    expect(recoveredOpen.token).toBe("fresh-after-outage");
-    recoveredSocket.fireMessage(openAckFrame([], null));
+    const probeOpen = sentFramesOfKind(recoveredSocket, "open")[0];
+    expect(probeOpen.token).toBe(NO_HOST_TOKEN_PROBE);
+    recoveredSocket.fireMessage(
+      JSON.stringify({
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "current-host-refusal",
+          doorReason: "owner_sign_in",
+          retryable: false,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      }),
+    );
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(3),
+    );
+    const recoveredAgain = FakeNativeWebSocket.instances[2];
+    recoveredAgain.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(recoveredAgain, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(recoveredAgain, "open")[0]?.token).toBe(
+      "fresh-after-outage",
+    );
+    recoveredAgain.fireMessage(openAckFrame([], null));
     await vi.waitFor(() => expect(hostDoorStateFor(hostId)).toBeNull());
 
     expect(mintCalls).toBe(4);
     expect(connected).toBe(true);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("refuses the token in force after credentialUpdate, not the earlier open token", async () => {
+    const provider = newProvider();
+    signIn(provider, USER_A, SIGN_IN_TOKEN);
+    const hostId = "local-credential-update-token-refusal";
+    clearHostDoorState(hostId);
+    const tokenInOpen = "open-token-before-rotation";
+    const tokenInForce = "credential-update-token";
+    const outcomes: HostTokenMintOutcome[] = [
+      {
+        kind: "ok",
+        token: { token: tokenInForce, expiresAtMs: 0 },
+      },
+      { kind: "unavailable", detail: "authn offline at expiry refusal" },
+      { kind: "unavailable", detail: "authn still offline after refusal" },
+    ];
+    let mintCalls = 0;
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        const outcome = outcomes.shift();
+        if (outcome === undefined)
+          throw new Error("unexpected host-token mint");
+        if (outcome.kind === "ok")
+          return Promise.resolve({
+            ...outcome,
+            token: { ...outcome.token, expiresAtMs: Date.now() + 10_000 },
+          });
+        return Promise.resolve(outcome);
+      },
+      signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
+      now: () => Date.now(),
+    });
+    await hostTokens.adopt(
+      USER_A,
+      hostId,
+      { token: tokenInOpen, expiresAtMs: Date.now() + 10_000 },
+      hostTokens.era(USER_A),
+    );
+    const target = { ...mockLocalHostEntry, hostId };
+    const client = buildLocalClient(target, provider, hostTokens);
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(1),
+    );
+    const established = FakeNativeWebSocket.instances[0];
+    established.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(established, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(established, "open")[0]?.token).toBe(tokenInOpen);
+    established.fireMessage(
+      openAckFrame([SESSION_CAPABILITY_CREDENTIAL_UPDATE], null),
+    );
+    await vi.waitFor(() => expect(hostDoorStateFor(hostId)).toBeNull());
+
+    await vi.advanceTimersByTimeAsync(10_001);
+    client.notifyBearerRotated();
+    await vi.waitFor(() => expect(mintCalls).toBe(1));
+    await vi.waitFor(() =>
+      expect(hostTokens.current(USER_A, hostId)?.token).toBe(tokenInForce),
+    );
+    client.notifyBearerRotated();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(established, "credentialUpdate")).toContainEqual({
+        kind: "credentialUpdate",
+        token: tokenInForce,
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(10_001);
+    client.notifyBearerRotated();
+    await vi.waitFor(() => expect(mintCalls).toBe(2));
+
+    established.fireMessage(
+      JSON.stringify({
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "host token expired",
+          doorReason: "token_expired",
+          retryable: false,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(hostDoorStateFor(hostId)?.kind).toBe("token-expired"),
+    );
+    await vi.advanceTimersToNextTimerAsync();
+    const retry = await vi.waitFor(() => {
+      expect(FakeNativeWebSocket.instances).toHaveLength(2);
+      return FakeNativeWebSocket.instances[1];
+    });
+    retry.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(retry, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(retry, "open")[0]?.token).toBe(NO_HOST_TOKEN_PROBE);
+    expect(sentFramesOfKind(established, "credentialUpdate")).toContainEqual({
+      kind: "credentialUpdate",
+      token: tokenInForce,
+    });
+    expect(sentFramesOfKind(established, "open")).toHaveLength(1);
+    expect(sentFramesOfKind(retry, "open").map((frame) => frame.token)).toEqual(
+      [NO_HOST_TOKEN_PROBE],
+    );
+    expect(
+      FakeNativeWebSocket.instances.flatMap((socket) =>
+        sentFramesOfKind(socket, "open").map((frame) => frame.token),
+      ),
+    ).toEqual([tokenInOpen, NO_HOST_TOKEN_PROBE]);
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);
