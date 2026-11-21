@@ -73,6 +73,7 @@ import {
   providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV1011Preimage,
   providersListResponseSchemaV1012Preimage,
+  providersListResponseSchemaV1013Preimage,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -255,7 +256,8 @@ const FIXTURES = {
   "providers.list@10.12": dump(providersListResponseSchemaV1012Preimage),
   // The head line. It dumps LIVE, so the next attempt to grow the provider
   // state goes red on this line.
-  "providers.list@10.13": dump(providersListResponseSchema),
+  "providers.list@10.13": dump(providersListResponseSchemaV1013Preimage),
+  "providers.list@10.14": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the

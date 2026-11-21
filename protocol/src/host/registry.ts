@@ -1697,6 +1697,7 @@ import {
   providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV1011Preimage,
   providersListResponseSchemaV1012Preimage,
+  providersListResponseSchemaV1013Preimage,
   providersListResponseSchemaV80,
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
@@ -3382,7 +3383,7 @@ export const providersListV1013 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 10, minor: 13 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  responseSchema: providersListResponseSchemaV1013Preimage,
 });
 export const providersListUpgradeV1012ToV1013 = defineUpgradePath<
   typeof providersListV1012,
@@ -3396,6 +3397,36 @@ export const providersListUpgradeV1012ToV1013 = defineUpgradePath<
     providers: response.providers.map((provider) => ({
       ...provider,
       apiKey: { ...provider.apiKey, recordEnvironmentId: null },
+    })),
+  }),
+});
+
+/**
+ * `providers.list@10.14`: a row's `syncStop`, set while this computer gave up
+ * its renewing copy at a sync stop.
+ */
+export const providersListV1014 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 10, minor: 14 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchema,
+});
+export const providersListUpgradeV1013ToV1014 = defineUpgradePath<
+  typeof providersListV1013,
+  typeof providersListV1014
+>({
+  from: { major: 10, minor: 13 },
+  to: { major: 10, minor: 14 },
+  upgradeRequest: (request) => request,
+  // A host below 10.14 never gives up a copy at a sync stop.
+  upgradeResponse: (response) => ({
+    ...response,
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      profiles: provider.profiles.map((profile) => ({
+        ...profile,
+        syncStop: null,
+      })),
     })),
   }),
 });
@@ -4107,10 +4138,10 @@ export function downgradeNativeListErrorForPublishedLines(
 }
 
 export const providersListDowngradeV10ToV9 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV92
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   // Lands on 9.2, major 9's latest installed minor; a 9.0 or 9.1 caller's own
   // contract parse then strips the keys its minor predates.
   to: { major: 9, minor: 2 },
@@ -4133,10 +4164,10 @@ export const providersListDowngradeV10ToV9 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV8 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV80
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4156,10 +4187,10 @@ export const providersListDowngradeV10ToV8 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV7 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV70
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4179,10 +4210,10 @@ export const providersListDowngradeV10ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV6 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV60
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4199,10 +4230,10 @@ export const providersListDowngradeV10ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV5 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV50
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4219,10 +4250,10 @@ export const providersListDowngradeV10ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV4 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV40
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4239,10 +4270,10 @@ export const providersListDowngradeV10ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV3 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV30
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4259,10 +4290,10 @@ export const providersListDowngradeV10ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV2 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV20
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -4279,10 +4310,10 @@ export const providersListDowngradeV10ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV10ToV1 = defineDowngradePath<
-  typeof providersListV1013,
+  typeof providersListV1014,
   typeof providersListV10
 >({
-  from: { major: 10, minor: 13 },
+  from: { major: 10, minor: 14 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -15080,14 +15111,14 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
 } as const;
 
 /**
- * `providers.list` major 10, named. Its fourteen minors and nine bridges inline
+ * `providers.list` major 10, named. Its fifteen minors and nine bridges inline
  * push `HOST_RPC_PROVIDERS_LIST_REGISTRY_DEFINITION` over TS7056's
  * declaration-serialization ceiling; a named slot type is emitted by name,
  * as `HostRpcNotificationMethodMap` is. The literal below is checked against
  * it, so the slot keeps every exact contract and bridge.
  */
 type ProvidersListMajor10 = {
-  readonly latestMinor: 13;
+  readonly latestMinor: 14;
   readonly versions: {
     readonly 0: {
       readonly contract: typeof providersListV100;
@@ -15147,6 +15178,10 @@ type ProvidersListMajor10 = {
       readonly contract: typeof providersListV1013;
       readonly upgradeFromPreviousVersion: typeof providersListUpgradeV1012ToV1013;
     };
+    readonly 14: {
+      readonly contract: typeof providersListV1014;
+      readonly upgradeFromPreviousVersion: typeof providersListUpgradeV1013ToV1014;
+    };
   };
   readonly downgradePathsFromLatest: {
     readonly 1: typeof providersListDowngradeV10ToV1;
@@ -15162,7 +15197,7 @@ type ProvidersListMajor10 = {
 };
 
 const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
-  latestMinor: 13,
+  latestMinor: 14,
   versions: {
     0: {
       contract: providersListV100,
@@ -15233,6 +15268,11 @@ const PROVIDERS_LIST_MAJOR_10: ProvidersListMajor10 = {
     13: {
       contract: providersListV1013,
       upgradeFromPreviousVersion: providersListUpgradeV1012ToV1013,
+    },
+    // A row's `syncStop`: a new KEY.
+    14: {
+      contract: providersListV1014,
+      upgradeFromPreviousVersion: providersListUpgradeV1013ToV1014,
     },
   },
   downgradePathsFromLatest: {
