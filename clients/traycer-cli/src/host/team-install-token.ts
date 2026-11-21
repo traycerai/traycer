@@ -207,6 +207,13 @@ const completedInstallSchema = z.strictObject({
   hostId: z.uuid(),
 });
 
+/**
+ * How long a staged install waits for its receipt: 60 s for the redemption,
+ * and the give's 45 s for the one restart into the team's settings, whose
+ * boot writes the receipt.
+ */
+export const TEAM_INSTALL_RECEIPT_WAIT_MS = 105_000;
+
 /** Success is a target-bound adoption receipt, never the token file's absence. */
 export async function waitForTeamTokenInstall(
   environment: Environment,
