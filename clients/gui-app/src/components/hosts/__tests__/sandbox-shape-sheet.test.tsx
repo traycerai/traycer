@@ -5,6 +5,10 @@ import {
   readinessCatalogue,
   servedMinutes,
 } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import {
+  autoSizingCatalogue,
+  autoSizingListedNoRatesCatalogue,
+} from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import type {
   StageConfiguration,
   StageSize,
@@ -382,6 +386,110 @@ describe("<SandboxShapeSheet />", () => {
       screen.getByRole("option", { name: /4 vCPU · 8 GB · 40 GB/ }).textContent,
     ).toContain("from $0.08/h");
   });
+
+  it("shows growing Linux starts and their disk-based prices, keeping a chosen disk across sizes", () => {
+    catalogueInUse = autoSizingCatalogue();
+    const onUseShape = vi.fn();
+    renderSheet(onUseShape);
+
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(disk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    expect(disk.getAttribute("min")).toBe("10");
+    expect(disk.getAttribute("max")).toBe("200");
+    expect(disk.value).toBe("50");
+
+    const size = screen.getByRole("combobox", { name: "Size" });
+    expect(size.textContent).toContain(
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    );
+    expect(
+      screen.getByTestId("sandbox-shape-sheet-resting-price").textContent,
+    ).toBe("Suspended: $0.01/h · Stopped: $0.01/h");
+    fireEvent.click(size);
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+      "4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · $0.26–$1.44/h",
+      "8 vCPU · 16 GB, grows to 16 vCPU · 64 GB · $0.52–$1.44/h",
+      "8 vCPU · 32 GB, grows to 16 vCPU · 64 GB · $0.73–$1.44/h",
+      "16 vCPU · 32 GB, grows to 16 vCPU · 64 GB · $1.03–$1.44/h",
+      "16 vCPU · 64 GB · $1.44/h",
+    ]);
+
+    fireEvent.change(disk, { target: { value: "200" } });
+    expect(
+      screen.getByRole("option", {
+        name: "4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · $0.28–$1.47/h",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("option", { name: "16 vCPU · 64 GB · $1.47/h" }),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("option", {
+        name: "4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · $0.28–$1.47/h",
+      }),
+    );
+    expect(disk.value).toBe("200");
+
+    fireEvent.change(disk, { target: { value: "30" } });
+    expect(disk.value).toBe("30");
+    expect(
+      screen.getByTestId("sandbox-shape-sheet-price").textContent,
+    ).toContain("$0.26–$1.44 an hour while awake");
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 4,
+      memoryMb: 8 * GIB,
+      diskMb: 30 * GIB,
+    });
+  });
+
+  it("shows a listed no-rates offer at 50 GB and no price for an unlisted 30 GB disk", () => {
+    catalogueInUse = autoSizingListedNoRatesCatalogue();
+    renderSheet(vi.fn());
+
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(disk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    const size = screen.getByRole("combobox", { name: "Size" });
+    fireEvent.click(size);
+    const listedText =
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.50/h";
+    expect(screen.getByRole("option", { name: listedText }).textContent).toBe(
+      listedText,
+    );
+
+    fireEvent.change(disk, { target: { value: "30" } });
+    const unpricedText = "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB";
+    expect(screen.getByRole("option", { name: unpricedText }).textContent).toBe(
+      unpricedText,
+    );
+  });
+
+  it.each(["5", ""])(
+    "omits growing option rates when the disk input is invalid (%s GB)",
+    (diskGb) => {
+      catalogueInUse = autoSizingCatalogue();
+      renderSheet(vi.fn());
+
+      const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+      if (!(disk instanceof HTMLInputElement)) {
+        throw new Error("Expected Disk (GB) to be an input");
+      }
+      fireEvent.change(disk, { target: { value: diskGb } });
+      fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+
+      const labels = screen
+        .getAllByRole("option")
+        .map((option) => option.textContent);
+      for (const label of labels) expect(label).not.toContain("/h");
+    },
+  );
 
   it("leaves a size string alone when that rung is smaller than the catalogue's source shape", () => {
     const [provider] = CATALOGUE.providers;

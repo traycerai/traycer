@@ -62,6 +62,8 @@ import {
   idleAndRestingLine,
   newSandboxRowLabel,
   sandboxShapeLabel,
+  sandboxSizeLabel,
+  shortAwakePriceLabel,
   shortPriceLabel,
   wakeString,
 } from "@/lib/sandboxes/sandbox-strings";
@@ -275,6 +277,31 @@ function rungFields(
   };
 }
 
+/** Whether a provider lists starting sizes that grow, whose disk is chosen apart. */
+function providerGrows(provider: SandboxCatalogueProvider): boolean {
+  return provider.shapes?.some((rung) => rung.grows !== undefined) ?? false;
+}
+
+/** The form's disk in MB, or why it is outside the provider's bounds. */
+function diskOfForm(
+  form: ShapeForm,
+  provider: SandboxCatalogueProvider,
+): { readonly diskMb: number } | { readonly problem: string } {
+  const diskGb = Number(form.diskGb);
+  const diskMb = diskGb * MB_PER_GIB;
+  if (
+    form.diskGb.trim().length === 0 ||
+    !Number.isInteger(diskGb) ||
+    diskMb < provider.shape.diskMinMb ||
+    diskMb > provider.shape.diskMaxMb
+  ) {
+    return {
+      problem: `Disk must be between ${provider.shape.diskMinMb / MB_PER_GIB} and ${provider.shape.diskMaxMb / MB_PER_GIB} GB.`,
+    };
+  }
+  return { diskMb };
+}
+
 function rungKey(rung: SandboxShapeRung): string {
   return `${rung.cpus}:${rung.memoryMb}:${rung.diskMb}`;
 }
@@ -306,8 +333,15 @@ function sizeOfForm(
   if (provider.shapes !== null) {
     const rung = rungOfForm(form, provider.shapes);
     if (rung === null) return { problem: "Pick a size." };
+    if (rung.grows === undefined) {
+      return {
+        size: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: rung.diskMb },
+      };
+    }
+    const disk = diskOfForm(form, provider);
+    if ("problem" in disk) return disk;
     return {
-      size: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: rung.diskMb },
+      size: { cpus: rung.cpus, memoryMb: rung.memoryMb, diskMb: disk.diskMb },
     };
   }
   const requested = {
@@ -525,25 +559,52 @@ function ShapeSheetForm(props: {
               />
             </>
           ) : (
-            <div className="sm:col-span-2">
-              <ShapeSelect
-                id={`${ids}-size`}
-                label="Size"
-                value={sizeValue(form, provider.shapes)}
-                options={provider.shapes.map((rung) => ({
-                  value: rungKey(rung),
-                  label: rungLabel(props.catalogue, form, rung),
-                }))}
-                onChange={(value) => {
-                  const rung = provider.shapes?.find(
-                    (candidate) => rungKey(candidate) === value,
-                  );
-                  if (rung === undefined) return;
-                  setSizeCommitted(true);
-                  setForm({ ...form, ...rungFields(rung) });
-                }}
-              />
-            </div>
+            <>
+              <div className="sm:col-span-2">
+                <ShapeSelect
+                  id={`${ids}-size`}
+                  label="Size"
+                  value={sizeValue(form, provider.shapes)}
+                  options={provider.shapes.map((rung) => ({
+                    value: rungKey(rung),
+                    label: rungLabel(props.catalogue, form, rung),
+                  }))}
+                  onChange={(value) => {
+                    const rung = provider.shapes?.find(
+                      (candidate) => rungKey(candidate) === value,
+                    );
+                    if (rung === undefined) return;
+                    setSizeCommitted(true);
+                    // A start that grows keeps the disk the person chose.
+                    setForm(
+                      rung.grows === undefined
+                        ? { ...form, ...rungFields(rung) }
+                        : {
+                            ...form,
+                            cpus: String(rung.cpus),
+                            memoryGb: String(rung.memoryMb / MB_PER_GIB),
+                          },
+                    );
+                  }}
+                />
+              </div>
+              {providerGrows(provider) ? (
+                <ShapeNumber
+                  id={`${ids}-disk`}
+                  label="Disk (GB)"
+                  value={form.diskGb}
+                  min={provider.shape.diskMinMb / MB_PER_GIB}
+                  max={provider.shape.diskMaxMb / MB_PER_GIB}
+                  step={1}
+                  testId="sandbox-shape-sheet-disk"
+                  onChange={(value) => {
+                    setSizeCommitted(false);
+                    setForm({ ...form, diskGb: value });
+                  }}
+                  onCommit={() => setSizeCommitted(true)}
+                />
+              ) : null}
+            </>
           )}
         </div>
         {form.os === "windows" ? (
@@ -724,22 +785,31 @@ function sizeValue(
   return rung === null ? "" : rungKey(rung);
 }
 
-/** `2 vCPU · 4 GB · 20 GB · $0.12/h`, priced in the form's region. */
+/**
+ * `2 vCPU · 4 GB · 20 GB · $0.12/h`, priced in the form's region; a start
+ * that grows, `2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h`,
+ * priced at the form's disk, and unpriced while that disk is one the
+ * catalogue cannot price.
+ */
 function rungLabel(
   catalogue: SandboxCatalogue,
   form: ShapeForm,
   rung: SandboxShapeRung,
 ): string {
-  const size = `${sandboxShapeLabel(rung.cpus, rung.memoryMb)} · ${formatMemory(rung.diskMb)}`;
+  const size =
+    rung.grows === undefined
+      ? `${sandboxShapeLabel(rung.cpus, rung.memoryMb)} · ${formatMemory(rung.diskMb)}`
+      : sandboxSizeLabel(rung.cpus, rung.memoryMb, rung.grows);
   const price = stagePrice(catalogue, {
     os: form.os,
     region: form.region,
     cpus: rung.cpus,
     memoryMb: rung.memoryMb,
-    diskMb: rung.diskMb,
+    diskMb:
+      rung.grows === undefined ? rung.diskMb : Number(form.diskGb) * MB_PER_GIB,
   });
   if (price === null) return size;
-  const label = shortPriceLabel(price.awakeMcPerHour);
+  const label = shortAwakePriceLabel(price.awakeMcPerHour, price.offer);
   return `${size} · ${price.exact ? label : `from ${label}`}`;
 }
 

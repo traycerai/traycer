@@ -74,6 +74,7 @@ import type {
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { autoSizingCatalogue } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
@@ -930,6 +931,54 @@ describe("useStagedSandboxSend's line after a refusal", () => {
         "Cancel the message",
       ]);
     });
+
+    it("hides Choose a smaller shape on a 2/4 start with a nondefault disk", () => {
+      mocks.catalogue = autoSizingCatalogue();
+      mocks.user = viewerWithCredits(0.2);
+      stageRefused({ kind: "credits", shortfallMc: 100 });
+      const current = readStagedSandbox(SURFACE);
+      if (current === null || current.target.kind !== "new") {
+        throw new Error("Expected the refused new stage");
+      }
+      useStagedSandboxStore.getState().setTarget(SURFACE, {
+        ...current.target,
+        shape: { ...current.target.shape, diskMb: 30_720 },
+      });
+      mount(vi.fn());
+
+      expect(refusalButtons()).toEqual([
+        "Add credits ↗",
+        "Use This computer",
+        "Cancel the message",
+      ]);
+    });
+
+    it("offers Choose a smaller shape on a 4/8 start when the balance covers 2/4", () => {
+      mocks.catalogue = autoSizingCatalogue();
+      mocks.user = viewerWithCredits(0.2);
+      stageRefused({ kind: "credits", shortfallMc: 100 });
+      const current = readStagedSandbox(SURFACE);
+      if (current === null || current.target.kind !== "new") {
+        throw new Error("Expected the refused new stage");
+      }
+      useStagedSandboxStore.getState().setTarget(SURFACE, {
+        ...current.target,
+        shape: {
+          ...current.target.shape,
+          cpus: 4,
+          memoryMb: 8_192,
+          diskMb: 51_200,
+        },
+      });
+      mount(vi.fn());
+
+      expect(refusalButtons()).toEqual([
+        "Add credits ↗",
+        "Choose a smaller shape",
+        "Use This computer",
+        "Cancel the message",
+      ]);
+    });
   });
 
   it("keeps an unknown credit source generic on a team staged refusal", () => {
@@ -1025,6 +1074,29 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
     expect(text).toContain("$0.21 an hour while awake · uses your credits");
     expect(text).not.toContain("Billed by the hour");
     expect(text).not.toContain("from $");
+  });
+
+  it("shows the 200 GB range on a staged create's setup line", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    stageCreated("booting", null);
+    const current = readStagedSandbox(SURFACE);
+    if (current === null || current.target.kind !== "new") {
+      throw new Error("Expected the staged new sandbox");
+    }
+    useStagedSandboxStore.getState().setTarget(SURFACE, {
+      ...current.target,
+      shape: {
+        ...current.target.shape,
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 204_800,
+      },
+    });
+    mount(vi.fn());
+
+    expect(detail()).toContain(
+      "$0.28–$1.47 an hour while awake · uses your credits",
+    );
   });
 
   it("says the hour is billed, unpriced, when the row names no rate", () => {
@@ -1948,6 +2020,44 @@ describe("useStagedSandboxSend after the sending tab is gone", () => {
 });
 
 describe("useStagedSandboxSend after the start page draft that sent is closed", () => {
+  it("sends the staged 30 GB disk to the create boundary for a growing start", async () => {
+    const actual = await vi.importActual<
+      typeof import("@/lib/sandboxes/staged-sandbox-run")
+    >("@/lib/sandboxes/staged-sandbox-run");
+    mocks.runStagedSandbox.mockImplementation(actual.runStagedSandbox);
+    mocks.catalogue = autoSizingCatalogue();
+    mocks.createSandbox.mockResolvedValue(
+      refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+    );
+    useStagedSandboxStore.getState().stage(SURFACE, {
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 30_720,
+        region: "us-east",
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: 10_080,
+      },
+      name: "api-refactor",
+      wakeString: null,
+    });
+    mount(vi.fn());
+
+    act(() => {
+      latestSend?.intercept("start", null);
+    });
+
+    await waitFor(() => expect(mocks.createSandbox).toHaveBeenCalledOnce());
+    expect(mocks.createSandbox.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 4,
+      memoryMb: 8_192,
+      diskMb: 30_720,
+    });
+  });
+
   it("brings the sandbox up on another draft's Retry of a create whose answer never came and leaves that draft's text to it", async () => {
     const actual = await vi.importActual<
       typeof import("@/lib/sandboxes/staged-sandbox-run")

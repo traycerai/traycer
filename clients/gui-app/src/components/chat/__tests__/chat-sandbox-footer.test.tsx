@@ -154,6 +154,33 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     },
   );
 
+  it.each(["suspended", "stopped"] as const)(
+    "shows the offered range for an auto-sized sandbox that is %s",
+    (state) => {
+      const base = resting(state, { team: false });
+      if (base.kind !== "resting")
+        throw new Error("Expected a resting sandbox");
+      const growing = {
+        ...base.sandbox,
+        grows: { cpus: 16, memoryMb: 65_536 },
+        // Last awake at 4/8; the range still starts at the start's rate.
+        priceMcPerHour: {
+          awakeMc: 263,
+          suspendedMc: 7,
+          stoppedMc: 7,
+          offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+        },
+      };
+      render(
+        <ChatSandboxFooter line={lineOf({ ...base, sandbox: growing })} />,
+      );
+
+      expect(document.body.textContent).toContain(
+        "$0.14–$1.44 an hour while awake · uses your credits",
+      );
+    },
+  );
+
   it("names Acme's credits for a team sandbox regardless of its wake payer", () => {
     const { unmount } = render(
       <ChatSandboxFooter

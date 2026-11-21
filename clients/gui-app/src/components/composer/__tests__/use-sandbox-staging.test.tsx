@@ -63,6 +63,7 @@ import type {
   HostScopeSandbox,
 } from "@/components/settings/host-scope/host-scope-model";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
+import { autoSizingCatalogue } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import {
   teamSubscription,
@@ -820,6 +821,40 @@ describe("useSandboxStaging New rows", () => {
     expect(composer.newRows[0].subLine).toContain("2 vCPU");
   });
 
+  it("shows growing sizes and the offered price range on a funded picker row and staged chip", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    const { composer } = mount([LAPTOP]);
+
+    expect(composer.newRows[0]?.subLine).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour while awake · uses your credits",
+    );
+    act(() => {
+      composer.onPickNew("personal");
+    });
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    );
+  });
+
+  it("shows the range without `from` on a needs-credits picker row", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    mocks.user = userWith(
+      userSubscription({
+        totalPlanCredits: 0,
+        consumedFromPlan: 0,
+        bonusCredits: 0,
+        consumedFromBonus: 0,
+        bundleRemaining: 0,
+      }),
+      [teamSubscription(0)],
+    );
+    const { composer } = mount([LAPTOP]);
+
+    expect(composer.newRows[0]?.subLine).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour · uses your credits",
+    );
+  });
+
   describe("sub-line, from a catalogue pricing its 2 vCPU · 4 GB shape at $0.21", () => {
     const PRICED_CATALOGUE: SandboxCatalogue = {
       providers: [
@@ -916,6 +951,7 @@ describe("useSandboxStaging New rows", () => {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 2,
       exact: false,
+      offer: null,
     });
     const stage = readStagedSandbox(SURFACE);
     expect(stage).toMatchObject({
@@ -1045,6 +1081,38 @@ describe("useSandboxStaging New rows", () => {
         memoryMb: 8192,
         idleMinutes: 2,
         destroyAfterRestingMinutes: 120,
+      },
+    });
+  });
+
+  it("stages a legacy 2/4 default at the growing rung's 50 GB disk", () => {
+    mocks.catalogue = autoSizingCatalogue();
+    mocks.defaults = {
+      personal: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 20_480,
+        idleMinutes: 30,
+        restingMinutes: null,
+      },
+    };
+    const { composer } = mount([LAPTOP]);
+
+    act(() => {
+      composer.onPickNew("personal");
+    });
+
+    expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+      kind: "new",
+      configuration: { kind: "personal" },
+      shape: {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 51_200,
+        idleMinutes: 30,
+        destroyAfterRestingMinutes: null,
       },
     });
   });
@@ -1293,7 +1361,7 @@ describe("useSandboxStaging New rows", () => {
     expect(staging().consequences).toMatchObject({
       configuration: { kind: "team", teamId: "team-1", teamName: "acme" },
       audience: "shared",
-      price: { awakeMcPerHour: 120, exact: false },
+      price: { awakeMcPerHour: 120, exact: false, offer: null },
     });
   });
 

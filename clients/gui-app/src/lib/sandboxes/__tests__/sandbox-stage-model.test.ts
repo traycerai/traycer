@@ -1,5 +1,10 @@
 import { sandboxReadinessLine } from "@/lib/sandboxes/sandbox-readiness";
 import { READY_SENTENCE } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import {
+  AUTO_SIZING_RUNGS,
+  autoSizingCatalogue,
+  autoSizingListedNoRatesCatalogue,
+} from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { describe, expect, it } from "vitest";
 import {
   consequenceClauses,
@@ -13,12 +18,15 @@ import {
   stageShapeDefaults,
   stageProviderForShape,
   stageSmallestShape,
+  stageSizeIsRung,
   type ConsequencesInput,
+  type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import {
   sandboxCatalogueSchema,
   type SandboxCatalogue,
   type SandboxCataloguePricing,
+  type SandboxCatalogueRegion,
   type SandboxOs,
 } from "@traycer/protocol/host/sandbox-control";
 
@@ -33,6 +41,7 @@ function input(overrides: Partial<ConsequencesInput>): ConsequencesInput {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 2,
       exact: true,
+      offer: null,
     },
     needsCredits: false,
     billingStarted: false,
@@ -67,6 +76,7 @@ describe("priceClause", () => {
             suspendedMcPerHour: 4,
             stoppedMcPerHour: 2,
             exact: false,
+            offer: null,
           },
         }),
       ).text,
@@ -92,6 +102,7 @@ describe("priceClause", () => {
           suspendedMcPerHour: 4,
           stoppedMcPerHour: 2,
           exact: false,
+          offer: null,
         },
         needsCredits: true,
         shortfallMc: 210,
@@ -109,6 +120,7 @@ describe("priceClause", () => {
             suspendedMcPerHour: 4,
             stoppedMcPerHour: 2,
             exact: false,
+            offer: null,
           },
           needsCredits: true,
           shortfallMc: 210,
@@ -273,6 +285,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 15,
       stoppedMcPerHour: 13,
       exact: true,
+      offer: null,
     });
   });
 
@@ -300,6 +313,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 3,
       exact: true,
+      offer: null,
     });
     // ceil((136.2 + 4 × 16.2) × 1.25) = ceil(251.25)
     expect(
@@ -314,6 +328,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 15,
       stoppedMcPerHour: 14,
       exact: true,
+      offer: null,
     });
   });
 
@@ -343,6 +358,7 @@ describe("stagePrice", () => {
         suspendedMcPerHour: suspended,
         stoppedMcPerHour: stopped,
         exact: true,
+        offer: null,
       });
     },
   );
@@ -382,6 +398,7 @@ describe("stagePrice", () => {
         suspendedMcPerHour: rates.suspended,
         stoppedMcPerHour: 13,
         exact: true,
+        offer: null,
       });
     },
   );
@@ -396,6 +413,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 2,
       exact: true,
+      offer: null,
     });
   });
 
@@ -405,6 +423,7 @@ describe("stagePrice", () => {
       suspendedMcPerHour: 4,
       stoppedMcPerHour: 2,
       exact: false,
+      offer: null,
     });
   });
 });
@@ -443,6 +462,7 @@ describe("stageProviderForShape", () => {
       suspendedMcPerHour: 15,
       stoppedMcPerHour: 13,
       exact: true,
+      offer: null,
     });
   });
 });
@@ -527,6 +547,7 @@ describe("listed shapes", () => {
       suspendedMcPerHour: 6,
       stoppedMcPerHour: 2,
       exact: true,
+      offer: null,
     });
   });
 
@@ -538,6 +559,7 @@ describe("listed shapes", () => {
       suspendedMcPerHour: 5,
       stoppedMcPerHour: 1,
       exact: true,
+      offer: null,
     });
   });
 
@@ -565,6 +587,7 @@ describe("listed shapes", () => {
       suspendedMcPerHour: 6,
       stoppedMcPerHour: 2,
       exact: true,
+      offer: null,
     });
     expect(stageSmallestShape(parsed, STAGED)).toEqual({
       isStaged: true,
@@ -580,6 +603,7 @@ describe("listed shapes", () => {
       suspendedMcPerHour: 24,
       stoppedMcPerHour: 20,
       exact: true,
+      offer: null,
     });
     expect(stageSmallestShape(legacy, STAGED)).toEqual({
       isStaged: true,
@@ -735,6 +759,172 @@ const SERVED_LAUNCH_FORM = {
   digest: "a".repeat(64),
 };
 
+describe("growing Linux starting sizes", () => {
+  const catalogue = autoSizingCatalogue();
+
+  function catalogueWithRegion(
+    region: SandboxCatalogueRegion,
+  ): SandboxCatalogue {
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    return {
+      ...base,
+      providers: [{ ...provider, regions: [region] }],
+    };
+  }
+
+  function size(cpus: number, memoryGb: number, diskGb: number) {
+    return {
+      os: "linux" as const,
+      cpus,
+      memoryMb: memoryGb * 1024,
+      diskMb: diskGb * 1024,
+      region: "us-east",
+    };
+  }
+
+  it("resolves legacy defaults to the growing rung's disk and keeps its periods", () => {
+    expect(
+      configurationStageShape(catalogue, {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 20_480,
+        idleMinutes: 30,
+        restingMinutes: null,
+      }),
+    ).toMatchObject({
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4_096,
+      diskMb: 51_200,
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: null,
+    });
+  });
+
+  it("keeps a remembered growing start at its chosen disk", () => {
+    const remembered: StageShape = {
+      ...size(4, 8, 30),
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: 10_080,
+    };
+    expect(
+      rememberedOrConfigurationStageShape(catalogue, remembered, null),
+    ).toBe(remembered);
+  });
+
+  it.each([
+    [2, 4, 135],
+    [4, 8, 263],
+    [8, 16, 518],
+    [8, 32, 726],
+    [16, 32, 1_028],
+    [16, 64, 1_444],
+  ])(
+    "prices the %i/%i start and its 16/64 ceiling at 50 GB",
+    (cpus, memory, start) => {
+      expect(stagePrice(catalogue, size(cpus, memory, 50))).toMatchObject({
+        awakeMcPerHour: start,
+        suspendedMcPerHour: 7,
+        stoppedMcPerHour: 7,
+        exact: true,
+        offer: { startAwakeMc: start, ceilingAwakeMc: 1_444 },
+      });
+    },
+  );
+
+  it("uses the selected disk for both prices and matches the smallest start without disk", () => {
+    const thirtyGb = size(4, 8, 30);
+    expect(stagePrice(catalogue, thirtyGb)).toMatchObject({
+      awakeMcPerHour: 261,
+      offer: { startAwakeMc: 261, ceilingAwakeMc: 1_442 },
+    });
+    expect(stagePrice(catalogue, size(2, 4, 200))?.offer).toEqual({
+      startAwakeMc: 156,
+      ceilingAwakeMc: 1_465,
+    });
+    expect(stageSmallestShape(catalogue, size(4, 8, 30))).toEqual({
+      isStaged: false,
+      awakeMcPerHour: 133,
+    });
+    expect(stageSmallestShape(catalogue, size(2, 4, 30))).toEqual({
+      isStaged: true,
+      awakeMcPerHour: 133,
+    });
+  });
+
+  it("uses the served offer at its listed disk and rates at an unlisted disk", () => {
+    const [provider] = catalogue.providers;
+    const [region] = provider.regions;
+    const offer = { startAwakeMc: 140, ceilingAwakeMc: 1_500 };
+    const listedPrice = {
+      awakeMc: 140,
+      suspendedMc: 9,
+      stoppedMc: 9,
+      offer,
+    };
+    const served = catalogueWithRegion({
+      ...region,
+      shapePrices: [
+        {
+          cpus: 2,
+          memoryMb: 4_096,
+          diskMb: 51_200,
+          priceMcPerHour: listedPrice,
+        },
+      ],
+    });
+
+    expect(stagePrice(served, size(2, 4, 50))).toEqual({
+      awakeMcPerHour: 140,
+      suspendedMcPerHour: 9,
+      stoppedMcPerHour: 9,
+      exact: true,
+      offer,
+    });
+    expect(stagePrice(served, size(2, 4, 30))).toEqual({
+      awakeMcPerHour: 133,
+      suspendedMcPerHour: 5,
+      stoppedMcPerHour: 5,
+      exact: true,
+      offer: { startAwakeMc: 133, ceilingAwakeMc: 1_442 },
+    });
+  });
+
+  it("uses an exact listed offer without unit rates and leaves an unlisted disk unpriced", () => {
+    const listed = autoSizingListedNoRatesCatalogue();
+    const [provider] = listed.providers;
+    const [region] = provider.regions;
+    const offer = { startAwakeMc: 140, ceilingAwakeMc: 1_500 };
+
+    expect(stagePrice(listed, size(2, 4, 50))).toEqual({
+      awakeMcPerHour: 140,
+      suspendedMcPerHour: 9,
+      stoppedMcPerHour: 9,
+      exact: true,
+      offer,
+    });
+    expect(stagePrice(listed, size(2, 4, 30))).toBeNull();
+    expect(
+      stagePrice(
+        catalogueWithRegion({ ...region, shapePrices: undefined }),
+        size(2, 4, 50),
+      ),
+    ).toBeNull();
+  });
+
+  it("matches growing rungs by compute and memory while fixed rungs retain disk matching", () => {
+    expect(stageSizeIsRung(AUTO_SIZING_RUNGS[1], size(4, 8, 30))).toBe(true);
+    expect(
+      stageSizeIsRung(
+        { cpus: 4, memoryMb: 8 * 1024, diskMb: 50 * 1024, default: false },
+        size(4, 8, 30),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("quoted freeform geometry", () => {
   const SIZE = {
     os: "linux" as const,
@@ -775,6 +965,7 @@ describe("quoted freeform geometry", () => {
       suspendedMcPerHour: 165,
       stoppedMcPerHour: 45,
       exact: true,
+      offer: null,
     });
     expect(sandboxReadinessLine(offered, SIZE)).toBe(READY_SENTENCE);
   });
@@ -807,6 +998,7 @@ describe("quoted freeform geometry", () => {
       suspendedMcPerHour: 280,
       stoppedMcPerHour: 40,
       exact: true,
+      offer: null,
     });
     expect(sandboxReadinessLine(offered, size)).toBe(READY_SENTENCE);
   });
@@ -873,12 +1065,14 @@ describe("served exact per-shape prices", () => {
       suspendedMcPerHour: SERVED_MIDDLE.suspendedMc,
       stoppedMcPerHour: SERVED_MIDDLE.stoppedMc,
       exact: true,
+      offer: null,
     });
     expect(stagePrice(served, size(SMALL))).toEqual({
       awakeMcPerHour: SERVED_SMALL.awakeMc,
       suspendedMcPerHour: 0,
       stoppedMcPerHour: 0,
       exact: true,
+      offer: null,
     });
   });
 
@@ -1050,12 +1244,14 @@ describe("served source geometry without unit rates", () => {
       suspendedMcPerHour: 21,
       stoppedMcPerHour: 20,
       exact: true,
+      offer: null,
     });
     expect(stagePrice(source, { ...SIZE, diskMb: 30720 })).toEqual({
       awakeMcPerHour: 80,
       suspendedMcPerHour: 21,
       stoppedMcPerHour: 20,
       exact: false,
+      offer: null,
     });
     expect(stageSmallestShape(source, SIZE)).toBeNull();
   });
