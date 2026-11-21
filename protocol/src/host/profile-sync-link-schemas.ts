@@ -383,6 +383,9 @@ export const hostProfileSyncStopLinkRequestSchema = lazySchema(() =>
         kind: z.literal("claim"),
         claimId: stopClaimIdSchema,
         claimantHostId: profileSyncHostIdSchema,
+        /** The end the component is rooted at: the claimant, or a keeper
+         * that cannot be asked. */
+        root: profileSyncHostIdSchema,
         visited: z
           .array(profileSyncHostIdSchema)
           .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
@@ -419,6 +422,12 @@ export const hostProfileSyncStopLinkResponseSchema = lazySchema(() =>
         z.strictObject({
           kind: z.literal("keeping"),
           why: z.enum(["terminal", "old-peer-beyond", "claimant"]),
+          /** The keepers this answer stands for: the answering host for
+           * `terminal`, every keeper known on its other open links for
+           * `old-peer-beyond`, none for `claimant`. */
+          keepers: z
+            .array(profileSyncHostIdSchema)
+            .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
         }),
         /** The same claim reached both ends by another path. */
         z.strictObject({ kind: z.literal("cross") }),
