@@ -1365,6 +1365,68 @@ describe("<BotChannelView tiles={null} /> a post's surface card: answering and d
     ).toBe(false);
   });
 
+  it("decides the approval the card was drawn for, by its own approval id, when another approval of the task is open", async () => {
+    const user = userEvent.setup();
+    const second: BotSurfaceReference = {
+      ...APPROVAL,
+      approvalId: "approval-second",
+    };
+    mountChannel({
+      rows: [
+        botPost(APPROVAL, "first", "post-first"),
+        botPost(second, "second", "post-second"),
+      ],
+      tasks: [
+        task([
+          OPEN_APPROVAL,
+          openItem({
+            kind: "approval",
+            approvalId: "approval-second",
+            tool: "Bash",
+            summary: "rm -rf build",
+            tier: null,
+            requiresPerson: false,
+            askedAt: 900,
+          }),
+        ]),
+      ],
+      surfaceActions: [],
+    });
+
+    const [, secondCard] = screen.getAllByTestId("bot-surface-card");
+    await user.click(within(secondCard).getByRole("button", { name: "Allow" }));
+
+    expect(acts).toHaveLength(1);
+    expect(acts[0]?.messageId).toBe("post-second");
+    expect(acts[0]?.surface).toEqual(second);
+  });
+
+  it("never shows a decision the host did not answer as taken, and sends the same decision again as the same action for the same approval", async () => {
+    const user = userEvent.setup();
+    answer = () => Promise.reject(new Error("socket closed"));
+    mountChannel({
+      rows: [post(APPROVAL)],
+      tasks: [task([OPEN_APPROVAL])],
+      surfaceActions: [],
+    });
+
+    await user.click(within(card()).getByRole("button", { name: "Allow" }));
+    await vi.waitFor(() =>
+      expect(stateLine()).toBe("Couldn't reach the task."),
+    );
+    expect(card().getAttribute("data-state")).not.toBe("sending");
+    expect(cardButtons()).toEqual(["Allow", "Deny", "Open"]);
+
+    answer = () => Promise.resolve(SETTLED);
+    await user.click(within(card()).getByRole("button", { name: "Allow" }));
+
+    expect(acts).toHaveLength(2);
+    expect(acts[1]).toEqual(acts[0]);
+    expect(acts[1]?.surface).toEqual(APPROVAL);
+    await vi.waitFor(() => expect(stateLine()).toBe("Allowed by you"));
+    expect(cardButtons()).toEqual(["Open"]);
+  });
+
   it("says to answer in the task, and offers Open, when the task's machine takes no answer from here", async () => {
     const user = userEvent.setup();
     answer = () =>
