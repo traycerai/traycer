@@ -347,6 +347,7 @@ function makeReleasedUnaryRig(input: {
   const hosts = createReleasedHostMemory();
   const { factory, sockets } = makeFactory();
   let requestNumber = 0;
+  let doorRefusals = 0;
   const client = new WsRpcClient<typeof testRegistry>({
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: testRegistry,
@@ -362,6 +363,12 @@ function makeReleasedUnaryRig(input: {
     hostBearerFor: hostTokenBearerFor(tokens, () => undefined),
     releasedSignOnFor: signInForLocalRow(() => input.row, null, tokens),
     releasedHosts: hosts,
+    doorFor: () => ({
+      refused: () => {
+        doorRefusals += 1;
+      },
+      admitted: () => undefined,
+    }),
     heldTokenRefusedFor: (_authority, presented) =>
       heldTokenRefused(
         tokens,
@@ -379,6 +386,8 @@ function makeReleasedUnaryRig(input: {
     client,
     sockets,
     tokens,
+    hosts,
+    doorRefusals: () => doorRefusals,
     setCurrent: mutable.setCurrent,
     start: async () => {
       const previousCount = sockets.length;
@@ -859,6 +868,122 @@ describe("WsRpcClient", () => {
         NO_HOST_TOKEN_PROBE,
         RELEASED_TEST_SIGN_IN,
       ]);
+    });
+
+    it("uses the sign-in only after a current personal probe invites it", async () => {
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: null,
+        outcomes: [unavailable, unavailable],
+      });
+
+      const first = await rig.start();
+      expect(first.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      first.socket.fireMessage(
+        doorFatal("owner_sign_in", "current computer invited sign-in"),
+      );
+      const invited = await socketAfter(rig.sockets, 1);
+      const open = await openRecordedSocket(invited);
+      expect(open.open.token).toBe(RELEASED_TEST_SIGN_IN);
+      await completeReleasedStatusCall(invited, first.pending);
+
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual([NO_HOST_TOKEN_PROBE, RELEASED_TEST_SIGN_IN]);
+      expect(rig.doorRefusals()).toBe(0);
+      expect(
+        rig.hosts.opensReleasedWay(RELEASED_TEST_USER, RELEASED_TEST_HOST),
+      ).toBe(false);
+    });
+
+    it("does not send sign-in when owner_sign_in follows a not-admitted mint", async () => {
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: null,
+        outcomes: [{ kind: "not-admitted" }],
+      });
+
+      const first = await rig.start();
+      expect(first.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      first.socket.fireMessage(
+        doorFatal("owner_sign_in", "authn already answered not-admitted"),
+      );
+      await expect(first.pending).rejects.toBeInstanceOf(HostRpcError);
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual([NO_HOST_TOKEN_PROBE]);
+    });
+
+    it("uses the host-only token on the call after invited sign-in admission", async () => {
+      const freshToken = "unary-host-token-after-invited-sign-in";
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: null,
+        outcomes: [
+          unavailable,
+          {
+            kind: "ok",
+            token: { token: freshToken, expiresAtMs: Date.now() + 60_000 },
+          },
+        ],
+      });
+
+      const invitedCall = await rig.start();
+      expect(invitedCall.open.token).toBe(NO_HOST_TOKEN_PROBE);
+      invitedCall.socket.fireMessage(
+        doorFatal("owner_sign_in", "current computer invited sign-in"),
+      );
+      const invited = await socketAfter(rig.sockets, 1);
+      expect((await openRecordedSocket(invited)).open.token).toBe(
+        RELEASED_TEST_SIGN_IN,
+      );
+      await completeReleasedStatusCall(invited, invitedCall.pending);
+
+      const nextCall = await rig.start();
+      expect(nextCall.open.token).toBe(freshToken);
+      await completeReleasedStatusCall(nextCall.recorded, nextCall.pending);
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual([NO_HOST_TOKEN_PROBE, RELEASED_TEST_SIGN_IN, freshToken]);
+      expect(rig.doorRefusals()).toBe(0);
+      expect(
+        rig.hosts.opensReleasedWay(RELEASED_TEST_USER, RELEASED_TEST_HOST),
+      ).toBe(false);
+    });
+
+    it("retries an expired held token through a probe and invitation in one call", async () => {
+      const expired = {
+        token: "unary-held-token-refused-as-expired",
+        expiresAtMs: Date.now() - 1,
+      };
+      const rig = makeReleasedUnaryRig({
+        row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+        initialToken: expired,
+        outcomes: [unavailable, unavailable, unavailable],
+      });
+
+      const attempt = await rig.start();
+      expect(attempt.open.token).toBe(expired.token);
+      attempt.socket.fireMessage(
+        doorFatal("token_expired", "held host-only token expired"),
+      );
+      const probe = await socketAfter(rig.sockets, 1);
+      expect((await openRecordedSocket(probe)).open.token).toBe(
+        NO_HOST_TOKEN_PROBE,
+      );
+      probe.socket.fireMessage(
+        doorFatal("owner_sign_in", "current computer invited sign-in"),
+      );
+      const invited = await socketAfter(rig.sockets, 2);
+      expect((await openRecordedSocket(invited)).open.token).toBe(
+        RELEASED_TEST_SIGN_IN,
+      );
+      await completeReleasedStatusCall(invited, attempt.pending);
+
+      expect(
+        rig.sockets.map(({ sent }) => expectOpenFrame(sent[0] ?? "").token),
+      ).toEqual([expired.token, NO_HOST_TOKEN_PROBE, RELEASED_TEST_SIGN_IN]);
+      expect(rig.doorRefusals()).toBe(0);
     });
 
     it("probes again after an admitted host token clears a declined probe", async () => {
