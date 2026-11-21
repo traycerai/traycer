@@ -117,6 +117,58 @@ export function pendingUploadFixture(
   };
 }
 
+/** The attempt `status.move` names once authn's acceptance exists; `needs_person` is the one the person must act on. */
+export function moveAttemptFixture(
+  state: "running" | "retry" | "needs_person",
+): NonNullable<EnvironmentStatusResponseV13["move"]> {
+  const ids = { attemptId: "attempt-1", acceptanceId: "acceptance-1" };
+  switch (state) {
+    case "running":
+      return { ...ids, state };
+    case "retry":
+      return { ...ids, state, cause: "unavailable" };
+    case "needs_person":
+      return { ...ids, state, reason: "plan_changed" };
+  }
+}
+
+export const REGISTERING_SETUP = { stage: "registering", state: "running" };
+
+/** What a host without the moving-settings fix serves from the stage's start, though an accepted move asks nobody. */
+export const MOVING_SETTINGS_WINDOW_SETUP = {
+  stage: "moving_settings",
+  state: "awaiting_consent",
+};
+
+/**
+ * The setups a person's accepted move shows while authn has not bound this
+ * computer: the registering stage after a Retry or a restart, and the moving
+ * settings window. With `status.move` in `retry` or `running`, each is past
+ * the accept.
+ */
+export const ACCEPTED_MOVE_CASES = [
+  { name: "registering", setup: REGISTERING_SETUP },
+  {
+    name: "the moving settings window",
+    setup: MOVING_SETTINGS_WINDOW_SETUP,
+  },
+].flatMap(({ name, setup }) =>
+  (["retry", "running"] as const).map((state) => [name, state, setup] as const),
+);
+
+/** A personal computer whose planes still read local, serving `setup` and `move`. */
+export function unboundMoveStatusFixture(
+  setup: EnvironmentStatusResponseV13["setup"],
+  move: EnvironmentStatusResponseV13["move"],
+): EnvironmentStatusResponseV13 {
+  return environmentStatusFixture({
+    principal: { kind: "personal" },
+    planes: { records: "local", broker: "local", room: "local" },
+    setup,
+    move,
+  });
+}
+
 export function environmentStatusFixture(
   overrides: Partial<EnvironmentStatusResponseV13>,
 ): EnvironmentStatusResponseV13 {

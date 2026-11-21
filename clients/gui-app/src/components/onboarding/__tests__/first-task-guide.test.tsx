@@ -21,8 +21,13 @@ import type {
 import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
 import {
+  ACCEPTED_MOVE_CASES,
+  MOVING_SETTINGS_WINDOW_SETUP,
+  REGISTERING_SETUP,
   buildEnvironmentClient,
   environmentStatusFixture,
+  moveAttemptFixture,
+  unboundMoveStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import {
   mountTeamPage,
@@ -286,8 +291,11 @@ function mountGuideWithLifecycleBridge(): {
   return { view, hideGuide: () => setGuideVisible(false) };
 }
 
-/** This computer, with a fake host answering `environment.status` with `status`. */
-function computerWithStatus(status: EnvironmentStatusResponseV13): void {
+/** This computer, with a fake host answering `environment.status@1.<statusMinor>` with `status`. */
+function computerWithStatusAt(
+  status: EnvironmentStatusResponseV13,
+  statusMinor: number,
+): void {
   const { client } = buildEnvironmentClient({
     hostId: "old",
     handlers: {
@@ -295,9 +303,13 @@ function computerWithStatus(status: EnvironmentStatusResponseV13): void {
     },
   });
   recordNegotiatedHostManifest("old", {
-    "environment.status": { major: 1, minor: 1 },
+    "environment.status": { major: 1, minor: statusMinor },
   });
   thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+}
+
+function computerWithStatus(status: EnvironmentStatusResponseV13): void {
+  computerWithStatusAt(status, 1);
 }
 
 /**
@@ -512,6 +524,56 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
       "Move this computer to Personal",
       expect.anything(),
     );
+  });
+
+  describe("a move the person already accepted, stopped before authn bound this computer", () => {
+    // `status.move`, served from `@1.3`, is what says the accept happened: the
+    // planes still read local, and the setup is either the registering stage
+    // after a Retry or a restart, or the moving settings window.
+    it.each(ACCEPTED_MOVE_CASES)(
+      "does not invite in %s while the host's move is in state %s",
+      async (_name, state, setup) => {
+        computerWithStatusAt(
+          unboundMoveStatusFixture(setup, moveAttemptFixture(state)),
+          3,
+        );
+        renderGuide();
+
+        await waitFor(() =>
+          expect(toastState).toHaveBeenCalledWith(
+            "You're all set",
+            expect.anything(),
+          ),
+        );
+        expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).toBeNull();
+      },
+    );
+
+    it.each([
+      ["registering", REGISTERING_SETUP],
+      ["the moving settings window", MOVING_SETTINGS_WINDOW_SETUP],
+    ])(
+      "still invites in %s a computer whose move was never accepted",
+      async (_name, setup) => {
+        computerWithStatusAt(unboundMoveStatusFixture(setup, null), 3);
+        renderGuide();
+
+        await expectMoveInvitation();
+      },
+    );
+
+    it("still invites a computer whose move waits on the person", async () => {
+      computerWithStatusAt(
+        unboundMoveStatusFixture(
+          REGISTERING_SETUP,
+          moveAttemptFixture("needs_person"),
+        ),
+        3,
+      );
+      renderGuide();
+
+      await expectMoveInvitation();
+    });
   });
 
   it("invites an existing user whose setup reminder was already dismissed", async () => {

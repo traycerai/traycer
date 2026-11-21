@@ -10,8 +10,13 @@ import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/enviro
 import type { ThisComputer } from "@/components/settings/move/this-computer";
 import { useThisComputersMove } from "@/components/settings/move/use-this-computers-move";
 import {
+  ACCEPTED_MOVE_CASES,
+  MOVING_SETTINGS_WINDOW_SETUP,
+  REGISTERING_SETUP,
   buildEnvironmentClient,
   environmentStatusFixture,
+  moveAttemptFixture,
+  unboundMoveStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 
 /*
@@ -47,14 +52,17 @@ function renderMove(computer: ThisComputer): {
   return { current: () => result.current };
 }
 
-/** This computer, with a host answering `environment.status` with `status`. */
-function computerAnswering(status: EnvironmentStatusResponseV13): ThisComputer {
+/** This computer, with a host answering `environment.status@1.<statusMinor>` with `status`. */
+function computerAnswering(
+  status: EnvironmentStatusResponseV13,
+  statusMinor: number,
+): ThisComputer {
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: { "environment.status": () => status },
   });
   recordNegotiatedHostManifest(HOST_ID, {
-    "environment.status": { major: 1, minor: 1 },
+    "environment.status": { major: 1, minor: statusMinor },
   });
   return { hostId: HOST_ID, hostName: "Old laptop", client };
 }
@@ -63,7 +71,16 @@ async function settlesTo(
   status: EnvironmentStatusResponseV13,
   answer: string,
 ): Promise<void> {
-  const move = renderMove(computerAnswering(status));
+  const move = renderMove(computerAnswering(status, 1));
+  await waitFor(() => expect(move.current()).toBe(answer));
+}
+
+/** The host serves `status.move`, which a host answering below `@1.3` upgrades to null. */
+async function settlesToServingMove(
+  status: EnvironmentStatusResponseV13,
+  answer: string,
+): Promise<void> {
+  const move = renderMove(computerAnswering(status, 3));
   await waitFor(() => expect(move.current()).toBe(answer));
 }
 
@@ -154,6 +171,48 @@ describe("useThisComputersMove", () => {
       }),
       "moved",
     );
+  });
+
+  describe("a move the person already accepted, stopped before authn bound this computer", () => {
+    // `status.move` is what says the accept happened: the planes still read
+    // local, and the setup is either the registering stage after a Retry or a
+    // restart, or the moving settings window.
+    it.each(ACCEPTED_MOVE_CASES)(
+      "reads moved in %s while the host's move is in state %s",
+      async (_name, state, setup) => {
+        await settlesToServingMove(
+          unboundMoveStatusFixture(setup, moveAttemptFixture(state)),
+          "moved",
+        );
+      },
+    );
+
+    it("still invites a first computer whose move was never accepted", async () => {
+      await settlesToServingMove(
+        {
+          ...unboundMoveStatusFixture(REGISTERING_SETUP, null),
+          principal: null,
+        },
+        "not_moved",
+      );
+    });
+
+    it("still asks in the moving settings window of a move never accepted", async () => {
+      await settlesToServingMove(
+        unboundMoveStatusFixture(MOVING_SETTINGS_WINDOW_SETUP, null),
+        "not_moved",
+      );
+    });
+
+    it("still invites a computer whose move waits on the person", async () => {
+      await settlesToServingMove(
+        unboundMoveStatusFixture(
+          REGISTERING_SETUP,
+          moveAttemptFixture("needs_person"),
+        ),
+        "not_moved",
+      );
+    });
   });
 
   it("claims nothing from a computer with no host of its own", () => {
