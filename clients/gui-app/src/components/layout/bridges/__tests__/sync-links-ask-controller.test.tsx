@@ -443,3 +443,143 @@ describe("<SyncLinksAskController />", () => {
     await waitFor(() => expect(toastMock).toHaveBeenCalled());
   });
 });
+
+const DETAILS = "Details";
+const MOVE_DETAIL =
+  "Move both to Personal: they keep working on both computers. MacBook Air moves too.";
+const RENEWING_STOP_DETAIL_TWO =
+  "Stop syncing: they stay on both computers. One of them may need to sign in again later.";
+const RENEWING_STOP_DETAIL_MORE =
+  "Stop syncing: they stay on every computer. One of them may need to sign in again later.";
+const KEY_ONLY_STOP_DETAIL =
+  "Stop syncing: they keep working on both computers.";
+const KEY_ONLY_STOP_DETAIL_MORE =
+  "Stop syncing: they keep working on every computer.";
+const SECOND_PEER = {
+  hostId: "host-c",
+  displayName: "Mac mini",
+  version: "current",
+} as const;
+
+function keyOnlyFolders(): SyncLinksFolder[] {
+  return linkedFolders().map((folder) => ({ ...folder, accountClass: "key" }));
+}
+
+function withTwoPeers(folders: SyncLinksFolder[]): SyncLinksFolder[] {
+  return folders.map((folder) => ({ ...folder, peers: [PEER, SECOND_PEER] }));
+}
+
+async function openAskWithTwoPeers(): Promise<void> {
+  await waitFor(() => expect(toastMock).toHaveBeenCalled());
+  render(<>{lastToastContent()}</>);
+  fireEvent.click(screen.getByRole("button", { name: CHOOSE }));
+  await screen.findByRole("heading", {
+    name: "Synced with MacBook Air and Mac mini",
+  });
+}
+
+function openDetails(): void {
+  fireEvent.click(screen.getByRole("button", { name: DETAILS }));
+}
+
+describe("<SyncLinksAskController /> Stop ends only the sync", () => {
+  beforeEach(() => {
+    toastMock.mockClear();
+    toastMock.dismiss.mockClear();
+    resetGates();
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetNegotiatedManifests();
+    directory.computer = {
+      hostId: null,
+      hostName: "this computer",
+      client: null,
+    };
+    resetGates();
+  });
+
+  it("says one of two computers may sign in again when the list holds a renewing account", async () => {
+    mountAsk({
+      teamComputer: false,
+      folders: linkedFolders(),
+      negotiateList: true,
+    });
+    await openAsk();
+    openDetails();
+
+    expect(await screen.findByText(RENEWING_STOP_DETAIL_TWO)).toBeTruthy();
+    expect(screen.getByText(MOVE_DETAIL)).toBeTruthy();
+  });
+
+  it("says every computer when three or more hold a renewing account", async () => {
+    mountAsk({
+      teamComputer: false,
+      folders: withTwoPeers(linkedFolders()),
+      negotiateList: true,
+    });
+    await openAskWithTwoPeers();
+    openDetails();
+
+    expect(await screen.findByText(RENEWING_STOP_DETAIL_MORE)).toBeTruthy();
+    expect(screen.queryByText(RENEWING_STOP_DETAIL_TWO)).toBeNull();
+  });
+
+  it("gives a key-only list the key-only Stop line", async () => {
+    mountAsk({
+      teamComputer: false,
+      folders: keyOnlyFolders(),
+      negotiateList: true,
+    });
+    await openAsk();
+    openDetails();
+
+    expect(await screen.findByText(KEY_ONLY_STOP_DETAIL)).toBeTruthy();
+    expect(screen.getByText(MOVE_DETAIL)).toBeTruthy();
+  });
+
+  it("says every computer on a key-only list with three or more computers", async () => {
+    mountAsk({
+      teamComputer: false,
+      folders: withTwoPeers(keyOnlyFolders()),
+      negotiateList: true,
+    });
+    await openAskWithTwoPeers();
+    openDetails();
+
+    expect(await screen.findByText(KEY_ONLY_STOP_DETAIL_MORE)).toBeTruthy();
+    expect(screen.queryByText(KEY_ONLY_STOP_DETAIL)).toBeNull();
+  });
+
+  it("gives a team computer with a renewing account only the renewing Stop line", async () => {
+    mountAsk({
+      teamComputer: true,
+      folders: linkedFolders(),
+      negotiateList: true,
+    });
+    await openAsk();
+    openDetails();
+
+    expect(await screen.findByText(RENEWING_STOP_DETAIL_TWO)).toBeTruthy();
+    expect(screen.queryByText(MOVE_DETAIL)).toBeNull();
+  });
+
+  it("keeps the update line for a computer on 1.5.4, beside the same Stop line", async () => {
+    mountAsk({
+      teamComputer: false,
+      folders: linkedFolders().map((folder) => ({
+        ...folder,
+        peers: [{ ...PEER, version: "needs-update" }],
+      })),
+      negotiateList: true,
+    });
+    await openAsk();
+
+    expect(
+      screen.getByText("MacBook Air needs the latest Traycer."),
+    ).toBeTruthy();
+    openDetails();
+    expect(await screen.findByText(RENEWING_STOP_DETAIL_TWO)).toBeTruthy();
+  });
+});

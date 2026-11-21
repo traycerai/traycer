@@ -44,9 +44,6 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
 const HOST_ID = "host-providers-page";
 const PROVIDER_ID = "claude-code";
 const WORK_PROFILE_ID = "11111111-1111-4111-8111-111111111111";
-const SIGN_IN = "Sign in";
-const SIGN_IN_AGAIN = "Sign in again";
-const SIGNED_OUT = "Signed out";
 const SIGNED_IN = "Signed in";
 const HELD_ONE = "Moves to Personal when MacBook Air does";
 const HELD_TWO = "Moves to Personal when MacBook Air and Mac mini do";
@@ -69,31 +66,6 @@ afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
-type SyncStop = "gave-up-copy" | null;
-
-function signedOutAuth(): ProviderProfile["auth"] {
-  return {
-    status: "unauthenticated",
-    badgeText: null,
-    label: null,
-    detail: null,
-  };
-}
-
-function signedOutRow(syncStop: SyncStop): ProviderProfile {
-  return {
-    ...profileWithStanding({}, { profileId: WORK_PROFILE_ID, label: "Work" }),
-    auth: signedOutAuth(),
-    syncStop,
-  };
-}
-
-function queryButtonNamed(name: string): HTMLElement | null {
-  return screen.queryByRole("button", {
-    name: (accessibleName) => accessibleName === name,
-  });
-}
-
 function signedInRow(): ProviderProfile {
   return profileWithStanding({}, { profileId: WORK_PROFILE_ID, label: "Work" });
 }
@@ -115,12 +87,9 @@ function folder(
 function renderSection(input: {
   readonly row: ProviderProfile;
   readonly syncLinks: SyncLinksListResponse | null;
-  readonly signedOut?: boolean;
 }): { readonly syncListCalls: () => number } {
   let syncListCalls = 0;
-  const listed = provider(PROVIDER_ID, [input.row]);
-  const shown =
-    input.signedOut === true ? { ...listed, auth: signedOutAuth() } : listed;
+  const shown = provider(PROVIDER_ID, [input.row]);
   const { client } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
@@ -179,42 +148,6 @@ function renderSection(input: {
   );
   return { syncListCalls: () => syncListCalls };
 }
-
-describe("ProviderProfileScopedSection after Stop syncing", () => {
-  it("offers Sign in again on a row this computer gave up, and stays Signed out", async () => {
-    renderSection({
-      row: signedOutRow("gave-up-copy"),
-      signedOut: true,
-      syncLinks: null,
-    });
-
-    expect(
-      await screen.findByRole("button", {
-        name: (accessibleName) => accessibleName === SIGN_IN_AGAIN,
-      }),
-    ).toBeTruthy();
-    expect(queryButtonNamed(SIGN_IN)).toBeNull();
-    const badge = screen.getByText(SIGNED_OUT);
-    expect(badge.getAttribute("data-slot")).toBe("badge");
-  });
-
-  it("offers Sign in on a row that was not given up, and stays Signed out", async () => {
-    renderSection({
-      row: signedOutRow(null),
-      signedOut: true,
-      syncLinks: null,
-    });
-
-    expect(
-      await screen.findByRole("button", {
-        name: (accessibleName) => accessibleName === SIGN_IN,
-      }),
-    ).toBeTruthy();
-    expect(queryButtonNamed(SIGN_IN_AGAIN)).toBeNull();
-    const badge = screen.getByText(SIGNED_OUT);
-    expect(badge.getAttribute("data-slot")).toBe("badge");
-  });
-});
 
 describe("ProviderProfileScopedSection held for Personal", () => {
   it("replaces the status badge with the one computer that still has to move", async () => {

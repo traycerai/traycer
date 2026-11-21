@@ -47,7 +47,6 @@ import {
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSyncLinksListQuery } from "@/hooks/providers/use-providers-sync-links-list-query";
 import { heldForPersonalLine } from "@/components/sync-links/sync-links-peers";
-import { SIGN_IN_AGAIN_AFTER_STOP_TEXT } from "@/components/sync-links/sync-links-copy";
 import { useHostClient } from "@/lib/host";
 import { ProfileOtherNames } from "./provider-profile-other-names";
 import {
@@ -599,9 +598,7 @@ function SelectedProfileRow(props: {
               onClick={props.onSignIn}
             >
               <LogIn data-icon="inline-start" />
-              {profile.syncStop === "gave-up-copy"
-                ? SIGN_IN_AGAIN_AFTER_STOP_TEXT
-                : "Sign in"}
+              Sign in
             </Button>
           </span>
         </TooltipWrapper>
