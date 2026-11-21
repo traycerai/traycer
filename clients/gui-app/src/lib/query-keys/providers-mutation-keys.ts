@@ -70,4 +70,5 @@ export const providersMutationKeys = {
   restoreFallbackTierGroups: () =>
     ["providers.fallbackPolicy.restoreTierGroups"] as const,
   resetFallbackPolicy: () => ["providers.fallbackPolicy.reset"] as const,
+  syncLinksStop: () => ["providers.syncLinks.stop"] as const,
 };

@@ -45,6 +45,9 @@ import {
   type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { useProvidersSyncLinksListQuery } from "@/hooks/providers/use-providers-sync-links-list-query";
+import { heldForPersonalLine } from "@/components/sync-links/sync-links-peers";
+import { useHostClient } from "@/lib/host";
 import { ProfileOtherNames } from "./provider-profile-other-names";
 import {
   NOT_ON_THIS_COMPUTER_YET_TEXT,
@@ -328,6 +331,9 @@ export function ProviderProfileScopedSection(
     state.providerId,
   );
   const offersSignIns = listOffersSignIns(providersList);
+  // The scoped host's own linked computers (I7): an account answered with
+  // Move reads board 4's line until they move too.
+  const syncLinks = useProvidersSyncLinksListQuery(useHostClient(), true).data;
 
   if (profiles.length === 0) return null;
 
@@ -441,6 +447,11 @@ export function ProviderProfileScopedSection(
           profile={selectedProfile}
           computerName={hostName}
           offersSignIns={offersSignIns}
+          heldLine={heldForPersonalLine(
+            syncLinks?.folders ?? [],
+            state.providerId,
+            selectedProfile.profileId,
+          )}
           canAddProfile={canAddProfile}
           signInUnavailableHint={signInUnavailableHint}
           managementHeldReason={managementHeldReason}
@@ -524,6 +535,7 @@ function SelectedProfileRow(props: {
   readonly profile: ProviderProfile;
   readonly computerName: string | null;
   readonly offersSignIns: boolean;
+  readonly heldLine: string | null;
   readonly canAddProfile: boolean;
   readonly signInUnavailableHint: string | null;
   readonly managementHeldReason: string | null;
@@ -545,6 +557,7 @@ function SelectedProfileRow(props: {
         profile={profile}
         computerName={props.computerName}
         offersSignIns={props.offersSignIns}
+        heldLine={props.heldLine}
       />
       {signInEverywhere ? (
         <TooltipWrapper
@@ -664,16 +677,31 @@ function ProfileIdentity({
   );
 }
 
+function profileStatusBadgeText(
+  state: ProviderCliState,
+  profile: ProviderProfile,
+  inventoryBadge: string,
+): string {
+  return profile.kind === "ambient" &&
+    isProviderAmbientSignedOut(state) &&
+    profilePersonNoticeText(profile) === null
+    ? "Signed out"
+    : inventoryBadge;
+}
+
 function ProfileSummary({
   state,
   profile,
   computerName,
   offersSignIns,
+  heldLine,
 }: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
   readonly computerName: string | null;
   readonly offersSignIns: boolean;
+  /** Board 4's "Moves to Personal when …", in place of the status words. */
+  readonly heldLine: string | null;
 }): ReactNode {
   const tier = profile.identity?.tier;
   const planText =
@@ -695,11 +723,7 @@ function ProfileSummary({
           largely to itself. */}
         <ProfileIdentity profile={profile} />
         <Badge variant="outline" size="xs" className="shrink-0">
-          {profile.kind === "ambient" &&
-          isProviderAmbientSignedOut(state) &&
-          profilePersonNoticeText(profile) === null
-            ? "Signed out"
-            : inventory.badge}
+          {heldLine ?? profileStatusBadgeText(state, profile, inventory.badge)}
         </Badge>
         {planText !== null ? (
           <TooltipWrapper

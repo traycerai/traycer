@@ -5,6 +5,7 @@ import { PersistentBrowserGuestHost } from "@/components/epic-canvas/browser-gue
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { LoginImportAnnouncementController } from "@/components/layout/bridges/login-import-announcement-controller";
 import { SessionImportAnnouncementController } from "@/components/layout/bridges/session-import-announcement-controller";
+import { SyncLinksAskController } from "@/components/layout/bridges/sync-links-ask-controller";
 import { ShareOnXController } from "@/components/share-on-x/share-on-x-controller";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
 import { HostControllerStatusListener } from "@/components/layout/bridges/host-controller-status-listener";
@@ -374,6 +375,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <AppUpdateToastController />
       <LoginImportAnnouncementController />
       <SessionImportAnnouncementController />
+      <SyncLinksAskController />
       <ShareOnXController />
       <LinkLoginDeepLinkBridge />
       <WorktreeDeleteProgressToastBridge />

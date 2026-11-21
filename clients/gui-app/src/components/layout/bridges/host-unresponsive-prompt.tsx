@@ -70,6 +70,7 @@ export function HostUnresponsivePrompt() {
           onAction={() => {
             forceRestart({ pid: state.pid, offerId });
           }}
+          showLater
           onLater={null}
         />,
         {
