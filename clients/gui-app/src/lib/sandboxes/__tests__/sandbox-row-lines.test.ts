@@ -855,9 +855,57 @@ describe("sandboxTodayCost", () => {
   it("says the accrual once it reaches a cent", () => {
     expect(sandboxTodayCost(awake, null, 30 * 60_000)).toBe("$0.06 so far");
   });
+
+  it("uses the charged ledger total for a size that grows", () => {
+    const growing = sandboxSummaryFixture({
+      state: "awake",
+      grows: { cpus: 16, memoryMb: 65_536 },
+      priceMcPerHour: {
+        awakeMc: 135,
+        suspendedMc: 7,
+        stoppedMc: 7,
+        offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+      },
+    });
+    const ledger: SandboxCost = {
+      sandboxId: "sbx-1",
+      currentRateMillicreditsPerHour: 135,
+      state: "awake",
+      frozen: false,
+      charged: {
+        computeMillicredits: 100,
+        storageMillicredits: 50,
+        sinceCreatedAt: NOW,
+      },
+      pendingMillicredits: 50,
+      segments: [],
+      todayMillicredits: 0,
+      todayAwakeMs: null,
+      history: [],
+    };
+
+    expect(sandboxTodayCost(growing, ledger, 0)).toBe("$0.20 so far");
+  });
 });
 
 describe("sandboxShapeAndCostLine", () => {
+  it("shows a growing size's full range in the row", () => {
+    const summary = sandboxSummaryFixture({
+      state: "awake",
+      grows: { cpus: 16, memoryMb: 65_536 },
+      priceMcPerHour: {
+        awakeMc: 135,
+        suspendedMc: 7,
+        stoppedMc: 7,
+        offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+      },
+    });
+
+    expect(sandboxRowShapeAndCostLine(summary, null)).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour while awake",
+    );
+  });
+
   it("puts the agent and its task on an agent sandbox's shape line", () => {
     const line = sandboxShapeAndCostLine(
       sandboxSummaryFixture({
@@ -1188,6 +1236,23 @@ describe("team credits in the resource line", () => {
   });
   const HOURLY = "Linux · 2 vCPU · 4 GB · $0.21 an hour while awake";
   const CREDITS = `${HOURLY} · uses Acme's credits`;
+
+  it("shows a growing shape's range on a team row", () => {
+    const growing = sandboxSummaryFixture({
+      state: "awake",
+      grows: { cpus: 16, memoryMb: 65_536 },
+      priceMcPerHour: {
+        awakeMc: 135,
+        suspendedMc: 7,
+        stoppedMc: 7,
+        offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+      },
+    });
+
+    expect(sandboxRowShapeAndCostLine(growing, team)).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour while awake · uses Acme's credits",
+    );
+  });
 
   it("names the team's credits whether another member paid last or no payer is named", () => {
     expect(sandboxShapeAndCostLine(summary, team)).toBe(CREDITS);

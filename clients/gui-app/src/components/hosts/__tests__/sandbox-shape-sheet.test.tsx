@@ -5,6 +5,7 @@ import {
   readinessCatalogue,
   servedMinutes,
 } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
+import { autoSizingCatalogue } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import type {
   StageConfiguration,
   StageSize,
@@ -381,6 +382,67 @@ describe("<SandboxShapeSheet />", () => {
     expect(
       screen.getByRole("option", { name: /4 vCPU · 8 GB · 40 GB/ }).textContent,
     ).toContain("from $0.08/h");
+  });
+
+  it("shows growing Linux starts and their disk-based prices, keeping a chosen disk across sizes", () => {
+    catalogueInUse = autoSizingCatalogue();
+    const onUseShape = vi.fn();
+    renderSheet(onUseShape);
+
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    expect(disk.getAttribute("min")).toBe("10");
+    expect(disk.getAttribute("max")).toBe("200");
+    expect((disk as HTMLInputElement).value).toBe("50");
+    expect(screen.queryByRole("option", { name: /1 vCPU · 1 GB/ })).toBeNull();
+
+    const size = screen.getByRole("combobox", { name: "Size" });
+    expect(size.textContent).toContain(
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    );
+    expect(
+      screen.getByTestId("sandbox-shape-sheet-resting-price").textContent,
+    ).toBe("Suspended: $0.01/h · Stopped: $0.01/h");
+    fireEvent.click(size);
+    expect(
+      screen.getByRole("option", {
+        name: "4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · $0.26–$1.44/h",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("option", {
+        name: "8 vCPU · 16 GB, grows to 16 vCPU · 64 GB · $0.52–$1.44/h",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("option", {
+        name: "8 vCPU · 32 GB, grows to 16 vCPU · 64 GB · $0.73–$1.44/h",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("option", {
+        name: "16 vCPU · 32 GB, grows to 16 vCPU · 64 GB · $1.03–$1.44/h",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("option", { name: "16 vCPU · 64 GB · $1.44/h" }),
+    ).toBeTruthy();
+
+    fireEvent.change(disk, { target: { value: "30" } });
+    fireEvent.click(
+      screen.getByRole("option", {
+        name: "4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · $0.26–$1.44/h",
+      }),
+    );
+    expect((disk as HTMLInputElement).value).toBe("30");
+    expect(screen.getByTestId("sandbox-shape-sheet-price").textContent).toContain(
+      "$0.26–$1.44 an hour while awake",
+    );
+    fireEvent.click(screen.getByRole("button", { name: USE_THIS_SHAPE }));
+    expect(onUseShape.mock.calls[0]?.[0]).toMatchObject({
+      cpus: 4,
+      memoryMb: 8 * GIB,
+      diskMb: 30 * GIB,
+    });
   });
 
   it("leaves a size string alone when that rung is smaller than the catalogue's source shape", () => {

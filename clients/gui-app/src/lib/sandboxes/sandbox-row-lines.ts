@@ -15,9 +15,9 @@ import {
 } from "@traycer/protocol/host/sandbox-control";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { frozenDestroyAt } from "@/lib/sandboxes/sandbox-balance";
-import { formatMemory } from "@/lib/sandboxes/sandbox-pricing";
 import {
   AGENT_SANDBOX,
+  awakePriceDollars,
   costLine,
   keptByLine,
   startedByLine,
@@ -30,6 +30,7 @@ import {
   formatSandboxDollars,
   idleAndRestingLine,
   idleLine,
+  sandboxSizeLabel,
   type SandboxConfigurationCopy,
 } from "@/lib/sandboxes/sandbox-strings";
 
@@ -324,10 +325,10 @@ export function sandboxKeptByLabel(
 
 // ── The shape and cost line ─────────────────────────────────────────────────
 
-/** `Linux · 2 vCPU · 4 GB`. */
+/** `Linux · 2 vCPU · 4 GB`, or `Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB`. */
 export function sandboxShapeLine(summary: SandboxSummary): string {
   const os = summary.os === "windows" ? "Windows" : "Linux";
-  return `${os} · ${summary.cpus} vCPU · ${formatMemory(summary.memoryMb)}`;
+  return `${os} · ${sandboxSizeLabel(summary.cpus, summary.memoryMb, summary.grows ?? null)}`;
 }
 
 /**
@@ -357,12 +358,19 @@ export function sandboxRowShapeAndCostLine(
   if (summary.priceMcPerHour === null) {
     return joinParts(sandboxShapeLine(summary), creator);
   }
-  const hourly = `${formatSandboxDollars(summary.priceMcPerHour.awakeMc)} an hour while awake`;
+  // A row describes the sandbox: a size that grows shows its range, never
+  // the rate it is at right now.
+  const offer = summary.priceMcPerHour.offer ?? null;
+  const hourly = `${awakePriceDollars(summary.priceMcPerHour.awakeMc, offer)} an hour while awake`;
   // A burst creator replaces the funding clause. A kept row's task does not.
   const cost =
     (summary.burst && creator !== null) || credits === null
       ? hourly
-      : costLine(summary.priceMcPerHour.awakeMc, configurationCopy(credits));
+      : costLine(
+          summary.priceMcPerHour.awakeMc,
+          offer,
+          configurationCopy(credits),
+        );
   return joinParts(sandboxShapeLine(summary), cost, creator);
 }
 
@@ -572,9 +580,37 @@ export function sandboxTodayCost(
   ) {
     return null;
   }
-  const accrued = (summary.priceMcPerHour.awakeMc * awakeTodayMs) / MS_PER_HOUR;
+  const accrued = sandboxAccruedMc(
+    summary,
+    summary.priceMcPerHour.awakeMc,
+    cost,
+    awakeTodayMs,
+  );
+  if (accrued === null) return null;
   if (accrued < MC_PER_CENT) return LESS_THAN_A_CENT_SO_FAR;
   return `${formatSandboxDollars(accrued)} so far`;
+}
+
+/**
+ * What an awake row has accrued: a fixed shape's rate times its time awake.
+ * A size that grows changes its rate as it grows, so its accrual is the
+ * ledger's charged total; unknown until the ledger is read.
+ */
+function sandboxAccruedMc(
+  summary: SandboxSummary,
+  awakeMc: number,
+  cost: SandboxCost | null,
+  awakeTodayMs: number,
+): number | null {
+  if (summary.grows === undefined) {
+    return (awakeMc * awakeTodayMs) / MS_PER_HOUR;
+  }
+  if (cost === null) return null;
+  return (
+    cost.charged.computeMillicredits +
+    cost.charged.storageMillicredits +
+    cost.pendingMillicredits
+  );
 }
 
 function idleMinutesOf(summary: SandboxSummary): number {

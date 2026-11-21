@@ -155,6 +155,7 @@ import {
   SandboxHeaderActions,
   SandboxHeaderCost,
   SandboxHeaderNotices,
+  SandboxCostsPanel,
   SandboxInstallationGroup,
 } from "@/components/hosts/sandbox-card";
 import { HostOverviewSecretsTab } from "@/components/settings/panels/host-overview-secrets-tab";
@@ -365,6 +366,33 @@ describe("team creator and billing identity", () => {
 });
 
 describe("team cost view", () => {
+  it("shows the growing size, chosen disk, and range on the team rate", () => {
+    const sandbox = sandboxOf("suspended", false, {
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 51_200,
+        grows: { cpus: 16, memoryMb: 65_536 },
+        priceMcPerHour: {
+          awakeMc: 135,
+          suspendedMc: 7,
+          stoppedMc: 7,
+          offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+        },
+      });
+    renderCard(sandbox, true);
+    render(<SandboxCostsPanel sandbox={{ ...sandbox, teamOwned: true }} />);
+
+    expect(screen.getByTestId("sandbox-card-shape").textContent).toBe(
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · 50 GB disk",
+    );
+    expect(screen.getByTestId("sandbox-card-other-rate").textContent).toBe(
+      "$0.14–$1.44 an hour",
+    );
+    expect(
+      screen.getByText("$0.14–$1.44 an hour while awake"),
+    ).toBeTruthy();
+  });
+
   it("opens the team Secrets page from Manage", () => {
     mocks.grantsData = { version: 3, grants: [], github: null };
     renderCard(sandboxOf("awake", false, { environmentId: ENV }), true);

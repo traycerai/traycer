@@ -697,6 +697,29 @@ function showFileTree(): void {
 describe("AgentHoverTooltip host section", () => {
   beforeEach(showFileTree);
 
+  it("shows a growing sandbox's start and ceiling size in the sidebar hover", () => {
+    h.sandboxes = [
+      sandboxRow({
+        grows: { cpus: 16, memoryMb: 65_536 },
+        priceMcPerHour: {
+          awakeMc: 135,
+          suspendedMc: 7,
+          stoppedMc: 7,
+          offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+        },
+      }),
+    ];
+    renderAgent({
+      hostId: "host-sbx",
+      ownerKind: "chat",
+      ownerHostUnreachable: false,
+    });
+
+    expect(screen.getByTestId("worktree-host-section").textContent).toContain(
+      "Sandbox · Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB",
+    );
+  });
+
   it("does not infer a payer while teams load and keeps the viewer as creator", () => {
     h.sandboxes = [sandboxRow({})];
     h.cost = [{ sandboxId: "sbx-1", todayMillicredits: 2000 }];

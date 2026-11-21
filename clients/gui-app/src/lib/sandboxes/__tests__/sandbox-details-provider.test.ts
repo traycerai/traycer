@@ -130,6 +130,25 @@ describe("sandboxDetailsEntry", () => {
     expect(entry.export().status.Region).toBe("United States (West)");
   });
 
+  it("shows a growing size in the Details shape and status line", () => {
+    const entry = sandboxDetailsEntry({
+      summary: sandboxSummaryFixture({
+        cpus: 2,
+        memoryMb: 4_096,
+        grows: { cpus: 16, memoryMb: 65_536 },
+      }),
+      cost: null,
+      wakeString: null,
+      viewerUserId: null,
+      personal: true,
+      now: NOW,
+    });
+
+    expect(entry.status.find((row) => row.label === "Shape")?.value).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB",
+    );
+  });
+
   it("reads a segment's cost below a cent as under $0.01, and a cent or more in dollars", () => {
     const segment = (millicredits: number) => ({
       state: "awake" as const,
