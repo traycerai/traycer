@@ -359,17 +359,48 @@ export type HostProfileSyncFetchResponse = z.infer<
   typeof hostProfileSyncFetchResponseSchema
 >;
 
+/** The most computers one linked group names; past it the group never opens. */
+export const PROFILE_SYNC_MAX_GROUP_HOLDERS = 32;
+
+const stopClaimIdSchema = lazySchema(() => z.string().uuid());
+
 /**
- * An updated host to its peer after "Stop syncing": the peer hands over its
- * current sign-in, then stops renewing it. Under the profile's lock the peer
- * answers with what its store holds, empties a renewing sign-in (a key stays)
- * and ends its link, keeping its account row. A host that predates this
- * method refuses it, which is how the caller learns the peer is on 1.5.4.
+ * "Stop syncing" between two updated hosts, one step at a time. A computer
+ * with stop custody sends `claim` on each link of the folder; the peer
+ * answers its stance on that link. The giver then sends its copy as
+ * `handoff` to the one neighbour it gives up to, and erases only against
+ * that neighbour's `receipt`; `closed` follows its erase. Each step is
+ * answered from what the peer persisted, so each is safe to send again. A
+ * host that predates this method refuses it, which is how the caller learns
+ * the peer is on 1.5.4.
  */
 export const hostProfileSyncStopLinkRequestSchema = lazySchema(() =>
   z.strictObject({
     linkId: linkIdSchema,
     providerId: profileSyncProviderSchema,
+    step: z.discriminatedUnion("kind", [
+      z.strictObject({
+        kind: z.literal("claim"),
+        claimId: stopClaimIdSchema,
+        claimantHostId: profileSyncHostIdSchema,
+        visited: z
+          .array(profileSyncHostIdSchema)
+          .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
+      }),
+      /** `credential` null: the giver holds no sign-in the wire carries. */
+      z.strictObject({
+        kind: z.literal("handoff"),
+        claimId: stopClaimIdSchema,
+        accountId: accountIdSchema,
+        generation: generationSchema,
+        credential: profileSyncCredentialSchemaV10.nullable(),
+      }),
+      z.strictObject({
+        kind: z.literal("closed"),
+        claimId: stopClaimIdSchema,
+        generation: generationSchema,
+      }),
+    ]),
   }),
 );
 export type HostProfileSyncStopLinkRequest = z.infer<
@@ -377,23 +408,43 @@ export type HostProfileSyncStopLinkRequest = z.infer<
 >;
 export const hostProfileSyncStopLinkResponseSchema = lazySchema(() =>
   z.discriminatedUnion("result", [
-    /** The peer stopped. `current` is what its store held; `null` when it
-     * held no sign-in the 1.5.4 wire carries. */
+    /** The answer to `claim`: where the peer stands on this link. */
     z.strictObject({
-      result: z.literal("stopped"),
-      current: z
-        .strictObject({
-          accountId: accountIdSchema,
+      result: z.literal("stance"),
+      stance: z.discriminatedUnion("kind", [
+        /** The peer will hand its copy off to the caller. */
+        z.strictObject({ kind: z.literal("giving") }),
+        /** The peer keeps: its Terminal account, an end beyond it that
+         * cannot be asked, or it is the winning claimant. */
+        z.strictObject({
+          kind: z.literal("keeping"),
+          why: z.enum(["terminal", "old-peer-beyond", "claimant"]),
+        }),
+        /** The same claim reached both ends by another path. */
+        z.strictObject({ kind: z.literal("cross") }),
+        /** Not decided yet; asked again. */
+        z.strictObject({ kind: z.literal("pending") }),
+        /** The peer already gave its copy up on this link. */
+        z.strictObject({
+          kind: z.literal("gave-up"),
           generation: generationSchema,
-          credential: profileSyncCredentialSchemaV10,
-        })
-        .nullable(),
+        }),
+        /** The peer's account renews nothing (a key): nothing to hand off. */
+        z.strictObject({ kind: z.literal("no-chain") }),
+      ]),
     }),
-    /** The peer's end is its Terminal account, which keeps the sign-in:
-     * nothing changed there, and the caller gives up its own copy. */
-    z.strictObject({ result: z.literal("terminal") }),
-    /** As fetch: `removed-on-device` for a link the peer no longer serves;
-     * `keychain-locked` and `transfer-failed` are asked again. */
+    /** The answer to `handoff`: the peer holds a renewing copy at
+     * `generation` or newer, read back from its store. `none` answers only a
+     * `credential: null` handoff: both ends are empty and nothing is erased. */
+    z.strictObject({
+      result: z.literal("receipt"),
+      generation: generationSchema,
+      held: z.enum(["renewing", "none"]),
+    }),
+    /** The answer to `closed`: the peer ended its link. */
+    z.strictObject({ result: z.literal("closed") }),
+    /** Any step: nothing changed on the peer. `keychain-locked` and
+     * `transfer-failed` are asked again. */
     z.strictObject({
       result: z.literal("refused"),
       reason: profileSyncReasonSchema,
@@ -403,9 +454,6 @@ export const hostProfileSyncStopLinkResponseSchema = lazySchema(() =>
 export type HostProfileSyncStopLinkResponse = z.infer<
   typeof hostProfileSyncStopLinkResponseSchema
 >;
-
-/** The most computers one linked group names; past it the group never opens. */
-export const PROFILE_SYNC_MAX_GROUP_HOLDERS = 32;
 
 /**
  * Which computers share a linked folder's chain, asked over the caller's own
@@ -430,6 +478,8 @@ export type HostProfileSyncGroupHoldersRequest = z.infer<
  * `holders`: every computer the answering host reached through the group, its
  * own linked peers included. `complete`: every one of them answered. `terminal`:
  * some computer in the group shares the chain with its Terminal account.
+ * `converted`: the answering host's own folder has converted too; absent from
+ * a host that predates it.
  */
 export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
   z.strictObject({
@@ -438,6 +488,7 @@ export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
       .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
     complete: z.boolean(),
     terminal: z.boolean(),
+    converted: z.boolean().default(false),
   }),
 );
 export type HostProfileSyncGroupHoldersResponse = z.infer<
