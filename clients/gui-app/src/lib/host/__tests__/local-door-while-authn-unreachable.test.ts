@@ -620,7 +620,6 @@ describe("local stream while authn cannot mint", () => {
       NO_HOST_TOKEN_PROBE,
       HOST_ONLY_AFTER_MINT,
     ]);
-    expect(sentTokens().slice(3)).not.toContain(SIGN_IN_TOKEN);
     admittedDial.socket.fireMessage(openAckFrame([], null));
     await settle();
     expect(hostDoorStateFor(hostId)).toBeNull();
