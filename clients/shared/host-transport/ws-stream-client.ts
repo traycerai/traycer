@@ -19,6 +19,7 @@ import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/cap
 import {
   NO_HOST_TOKEN_PROBE,
   readDoorReason,
+  type HostDoorReasonReading,
 } from "@traycer/protocol/framework/door-reason";
 import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
@@ -2471,7 +2472,11 @@ class StreamSession<
         if (
           this.releasedPlan === "host-token" &&
           released !== null &&
-          !released.hosts.probeDeclined(selected.hostId) &&
+          signInNow !== null &&
+          !released.hosts.probeDeclined(
+            signInNow.identity.userId,
+            selected.hostId,
+          ) &&
           released.hostTokenUnobtainable() &&
           released.signIn() !== null
         ) {
@@ -3293,9 +3298,10 @@ class StreamSession<
     if (
       reason === "token_expired" &&
       this.releasedPlan === "host-token" &&
-      !this.probing
+      !this.probing &&
+      this.openFrameToken !== null
     )
-      released?.heldTokenRefused();
+      released?.heldTokenRefused(this.openFrameToken);
     // The probe carried no credential of the person's: a current host's answer
     // to it is not theirs to see. `owner_sign_in` is followed by the sign-in
     // only while no host-only token can be had; otherwise (a mint ended `ok`
@@ -3313,8 +3319,7 @@ class StreamSession<
         this.connect();
         return;
       }
-      if (reason !== "owner_sign_in" && this.openFrameHostId !== null)
-        released?.hosts.declineProbe(this.openFrameHostId);
+      this.declineProbe(reason);
       this.teardownSocket(1000, "no-host-token-probe");
       this.dropAndReconnect(details);
       return;
@@ -3499,6 +3504,26 @@ class StreamSession<
   }
 
   /**
+   * The dialed host named `reason` for not admitting this person: it is not
+   * probed again for them. `not_provisioned` describes the host, not the
+   * person, and lasts only until it takes an owner, so it is asked again.
+   */
+  private declineProbe(reason: HostDoorReasonReading): void {
+    const released = this.config.releasedSignOn;
+    const userId = released?.signIn()?.identity.userId ?? null;
+    if (
+      reason === "owner_sign_in" ||
+      reason === "not_provisioned" ||
+      released === undefined ||
+      released === null ||
+      userId === null ||
+      this.openFrameHostId === null
+    )
+      return;
+    released.hosts.declineProbe(userId, this.openFrameHostId);
+  }
+
+  /**
    * The host refused the sign-in a current host invited. Expired: refresh it,
    * redial with it, and report the refusal unless the refresh rotated it. Any
    * other refusal is reported, and that host is not probed again.
@@ -3510,8 +3535,7 @@ class StreamSession<
     const door = this.config.door;
     const recovery = this.config.releasedSignOn?.recovery ?? null;
     if (!expired) {
-      if (this.openFrameHostId !== null)
-        this.config.releasedSignOn?.hosts.declineProbe(this.openFrameHostId);
+      this.declineProbe(readDoorReason(details.doorReason));
       door?.refused(details);
       this.teardownSocket(1000, "owner-sign-in-refused");
       this.dropAndReconnect(details);

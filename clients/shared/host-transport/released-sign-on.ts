@@ -44,11 +44,11 @@ export interface ReleasedSignOn {
    */
   readonly ownerSignInEligible: () => boolean;
   /**
-   * The host refused the host-only token as expired; a held one is not
-   * presented again. Answers whether it was a held one presented because authn
-   * did not answer the mint.
+   * The host refused `presented`, the host-only token on the open frame, as
+   * expired; that token is not presented again. Answers whether it was the held
+   * one presented because authn did not answer the mint.
    */
-  readonly heldTokenRefused: () => boolean;
+  readonly heldTokenRefused: (presented: string) => boolean;
   /** What this process has seen of each host's answers; see {@link ReleasedHostMemory}. */
   readonly hosts: ReleasedHostMemory;
 }
@@ -62,6 +62,8 @@ export interface ReleasedSignOn {
  * sign-out (`forgetAll`). It is forgotten for everyone the moment the host admits
  * a host-only token or refuses anything naming its reason (it was updated). A
  * host that has named a reason in this process is never handed the sign-in again.
+ * A declined probe is the same person's and host's: it is forgotten with the
+ * person, and when the host admits a host-only token.
  */
 export interface ReleasedHostMemory {
   readonly opensReleasedWay: (userId: string, hostId: string) => boolean;
@@ -69,9 +71,13 @@ export interface ReleasedHostMemory {
   readonly signInAdmitted: (userId: string, hostId: string) => void;
   readonly hostTokenAdmitted: (hostId: string) => void;
   readonly refusedNamingReason: (hostId: string) => void;
-  /** The host answered the probe naming a reason other than `owner_sign_in`: it is not probed again. */
-  readonly declineProbe: (hostId: string) => void;
-  readonly probeDeclined: (hostId: string) => boolean;
+  /**
+   * The host refused this person's probe, or the sign-in it invited, naming why
+   * (`not_admitted`): it is not probed again for them. `not_provisioned` is not
+   * declined, since the host takes an owner without restarting this process.
+   */
+  readonly declineProbe: (userId: string, hostId: string) => void;
+  readonly probeDeclined: (userId: string, hostId: string) => boolean;
   readonly forgetAll: () => void;
 }
 
@@ -83,6 +89,7 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
   const forgetAll = (): void => {
     person = null;
     released.clear();
+    declined.clear();
   };
   return {
     opensReleasedWay: (userId, hostId) => {
@@ -98,15 +105,19 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
     },
     hostTokenAdmitted: (hostId) => {
       released.delete(hostId);
+      declined.delete(hostId);
     },
     refusedNamingReason: (hostId) => {
       released.delete(hostId);
       current.add(hostId);
     },
-    declineProbe: (hostId) => {
+    declineProbe: (userId, hostId) => {
+      if (person !== userId) forgetAll();
+      person = userId;
       declined.add(hostId);
     },
-    probeDeclined: (hostId) => declined.has(hostId),
+    probeDeclined: (userId, hostId) =>
+      person === userId && declined.has(hostId),
     forgetAll,
   };
 }
@@ -197,10 +208,11 @@ export function heldTokenRefused(
   tokens: TrackedHostTokens,
   userId: string,
   hostId: string,
+  presented: string,
 ): boolean {
-  const presented = heldWhileAuthnUnreachable(tokens, userId, hostId) !== null;
-  tokens.noteHeldRefused(userId, hostId);
-  return presented;
+  const held = heldWhileAuthnUnreachable(tokens, userId, hostId);
+  tokens.noteHeldRefused(userId, hostId, presented);
+  return held !== null && held.token === presented;
 }
 
 /** For this machine's host when the caller holds its row; `null` unless the row allows it. */
@@ -221,7 +233,8 @@ export function releasedSignOnForLocalRow(
         hostTokenUnobtainable: () =>
           hostTokenUnobtainable(tokens, userId, hostId),
         ownerSignInEligible: () => ownerSignInEligible(tokens, userId, hostId),
-        heldTokenRefused: () => heldTokenRefused(tokens, userId, hostId),
+        heldTokenRefused: (presented) =>
+          heldTokenRefused(tokens, userId, hostId, presented),
         hosts,
       }
     : null;
@@ -280,7 +293,7 @@ export function releasedLocalSignOnFromRegistry(deps: {
   readonly recovery: StreamAuthRevalidator | null;
   readonly hostTokenUnobtainable: () => boolean;
   readonly ownerSignInEligible: () => boolean;
-  readonly heldTokenRefused: () => boolean;
+  readonly heldTokenRefused: (presented: string) => boolean;
   readonly hosts: ReleasedHostMemory;
 }): ReleasedSignOn {
   const answered = new Map<string, boolean>();

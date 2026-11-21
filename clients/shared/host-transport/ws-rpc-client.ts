@@ -292,11 +292,15 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    */
   readonly surfacesNotProvisioned?: boolean;
   /**
-   * The host refused the call's host-only token as expired. Answers whether
-   * that token was a held one presented because authn did not answer the mint:
-   * then the call asks `hostBearerFor` once more, which no longer presents it.
+   * The host refused `presented`, the call's host-only token, as expired.
+   * Answers whether it was the held one presented because authn did not answer
+   * the mint: then the call asks `hostBearerFor` once more, which no longer
+   * presents it.
    */
-  readonly heldTokenRefusedFor?: (authority: HostRequestAuthority) => boolean;
+  readonly heldTokenRefusedFor?: (
+    authority: HostRequestAuthority,
+    presented: string,
+  ) => boolean;
 }
 
 /**
@@ -605,8 +609,11 @@ export class WsRpcClient<
             hostOptions = { ...options, authority };
             continue;
           }
-          if (reason !== "owner_sign_in")
-            this.releasedHosts.declineProbe(hostId);
+          if (reason !== "owner_sign_in" && reason !== "not_provisioned")
+            this.releasedHosts.declineProbe(
+              options.authority.bearer.identity.userId,
+              hostId,
+            );
           if (reason === "not_provisioned" && this.surfacesNotProvisioned)
             throw cause;
           throw noHostTokenError(this.requestIdProvider(), method);
@@ -661,7 +668,13 @@ export class WsRpcClient<
       }
     }
     const bearer = await hostBearerFor(hostId, options.authority.bearer);
-    if (bearer === null && !this.releasedHosts.probeDeclined(hostId)) {
+    if (
+      bearer === null &&
+      !this.releasedHosts.probeDeclined(
+        options.authority.bearer.identity.userId,
+        hostId,
+      )
+    ) {
       const signIn = await this.releasedSignOnFor?.(
         options.authority,
         "no-host-token",
@@ -1018,13 +1031,16 @@ export class WsRpcClient<
           reason === "token_expired" &&
           (this.ownerSignInAuthorities.get(authority) ?? null) !== null;
         if (ownerSignIn && named && reason !== "token_expired")
-          this.releasedHosts.declineProbe(selected.hostId);
+          this.releasedHosts.declineProbe(
+            authority.bearer.identity.userId,
+            selected.hostId,
+          );
         const heldRefused =
           reason === "token_expired" &&
           !probe &&
           !ownerSignIn &&
           !this.signInAuthorities.has(authority) &&
-          (this.heldTokenRefusedFor?.(authority) ?? false);
+          (this.heldTokenRefusedFor?.(authority, token) ?? false);
         // Reported once the sign-in, or its refresh, cannot answer it; never
         // for the probe, which carried no credential of the person's, nor for
         // a remembered host that was updated, whose next dial carries the token.

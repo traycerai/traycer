@@ -1062,11 +1062,12 @@ function localDoorBearers(
     hostBearerFor: hostTokenBearerFor(tracked, noteHostTokenRefusal),
     releasedSignOnFor: signInForLocalRow(resolveRow, recovery, tracked),
     releasedHosts: processReleasedHosts,
-    heldTokenRefusedFor: (authority) =>
+    heldTokenRefusedFor: (authority, presented) =>
       heldTokenRefused(
         tracked,
         authority.bearer.identity.userId,
         authority.endpoint.hostId,
+        presented,
       ),
   };
 }

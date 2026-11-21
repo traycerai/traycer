@@ -115,11 +115,11 @@ vi.mock(
         refusedNamingReason: (hostId: string): void => {
           releasedMemory.read().refusedNamingReason(hostId);
         },
-        declineProbe: (hostId: string): void => {
-          releasedMemory.read().declineProbe(hostId);
+        declineProbe: (userId: string, hostId: string): void => {
+          releasedMemory.read().declineProbe(userId, hostId);
         },
-        probeDeclined: (hostId: string): boolean =>
-          releasedMemory.read().probeDeclined(hostId),
+        probeDeclined: (userId: string, hostId: string): boolean =>
+          releasedMemory.read().probeDeclined(userId, hostId),
         forgetAll: (): void => {
           releasedMemory.read().forgetAll();
         },

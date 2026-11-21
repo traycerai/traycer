@@ -520,7 +520,8 @@ async function requestWithHostToken<
               ? { bearer: signIn, recovery: releasedSignOn.recovery }
               : null;
           },
-          heldTokenRefusedFor: () => releasedSignOn.heldTokenRefused(),
+          heldTokenRefusedFor: (_authority, presented) =>
+            releasedSignOn.heldTokenRefused(presented),
           releasedHosts: releasedSignOn.hosts,
           surfacesNotProvisioned: true,
         }),

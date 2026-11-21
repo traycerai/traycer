@@ -499,8 +499,8 @@ export function createLocalHostInventoryStreamClient(deps: {
           hostTokenUnobtainable(hostTokens, userId, endpoint.hostId),
         ownerSignInEligible: () =>
           ownerSignInEligible(hostTokens, userId, endpoint.hostId),
-        heldTokenRefused: () =>
-          heldTokenRefused(hostTokens, userId, endpoint.hostId),
+        heldTokenRefused: (presented) =>
+          heldTokenRefused(hostTokens, userId, endpoint.hostId, presented),
         hosts: processReleasedHosts,
       }),
       ...hostTokenSessionAuth(

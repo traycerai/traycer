@@ -45,10 +45,15 @@ export interface TrackedHostTokens extends HostTokenAccess {
     hostId: string,
   ) => HostTokenMintFailure | null;
   /**
-   * The host refused the token held now as expired: it reads authn reachable,
-   * so presenting it again cannot open. A token minted later is not affected.
+   * The host refused `presented` as expired: it reads authn reachable, so
+   * presenting that token again cannot open. Any other token, one minted while
+   * the refusal was on its way included, is not affected.
    */
-  readonly noteHeldRefused: (userId: string, hostId: string) => void;
+  readonly noteHeldRefused: (
+    userId: string,
+    hostId: string,
+    presented: string,
+  ) => void;
   readonly heldRefused: (userId: string, hostId: string) => boolean;
 }
 
@@ -69,9 +74,8 @@ export function trackHostTokenMints(
     },
     lastMintFailure: (userId, hostId) =>
       failures.get(keyOf(userId, hostId)) ?? null,
-    noteHeldRefused: (userId, hostId) => {
-      const held = tokens.current(userId, hostId);
-      if (held !== null) refusedHeld.set(keyOf(userId, hostId), held.token);
+    noteHeldRefused: (userId, hostId, presented) => {
+      refusedHeld.set(keyOf(userId, hostId), presented);
     },
     heldRefused: (userId, hostId) => {
       const refused = refusedHeld.get(keyOf(userId, hostId));
