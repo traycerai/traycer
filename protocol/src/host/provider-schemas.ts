@@ -1724,27 +1724,40 @@ const providerProfileProjectionSchemaV1010 = lazySchema(() =>
 );
 
 /**
- * Read projection: a future row is one disabled, explained row, never a lost
- * inventory.
- *
- * The four 10.11 keys and `syncStop` live only here, so mutation echoes and released lines never
+ * The four 10.11 keys live only on the read projection, so mutation echoes and released lines never
  * carry them; each falls back at its own field.
  */
+const providerProfileProjectionObjectSchemaV1013 = lazySchema(() =>
+  providerProfileProjectionObjectSchemaV1010.extend({
+    // The ids of its folded duplicates, so a chat, bot or interview pinned to one finds it.
+    aliases: z.array(z.string().min(1)).optional().catch(undefined),
+    personNotice: providerProfilePersonNoticeSchema
+      .nullable()
+      .optional()
+      .catch(undefined),
+    // Whether this computer's Terminal login is this row's account.
+    terminalOnThisComputer: z.boolean().optional().catch(undefined),
+    // Empty once a person has chosen one (`providers.answerProfileName`).
+    otherNames: z.array(z.string().min(1)).optional().catch(undefined),
+  }),
+);
+
+/** Frozen 10.11 to 10.13 read projection, before 10.14's `syncStop`. */
+const providerProfileProjectionSchemaV1013 = lazySchema(() =>
+  providerProfileProjectionObjectSchemaV1013.catch((context) =>
+    unreadableProjectedProfile(context.input),
+  ),
+);
+
+/**
+ * Read projection: a future row is one disabled, explained row, never a lost
+ * inventory.
+ */
 export const providerProfileProjectionSchema = lazySchema(() =>
-  providerProfileProjectionObjectSchemaV1010
+  providerProfileProjectionObjectSchemaV1013
     .extend({
-      // The ids of its folded duplicates, so a chat, bot or interview pinned to one finds it.
-      aliases: z.array(z.string().min(1)).optional().catch(undefined),
-      personNotice: providerProfilePersonNoticeSchema
-        .nullable()
-        .optional()
-        .catch(undefined),
-      // Whether this computer's Terminal login is this row's account.
-      terminalOnThisComputer: z.boolean().optional().catch(undefined),
-      // Empty once a person has chosen one (`providers.answerProfileName`).
-      otherNames: z.array(z.string().min(1)).optional().catch(undefined),
       // This computer gave up its renewing copy when syncing with a linked computer stopped, and the
-      // account is not signed in here; a sign-in clears it. Absent from an older host reads as none.
+      // account is not signed in here; a sign-in clears it.
       syncStop: z.enum(["gave-up-copy"]).nullable().optional().catch(undefined),
     })
     .catch((context) => unreadableProjectedProfile(context.input)),
@@ -2798,7 +2811,7 @@ export const providersListResponseSchemaV1011Preimage = lazySchema(() =>
       providerCliStateSchemaV1012Preimage.extend({
         // Older hosts omit the key; current hosts report adapter capability.
         usageReporting: z.boolean().optional(),
-        profiles: z.array(providerProfileProjectionSchema).catch([]),
+        profiles: z.array(providerProfileProjectionSchemaV1013).catch([]),
       }),
     ),
     // The ids a person removed, never rows: the only source of "Was removed". An id in no
@@ -2821,6 +2834,17 @@ export const providersListResponseSchemaV1012Preimage = lazySchema(() =>
     // True only when the answering computer offers sign-ins by itself in a profile-sync
     // environment; absent reads false. Optional, like `onHostOnly`, so no default is inserted.
     offersSignIns: z.boolean().optional(),
+  }),
+);
+/** Frozen `providers.list@10.13` response, before 10.14's row `syncStop`. */
+export const providersListResponseSchemaV1013Preimage = lazySchema(() =>
+  providersListResponseSchemaV1012Preimage.extend({
+    providers: z.array(
+      providerCliStateSchema.extend({
+        usageReporting: z.boolean().optional(),
+        profiles: z.array(providerProfileProjectionSchemaV1013).catch([]),
+      }),
+    ),
   }),
 );
 /**

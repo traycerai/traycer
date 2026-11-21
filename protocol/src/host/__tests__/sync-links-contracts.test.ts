@@ -56,9 +56,18 @@ const threeComputers = {
 
 const folderScope = {
   scope: {
-    kind: "folder" as const,
-    providerId: "codex" as const,
-    profileId: CODEX_PROFILE,
+    kind: "folders" as const,
+    folders: [{ providerId: "codex" as const, profileId: CODEX_PROFILE }],
+  },
+};
+
+const everyFolderScope = {
+  scope: {
+    kind: "folders" as const,
+    folders: [
+      { providerId: "claude-code" as const, profileId: CLAUDE_PROFILE },
+      { providerId: "codex" as const, profileId: CODEX_PROFILE },
+    ],
   },
 };
 
@@ -129,7 +138,7 @@ describe.each(METHODS)("%s optional registry surface", (method) => {
         params:
           method === LIST_METHOD
             ? listContract.requestSchema.parse({})
-            : stopContract.requestSchema.parse({ scope: { kind: "all" } }),
+            : stopContract.requestSchema.parse(folderScope),
         requestId: `req-${method}`,
         execute: () => {
           fallbackRan = true;
@@ -187,20 +196,32 @@ describe("providers.syncLinks.list schema", () => {
 });
 
 describe("providers.syncLinks.stop schema", () => {
-  it("parses a stop for every linked folder", () => {
-    expect(
-      stopContract.requestSchema.parse({ scope: { kind: "all" } }),
-    ).toEqual({ scope: { kind: "all" } });
+  it("parses a stop for every folder the ask showed", () => {
+    expect(stopContract.requestSchema.parse(everyFolderScope)).toEqual(
+      everyFolderScope,
+    );
   });
 
   it("parses a stop for one folder", () => {
     expect(stopContract.requestSchema.parse(folderScope)).toEqual(folderScope);
   });
 
-  it("rejects a folder scope without a profile id", () => {
+  it("refuses the retired all and single-folder scopes, and an empty list", () => {
+    for (const scope of [
+      { kind: "all" },
+      { kind: "folder", providerId: "codex", profileId: CODEX_PROFILE },
+      { kind: "folders", folders: [] },
+    ]) {
+      expect(stopContract.requestSchema.safeParse({ scope }).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it("rejects a folder without a profile id", () => {
     expect(
       stopContract.requestSchema.safeParse({
-        scope: { kind: "folder", providerId: "claude-code" },
+        scope: { kind: "folders", folders: [{ providerId: "claude-code" }] },
       }).success,
     ).toBe(false);
   });
