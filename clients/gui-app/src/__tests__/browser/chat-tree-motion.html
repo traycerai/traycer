@@ -68,7 +68,7 @@
           onPostCommitFiberRoot: function () {},
           onCommitFiberRoot: function (_id, root) {
             if (!counting.on) return;
-            var out = { rows: 0, mounted: 0, panel: 0 };
+            var out = { rows: 0, mounted: 0, panel: 0, at: performance.now() };
             var current = root.current;
             if (current.alternate === null) mount(current, out);
             else update(current, current.alternate, out);

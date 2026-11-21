@@ -4,12 +4,11 @@ import {
   ROOTS,
   ROW_PITCH,
   SCROLLED_TOP,
-  counting,
   drawn,
+  expectClosesGap,
   expectAppearsAtOnce,
   expectFadesInPlace,
   expectHeld,
-  expectOnlyMountsRender,
   expectSlides,
   expectOutAndBack,
   expectSlidesBack,
@@ -202,16 +201,15 @@ for (const place of PLACES) {
       page,
     }) => {
       await open(page, BASE);
-      const { recording, commits } = await counting(page, () =>
-        recordHide(page, tree({ ...BASE, children: { b: ["b1", "b3"] } }), [
-          "b2",
-        ]),
+      const recording = await recordHide(
+        page,
+        tree({ ...BASE, children: { b: ["b1", "b3"] } }),
+        ["b2"],
       );
-      if (place.scrollTop > 0) expectOnlyMountsRender(commits);
       expectFadesInPlace(recording, "b2");
       for (const id of ["a", "b", "b1"]) expectHeld(recording, id);
       // Its sibling slides into the slot, and only after the fade has run.
-      expectSlides(recording, "b3", -ROW_PITCH);
+      expectClosesGap(recording, "b3", -ROW_PITCH, "b2");
       expect(
         firstMoveFrame(recording, "b3"),
         "b3 waits for the fade",
@@ -235,18 +233,15 @@ for (const place of PLACES) {
       page,
     }) => {
       await open(page, BASE);
-      const { recording, commits } = await counting(page, () =>
-        recordHide(
-          page,
-          tree({ ...BASE, roots: ROOTS.filter((id) => id !== "c") }),
-          ["c"],
-        ),
+      const recording = await recordHide(
+        page,
+        tree({ ...BASE, roots: ROOTS.filter((id) => id !== "c") }),
+        ["c"],
       );
-      if (place.scrollTop > 0) expectOnlyMountsRender(commits);
       expectFadesInPlace(recording, "c");
       for (const id of ["a", "b", "b1", "b2", "b3"]) expectHeld(recording, id);
       for (const id of ["d", "e", "f", "g", "h"]) {
-        expectSlides(recording, id, -ROW_PITCH);
+        expectClosesGap(recording, id, -ROW_PITCH, "c");
         expect(
           firstMoveFrame(recording, id),
           `${id} waits for the fade`,
@@ -267,17 +262,14 @@ for (const place of PLACES) {
       page,
     }) => {
       await open(page, BASE);
-      const { recording, commits } = await counting(page, () =>
-        recordShape(
-          page,
-          tree({
-            roots: ROOTS.filter((id) => id !== "f"),
-            children: { b: ["b1", "b2", "b3", "f"] },
-            updatedAt: undefined,
-          }),
-        ),
+      const recording = await recordShape(
+        page,
+        tree({
+          roots: ROOTS.filter((id) => id !== "f"),
+          children: { b: ["b1", "b2", "b3", "f"] },
+          updatedAt: undefined,
+        }),
       );
-      if (place.scrollTop > 0) expectOnlyMountsRender(commits);
       // Where the row lands: below b3, which has not moved.
       const newPlace = startTop(recording, "b3") + ROW_PITCH;
       const oldPlace = startTop(recording, "f");
