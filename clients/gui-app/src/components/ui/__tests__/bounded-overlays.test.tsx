@@ -69,7 +69,7 @@ const sandboxCatalogueState = vi.hoisted(() => {
   const data: SandboxCatalogue = {
     providers: [
       {
-        provider: "tensorlake",
+        provider: "firecracker",
         os: ["linux"],
         shape: {
           cpuMin: 1,

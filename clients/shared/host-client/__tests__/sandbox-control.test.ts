@@ -63,7 +63,7 @@ const OLDER_SUMMARY_BODY = {
   id: "sbx_1",
   hostId: "host-1",
   kind: "agent",
-  provider: "tensorlake",
+  provider: "firecracker",
   region: "us-east",
   os: "linux",
   cpus: 2,

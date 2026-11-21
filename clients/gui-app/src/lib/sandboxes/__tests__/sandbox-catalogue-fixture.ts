@@ -5,7 +5,7 @@ export function budgetCatalogue(createBudgetMs: number): SandboxCatalogue {
   return {
     providers: [
       {
-        provider: "tensorlake",
+        provider: "firecracker",
         os: ["linux"],
         createBudgetMs,
         shape: {

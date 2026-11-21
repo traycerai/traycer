@@ -129,7 +129,7 @@ vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({
     data: {
       providers: [
-        { provider: "tensorlake", os: ["linux"], suspendFidelity: "memory" },
+        { provider: "firecracker", os: ["linux"], suspendFidelity: "memory" },
       ],
     },
   }),
@@ -622,7 +622,7 @@ function sandboxRow(overrides: Partial<SandboxSummary>): SandboxSummary {
     id: "sbx-1",
     hostId: "host-sbx",
     kind: "agent",
-    provider: "tensorlake",
+    provider: "firecracker",
     region: "us",
     os: "linux",
     cpus: 2,
