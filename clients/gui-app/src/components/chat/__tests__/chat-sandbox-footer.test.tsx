@@ -162,6 +162,7 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
         throw new Error("Expected a resting sandbox");
       const growing = {
         ...base.sandbox,
+        diskMb: 51_200,
         grows: { cpus: 16, memoryMb: 65_536 },
         // Last awake at 4/8; the range still starts at the start's rate.
         priceMcPerHour: {

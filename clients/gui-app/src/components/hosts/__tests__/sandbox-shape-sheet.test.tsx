@@ -471,8 +471,8 @@ describe("<SandboxShapeSheet />", () => {
     );
   });
 
-  it.each(["5", ""])(
-    "omits growing option rates when the disk input is invalid (%s GB)",
+  it.each(["5", "", "201", "30.5"])(
+    "names the disk bounds and omits growing option rates when the disk input is invalid (%s GB)",
     (diskGb) => {
       catalogueInUse = autoSizingCatalogue();
       renderSheet(vi.fn());
@@ -482,6 +482,9 @@ describe("<SandboxShapeSheet />", () => {
         throw new Error("Expected Disk (GB) to be an input");
       }
       fireEvent.change(disk, { target: { value: diskGb } });
+      expect(
+        screen.getByTestId("sandbox-shape-sheet-problem").textContent,
+      ).toBe("Disk must be between 10 and 200 GB.");
       fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
 
       const labels = screen

@@ -382,8 +382,18 @@ describe("team cost view", () => {
   });
 
   it("shows the growing size and chosen disk on the team card", () => {
+    // A 30 GB disk chosen over the 50 GB default, at the server's 30 GB quote.
     renderCard(
-      sandboxOf("suspended", false, GROWING_RESTING_CARD_OVERRIDES),
+      sandboxOf("suspended", false, {
+        ...GROWING_RESTING_CARD_OVERRIDES,
+        diskMb: 30_720,
+        priceMcPerHour: {
+          awakeMc: 261,
+          suspendedMc: 5,
+          stoppedMc: 5,
+          offer: { startAwakeMc: 133, ceilingAwakeMc: 1_442 },
+        },
+      }),
       true,
     );
 

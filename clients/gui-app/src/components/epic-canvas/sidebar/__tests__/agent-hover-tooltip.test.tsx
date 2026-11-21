@@ -700,6 +700,7 @@ describe("AgentHoverTooltip host section", () => {
   it("shows a growing sandbox's start and ceiling size in the sidebar hover", () => {
     h.sandboxes = [
       sandboxRow({
+        diskMb: 51_200,
         grows: { cpus: 16, memoryMb: 65_536 },
         priceMcPerHour: {
           awakeMc: 263,

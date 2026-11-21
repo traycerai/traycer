@@ -2028,10 +2028,33 @@ describe("useSandboxStaging In this task, agent sandboxes the task's hosts omit"
 describe("useSandboxStaging a staged resting sandbox's block", () => {
   const PRICED = { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 };
 
+  /** A 2/4 start on the 50 GB default disk, last awake at 4/8. */
+  const GROWN: Parameters<typeof sandboxSummaryFixture>[0] = {
+    cpus: 2,
+    memoryMb: 4_096,
+    diskMb: 51_200,
+    grows: { cpus: 16, memoryMb: 65_536 },
+    priceMcPerHour: {
+      awakeMc: 263,
+      suspendedMc: 7,
+      stoppedMc: 7,
+      offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+    },
+  };
+
   function pricedHost(
     hostId: string,
     state: "suspended" | "stopped",
     item: HostListItem | null,
+  ): HostScopeOption {
+    return sizedHost(hostId, state, item, { priceMcPerHour: PRICED });
+  }
+
+  function sizedHost(
+    hostId: string,
+    state: "suspended" | "stopped",
+    item: HostListItem | null,
+    size: Parameters<typeof sandboxSummaryFixture>[0],
   ): HostScopeOption {
     return sandboxHost(
       hostId,
@@ -2041,7 +2064,7 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
           id: `sbx-${hostId}`,
           hostId,
           state,
-          priceMcPerHour: PRICED,
+          ...size,
         }),
       },
       item,
@@ -2064,11 +2087,17 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
     return screen.getByTestId("consequences-price").textContent;
   }
 
-  it("prices a suspended Personal sandbox from its own row", () => {
-    expect(stagedPrice(pricedHost("box-suspended", "suspended", null))).toBe(
-      "$0.21 an hour while awake · uses your credits",
-    );
-  });
+  it.each([
+    { size: "fixed", host: { priceMcPerHour: PRICED }, line: "$0.21" },
+    { size: "grown", host: GROWN, line: "$0.14–$1.44" },
+  ])(
+    "prices a suspended Personal sandbox of a $size size from its own row",
+    ({ host, line }) => {
+      expect(
+        stagedPrice(sizedHost("box-suspended", "suspended", null, host)),
+      ).toBe(`${line} an hour while awake · uses your credits`);
+    },
+  );
 
   it("prices a stopped Personal sandbox from its own row", () => {
     expect(stagedPrice(pricedHost("box-stopped", "stopped", null))).toBe(

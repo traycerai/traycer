@@ -861,6 +861,7 @@ describe("sandboxTodayCost", () => {
     const twoHoursMs = 2 * 60 * 60_000;
     const growing = sandboxSummaryFixture({
       state: "awake",
+      diskMb: 51_200,
       grows: { cpus: 16, memoryMb: 65_536 },
       priceMcPerHour: {
         awakeMc: 263,
@@ -905,6 +906,7 @@ describe("sandboxShapeAndCostLine", () => {
     // Grown to 4/8: the range still starts at the start's rate.
     const summary = sandboxSummaryFixture({
       state: "awake",
+      diskMb: 51_200,
       grows: { cpus: 16, memoryMb: 65_536 },
       priceMcPerHour: {
         awakeMc: 263,
@@ -1253,6 +1255,7 @@ describe("team credits in the resource line", () => {
   it("shows a growing shape's range on a team row", () => {
     const growing = sandboxSummaryFixture({
       state: "awake",
+      diskMb: 51_200,
       grows: { cpus: 16, memoryMb: 65_536 },
       priceMcPerHour: {
         awakeMc: 263,

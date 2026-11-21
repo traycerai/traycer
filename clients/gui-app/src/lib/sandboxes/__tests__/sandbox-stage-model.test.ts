@@ -801,6 +801,33 @@ describe("growing Linux starting sizes", () => {
       idleMinutes: 30,
       destroyAfterRestingMinutes: null,
     });
+
+    // A fixed ladder lists its disk as part of the shape: a default at a
+    // disk it does not list is no longer offered, and falls back.
+    const [provider] = catalogue.providers;
+    const fixed: SandboxCatalogue = {
+      providers: [
+        {
+          ...provider,
+          shapes: AUTO_SIZING_RUNGS.map((rung) => ({
+            cpus: rung.cpus,
+            memoryMb: rung.memoryMb,
+            diskMb: rung.diskMb,
+            default: rung.default,
+          })),
+        },
+      ],
+    };
+    expect(
+      configurationStageShape(fixed, {
+        os: "linux",
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 20_480,
+        idleMinutes: 30,
+        restingMinutes: null,
+      }),
+    ).toMatchObject({ cpus: 2, memoryMb: 4_096, diskMb: 51_200 });
   });
 
   it("keeps a remembered growing start at its chosen disk", () => {
@@ -844,6 +871,8 @@ describe("growing Linux starting sizes", () => {
       startAwakeMc: 156,
       ceilingAwakeMc: 1_465,
     });
+    // A disk must be whole GB within the bounds to be priced.
+    expect(stagePrice(catalogue, size(2, 4, 30.5))).toBeNull();
     expect(stageSmallestShape(catalogue, size(4, 8, 30))).toEqual({
       isStaged: false,
       awakeMcPerHour: 133,

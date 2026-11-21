@@ -2,13 +2,14 @@ import { screen } from "@testing-library/react";
 import { expect } from "vitest";
 
 /**
- * A 2/4 start last awake at 4/8, on a 30 GB disk chosen over the 50 GB
- * default: its ranges start at the start's rate, never the current one.
+ * A 2/4 start on the 50 GB default disk, last awake at 4/8: every figure is
+ * the server's quote at 50 GB, and its range starts at the start's rate,
+ * never the current one.
  */
 export const GROWING_RESTING_CARD_OVERRIDES = {
   cpus: 2,
   memoryMb: 4_096,
-  diskMb: 30_720,
+  diskMb: 51_200,
   grows: { cpus: 16, memoryMb: 65_536 },
   priceMcPerHour: {
     awakeMc: 263,

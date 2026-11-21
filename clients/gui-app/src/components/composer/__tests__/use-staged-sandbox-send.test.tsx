@@ -1060,21 +1060,42 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
     return screen.getByTestId("sandbox-setup-line-detail").textContent;
   }
 
-  it("prices a resting sandbox from its list row's awake rate, exactly", () => {
-    mocks.sandboxes = [
-      sandboxSummaryFixture({
-        id: "sbx-1",
-        priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 },
-      }),
-    ];
-    stageExisting();
-    mount(vi.fn());
+  it.each([
+    {
+      size: "fixed",
+      row: { priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 } },
+      line: "$0.21",
+    },
+    {
+      // A 2/4 start on the 50 GB default disk, last awake at 4/8.
+      size: "grown",
+      row: {
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 51_200,
+        grows: { cpus: 16, memoryMb: 65_536 },
+        priceMcPerHour: {
+          awakeMc: 263,
+          suspendedMc: 7,
+          stoppedMc: 7,
+          offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
+        },
+      },
+      line: "$0.14–$1.44",
+    },
+  ])(
+    "prices a resting sandbox of a $size size from its list row, exactly",
+    ({ row, line }) => {
+      mocks.sandboxes = [sandboxSummaryFixture({ id: "sbx-1", ...row })];
+      stageExisting();
+      mount(vi.fn());
 
-    const text = detail();
-    expect(text).toContain("$0.21 an hour while awake · uses your credits");
-    expect(text).not.toContain("Billed by the hour");
-    expect(text).not.toContain("from $");
-  });
+      const text = detail();
+      expect(text).toContain(`${line} an hour while awake · uses your credits`);
+      expect(text).not.toContain("Billed by the hour");
+      expect(text).not.toContain("from $");
+    },
+  );
 
   it("shows the 200 GB range on a staged create's setup line", () => {
     mocks.catalogue = autoSizingCatalogue();
