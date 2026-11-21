@@ -154,6 +154,7 @@ export function SessionImportAnnouncementController(): ReactNode {
         onAction={() => {
           setDialogOpen(true);
         }}
+        showLater
         onLater={null}
       />,
       {

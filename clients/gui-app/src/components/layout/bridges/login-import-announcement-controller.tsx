@@ -124,6 +124,7 @@ export function LoginImportAnnouncementController(): null {
           useBrowserFocusStore.getState().requestImportLogins();
           navigateToSettingsSection("browser");
         }}
+        showLater
         onLater={null}
       />,
       {

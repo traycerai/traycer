@@ -284,6 +284,7 @@ function showAppUpdateToast(
           description={updateAvailableDescription(snapshot.latestVersion)}
           actionLabel="Download"
           onAction={actions.onDownload}
+          showLater
           onLater={null}
         />,
         {
@@ -333,6 +334,7 @@ function showAppUpdateToast(
             description="Restart Traycer to finish updating."
             actionLabel="Restart"
             onAction={actions.onRestart}
+            showLater
             onLater={null}
           />
         ) : (
@@ -343,6 +345,7 @@ function showAppUpdateToast(
             description="One manual step finishes installing it."
             actionLabel="View instructions"
             onAction={actions.onViewInstructions}
+            showLater
             onLater={null}
           />
         ),

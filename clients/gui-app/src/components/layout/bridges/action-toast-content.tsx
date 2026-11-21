@@ -3,9 +3,10 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 
 /**
- * A toast body with one primary action and "Later": the app-update toasts'
- * shape, shared with the feature announcements so a second toast with a
- * button does not grow a second button layout.
+ * A toast body with one primary action and, unless `showLater` is false,
+ * "Later": the app-update toasts' shape, shared with the feature
+ * announcements so a second toast with a button does not grow a second
+ * button layout. An ask that stands until it is answered shows no "Later".
  *
  * The primary action fires once. A toast dismisses on a delay, so a second
  * click can land while it is on its way out; the ref (not only the state)
@@ -17,10 +18,12 @@ export function ActionToastContent(props: {
   /** A small uppercase line above the title, or `null` for none. */
   readonly eyebrow: string | null;
   readonly title: string;
-  readonly description: string;
+  /** A line under the title, or `null` for none. */
+  readonly description: string | null;
   readonly actionLabel: string;
   readonly onAction: () => void;
   readonly onLater: (() => void) | null;
+  readonly showLater: boolean;
 }): ReactNode {
   const actionHandledRef = useRef(false);
   const [actionHandled, setActionHandled] = useState(false);
@@ -42,7 +45,9 @@ export function ActionToastContent(props: {
           </div>
         )}
         <div className="font-medium">{props.title}</div>
-        <div className="mt-1 text-muted-foreground">{props.description}</div>
+        {props.description === null ? null : (
+          <div className="mt-1 text-muted-foreground">{props.description}</div>
+        )}
       </div>
       <div className="grid shrink-0 grid-cols-1 gap-1.5">
         <Button
@@ -54,18 +59,20 @@ export function ActionToastContent(props: {
         >
           {props.actionLabel}
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          className="w-full min-w-max"
-          onClick={() => {
-            toast.dismiss(props.toastId);
-            props.onLater?.();
-          }}
-        >
-          Later
-        </Button>
+        {props.showLater ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="w-full min-w-max"
+            onClick={() => {
+              toast.dismiss(props.toastId);
+              props.onLater?.();
+            }}
+          >
+            Later
+          </Button>
+        ) : null}
       </div>
     </div>
   );

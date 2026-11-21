@@ -45,6 +45,9 @@ export const PROVIDER_INVALIDATIONS: ReadonlyArray<
   // sign-in or a provider change re-asks. An optional method, like the entry
   // above.
   "providers.readModelRoutes",
+  // The folders a 1.5.4 "Sync profiles" linked: a sign-in, a move or a Stop
+  // on any of their providers changes what the ask lists. An optional method.
+  "providers.syncLinks.list",
 ];
 
 /**

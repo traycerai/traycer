@@ -26,6 +26,7 @@ describe("<ActionToastContent />", () => {
         actionLabel="Import logins…"
         onAction={() => undefined}
         onLater={null}
+        showLater
       />,
     );
 
@@ -46,6 +47,7 @@ describe("<ActionToastContent />", () => {
         actionLabel="Download"
         onAction={() => undefined}
         onLater={null}
+        showLater
       />,
     );
 
@@ -63,6 +65,7 @@ describe("<ActionToastContent />", () => {
         actionLabel="Download"
         onAction={onAction}
         onLater={null}
+        showLater
       />,
     );
 
@@ -86,6 +89,7 @@ describe("<ActionToastContent />", () => {
         actionLabel="Download"
         onAction={() => undefined}
         onLater={onLater}
+        showLater
       />,
     );
 
@@ -105,11 +109,52 @@ describe("<ActionToastContent />", () => {
         actionLabel="Download"
         onAction={() => undefined}
         onLater={null}
+        showLater
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Later" }));
 
     expect(toastDismissMock).toHaveBeenCalledWith("toast-1");
+  });
+
+  it("keeps Later when an existing caller passes a description", () => {
+    render(
+      <ActionToastContent
+        toastId="toast-1"
+        eyebrow={null}
+        title="Update available"
+        description="A new version is ready."
+        actionLabel="Download"
+        onAction={() => undefined}
+        onLater={null}
+        showLater
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Later" })).not.toBeNull();
+    expect(screen.getByText("A new version is ready.")).not.toBeNull();
+  });
+
+  it("omits Later and the description line when both are off", () => {
+    render(
+      <ActionToastContent
+        toastId="toast-1"
+        eyebrow={null}
+        title="Accounts synced with MacBook Air"
+        description={null}
+        actionLabel="Choose…"
+        onAction={() => undefined}
+        onLater={null}
+        showLater={false}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Later" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Choose…" })).not.toBeNull();
+    const title = screen.getByText("Accounts synced with MacBook Air");
+    expect(title.parentElement?.textContent).toBe(
+      "Accounts synced with MacBook Air",
+    );
   });
 });

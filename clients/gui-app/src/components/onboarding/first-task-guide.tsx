@@ -191,6 +191,7 @@ function StartToast(props: {
           answer();
           openMoveSheet({ hostId, hostName });
         }}
+        showLater
         onLater={() => {
           if (identityIsCurrent()) answer();
         }}
