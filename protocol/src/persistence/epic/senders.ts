@@ -645,6 +645,24 @@ export type CommandCodeChatSessionAnchor = z.infer<
   typeof commandCodeChatSessionAnchorSchema
 >;
 
+// Cline resumes at session granularity only — reloading the session resumes the
+// whole conversation, with no per-message truncation/fork point — so the anchor
+// carries just the session id.
+export const clineChatSessionAnchorSchema = lazySchema(() =>
+  z.object({
+    harnessId: z.literal("cline"),
+    hostId: z.string(),
+    sessionId: z.string(),
+    sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+    createdAt: z.number(),
+    coveredUntilMessageId: z.string().nullable().default(null),
+    ...profileSnapshotFields,
+  }),
+);
+export type ClineChatSessionAnchor = z.infer<
+  typeof clineChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = lazySchema(() =>
   z.discriminatedUnion("harnessId", [
     claudeChatSessionAnchorSchema,
@@ -669,6 +687,7 @@ export const chatSessionAnchorSchema = lazySchema(() =>
     reasonixChatSessionAnchorSchema,
     antigravityChatSessionAnchorSchema,
     commandCodeChatSessionAnchorSchema,
+    clineChatSessionAnchorSchema,
   ]),
 );
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
@@ -775,4 +794,21 @@ export const chatSessionAnchorSchemaPreCommandCode = lazySchema(() =>
 );
 export type ChatSessionAnchorPreCommandCode = z.infer<
   typeof chatSessionAnchorSchemaPreCommandCode
+>;
+
+/**
+ * Wire-freeze copy of the anchor union as the 1.5.1+ tags shipped it: every
+ * live arm through Command Code, without the Cline one. Bound by the
+ * `rowContext` of `chat.subscribe@1.21` through `@1.46`
+ * (`transcriptRowContextSchemaPreCline`); `@1.47` is where a later arm
+ * rides.
+ */
+export const chatSessionAnchorSchemaPreCline = lazySchema(() =>
+  z.discriminatedUnion("harnessId", [
+    ...chatSessionAnchorSchemaPreCommandCode.options,
+    commandCodeChatSessionAnchorSchema,
+  ]),
+);
+export type ChatSessionAnchorPreCline = z.infer<
+  typeof chatSessionAnchorSchemaPreCline
 >;

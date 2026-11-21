@@ -130,6 +130,8 @@ const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
   antigravity: null,
   // Command Code runs its own `cmd` binary (`cmdc` on Windows).
   commandcode: null,
+  // Cline runs its own `cline` binary.
+  cline: null,
 };
 
 /**
@@ -184,6 +186,10 @@ const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   // PATH, like Hermes. Not found is therefore this provider's normal first
   // state, and the quickstart is the page that installs it.
   commandcode: "https://commandcode.ai/docs/quickstart",
+  // Cline is never bundled either: Traycer finds your own install on PATH, so
+  // not-found is its normal first state and its CLI overview covers installing
+  // it.
+  cline: "https://docs.cline.bot/cli/overview",
 };
 
 interface ProviderCandidateConfig {

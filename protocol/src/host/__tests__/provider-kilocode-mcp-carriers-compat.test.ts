@@ -346,7 +346,7 @@ describe("list@10.3 -> 9.2 / 8.0 / 7.0 bridges map the new codes (A38)", () => {
   ): unknown {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      10,
+      11,
       major,
       providersListResponseSchema.parse({ providers: [], native }),
     );

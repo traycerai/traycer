@@ -46,6 +46,7 @@ const ENV_NAME_PLACEHOLDER: Record<ProviderId, string> = {
   // so Traycer offers it no API-key method. `COMMAND_CODE_API_KEY` is the one
   // variable the CLI itself reads as an override of its stored sign-in.
   commandcode: "COMMAND_CODE_API_KEY",
+  cline: "CLINE_API_KEY",
 };
 
 export function envNamePlaceholder(providerId: ProviderId): string {

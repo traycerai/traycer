@@ -27,6 +27,7 @@ import {
   listAgentsResponseSchemaV100,
   listAgentsResponseSchemaV101,
   listAgentsResponseSchemaV102,
+  listAgentsResponseSchemaV103,
   listAgentsResponseSchema,
 } from "../../src/host/agent/shared";
 import {
@@ -44,6 +45,7 @@ import {
   listGuiHarnessesResponseSchemaV91,
   listGuiHarnessesResponseSchemaV92,
   listGuiHarnessesResponseSchemaV100,
+  listGuiHarnessesResponseSchemaV101,
   listGuiHarnessesResponseSchema,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
@@ -52,9 +54,13 @@ import {
   getChatRunSettingsResponseSchemaV20,
   getChatRunSettingsResponseSchemaV30,
   getChatRunSettingsResponseSchemaV41,
+  getChatRunSettingsResponseSchemaV42,
+  getChatRunSettingsResponseSchemaV50,
   getChatRunSettingsBatchResponseSchema,
   getChatRunSettingsBatchResponseSchemaV10,
   getChatRunSettingsBatchResponseSchemaV21,
+  getChatRunSettingsBatchResponseSchemaV22,
+  getChatRunSettingsBatchResponseSchemaV30,
 } from "../../src/host/epic/chat-records";
 import {
   providersListRequestSchema,
@@ -73,6 +79,7 @@ import {
   providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV1011Preimage,
   providersListResponseSchemaV1012Preimage,
+  providersListResponseSchemaV1013,
   providersUsePackVersionResponseSchemaV10,
   providersUsePackVersionResponseSchema,
   providersListResponseSchemaV70,
@@ -136,8 +143,10 @@ const FIXTURES = {
   // 10.0 froze when 10.1 opened for the sandbox credential keys: `host-v1.5.1`
   // shipped 10.0. Its dump did not change by the freeze.
   "agent.gui.listHarnesses@10.0": dump(listGuiHarnessesResponseSchemaV100),
-  // The head line since the sandbox credential keys opened it.
-  "agent.gui.listHarnesses@10.1": dump(listGuiHarnessesResponseSchema),
+  // 10.1 froze when `cline` opened 11.0; its dump did not change by the freeze.
+  "agent.gui.listHarnesses@10.1": dump(listGuiHarnessesResponseSchemaV101),
+  // The head line since `cline` opened major 11.
+  "agent.gui.listHarnesses@11.0": dump(listGuiHarnessesResponseSchema),
   "agent.list@1.0": dump(listAgentsResponseSchemaV10),
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
   "agent.list@3.0": dump(listAgentsResponseSchemaV30),
@@ -174,7 +183,10 @@ const FIXTURES = {
   "agent.list@10.2": dump(listAgentsResponseSchemaV102),
   // The head line. It dumps LIVE, so the next attempt to grow the row goes red
   // on this line.
-  "agent.list@10.3": dump(listAgentsResponseSchema),
+  // 10.3 froze when `cline` opened 11.0; its dump did not change by the freeze.
+  "agent.list@10.3": dump(listAgentsResponseSchemaV103),
+  // The head line since `cline` opened major 11.
+  "agent.list@11.0": dump(listAgentsResponseSchema),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
   // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this
@@ -253,9 +265,11 @@ const FIXTURES = {
   "providers.list@10.11": dump(providersListResponseSchemaV1011Preimage),
   // 10.12 froze when the key-record environment fact opened 10.13.
   "providers.list@10.12": dump(providersListResponseSchemaV1012Preimage),
+  // 10.13 froze when `cline` opened 11.0; its dump did not change by the freeze.
+  "providers.list@10.13": dump(providersListResponseSchemaV1013),
   // The head line. It dumps LIVE, so the next attempt to grow the provider
   // state goes red on this line.
-  "providers.list@10.13": dump(providersListResponseSchema),
+  "providers.list@11.0": dump(providersListResponseSchema),
   "providers.usePackVersion@1.0": dump(providersUsePackVersionResponseSchemaV10),
   "providers.usePackVersion@1.1": dump(providersUsePackVersionResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
@@ -285,6 +299,8 @@ const FIXTURES = {
   "epic.getChatRunSettings@3.0": dump(getChatRunSettingsResponseSchemaV30),
   "epic.getChatRunSettings@4.0": dump(getChatRunSettingsResponseSchema),
   "epic.getChatRunSettings@4.1": dump(getChatRunSettingsResponseSchemaV41),
+  "epic.getChatRunSettings@4.2": dump(getChatRunSettingsResponseSchemaV42),
+  "epic.getChatRunSettings@5.0": dump(getChatRunSettingsResponseSchemaV50),
   "epic.getChatRunSettingsBatch@1.0": dump(
     getChatRunSettingsBatchResponseSchemaV10,
   ),
@@ -292,6 +308,8 @@ const FIXTURES = {
     getChatRunSettingsBatchResponseSchema,
   ),
   "epic.getChatRunSettingsBatch@2.1": dump(getChatRunSettingsBatchResponseSchemaV21),
+  "epic.getChatRunSettingsBatch@2.2": dump(getChatRunSettingsBatchResponseSchemaV22),
+  "epic.getChatRunSettingsBatch@3.0": dump(getChatRunSettingsBatchResponseSchemaV30),
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
   // This row DOES get regenerated when a provider id is added, and it is the
   // one row here where that is the right answer rather than the forbidden one.

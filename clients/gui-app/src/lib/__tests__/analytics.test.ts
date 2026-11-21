@@ -138,6 +138,23 @@ describe("analytics", () => {
     ).toBeNull();
   });
 
+  it("accepts cline as a harness and as a provider value", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        harness: "cline",
+      }),
+    ).toEqual({ harness: "cline" });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProviderProfileLinkSucceeded, {
+        provider: "cline",
+        mode: "create",
+      }),
+    ).toEqual({ provider: "cline", mode: "create" });
+  });
+
   it("accepts every settings section the type union declares", async () => {
     // The runtime allowlist is what `section` is validated against, and a
     // union member missing from it drops the event with no error anywhere -

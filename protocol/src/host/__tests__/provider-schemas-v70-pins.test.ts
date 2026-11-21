@@ -25,6 +25,7 @@ import {
   providersListResponseSchemaV90,
   providersListResponseSchemaV91,
   providersListResponseSchemaV92,
+  providersListResponseSchemaV1013,
   providersListResponseSchemaV70Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
@@ -193,15 +194,19 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     // the head is now major 10 and EVERY 9.x line is frozen below it.
     const majorNine = hostRpcRegistry["providers.list"][9];
     const majorTen = hostRpcRegistry["providers.list"][10];
+    const majorEleven = hostRpcRegistry["providers.list"][11];
     const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
     const v80 = hostRpcRegistry["providers.list"][8].versions[0].contract;
     const v90 = majorNine.versions[0].contract;
     const v91 = majorNine.versions[1].contract;
     const v92 = majorNine.versions[majorNine.latestMinor].contract;
-    const head = majorTen.versions[majorTen.latestMinor].contract;
+    const v1013 = majorTen.versions[majorTen.latestMinor].contract;
+    const head = majorEleven.versions[majorEleven.latestMinor].contract;
 
     // The head names live, whichever minor the head happens to be.
     expect(head.responseSchema).toBe(providersListResponseSchema);
+    expect(v1013.responseSchema).toBe(providersListResponseSchemaV1013);
+    expect(v1013.responseSchema).not.toBe(providersListResponseSchema);
     // ...and nothing below it does, on any major. 9.1 is listed explicitly
     // because it is the line this guard was written too late for: it held the
     // head row while pointing at live, two login-capability markers were added
@@ -282,6 +287,7 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
       "reasonix",
       "antigravity",
       "commandcode",
+      "cline",
     ] as const;
     expect([...providerIdSchema.options].sort()).toEqual(
       [...providerIdSchemaV70.options, ...POST_V70_PROVIDER_IDS].sort(),
@@ -572,7 +578,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     (target) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        10,
+        11,
         target,
         providersListResponseSchema.parse({
           providers: [state],
@@ -609,7 +615,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        10,
+        11,
         target,
         providersListResponseSchema.parse({
           providers: [huggingfaceState],
@@ -636,7 +642,7 @@ describe("downgrade bridge v9.0 -> v8.0 works through the real registry", () => 
     );
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      10,
+      11,
       8,
       providersListResponseSchema.parse({
         providers: [antigravityState],

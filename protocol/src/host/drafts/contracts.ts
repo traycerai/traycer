@@ -10,7 +10,9 @@ import {
   draftsListRequestSchema,
   draftsListResponseSchema,
   draftsListResponseSchemaV10,
+  draftsListResponseSchemaV20,
   draftDocumentSchemaV10,
+  draftDocumentSchemaV20,
   draftsPutBlobRequestSchema,
   draftsPutBlobRequestSchemaV11,
   draftsPutBlobRequestSchemaV12,
@@ -25,9 +27,11 @@ import {
   draftsSubscribeOpenRequestSchemaV10,
   draftsSubscribeServerFrameSchemaV10,
   draftsSubscribeServerFrameSchemaV11,
+  draftsSubscribeServerFrameSchemaV12,
   draftsUpsertRequestSchema,
   draftsUpsertResponseSchema,
   draftsUpsertResponseSchemaV10,
+  draftsUpsertResponseSchemaV20,
 } from "./schemas";
 
 /**
@@ -53,12 +57,74 @@ export const draftsUpsertV10 = defineRpcContract({
   responseSchema: draftsUpsertResponseSchemaV10,
 });
 
-// The LIVE line: the echo carries the live document.
+// Frozen at the document the 1.5.1 tags shipped (through Command Code).
 export const draftsUpsertV20 = defineRpcContract({
   method: "drafts.upsert",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: draftsUpsertRequestSchema,
+  responseSchema: draftsUpsertResponseSchemaV20,
+});
+
+// The LIVE line: the echo carries the live document.
+export const draftsUpsertV30 = defineRpcContract({
+  method: "drafts.upsert",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: draftsUpsertRequestSchema,
   responseSchema: draftsUpsertResponseSchema,
+});
+
+export const draftsUpsertUpgradeV20ToV30 = defineUpgradePath<
+  typeof draftsUpsertV20,
+  typeof draftsUpsertV30
+>({
+  from: draftsUpsertV20.schemaVersion,
+  to: draftsUpsertV30.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const draftsUpsertDowngradeV30ToV20 = defineDowngradePath<
+  typeof draftsUpsertV30,
+  typeof draftsUpsertV20
+>({
+  from: draftsUpsertV30.schemaVersion,
+  to: draftsUpsertV20.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = draftsUpsertResponseSchemaV20.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message: "This draft requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const draftsUpsertDowngradeV30ToV10 = defineDowngradePath<
+  typeof draftsUpsertV30,
+  typeof draftsUpsertV10
+>({
+  from: draftsUpsertV30.schemaVersion,
+  to: draftsUpsertV10.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = draftsUpsertResponseSchemaV10.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message: "This draft requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });
 
 export const draftsUpsertUpgradeV10ToV20 = defineUpgradePath<
@@ -118,12 +184,68 @@ export const draftsListV10 = defineRpcContract({
   responseSchema: draftsListResponseSchemaV10,
 });
 
-// The LIVE line: rows carry the live document.
+// Frozen at the document the 1.5.1 tags shipped (through Command Code).
 export const draftsListV20 = defineRpcContract({
   method: "drafts.list",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: draftsListRequestSchema,
+  responseSchema: draftsListResponseSchemaV20,
+});
+
+// The LIVE line: rows carry the live document.
+export const draftsListV30 = defineRpcContract({
+  method: "drafts.list",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: draftsListRequestSchema,
   responseSchema: draftsListResponseSchema,
+});
+
+export const draftsListUpgradeV20ToV30 = defineUpgradePath<
+  typeof draftsListV20,
+  typeof draftsListV30
+>({
+  from: draftsListV20.schemaVersion,
+  to: draftsListV30.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const draftsListDowngradeV30ToV20 = defineDowngradePath<
+  typeof draftsListV30,
+  typeof draftsListV20
+>({
+  from: draftsListV30.schemaVersion,
+  to: draftsListV20.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      ...response,
+      drafts: response.drafts.flatMap((draft) => {
+        const parsed = draftDocumentSchemaV20.safeParse(draft);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    },
+  }),
+});
+
+export const draftsListDowngradeV30ToV10 = defineDowngradePath<
+  typeof draftsListV30,
+  typeof draftsListV10
+>({
+  from: draftsListV30.schemaVersion,
+  to: draftsListV10.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      ...response,
+      drafts: response.drafts.flatMap((draft) => {
+        const parsed = draftDocumentSchemaV10.safeParse(draft);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    },
+  }),
 });
 
 export const draftsListUpgradeV10ToV20 = defineUpgradePath<
@@ -332,6 +454,21 @@ export const draftsSubscribeV11 = defineStreamRpcContract({
   method: "drafts.subscribe",
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: draftsSubscribeOpenRequestSchemaV10,
+  // Frozen at the document the 1.5.1 tags shipped.
   serverFrameSchema: draftsSubscribeServerFrameSchemaV11,
+  clientFrameSchema: draftsSubscribeClientFrameSchemaV10,
+});
+
+/**
+ * `@1.2` is the first minor whose `upsert` frames may carry a draft naming a
+ * harness added after 1.5.1 (Cline is the first). Nothing else changes: the
+ * capability signal is the negotiated minor, and the host withholds such an
+ * `upsert` from a `<1.2` subscriber.
+ */
+export const draftsSubscribeV12 = defineStreamRpcContract({
+  method: "drafts.subscribe",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: draftsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: draftsSubscribeServerFrameSchemaV12,
   clientFrameSchema: draftsSubscribeClientFrameSchemaV10,
 });

@@ -1,6 +1,7 @@
 import type { TierGroup } from "@traycer/protocol/host/fallback-policy";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { previewTierGroupsLineSupportsPatterns } from "@/hooks/providers/use-fallback-policy-pattern-lines";
 import { useTeamViewingHost } from "./use-team-viewing-host";
 
 const METHOD = "providers.fallbackPolicy.previewTierGroups";
@@ -14,9 +15,7 @@ export function useConfigurationRoutingPreviewQuery(
     scope.viewingHost?.hostId ?? null,
     METHOD,
   );
-  const patterns =
-    line !== null &&
-    ((line.major === 1 && line.minor >= 1) || line.major === 2);
+  const patterns = previewTierGroupsLineSupportsPatterns(line);
   return useHostQuery({
     client: scope.client,
     cacheKeyIdentity: undefined,

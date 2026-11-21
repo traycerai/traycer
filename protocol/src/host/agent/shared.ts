@@ -81,6 +81,7 @@ export const guiHarnessIdSchema = lazySchema(() =>
     "reasonix",
     "antigravity",
     "commandcode",
+    "cline",
   ]),
 );
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
@@ -405,6 +406,47 @@ export const guiHarnessIdSchemaV90 = lazySchema(() =>
 );
 export type GuiHarnessIdV90 = z.infer<typeof guiHarnessIdSchemaV90>;
 
+/**
+ * Frozen harness id set as `1.5.1` shipped major 10 - everything through
+ * Command Code, before Cline.
+ *
+ * Major 10 was opened to carry what v9.0 froze off and bound the live enum, on
+ * the same reading that failed for major 9: its lines are in the field, so the
+ * next id added to the live enum would widen every released `@10.x` line in
+ * place. Pinned here the moment `cline` arrived, which is what keeps the id on
+ * the new major 11 head only.
+ *
+ * Do NOT add new harnesses here - extend the latest `guiHarnessIdSchema`; the
+ * head line's bridge drops post-v10 ids for older callers.
+ */
+export const guiHarnessIdSchemaV100 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+    "commandcode",
+  ]),
+);
+export type GuiHarnessIdV100 = z.infer<typeof guiHarnessIdSchemaV100>;
+
 export const tuiHarnessIdSchema = lazySchema(() =>
   harnessIdSchema.extract(["claude", "codex", "opencode", "cursor"]),
 );
@@ -522,6 +564,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "reasonix",
   "antigravity",
   "commandcode",
+  "cline",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -1133,6 +1176,9 @@ export type AgentSummaryV92 = z.infer<typeof agentSummarySchemaV92>;
  */
 export const agentSummarySchemaV100 = lazySchema(() =>
   releasedAgentSummarySchema.extend({
+    // `releasedAgentSummarySchema` binds the live enum, so a `@10.x` row must
+    // pin its own id set: major 10 shipped (`1.5.1`), and Cline rides major 11.
+    harnessId: guiHarnessIdSchemaV100.nullable(),
     runConfig: agentRunConfigSchemaV102.nullable().default(null),
     sessionState: agentSessionStateSchema.nullable(),
     lastExit: agentSessionLastExitSchema.nullable(),
@@ -1179,6 +1225,19 @@ export const agentSummarySchemaV102 = lazySchema(() =>
     hostConnectivity: lastKnownConnectivitySchema,
   }),
 );
+export type AgentSummaryV102 = z.infer<typeof agentSummarySchemaV102>;
+
+/**
+ * Frozen `agent.list@10.3` row: adds service tiers on `runConfig` while
+ * keeping `harnessId` pinned to `guiHarnessIdSchemaV100` (all major-10 minors
+ * share the pre-Cline id set; Cline opens major 11).
+ */
+export const agentSummarySchemaV103 = lazySchema(() =>
+  agentSummarySchemaV102.extend({
+    runConfig: agentRunConfigSchema.nullable().default(null),
+  }),
+);
+export type AgentSummaryV103 = z.infer<typeof agentSummarySchemaV103>;
 
 // THE CANONICAL NAME STAYS ON THE HEAD, which is the rule
 // `head-names-canonical-alias.test.ts` enforces: writing the new row under a
@@ -1501,6 +1560,22 @@ export const listAgentsResponseSchemaV102 = lazySchema(() =>
     agents: z.array(agentSummarySchemaV102),
   }),
 );
+export type ListAgentsResponseV102 = z.infer<
+  typeof listAgentsResponseSchemaV102
+>;
+
+/**
+ * Frozen `agent.list@10.3` response: major 10 head before Cline opened major 11.
+ * See {@link agentSummarySchemaV103}.
+ */
+export const listAgentsResponseSchemaV103 = lazySchema(() =>
+  listAgentsResponseSchemaV102.extend({
+    agents: z.array(agentSummarySchemaV103),
+  }),
+);
+export type ListAgentsResponseV103 = z.infer<
+  typeof listAgentsResponseSchemaV103
+>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

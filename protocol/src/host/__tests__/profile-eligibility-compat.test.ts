@@ -124,7 +124,7 @@ describe("profile eligibility protocol compatibility", () => {
 
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      10,
+      11,
       7,
       current,
     );

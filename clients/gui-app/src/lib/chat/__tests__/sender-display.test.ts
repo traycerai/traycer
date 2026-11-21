@@ -39,6 +39,11 @@ describe("agentProviderLabel", () => {
     expect(agentProviderLabel("antigravity")).toBe("Antigravity");
   });
 
+  it("labels cline as Cline and recognizes it as a known harness", () => {
+    expect(agentProviderLabel("cline")).toBe("Cline");
+    expect(knownHarnessId("cline")).toBe("cline");
+  });
+
   it("labels a known harness with its friendly name", () => {
     expect(agentProviderLabel("claude")).toBe("Claude Code");
   });

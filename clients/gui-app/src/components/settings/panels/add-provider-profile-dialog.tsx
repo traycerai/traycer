@@ -139,6 +139,7 @@ const PROVIDER_SHARES_SKILLS_AND_PLUGINS: Record<
   reasonix: false,
   antigravity: false,
   commandcode: false,
+  cline: false,
 };
 
 export interface FailedProviderProfileAttempt {

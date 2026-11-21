@@ -21,7 +21,7 @@ const SEND_WOULD_QUEUE_MINOR = 34;
 const MEMORY_CURATION_MINOR = 35;
 const NOT_APPLIED_MINOR = 37;
 const ULTRACODE_MINOR = 41;
-const LATEST_MINOR = 46;
+const LATEST_MINOR = 47;
 
 const envelope = {
   hasBinaryPayload: false,

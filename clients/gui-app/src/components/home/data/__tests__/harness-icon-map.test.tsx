@@ -2,7 +2,10 @@ import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
 import { PROVIDER_ICON_CONFIG } from "@/components/home/data/harness-icon-map";
-import { CommandCodeIcon } from "@/components/home/pickers/harness-icons";
+import {
+  ClineIcon,
+  CommandCodeIcon,
+} from "@/components/home/pickers/harness-icons";
 
 describe("PROVIDER_ICON_CONFIG", () => {
   it("has an entry for every provider id the protocol declares", () => {
@@ -22,6 +25,21 @@ describe("PROVIDER_ICON_CONFIG", () => {
     expect(sharing.map(([providerId]) => providerId)).toEqual(["commandcode"]);
     // Positive control: another provider keeps its own, different icon.
     expect(PROVIDER_ICON_CONFIG.reasonix.Icon).not.toBe(CommandCodeIcon);
+  });
+
+  it("maps cline to its own monochrome icon, shared with no other provider", () => {
+    expect(PROVIDER_ICON_CONFIG.cline.Icon).toBe(ClineIcon);
+    expect(PROVIDER_ICON_CONFIG.cline.className).toBe("text-foreground");
+    const sharing = Object.entries(PROVIDER_ICON_CONFIG).filter(
+      ([, config]) => config.Icon === ClineIcon,
+    );
+    expect(sharing.map(([providerId]) => providerId)).toEqual(["cline"]);
+    expect(PROVIDER_ICON_CONFIG.commandcode.Icon).not.toBe(ClineIcon);
+
+    const { container } = render(<ClineIcon />);
+    const svg = container.querySelector("svg");
+    expect(svg).not.toBeNull();
+    expect(container.innerHTML).toContain("currentColor");
   });
 
   it("renders the Command Code logomark with its fixed brand colours", () => {

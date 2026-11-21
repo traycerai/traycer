@@ -198,3 +198,43 @@ describe("Antigravity persisted records", () => {
     expect(anchor.accentColor).toBeNull();
   });
 });
+
+describe("Cline persisted records", () => {
+  it("accepts a cline chat run-settings tuple", () => {
+    const settings = chatRunSettingsSchema.parse({
+      harnessId: "cline",
+      model: "claude-sonnet-4-6",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      agentMode: "regular",
+    });
+
+    expect(settings.harnessId).toBe("cline");
+    expect(settings.reasoningEffort).toBeNull();
+    expect(settings.serviceTier).toBeNull();
+    expect(settings.profileId).toBeNull();
+  });
+
+  it("parses a cline session anchor as a session-granularity anchor", () => {
+    const anchor = chatSessionAnchorSchema.parse({
+      harnessId: "cline",
+      hostId: "host-1",
+      sessionId: "cline-session-1",
+      sessionWorkspaceSnapshot: {
+        workspaceKind: "session-snapshot" as const,
+        primaryWorkspace: "/repo",
+        secondaryWorkspaces: [],
+      },
+      createdAt: 100,
+      coveredUntilMessageId: null,
+    });
+
+    expect(anchor).toMatchObject({
+      harnessId: "cline",
+      sessionId: "cline-session-1",
+    });
+    expect(anchor).not.toHaveProperty("opencodeUserMessageId");
+    expect(anchor.profileId).toBeNull();
+    expect(anchor.accentColor).toBeNull();
+  });
+});

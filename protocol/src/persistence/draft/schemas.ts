@@ -4,6 +4,7 @@ import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   chatRunSettingsStrictSchemaPreUltracode,
   chatRunSettingsStrictSchemaPreCommandCode,
+  chatRunSettingsStrictSchemaPreCline,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { browserAnnotationRecordSchemaPreCanvas } from "@traycer/protocol/persistence/epic/messages";
 import { sha256HexSchema } from "@traycer/protocol/persistence/chat-sync/version";
@@ -99,6 +100,29 @@ export const draftComposerPortableSchemaPreCommandCode = lazySchema(() =>
 );
 export type DraftComposerPortablePreCommandCode = z.infer<
   typeof draftComposerPortableSchemaPreCommandCode
+>;
+
+/**
+ * Wire-freeze copy of the composer payload as the 1.5.1 tags shipped it on the
+ * `drafts.*` READ lines (`drafts.list@2.0`, `drafts.upsert@2.0`,
+ * `drafts.subscribe@1.1`): `runSettings` pinned to
+ * `chatRunSettingsStrictSchemaPreCline` (harness ids through Command Code).
+ *
+ * A WIRE freeze only. The `draft/v1` head and every write path keep the live
+ * payload above; nothing stored binds this.
+ */
+export const draftComposerPortableSchemaPreCline = lazySchema(() =>
+  z.object({
+    content: jsonContentSchema,
+    selection: draftSelectionSchema.nullable(),
+    runSettings: chatRunSettingsStrictSchemaPreCline.nullable(),
+    composerMode: draftComposerModeSchema,
+    blobHashes: z.array(sha256HexSchema),
+    closed: z.boolean().default(false),
+  }),
+);
+export type DraftComposerPortablePreCline = z.infer<
+  typeof draftComposerPortableSchemaPreCline
 >;
 
 /**

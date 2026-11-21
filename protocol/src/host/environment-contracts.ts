@@ -1,4 +1,8 @@
-import { defineRpcContract, defineUpgradePath } from "../framework/index";
+import {
+  defineDowngradePath,
+  defineRpcContract,
+  defineUpgradePath,
+} from "../framework/index";
 import * as schemas from "./environment-schemas";
 import { environmentProposalsV10 } from "./environment/settings-proposals";
 import { RETIRED_PROVIDER_VARIABLES } from "./released-wire-rows";
@@ -523,6 +527,144 @@ export const environmentSetupPutUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+function filterLocalOverridesToV10(
+  overrides: readonly schemas.LocalOverride[],
+): schemas.LocalOverrideV10[] {
+  const kept: schemas.LocalOverrideV10[] = [];
+  for (const row of overrides) {
+    const parsed = schemas.localOverrideSchemaV10.safeParse(row);
+    if (parsed.success) {
+      kept.push(parsed.data);
+    }
+  }
+  return kept;
+}
+
+function downgradeConfigEnvLocalOverrideResponseToV10(
+  response: schemas.ConfigEnvLocalOverrideResponse,
+): schemas.ConfigEnvLocalOverrideResponseV10 {
+  if (response.outcome === "needs_grant") {
+    return response;
+  }
+  return {
+    outcome: "saved",
+    overrides: filterLocalOverridesToV10(response.overrides),
+  };
+}
+
+export const configEnvLocalOverrideSetV10 = defineRpcContract({
+  method: "config.env.localOverride.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.configEnvLocalOverrideSetRequestSchema,
+  responseSchema: schemas.configEnvLocalOverrideResponseSchemaV10,
+});
+
+export const configEnvLocalOverrideSetV20 = defineRpcContract({
+  method: "config.env.localOverride.set",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: schemas.configEnvLocalOverrideSetRequestSchema,
+  responseSchema: schemas.configEnvLocalOverrideResponseSchema,
+});
+
+export const configEnvLocalOverrideSetUpgradeV10ToV20 = defineUpgradePath<
+  typeof configEnvLocalOverrideSetV10,
+  typeof configEnvLocalOverrideSetV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const configEnvLocalOverrideSetDowngradeV20ToV10 = defineDowngradePath<
+  typeof configEnvLocalOverrideSetV20,
+  typeof configEnvLocalOverrideSetV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: downgradeConfigEnvLocalOverrideResponseToV10(response),
+  }),
+});
+
+export const configEnvLocalOverrideClearV10 = defineRpcContract({
+  method: "config.env.localOverride.clear",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.configEnvLocalOverrideClearRequestSchema,
+  responseSchema: schemas.configEnvLocalOverrideResponseSchemaV10,
+});
+
+export const configEnvLocalOverrideClearV20 = defineRpcContract({
+  method: "config.env.localOverride.clear",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: schemas.configEnvLocalOverrideClearRequestSchema,
+  responseSchema: schemas.configEnvLocalOverrideResponseSchema,
+});
+
+export const configEnvLocalOverrideClearUpgradeV10ToV20 = defineUpgradePath<
+  typeof configEnvLocalOverrideClearV10,
+  typeof configEnvLocalOverrideClearV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const configEnvLocalOverrideClearDowngradeV20ToV10 = defineDowngradePath<
+  typeof configEnvLocalOverrideClearV20,
+  typeof configEnvLocalOverrideClearV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: downgradeConfigEnvLocalOverrideResponseToV10(response),
+  }),
+});
+
+export const environmentLocalOverridesV10 = defineRpcContract({
+  method: "environment.localOverrides",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: schemas.environmentLocalOverridesRequestSchema,
+  responseSchema: schemas.environmentLocalOverridesResponseSchemaV10,
+});
+
+export const environmentLocalOverridesV20 = defineRpcContract({
+  method: "environment.localOverrides",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: schemas.environmentLocalOverridesRequestSchema,
+  responseSchema: schemas.environmentLocalOverridesResponseSchema,
+});
+
+export const environmentLocalOverridesUpgradeV10ToV20 = defineUpgradePath<
+  typeof environmentLocalOverridesV10,
+  typeof environmentLocalOverridesV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const environmentLocalOverridesDowngradeV20ToV10 = defineDowngradePath<
+  typeof environmentLocalOverridesV20,
+  typeof environmentLocalOverridesV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      overrides: filterLocalOverridesToV10(response.overrides),
+    },
+  }),
+});
+
 export const ENVIRONMENT_RPC_METHODS = {
   "config.env.localOverride.set": {
     degrade: { kind: "unsupported" },
@@ -530,16 +672,27 @@ export const ENVIRONMENT_RPC_METHODS = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "config.env.localOverride.set",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.configEnvLocalOverrideSetRequestSchema,
-            responseSchema: schemas.configEnvLocalOverrideResponseSchema,
-          }),
+          contract: configEnvLocalOverrideSetV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configEnvLocalOverrideSetV20,
+          upgradeFromPreviousVersion: configEnvLocalOverrideSetUpgradeV10ToV20,
+          // Top-level `discriminatedUnion` response widens `providerId` inside
+          // the `saved` arm (forbidden as a minor on the response lane);
+          // `findBreakingChange` does not descend into root `anyOf` arms.
+          semanticMajorBreakFromPreviousMajor: true,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: configEnvLocalOverrideSetDowngradeV20ToV10,
+      },
     },
   },
   "config.env.localOverride.clear": {
@@ -548,16 +701,26 @@ export const ENVIRONMENT_RPC_METHODS = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "config.env.localOverride.clear",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.configEnvLocalOverrideClearRequestSchema,
-            responseSchema: schemas.configEnvLocalOverrideResponseSchema,
-          }),
+          contract: configEnvLocalOverrideClearV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configEnvLocalOverrideClearV20,
+          upgradeFromPreviousVersion:
+            configEnvLocalOverrideClearUpgradeV10ToV20,
+          // Same root `discriminatedUnion` widening as `localOverride.set@2.0`.
+          semanticMajorBreakFromPreviousMajor: true,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: configEnvLocalOverrideClearDowngradeV20ToV10,
+      },
     },
   },
   "environment.localOverrides": {
@@ -566,16 +729,23 @@ export const ENVIRONMENT_RPC_METHODS = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: defineRpcContract({
-            method: "environment.localOverrides",
-            schemaVersion: { major: 1, minor: 0 },
-            requestSchema: schemas.environmentLocalOverridesRequestSchema,
-            responseSchema: schemas.environmentLocalOverridesResponseSchema,
-          }),
+          contract: environmentLocalOverridesV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: environmentLocalOverridesV20,
+          upgradeFromPreviousVersion: environmentLocalOverridesUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: environmentLocalOverridesDowngradeV20ToV10,
+      },
     },
   },
   "environment.proposals": {

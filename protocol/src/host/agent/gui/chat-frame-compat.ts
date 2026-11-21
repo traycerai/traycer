@@ -2051,6 +2051,70 @@ function projectAccountWaitFrame(
   return frame;
 }
 
+const CHAT_SUBSCRIBE_CLINE_MINOR = 47;
+
+function isClineActiveTurn(value: unknown): boolean {
+  return isRecord(value) && value.harnessId === "cline";
+}
+
+function projectClineSessionAnchorRowContext(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.rowContext)) return value;
+  const original = value.rowContext;
+  let changed = false;
+  const nextRowContext: Record<string, unknown> = {};
+  for (const [rowId, ctx] of Object.entries(original)) {
+    if (
+      isRecord(ctx) &&
+      isRecord(ctx.sessionAnchor) &&
+      ctx.sessionAnchor.harnessId === "cline"
+    ) {
+      changed = true;
+      const { sessionAnchor: _sessionAnchor, ...rest } = ctx;
+      if (Object.keys(rest).length > 0) {
+        nextRowContext[rowId] = rest;
+      }
+      continue;
+    }
+    nextRowContext[rowId] = ctx;
+  }
+  if (!changed) return value;
+  if (Object.keys(nextRowContext).length === 0) {
+    const { rowContext: _rowContext, ...rest } = value;
+    return rest;
+  }
+  return { ...value, rowContext: nextRowContext };
+}
+
+function projectClineChatFrame(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  if (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_CLINE_MINOR
+  ) {
+    return frame;
+  }
+  if (frame.kind === "range") {
+    const range = projectClineSessionAnchorRowContext(frame.range);
+    return range === frame.range ? frame : { ...frame, range };
+  }
+  if (frame.kind === "turnStateChanged") {
+    if (!isClineActiveTurn(frame.activeTurn)) return frame;
+    return { ...frame, activeTurn: null };
+  }
+  if (frame.kind !== "snapshot" || !isRecord(frame.snapshot)) return frame;
+  const original = frame.snapshot;
+  const tail = projectClineSessionAnchorRowContext(original.tail);
+  const clearActiveTurn = isClineActiveTurn(original.activeTurn);
+  if (tail === original.tail && !clearActiveTurn) return frame;
+  const snapshot = { ...original };
+  if (tail !== original.tail) snapshot.tail = tail;
+  if (clearActiveTurn) snapshot.activeTurn = null;
+  return { ...frame, snapshot };
+}
+
 export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
@@ -2058,8 +2122,11 @@ export function projectChatServerFrameForVersion(
   const projected = projectChatServerFrameBeforeUltracode(
     projectDeliveryWorktreeIntent(
       projectFeedbackDraftFrame(
-        projectAccountWaitFrame(
-          projectProviderSelectionFrame(frame, negotiated),
+        projectClineChatFrame(
+          projectAccountWaitFrame(
+            projectProviderSelectionFrame(frame, negotiated),
+            negotiated,
+          ),
           negotiated,
         ),
         negotiated,

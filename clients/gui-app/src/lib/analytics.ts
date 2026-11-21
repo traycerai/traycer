@@ -222,6 +222,7 @@ export type AnalyticsHarness =
   | "amp"
   | "antigravity"
   | "claude"
+  | "cline"
   | "codex"
   | "commandcode"
   | "copilot"
@@ -359,6 +360,7 @@ export type AnalyticsProvider =
   | "amp"
   | "antigravity"
   | "claude-code"
+  | "cline"
   | "codex"
   | "commandcode"
   | "copilot"
@@ -1403,6 +1405,7 @@ const ANALYTICS_HARNESSES = new Set<string>([
   "amp",
   "antigravity",
   "claude",
+  "cline",
   "codex",
   "commandcode",
   "copilot",
@@ -1466,6 +1469,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "amp",
   "antigravity",
   "claude-code",
+  "cline",
   "codex",
   "commandcode",
   "copilot",

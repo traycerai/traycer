@@ -40,6 +40,7 @@ import {
 } from "@/components/settings/panels/fallback/fallback-test-model-panel";
 import { useConfigurationRoutingPreviewQuery } from "@/hooks/environment/team/use-routing-preview-query";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
+import { previewTierGroupsLineSupportsPatterns } from "@/hooks/providers/use-fallback-policy-pattern-lines";
 import { TeamViewingHostBinding } from "./team-viewing-host-binding";
 import { TeamViewingHostPicker } from "./team-viewing-host-picker";
 import { TeamContentNeedsHost } from "./team-content-needs-host";
@@ -196,10 +197,7 @@ function TeamRoutingEditor(props: {
     scope.viewingHost?.hostId ?? null,
     "providers.fallbackPolicy.previewTierGroups",
   );
-  const canSimulate =
-    previewLine !== null &&
-    ((previewLine.major === 1 && previewLine.minor >= 1) ||
-      previewLine.major === 2);
+  const canSimulate = previewTierGroupsLineSupportsPatterns(previewLine);
   const catalog = useFallbackCatalogOptionsForClient(
     scope.client,
     policy.tierGroups,

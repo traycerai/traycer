@@ -37,6 +37,11 @@ describe("providerIdFromHarnessOrProviderName", () => {
     expect(providerIdFromHarnessOrProviderName("claude")).toBe("claude-code");
   });
 
+  it("resolves cline, whose harness id and provider id are the same name", () => {
+    expect(GUI_HARNESS_BY_PROVIDER_ID.cline).toBe("cline");
+    expect(providerIdFromHarnessOrProviderName("cline")).toBe("cline");
+  });
+
   it("returns null for a name that is neither", () => {
     expect(providerIdFromHarnessOrProviderName("not-a-provider")).toBeNull();
   });
