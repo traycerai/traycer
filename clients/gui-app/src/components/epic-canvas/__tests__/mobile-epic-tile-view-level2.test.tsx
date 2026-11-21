@@ -400,6 +400,24 @@ describe("<MobileEpicTileView /> level 2 forms", () => {
       expect(screen.queryByTestId("mobile-tile-chooser")).toBeNull();
     });
 
+    it("opens the selector for the engaged split pane", async () => {
+      const user = userEvent.setup();
+      renderView();
+      await user.click(screen.getByTestId("mobile-tile-split"));
+      await user.click(
+        within(screen.getByTestId("mobile-tile-chooser")).getByRole("button", {
+          name: "Open Spec 2",
+        }),
+      );
+      const second = screen.getByTestId("mobile-epic-second-tile");
+      await user.click(within(second).getByTestId("tile-spec-2"));
+      act(() => useMobileSwitcherStore.getState().swipeOpenByTabId[TAB_ID]?.());
+      expect(
+        await screen.findByTestId("mobile-tab-switcher-sheet"),
+      ).not.toBeNull();
+      expect(sheetOpen()).toBe(false);
+    });
+
     it("closes from its header without a pick", async () => {
       const user = userEvent.setup();
       renderView();

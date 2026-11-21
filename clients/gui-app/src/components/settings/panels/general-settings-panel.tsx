@@ -38,6 +38,10 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 }
 
 export function GeneralSettingsPanel() {
+  const mobileSwipeHistory = useSettingsStore((s) => s.mobileSwipeHistory);
+  const setMobileSwipeHistory = useSettingsStore(
+    (s) => s.setMobileSwipeHistory,
+  );
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
   const steerOnModEnterEnabled = useSettingsStore(
@@ -71,6 +75,18 @@ export function GeneralSettingsPanel() {
           fill={false}
         >
           <VoiceSettingsSection />
+          {availability.mobileApp ? (
+            <SettingsRow
+              row={GENERAL.definitions.mobileSwipeHistory}
+              control={
+                <Switch
+                  checked={mobileSwipeHistory}
+                  onCheckedChange={setMobileSwipeHistory}
+                  aria-label="Swipe for back and forward"
+                />
+              }
+            />
+          ) : null}
           <SettingsRow
             row={GENERAL.definitions.quoteReply}
             control={

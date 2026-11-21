@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMobileApp } from "@/lib/mobile-app";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -117,7 +118,18 @@ describe("<TabSwitcherSheet />", () => {
     // Reset every input the bar is derived from, so nothing leaks.
     resetSwitcherInputs();
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+  });
+
+  it("opens the installed app selector from the right with a bottom safe inset", () => {
+    setMobileApp(true);
+    renderSheet(true, () => {});
+    const panel = screen.getByTestId("mobile-tab-switcher-sheet");
+    expect(panel.getAttribute("data-vaul-drawer-direction")).toBe("right");
+    expect(panel.classList.contains("pb-safe-bottom")).toBe(true);
+  });
 
   it("renders every category in the rail's order, with no More entry", () => {
     // No PR presence and no revealed comment: on the phone Auto still reads as

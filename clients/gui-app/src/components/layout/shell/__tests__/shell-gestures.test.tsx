@@ -1601,6 +1601,19 @@ describe("useEdgeNavSwipe", () => {
     });
   });
 
+  it("leaves an artifact canvas drag to the canvas", () => {
+    const probe = mountOnBareScreen();
+    const canvas = document.createElement("div");
+    canvas.setAttribute("data-history-gesture-owner", "");
+    const child = document.createElement("div");
+    canvas.appendChild(child);
+    document.body.appendChild(canvas);
+
+    swipe({ from: 8, to: 60, target: child, dropY: 0 });
+
+    expect(probe.navigations).toEqual([]);
+  });
+
   it("does not navigate on a rail that already pans sideways", () => {
     const probe = mountOnBareScreen();
     const rail = document.createElement("div");
