@@ -25,8 +25,9 @@ import type {
 } from "@traycer/protocol/host-transport/websocket";
 import { CLI_CLIENT_IDENTITY } from "../../cli-version";
 import { openCliHostSession, type CliHostSession } from "../cli-host-tokens";
-import { callHostRpcAtEndpoint } from "../host-rpc";
+import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 import type { HostAuth } from "../host-auth";
+import { CLI_ERROR_CODES } from "../../runner/errors";
 
 const USER_ID = "user-1";
 const HOST_ID = "11111111-1111-4111-8111-111111111111";
@@ -40,6 +41,7 @@ type DoorMode =
   | "unavailable-once"
   | "not-admitted"
   | "team"
+  | "team-unavailable"
   | "other-user";
 
 const harness = vi.hoisted(() => {
@@ -200,7 +202,10 @@ function jsonResponse(body: unknown, status: number): Response {
 }
 
 function ownershipBody(): unknown {
-  if (harness.state.mode === "team") {
+  if (
+    harness.state.mode === "team" ||
+    harness.state.mode === "team-unavailable"
+  ) {
     return {
       hosts: [
         {
@@ -236,6 +241,7 @@ function installFetch(): void {
       if (url.pathname === "/api/v3/hosts" && method === "GET") {
         if (
           harness.state.mode === "team" ||
+          harness.state.mode === "team-unavailable" ||
           harness.state.mode === "other-user"
         ) {
           return jsonResponse(ownershipBody(), 200);
@@ -252,6 +258,9 @@ function installFetch(): void {
           return new Promise<Response>(() => undefined);
         }
         if (harness.state.mode === "unavailable") {
+          return jsonResponse({ message: "offline" }, 503);
+        }
+        if (harness.state.mode === "team-unavailable") {
           return jsonResponse({ message: "offline" }, 503);
         }
         return jsonResponse({ message: "missing" }, 404);
@@ -348,6 +357,31 @@ function namedProbeRefusal(): {
   };
 }
 
+function notProvisionedRefusal(): {
+  readonly kind: "fatalError";
+  readonly details: {
+    readonly code: "UNAUTHORIZED";
+    readonly reason: string;
+    readonly doorReason: "not_provisioned";
+    readonly retryable: false;
+    readonly incompatibleMethods: null;
+    readonly upgradeGuidance: null;
+  };
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason:
+        "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+      doorReason: "not_provisioned",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
 function releasedRefusal(): {
   readonly kind: "fatalError";
   readonly details: {
@@ -362,6 +396,30 @@ function releasedRefusal(): {
     details: {
       code: "UNAUTHORIZED",
       reason: "released-host-token-refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
+function expiredTokenRefusal(): {
+  readonly kind: "fatalError";
+  readonly details: {
+    readonly code: "UNAUTHORIZED";
+    readonly reason: string;
+    readonly doorReason: "token_expired";
+    readonly retryable: false;
+    readonly incompatibleMethods: null;
+    readonly upgradeGuidance: null;
+  };
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "host token expired",
+      doorReason: "token_expired",
+      retryable: false,
       incompatibleMethods: null,
       upgradeGuidance: null,
     },
@@ -464,6 +522,45 @@ afterEach(() => {
 });
 
 describe("CLI local doors while authn cannot mint", () => {
+  it("reports not_provisioned and probes again after this computer is enrolled", async () => {
+    harness.state.mode = "unavailable";
+    const firstCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const firstProbe = await socketAt(0);
+    expect((await readOpen(firstProbe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    firstProbe.fireFrame(notProvisionedRefusal());
+    await expect(toAgentCliError(firstCall)).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      exitCode: 1,
+      message:
+        "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+    });
+
+    const secondCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const enrolledProbe = await socketAt(1);
+    expect((await readOpen(enrolledProbe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    enrolledProbe.fireFrame({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "owner sign-in invited",
+        doorReason: "owner_sign_in",
+        retryable: false,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    const invited = await socketAt(2);
+    const open = await readOpen(invited);
+    expect(open.token).toBe(SIGN_IN);
+    await admitStatus(invited, open);
+    await expect(secondCall).resolves.toMatchObject({ ready: true });
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+    ]);
+  });
+
   it("reaches the host with the held expired token and does not start another mint", async () => {
     const expired = expiredJwt(Date.now());
     hold(expired);
@@ -551,6 +648,35 @@ describe("CLI local doors while authn cannot mint", () => {
     expect(openToken(probe)).toBe(NO_HOST_TOKEN_PROBE);
     expect(harness.sockets.map((socket) => openToken(socket))).not.toContain(
       SIGN_IN,
+    );
+  });
+
+  it("re-presents the held expired token on a team row after the host refuses it", async () => {
+    harness.state.mode = "team-unavailable";
+    const expired = expiredJwt(Date.now());
+    hold(expired);
+    const firstCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const first = await socketAt(0);
+    expect((await readOpen(first)).token).toBe(expired.token);
+    first.fireFrame(expiredTokenRefusal());
+    await expect(firstCall).rejects.toThrow();
+
+    const nextCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const second = await socketAt(1);
+    const open = await readOpen(second);
+    expect(open.token).toBe(expired.token);
+    await admitStatus(second, open);
+    await expect(nextCall).resolves.toMatchObject({ ready: true });
+    expect(harness.state.grants).toBeGreaterThan(0);
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      expired.token,
+      expired.token,
+    ]);
+    expect(harness.sockets.map((socket) => openToken(socket))).not.toContain(
+      SIGN_IN,
+    );
+    expect(harness.sockets.map((socket) => openToken(socket))).not.toContain(
+      NO_HOST_TOKEN_PROBE,
     );
   });
 
