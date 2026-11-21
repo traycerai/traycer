@@ -743,6 +743,17 @@ describe("per state", () => {
   });
 });
 
+describe("size line", () => {
+  it.each([
+    [0, "2 vCPU · 4 GB memory"],
+    [1, "2 vCPU · 4 GB memory · 1 MB disk"],
+  ])("formats an awake sandbox with a %i MB disk", (diskMb, expected) => {
+    renderCard(sandboxOf("awake", false, { diskMb }));
+
+    expect(screen.getByTestId("sandbox-card-shape").textContent).toBe(expected);
+  });
+});
+
 describe("rates", () => {
   it.each([
     ["awake", "$0.12 an hour", "under $0.01 an hour", "Storage rate"],
@@ -767,6 +778,19 @@ describe("rates", () => {
     renderCard(sandboxOf("suspended", false, GROWING_RESTING_CARD_OVERRIDES));
 
     expectGrowingRestingAwakeRateCard();
+  });
+
+  it("uses the higher stopped rate for storage on an awake card", () => {
+    renderCard(
+      sandboxOf("awake", false, {
+        priceMcPerHour: { awakeMc: 120, suspendedMc: 40, stoppedMc: 80 },
+      }),
+    );
+
+    expect(screen.getByText("Storage rate")).toBeTruthy();
+    expect(screen.getByTestId("sandbox-card-other-rate").textContent).toBe(
+      "$0.08 an hour",
+    );
   });
 
   it("does not mistake an unpriced ledger zero for no billing", () => {

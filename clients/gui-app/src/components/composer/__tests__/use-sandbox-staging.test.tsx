@@ -63,7 +63,12 @@ import type {
   HostScopeSandbox,
 } from "@/components/settings/host-scope/host-scope-model";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import { autoSizingCatalogue } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
+import {
+  autoSizingAlternateRegion,
+  autoSizingCatalogue,
+  autoSizingCatalogueWithRegions,
+  autoSizingScalarNoRatesCatalogue,
+} from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import {
   teamSubscription,
@@ -828,11 +833,34 @@ describe("useSandboxStaging New rows", () => {
     expect(composer.newRows[0]?.subLine).toBe(
       "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour while awake · uses your credits",
     );
+    expect(composer.newRows[1]?.subLine).toContain(
+      "$0.14–$1.44 an hour while awake · uses acme's credits",
+    );
     act(() => {
       composer.onPickNew("personal");
     });
     expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
       "New Personal sandbox · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    );
+  });
+
+  it("uses the first region's varied rates on a growing New row and staged chip", () => {
+    const [provider] = autoSizingCatalogue().providers;
+    const [east] = provider.regions;
+    mocks.catalogue = autoSizingCatalogueWithRegions([
+      autoSizingAlternateRegion(),
+      east,
+    ]);
+    const { composer } = mount([LAPTOP]);
+
+    expect(composer.newRows[0]?.subLine).toContain(
+      "$0.15–$1.61 an hour while awake · uses your credits",
+    );
+    act(() => {
+      composer.onPickNew("personal");
+    });
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.15–$1.61/h",
     );
   });
 
@@ -852,6 +880,15 @@ describe("useSandboxStaging New rows", () => {
 
     expect(composer.newRows[0]?.subLine).toBe(
       "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44 an hour · uses your credits",
+    );
+  });
+
+  it("shows a scalar exact quote without unit rates or an offer on the New row", () => {
+    mocks.catalogue = autoSizingScalarNoRatesCatalogue();
+    const { composer } = mount([LAPTOP]);
+
+    expect(composer.newRows[0]?.subLine).toBe(
+      "Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14 an hour while awake · uses your credits",
     );
   });
 
@@ -970,6 +1007,59 @@ describe("useSandboxStaging New rows", () => {
       ],
     ).toBe("personal");
     expect(staging().composer.stagedConfigurationKey).toBe("personal");
+  });
+
+  it("keeps a staged label safe before catalogue facts load and after its size is withdrawn", () => {
+    mocks.catalogue = null;
+    act(() => {
+      useStagedSandboxStore.getState().stage(SURFACE, {
+        kind: "new",
+        configuration: { kind: "personal" },
+        shape: {
+          os: "linux",
+          cpus: 2,
+          memoryMb: 4_096,
+          diskMb: 51_200,
+          region: "us-east",
+          idleMinutes: 30,
+          destroyAfterRestingMinutes: 10_080,
+        },
+        name: "sandbox-test",
+        wakeString: null,
+      });
+    });
+    const view = render(<Harness surfaceKey={SURFACE} hosts={[LAPTOP]} />);
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB",
+    );
+
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    const shapes = provider.shapes;
+    if (shapes === null) {
+      throw new Error("Expected listed growing Linux sizes");
+    }
+    mocks.catalogue = base;
+    view.rerender(<Harness surfaceKey={SURFACE} hosts={[LAPTOP]} />);
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    );
+
+    mocks.catalogue = {
+      ...base,
+      providers: [
+        {
+          ...provider,
+          shapes: shapes
+            .filter((rung) => rung.cpus !== 2)
+            .map((rung, index) => ({ ...rung, default: index === 0 })),
+        },
+      ],
+    };
+    view.rerender(<Harness surfaceKey={SURFACE} hosts={[LAPTOP]} />);
+    expect(screen.getByTestId("staged-sandbox-chip").textContent).toBe(
+      "New Personal sandbox · 2 vCPU · 4 GB",
+    );
   });
 
   it("omits the price on a staged chip when the catalogue prices no rate for the shape", () => {
@@ -1185,6 +1275,23 @@ describe("useSandboxStaging New rows", () => {
       composer.onPickNew("personal");
     });
     expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+
+  it("renders the no-size New row when Linux has no creatable region", () => {
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    mocks.catalogue = {
+      ...base,
+      providers: [{ ...provider, regions: [] }],
+    };
+    mountStagingPicker([LAPTOP]);
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    expect(
+      within(
+        screen.getByTestId("host-switcher-new-sandbox-personal"),
+      ).getByText(SANDBOXES_CANT_BE_CREATED),
+    ).toBeDefined();
   });
 
   it("drops the chip's spinner when the staged create is refused", () => {
@@ -2072,7 +2179,14 @@ describe("useSandboxStaging a staged resting sandbox's block", () => {
   }
 
   function stagedPrice(host: HostScopeOption): string {
-    const { composer } = mount([LAPTOP, host]);
+    const distractor = sizedHost("box-distractor", "stopped", null, {
+      priceMcPerHour: {
+        awakeMc: 999,
+        suspendedMc: 99,
+        stoppedMc: 99,
+      },
+    });
+    const { composer } = mount([LAPTOP, distractor, host]);
     act(() => composer.onPickHost(host));
     const { consequences } = staging();
     if (consequences === null) throw new Error("nothing was staged");

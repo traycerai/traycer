@@ -172,12 +172,25 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
           offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
         },
       };
-      render(
+      const { unmount } = render(
         <ChatSandboxFooter line={lineOf({ ...base, sandbox: growing })} />,
       );
 
       expect(document.body.textContent).toContain(
         "$0.14–$1.44 an hour while awake · uses your credits",
+      );
+
+      unmount();
+      const team = resting(state, { team: true });
+      if (team.kind !== "resting")
+        throw new Error("Expected a team resting sandbox");
+      render(
+        <ChatSandboxFooter
+          line={lineOf({ ...team, sandbox: { ...team.sandbox, ...growing } })}
+        />,
+      );
+      expect(document.body.textContent).toContain(
+        "$0.14–$1.44 an hour while awake · uses Acme's credits",
       );
     },
   );

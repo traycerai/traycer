@@ -700,6 +700,16 @@ describe("AgentHoverTooltip host section", () => {
   it("shows a growing sandbox's start and ceiling size in the sidebar hover", () => {
     h.sandboxes = [
       sandboxRow({
+        id: "sbx-other",
+        hostId: "host-other",
+        cpus: 8,
+        memoryMb: 16_384,
+        diskMb: 51_200,
+        priceMcPerHour: { awakeMc: 900, suspendedMc: 20, stoppedMc: 20 },
+      }),
+      sandboxRow({
+        id: "sbx-1",
+        hostId: "host-sbx",
         diskMb: 51_200,
         grows: { cpus: 16, memoryMb: 65_536 },
         priceMcPerHour: {

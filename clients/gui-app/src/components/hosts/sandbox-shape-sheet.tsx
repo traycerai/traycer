@@ -277,9 +277,9 @@ function rungFields(
   };
 }
 
-/** Whether a provider lists starting sizes that grow, whose disk is chosen apart. */
-function providerGrows(provider: SandboxCatalogueProvider): boolean {
-  return provider.shapes?.some((rung) => rung.grows !== undefined) ?? false;
+/** Whether a ladder lists starting sizes that grow, whose disk is chosen apart. */
+function ladderGrows(shapes: readonly SandboxShapeRung[]): boolean {
+  return shapes.some((rung) => rung.grows !== undefined);
 }
 
 /**
@@ -590,7 +590,7 @@ function ShapeSheetForm(props: {
                   }}
                 />
               </div>
-              {providerGrows(provider) ? (
+              {ladderGrows(provider.shapes) ? (
                 <ShapeNumber
                   id={`${ids}-disk`}
                   label="Disk (GB)"

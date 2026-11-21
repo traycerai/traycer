@@ -2,8 +2,11 @@ import { sandboxReadinessLine } from "@/lib/sandboxes/sandbox-readiness";
 import { READY_SENTENCE } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
 import {
   AUTO_SIZING_RUNGS,
+  autoSizingAlternateRegion,
   autoSizingCatalogue,
+  autoSizingCatalogueWithRegions,
   autoSizingListedNoRatesCatalogue,
+  autoSizingScalarNoRatesCatalogue,
 } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { describe, expect, it } from "vitest";
 import {
@@ -774,12 +777,21 @@ describe("growing Linux starting sizes", () => {
   }
 
   function size(cpus: number, memoryGb: number, diskGb: number) {
+    return sizeInRegion(cpus, memoryGb, diskGb, "us-east");
+  }
+
+  function sizeInRegion(
+    cpus: number,
+    memoryGb: number,
+    diskGb: number,
+    region: string,
+  ) {
     return {
       os: "linux" as const,
       cpus,
       memoryMb: memoryGb * 1024,
       diskMb: diskGb * 1024,
-      region: "us-east",
+      region,
     };
   }
 
@@ -830,6 +842,64 @@ describe("growing Linux starting sizes", () => {
     ).toMatchObject({ cpus: 2, memoryMb: 4_096, diskMb: 51_200 });
   });
 
+  it("falls back to the catalogue default when saved defaults name an unoffered OS", () => {
+    expect(
+      configurationStageShape(catalogue, {
+        os: "windows",
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 40_960,
+        idleMinutes: 45,
+        restingMinutes: null,
+      }),
+    ).toEqual({
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4_096,
+      diskMb: 51_200,
+      region: "us-east",
+      idleMinutes: 45,
+      destroyAfterRestingMinutes: null,
+    });
+  });
+
+  it("uses the first listed disk when growing rungs share a saved start", () => {
+    const [provider] = catalogue.providers;
+    const shapes = provider.shapes;
+    if (shapes === null) {
+      throw new Error("Expected listed growing sizes");
+    }
+    const first = shapes[0];
+    const repeated = {
+      ...first,
+      diskMb: 80 * 1024,
+      default: false,
+    };
+    const duplicated = {
+      ...catalogue,
+      providers: [{ ...provider, shapes: [first, repeated] }],
+    };
+
+    expect(
+      configurationStageShape(duplicated, {
+        os: "linux",
+        cpus: 2,
+        memoryMb: 4_096,
+        diskMb: 80 * 1024,
+        idleMinutes: 30,
+        restingMinutes: null,
+      }),
+    ).toEqual({
+      os: "linux",
+      cpus: 2,
+      memoryMb: 4_096,
+      diskMb: 50 * 1024,
+      region: "us-east",
+      idleMinutes: 30,
+      destroyAfterRestingMinutes: null,
+    });
+  });
+
   it("keeps a remembered growing start at its chosen disk", () => {
     const remembered: StageShape = {
       ...size(4, 8, 30),
@@ -861,7 +931,7 @@ describe("growing Linux starting sizes", () => {
     },
   );
 
-  it("uses the selected disk for both prices and matches the smallest start without disk", () => {
+  it("uses the selected or rung disk for prices and matches the smallest start", () => {
     const thirtyGb = size(4, 8, 30);
     expect(stagePrice(catalogue, thirtyGb)).toMatchObject({
       awakeMcPerHour: 261,
@@ -870,6 +940,13 @@ describe("growing Linux starting sizes", () => {
     expect(stagePrice(catalogue, size(2, 4, 200))?.offer).toEqual({
       startAwakeMc: 156,
       ceilingAwakeMc: 1_465,
+    });
+    expect(stagePrice(catalogue, { ...size(2, 4, 50), diskMb: null })).toEqual({
+      awakeMcPerHour: 135,
+      suspendedMcPerHour: 7,
+      stoppedMcPerHour: 7,
+      exact: true,
+      offer: { startAwakeMc: 135, ceilingAwakeMc: 1_444 },
     });
     // A disk must be whole GB within the bounds to be priced.
     expect(stagePrice(catalogue, size(2, 4, 30.5))).toBeNull();
@@ -883,7 +960,32 @@ describe("growing Linux starting sizes", () => {
     });
   });
 
-  it("applies the pricing multiplier to compute, storage and the source quote", () => {
+  it("does not mark a growing shape staged when only one dimension matches the minimum", () => {
+    const [provider] = catalogue.providers;
+    const shapes = provider.shapes;
+    if (shapes === null) {
+      throw new Error("Expected listed growing sizes");
+    }
+    const minimum = shapes[0];
+    const siblings = {
+      ...catalogue,
+      providers: [
+        {
+          ...provider,
+          shapes: [
+            minimum,
+            { ...minimum, memoryMb: 8 * 1024, default: false },
+            { ...minimum, cpus: 4, default: false },
+          ],
+        },
+      ],
+    };
+
+    expect(stageSmallestShape(siblings, size(2, 8, 50))?.isStaged).toBe(false);
+    expect(stageSmallestShape(siblings, size(4, 4, 50))?.isStaged).toBe(false);
+  });
+
+  it("applies the pricing multiplier to compute and storage", () => {
     const [provider] = catalogue.providers;
     const [region] = provider.regions;
     const rates = region.pricing;
@@ -905,26 +1007,50 @@ describe("growing Linux starting sizes", () => {
 
   it("uses the region's varied unit rates for a growing start and ceiling", () => {
     const [provider] = catalogue.providers;
-    const [region] = provider.regions;
-    const rates = region.pricing;
-    if (rates === null) throw new Error("Expected auto-sizing unit rates");
-    const varied = catalogueWithRegion({
-      ...region,
-      pricing: {
-        ...rates,
-        vcpuHourMillicredits: 40,
-        memoryGbHourMillicredits: 15,
-        diskGbHourMillicredits: 0.2,
-      },
-      fromPriceMcPerHour: { awakeMc: 150, suspendedMc: 10, stoppedMc: 10 },
-    });
+    const [east] = provider.regions;
+    const varied = autoSizingCatalogueWithRegions([
+      east,
+      autoSizingAlternateRegion(),
+    ]);
 
-    expect(stagePrice(varied, size(4, 8, 30))).toEqual({
+    expect(stagePrice(varied, sizeInRegion(4, 8, 30, "us-west"))).toEqual({
       awakeMcPerHour: 286,
       suspendedMcPerHour: 6,
       stoppedMcPerHour: 6,
       exact: true,
       offer: { startAwakeMc: 286, ceilingAwakeMc: 1_606 },
+    });
+  });
+
+  it("selects the Linux provider when a Windows provider is listed first", () => {
+    const [linux] = catalogue.providers;
+    const [region] = linux.regions;
+    const windows = {
+      ...linux,
+      provider: "windows-test",
+      os: ["windows"] as const,
+      shapes: null,
+      regions: [
+        {
+          ...region,
+          pricing: null,
+          shapePrices: [],
+          fromPriceMcPerHour: {
+            awakeMc: 900,
+            suspendedMc: 90,
+            stoppedMc: 90,
+          },
+        },
+      ],
+    };
+    const mixed: SandboxCatalogue = {
+      ...catalogue,
+      providers: [windows, linux],
+    };
+
+    expect(stagePrice(mixed, size(4, 8, 50))).toMatchObject({
+      awakeMcPerHour: 263,
+      offer: { startAwakeMc: 263, ceilingAwakeMc: 1_444 },
     });
   });
 
@@ -1016,6 +1142,15 @@ describe("growing Linux starting sizes", () => {
         size(2, 4, 50),
       ),
     ).toBeNull();
+    expect(
+      stagePrice(autoSizingScalarNoRatesCatalogue(), size(2, 4, 50)),
+    ).toEqual({
+      awakeMcPerHour: 135,
+      suspendedMcPerHour: 7,
+      stoppedMcPerHour: 7,
+      exact: true,
+      offer: null,
+    });
   });
 
   it("matches growing rungs by compute and memory while fixed rungs retain disk matching", () => {

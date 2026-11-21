@@ -74,7 +74,12 @@ import type {
 } from "@/lib/sandboxes/staged-sandbox-run";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import { autoSizingCatalogue } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
+import {
+  autoSizingAlternateRegion,
+  autoSizingCatalogue,
+  autoSizingCatalogueWithRegions,
+  autoSizingScalarNoRatesCatalogue,
+} from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selection-store";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import {
@@ -1088,7 +1093,14 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
   ])(
     "prices a resting sandbox of a $size size from its list row, exactly",
     ({ row, line, state }) => {
-      mocks.sandboxes = [sandboxSummaryFixture({ id: "sbx-1", state, ...row })];
+      mocks.sandboxes = [
+        sandboxSummaryFixture({
+          id: "sbx-distractor",
+          state: "suspended",
+          priceMcPerHour: { awakeMc: 210, suspendedMc: 4, stoppedMc: 2 },
+        }),
+        sandboxSummaryFixture({ id: "sbx-1", state, ...row }),
+      ];
       stageExisting();
       mount(vi.fn());
 
@@ -1113,6 +1125,7 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
         cpus: 4,
         memoryMb: 8_192,
         diskMb: 204_800,
+        region: "us-east",
       },
     });
     mount(vi.fn());
@@ -1120,6 +1133,43 @@ describe("useStagedSandboxSend's setup line prices and names what it stages", ()
     expect(detail()).toContain(
       "$0.28–$1.47 an hour while awake · uses your credits",
     );
+  });
+
+  it("uses a selected alternate region's rates on the staged setup line", () => {
+    const [provider] = autoSizingCatalogue().providers;
+    const [east] = provider.regions;
+    mocks.catalogue = autoSizingCatalogueWithRegions([
+      east,
+      autoSizingAlternateRegion(),
+    ]);
+    stageCreated("booting", null);
+    const current = readStagedSandbox(SURFACE);
+    if (current === null || current.target.kind !== "new") {
+      throw new Error("Expected the staged new sandbox");
+    }
+    useStagedSandboxStore.getState().setTarget(SURFACE, {
+      ...current.target,
+      shape: {
+        ...current.target.shape,
+        cpus: 4,
+        memoryMb: 8_192,
+        diskMb: 204_800,
+        region: "us-west",
+      },
+    });
+    mount(vi.fn());
+
+    expect(detail()).toContain(
+      "$0.32–$1.64 an hour while awake · uses your credits",
+    );
+  });
+
+  it("shows a scalar exact quote without unit rates or an offer on a staged create", () => {
+    mocks.catalogue = autoSizingScalarNoRatesCatalogue();
+    stageCreated("booting", null);
+    mount(vi.fn());
+
+    expect(detail()).toContain("$0.14 an hour while awake · uses your credits");
   });
 
   it("says the hour is billed, unpriced, when the row names no rate", () => {

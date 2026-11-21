@@ -6,8 +6,12 @@ import {
   servedMinutes,
 } from "@/lib/sandboxes/__tests__/sandbox-catalogue-fixture";
 import {
+  AUTO_SIZING_RUNGS,
+  autoSizingAlternateRegion,
   autoSizingCatalogue,
+  autoSizingCatalogueWithRegions,
   autoSizingListedNoRatesCatalogue,
+  autoSizingScalarNoRatesCatalogue,
 } from "@/lib/sandboxes/__tests__/sandbox-auto-sizing-fixture";
 import type {
   StageConfiguration,
@@ -398,6 +402,7 @@ describe("<SandboxShapeSheet />", () => {
     }
     expect(disk.getAttribute("min")).toBe("10");
     expect(disk.getAttribute("max")).toBe("200");
+    expect(disk.getAttribute("step")).toBe("1");
     expect(disk.value).toBe("50");
 
     const size = screen.getByRole("combobox", { name: "Size" });
@@ -448,18 +453,92 @@ describe("<SandboxShapeSheet />", () => {
     });
   });
 
-  it("shows a listed no-rates offer at 50 GB and no price for an unlisted 30 GB disk", () => {
-    catalogueInUse = autoSizingListedNoRatesCatalogue();
+  it("keeps the growing rung's 50 GB disk when the provider default is 60 GB", () => {
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    catalogueInUse = {
+      ...base,
+      providers: [
+        {
+          ...provider,
+          shape: { ...provider.shape, diskDefaultMb: 60 * GIB },
+        },
+      ],
+    };
     renderSheet(vi.fn());
 
     const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
     if (!(disk instanceof HTMLInputElement)) {
       throw new Error("Expected Disk (GB) to be an input");
     }
+    expect(disk.value).toBe("50");
+    fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+    expect(
+      screen.getByRole("option", {
+        name: "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+      }).textContent,
+    ).toBe("2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h");
+  });
+
+  it("shows Disk when a listed ladder contains both growing and fixed rungs", () => {
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    const [growingRung, fixedCandidate] = AUTO_SIZING_RUNGS;
+    const fixedRung: SandboxShapeRung = {
+      cpus: fixedCandidate.cpus,
+      memoryMb: fixedCandidate.memoryMb,
+      diskMb: fixedCandidate.diskMb,
+      default: false,
+    };
+    catalogueInUse = {
+      ...base,
+      providers: [{ ...provider, shapes: [growingRung, fixedRung] }],
+    };
+    renderSheet(vi.fn());
+
+    expect(screen.getByRole("spinbutton", { name: "Disk (GB)" })).toBeDefined();
     const size = screen.getByRole("combobox", { name: "Size" });
-    fireEvent.click(size);
-    const listedText =
-      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.50/h";
+    expect(size.textContent).toBe(
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    );
+  });
+
+  it("prices a selected nonfirst region from its unit rates", () => {
+    const [provider] = autoSizingCatalogue().providers;
+    const [east] = provider.regions;
+    catalogueInUse = autoSizingCatalogueWithRegions([
+      east,
+      autoSizingAlternateRegion(),
+    ]);
+    renderSheet(vi.fn());
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Sandbox region" }));
+    fireEvent.click(screen.getByRole("option", { name: "US West" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+    expect(
+      screen.getByRole("option", {
+        name: "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.15–$1.61/h",
+      }).textContent,
+    ).toBe("2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.15–$1.61/h");
+    expect(
+      screen.getByRole("option", {
+        name: "4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · $0.29–$1.61/h",
+      }).textContent,
+    ).toBe("4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · $0.29–$1.61/h");
+  });
+
+  function expectNoRatesDiskQuote(
+    catalogue: SandboxCatalogue,
+    listedText: string,
+  ): void {
+    catalogueInUse = catalogue;
+    renderSheet(vi.fn());
+
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(disk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
     expect(screen.getByRole("option", { name: listedText }).textContent).toBe(
       listedText,
     );
@@ -469,28 +548,103 @@ describe("<SandboxShapeSheet />", () => {
     expect(screen.getByRole("option", { name: unpricedText }).textContent).toBe(
       unpricedText,
     );
+  }
+
+  it("shows a listed no-rates offer at 50 GB and no price for an unlisted 30 GB disk", () => {
+    expectNoRatesDiskQuote(
+      autoSizingListedNoRatesCatalogue(),
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.50/h",
+    );
   });
 
-  it.each(["5", "", "201", "30.5"])(
-    "names the disk bounds and omits growing option rates when the disk input is invalid (%s GB)",
-    (diskGb) => {
-      catalogueInUse = autoSizingCatalogue();
-      renderSheet(vi.fn());
+  it("shows a scalar exact no-rates quote at 50 GB and no price at 30 GB", () => {
+    expectNoRatesDiskQuote(
+      autoSizingScalarNoRatesCatalogue(),
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14/h",
+    );
+  });
 
-      const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
-      if (!(disk instanceof HTMLInputElement)) {
-        throw new Error("Expected Disk (GB) to be an input");
-      }
-      fireEvent.change(disk, { target: { value: diskGb } });
-      expect(
-        screen.getByTestId("sandbox-shape-sheet-problem").textContent,
-      ).toBe("Disk must be between 10 and 200 GB.");
-      fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+  function expectDiskInput(
+    diskGb: string,
+    min: number,
+    max: number,
+    pricedLabel: string | null,
+  ): void {
+    const base = autoSizingCatalogue();
+    const [provider] = base.providers;
+    catalogueInUse = {
+      ...base,
+      providers: [
+        {
+          ...provider,
+          shape: {
+            ...provider.shape,
+            diskMinMb: min * GIB,
+            diskMaxMb: max * GIB,
+            diskDefaultMb: 50 * GIB,
+          },
+        },
+      ],
+    };
+    renderSheet(vi.fn());
 
+    const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
+    if (!(disk instanceof HTMLInputElement)) {
+      throw new Error("Expected Disk (GB) to be an input");
+    }
+    expect(disk.getAttribute("min")).toBe(String(min));
+    expect(disk.getAttribute("max")).toBe(String(max));
+    fireEvent.change(disk, { target: { value: diskGb } });
+    const problemLine = screen.queryByTestId("sandbox-shape-sheet-problem");
+    if (pricedLabel === null) {
+      expect(problemLine?.textContent).toBe(
+        `Disk must be between ${min} and ${max} GB.`,
+      );
+    } else {
+      expect(problemLine).toBeNull();
+    }
+    fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
+
+    if (pricedLabel === null) {
       const labels = screen
         .getAllByRole("option")
         .map((option) => option.textContent);
       for (const label of labels) expect(label).not.toContain("/h");
+    } else {
+      expect(
+        screen.getByRole("option", { name: pricedLabel }).textContent,
+      ).toBe(pricedLabel);
+    }
+  }
+
+  it.each(["5", "", "201", "30.5"])(
+    "names the disk bounds and omits growing option rates when the disk input is invalid (%s GB)",
+    (diskGb) => {
+      expectDiskInput(diskGb, 10, 200, null);
+    },
+  );
+
+  it.each([
+    {
+      diskGb: "19",
+      pricedLabel: null,
+    },
+    {
+      diskGb: "101",
+      pricedLabel: null,
+    },
+    {
+      diskGb: "20",
+      pricedLabel: "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.13–$1.44/h",
+    },
+    {
+      diskGb: "100",
+      pricedLabel: "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.45/h",
+    },
+  ])(
+    "uses narrower catalogue disk bounds for $diskGb GB",
+    ({ diskGb, pricedLabel }) => {
+      expectDiskInput(diskGb, 20, 100, pricedLabel);
     },
   );
 
@@ -1020,6 +1174,23 @@ describe("<SandboxShapeSheet />", () => {
       fireEvent.blur(input);
 
       expect(questions().map((shape) => shape.cpus)).toEqual([2, 4]);
+    });
+
+    it("holds readiness while the disk is edited, then asks with the committed disk", () => {
+      catalogueInUse = autoSizingCatalogue();
+      renderSheet(vi.fn());
+      expect(questions().map((shape) => shape.diskMb)).toEqual([50 * GIB]);
+
+      const disk = type("sandbox-shape-sheet-disk", "30");
+      expect(questions().map((shape) => shape.diskMb)).toEqual([50 * GIB]);
+      expect(screen.queryByTestId("sandbox-shape-sheet-readiness")).toBeNull();
+
+      fireEvent.blur(disk);
+
+      expect(questions().map((shape) => shape.diskMb)).toEqual([
+        50 * GIB,
+        30 * GIB,
+      ]);
     });
 
     it("asks about a typed number on Enter without a blur", () => {

@@ -544,13 +544,25 @@ describe("the Settings Details drawer's sandbox provider", () => {
   });
 
   it("shows the state, growing size and server region label in the status summary", async () => {
+    const distractor = sandboxSummaryFixture({
+      id: "sbx-other",
+      state: "stopped",
+      cpus: 8,
+      memoryMb: 16_384,
+      diskMb: 51_200,
+      regionLabel: "Elsewhere",
+      priceMcPerHour: { awakeMc: 900, suspendedMc: 20, stoppedMc: 20 },
+    });
     const summary = sandboxSummaryFixture({
       ...AUTO_SIZING_GROWING_SUMMARY_OVERRIDES,
       id: "sbx-1",
       region: "us-west-3",
       regionLabel: "United States (West)",
     });
-    const queryClient = await listedOnce([{ sandboxes: [summary] }], "u-me");
+    const queryClient = await listedOnce(
+      [{ sandboxes: [distractor, summary] }],
+      "u-me",
+    );
 
     const entry = await loadSandboxDetails(queryClient, "sbx-1");
 

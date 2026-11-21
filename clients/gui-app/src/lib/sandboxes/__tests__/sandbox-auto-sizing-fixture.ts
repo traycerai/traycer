@@ -1,5 +1,6 @@
 import type {
   SandboxCatalogue,
+  SandboxCatalogueRegion,
   SandboxSummary,
   SandboxShapeRung,
 } from "@traycer/protocol/host/sandbox-control";
@@ -112,6 +113,37 @@ export function autoSizingCatalogue(): SandboxCatalogue {
   };
 }
 
+export function autoSizingCatalogueWithRegions(
+  regions: readonly SandboxCatalogueRegion[],
+): SandboxCatalogue {
+  const catalogue = autoSizingCatalogue();
+  const [provider] = catalogue.providers;
+  return {
+    ...catalogue,
+    providers: [{ ...provider, regions }],
+  };
+}
+
+export function autoSizingAlternateRegion(): SandboxCatalogueRegion {
+  const [provider] = autoSizingCatalogue().providers;
+  const [region] = provider.regions;
+  const rates = region.pricing;
+  if (rates === null) throw new Error("Expected auto-sizing unit rates");
+  return {
+    ...region,
+    id: "us-west",
+    label: "US West",
+    pricing: {
+      ...rates,
+      vcpuHourMillicredits: 40,
+      memoryGbHourMillicredits: 15,
+      diskGbHourMillicredits: 0.2,
+    },
+    shapePrices: [],
+    fromPriceMcPerHour: { awakeMc: 150, suspendedMc: 10, stoppedMc: 10 },
+  };
+}
+
 export function autoSizingListedNoRatesCatalogue(): SandboxCatalogue {
   const catalogue = autoSizingCatalogue();
   const [provider] = catalogue.providers;
@@ -135,6 +167,37 @@ export function autoSizingListedNoRatesCatalogue(): SandboxCatalogue {
                   suspendedMc: 9,
                   stoppedMc: 9,
                   offer: { startAwakeMc: 140, ceilingAwakeMc: 1_500 },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+export function autoSizingScalarNoRatesCatalogue(): SandboxCatalogue {
+  const catalogue = autoSizingListedNoRatesCatalogue();
+  const [provider] = catalogue.providers;
+  const [region] = provider.regions;
+  return {
+    ...catalogue,
+    providers: [
+      {
+        ...provider,
+        regions: [
+          {
+            ...region,
+            shapePrices: [
+              {
+                cpus: 2,
+                memoryMb: 4_096,
+                diskMb: 51_200,
+                priceMcPerHour: {
+                  awakeMc: 135,
+                  suspendedMc: 7,
+                  stoppedMc: 7,
                 },
               },
             ],
