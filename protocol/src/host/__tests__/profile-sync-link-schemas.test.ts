@@ -329,6 +329,7 @@ const STOP_STEPS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ["status", { kind: "status", claimId: CLAIM_ID }],
   ["closed", { kind: "closed", claimId: CLAIM_ID, generation: 4 }],
   ["abort", { kind: "abort", claimId: CLAIM_ID }],
+  ["leave", { kind: "leave" }],
 ];
 
 const STOP_RESPONSES: ReadonlyArray<
@@ -381,6 +382,13 @@ describe("stopLink one-keeper steps", () => {
     ).toEqual([false, false]);
     expect(
       parsesRequest(stopRequest({ ...PREPARE, visited: ["host-a"] })),
+    ).toBe(false);
+  });
+
+  it("refuses a leave step that carries a claimId", () => {
+    expect(parsesRequest(stopRequest({ kind: "leave" }))).toBe(true);
+    expect(
+      parsesRequest(stopRequest({ kind: "leave", claimId: CLAIM_ID })),
     ).toBe(false);
   });
 

@@ -420,6 +420,12 @@ export const hostProfileSyncStopLinkRequestSchema = lazySchema(() =>
         kind: z.literal("abort"),
         claimId: stopClaimIdSchema,
       }),
+      /** No claim: the sender has nothing to hand over this link (a key, an
+       * account none of its links is pinned to, or ends pinned to different
+       * accounts). The one step authorised by the link: the sender must be
+       * its recorded peer. The receiver ends that one link, erases nothing
+       * and answers `ok`, as it does for a link already ended. */
+      z.strictObject({ kind: z.literal("leave") }),
     ]),
   }),
 );
@@ -459,7 +465,7 @@ export const hostProfileSyncStopLinkResponseSchema = lazySchema(() =>
     }),
     /** The answer to `closed`: the keeper counts the member closed. */
     z.strictObject({ result: z.literal("closed") }),
-    /** The answer to `abort`: the claim is dropped. */
+    /** The answer to `abort` (the claim is dropped) and to `leave`. */
     z.strictObject({ result: z.literal("ok") }),
     /** Any step: nothing changed on the receiver. `keychain-locked` and
      * `transfer-failed` are asked again. */
