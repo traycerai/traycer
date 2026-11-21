@@ -399,7 +399,6 @@ describe("<SandboxShapeSheet />", () => {
     expect(disk.getAttribute("min")).toBe("10");
     expect(disk.getAttribute("max")).toBe("200");
     expect(disk.value).toBe("50");
-    expect(screen.queryByRole("option", { name: /1 vCPU · 1 GB/ })).toBeNull();
 
     const size = screen.getByRole("combobox", { name: "Size" });
     expect(size.textContent).toContain(
@@ -410,28 +409,15 @@ describe("<SandboxShapeSheet />", () => {
     ).toBe("Suspended: $0.01/h · Stopped: $0.01/h");
     fireEvent.click(size);
     expect(
-      screen.getByRole("option", {
-        name: "4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · $0.26–$1.44/h",
-      }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("option", {
-        name: "8 vCPU · 16 GB, grows to 16 vCPU · 64 GB · $0.52–$1.44/h",
-      }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("option", {
-        name: "8 vCPU · 32 GB, grows to 16 vCPU · 64 GB · $0.73–$1.44/h",
-      }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("option", {
-        name: "16 vCPU · 32 GB, grows to 16 vCPU · 64 GB · $1.03–$1.44/h",
-      }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("option", { name: "16 vCPU · 64 GB · $1.44/h" }),
-    ).toBeTruthy();
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([
+      "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+      "4 vCPU · 8 GB, grows to 16 vCPU · 64 GB · $0.26–$1.44/h",
+      "8 vCPU · 16 GB, grows to 16 vCPU · 64 GB · $0.52–$1.44/h",
+      "8 vCPU · 32 GB, grows to 16 vCPU · 64 GB · $0.73–$1.44/h",
+      "16 vCPU · 32 GB, grows to 16 vCPU · 64 GB · $1.03–$1.44/h",
+      "16 vCPU · 64 GB · $1.44/h",
+    ]);
 
     fireEvent.change(disk, { target: { value: "200" } });
     expect(

@@ -130,7 +130,7 @@ describe("sandboxDetailsEntry", () => {
     expect(entry.export().status.Region).toBe("United States (West)");
   });
 
-  it("shows a growing size in the Details shape and status line", () => {
+  it("shows a growing size in the Details Shape row", () => {
     const entry = sandboxDetailsEntry({
       summary: sandboxSummaryFixture({
         cpus: 2,
@@ -544,20 +544,22 @@ describe("the Settings Details drawer's sandbox provider", () => {
     expect(exported).not.toContain("/home/dev");
   });
 
-  it("names the region by the server's label in the status summary, never its id", async () => {
+  it("shows the state, growing size and server region label in the status summary", async () => {
     const summary = sandboxSummaryFixture({
       id: "sbx-1",
       region: "us-west-3",
       regionLabel: "United States (West)",
+      cpus: 2,
+      memoryMb: 4_096,
+      grows: { cpus: 16, memoryMb: 65_536 },
     });
     const queryClient = await listedOnce([{ sandboxes: [summary] }], "u-me");
 
     const entry = await loadSandboxDetails(queryClient, "sbx-1");
 
-    expect(entry.status().summary.endsWith("· United States (West)")).toBe(
-      true,
+    expect(entry.status().summary).toBe(
+      "Awake · Linux · 2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · United States (West)",
     );
-    expect(entry.status().summary).not.toContain("us-west-3");
   });
 
   it("omits the Region summary part for a row the server sends no label for", async () => {
