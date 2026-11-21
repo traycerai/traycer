@@ -530,7 +530,16 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
     messenger,
   });
   spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-1",
+      // The send leaves as the signed-in viewer.
+      identity: {
+        userId: VIEWER_USER_ID,
+        username: "olive",
+        providerHandle: null,
+      },
+    }),
   );
   return spine.createRequester(mockRemoteHostEntry);
 }
@@ -592,6 +601,8 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
                 botId={BOT_ID}
                 hostId={HOST_ID}
                 boundHostId={HOST_ID}
+                boundHostEpoch={1}
+                onBindingMoved={vi.fn()}
                 imageReach="none"
                 answerReach="each"
                 replyReach={panelReplyReach}
@@ -1486,6 +1497,7 @@ describe("<BotThreadPanel /> the anchor", () => {
       senderUserId: null,
       sentAt: 1_000,
       delivery: "written",
+      provisional: false,
     };
     mountPanel(listed("user-teammate"), []);
     const pending = within(screen.getByTestId("bot-thread-anchor"));

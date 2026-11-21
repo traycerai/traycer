@@ -5,6 +5,7 @@
  * the channel PASSES them is what is asserted: the thread line it draws under
  * each post, the chat the thread panel reads, and where each box writes.
  */
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
@@ -252,10 +253,15 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({
-    mutate: mocks.send,
-    mutateAsync: mocks.sendAsync,
+    mutate: (
+      variables: { readonly request: BotConversationSendRequest },
+      options: { onError: (error: HostRpcError) => void },
+    ) => mocks.send(variables.request, options),
+    mutateAsync: (variables: {
+      readonly request: BotConversationSendRequest;
+    }) => mocks.sendAsync(variables.request),
     isPending: mocks.state.sending,
-    variables: { redeliver: null },
+    variables: { request: { redeliver: null } },
   }),
 }));
 vi.mock("@/lib/host-error-toast", () => ({
@@ -416,15 +422,20 @@ vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
             type="button"
             data-testid={`stub-${props.testId}-sent`}
             onClick={() =>
-              props.onSent(mocks.sendResponse, POSTED_TEXT, {
-                type: "doc",
-                content: [
-                  {
-                    type: "paragraph",
-                    content: [{ type: "text", text: POSTED_TEXT }],
-                  },
-                ],
-              })
+              props.onSent(
+                mocks.sendResponse,
+                POSTED_TEXT,
+                {
+                  type: "doc",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: POSTED_TEXT }],
+                    },
+                  ],
+                },
+                currentBotLifetime(),
+              )
             }
           />
         </div>
@@ -645,11 +656,13 @@ function mount(options: MountOptions): {
           <TooltipProvider>
             <ChatExpansionTestProviders tileInstanceId="tile-1">
               <BotChannelView
+                replyMode="direct"
                 tiles={mountTiles}
                 botId={BOT_ID}
                 hostId={HOST_ID}
                 boundHostId={mocks.state.binding.hostId}
                 boundHostEpoch={mocks.state.binding.epoch}
+                onBindingMoved={vi.fn()}
                 botTitle="Release Bot"
                 directive={null}
                 appConversationChatId={mocks.state.appConversationChatId}
@@ -2716,6 +2729,7 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
       senderUserId: null,
       sentAt: 5_000,
       delivery: "written",
+      provisional: false,
     },
   };
 

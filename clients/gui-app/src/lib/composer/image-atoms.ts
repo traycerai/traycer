@@ -55,6 +55,22 @@ export function collectImageAtoms(
   return out;
 }
 
+/**
+ * The `imageAttachment` nodes of `content` that `collectImageAtoms` reads as
+ * images, as they are, in document order.
+ */
+export function collectImageAttachmentNodes(
+  content: JsonContent,
+): ReadonlyArray<JsonContent> {
+  const out: JsonContent[] = [];
+  walk(content, (node) => {
+    if (node.type !== "imageAttachment") return false;
+    if (atomFromAttrs(node.attrs) !== null) out.push(node);
+    return false;
+  });
+  return out;
+}
+
 export function containsImageAtoms(content: JsonContent): boolean {
   return walk(content, (node) => node.type === "imageAttachment");
 }

@@ -20,6 +20,8 @@ import {
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 function model(id: string, content: string): ChatMessageModel {
   return {
     id,
@@ -288,6 +290,7 @@ describe("stable rows across a send's void", () => {
     const before = opened(["a", "b", "c"]);
     const held = computeStableTranscriptListRows(
       transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
         window: before,
         rendered: [],
         splitLongTurns: true,
@@ -305,6 +308,7 @@ describe("stable rows across a send's void", () => {
     });
     const throughVoid = computeStableTranscriptListRows(
       transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
         window: voided,
         rendered: [],
         splitLongTurns: true,
@@ -326,6 +330,7 @@ describe("stable rows across a send's void", () => {
 
     const replaced = computeStableTranscriptListRows(
       transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
         splitLongTurns: true,
         window: skeletonChunk(voided, ["a", "b", "c", "d"]),
         rendered: [],

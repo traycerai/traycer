@@ -277,9 +277,53 @@ export const botConversationSendRequestSchemaV15 = lazySchema(() =>
  * never set with `answer`, `answers`, `redeliver` or `supersedes`, whose
  * message is already tied to the one it answers or replaces.
  */
-export const botConversationSendRequestSchema = lazySchema(() =>
+export const botConversationSendRequestSchemaV16 = lazySchema(() =>
   botConversationSendRequestSchemaV15.extend({
     replyTo: z.string().min(1).max(255).optional(),
+  }),
+);
+
+/**
+ * The binding a send that carries a nonce was made for (T249): the bot's
+ * bound host and its epoch as the client read them from the bot's record
+ * (`boundHostId`, `hostEpoch`). Part of the send's identity
+ * (`botSendRequestId`), which is never derived again under another binding.
+ *
+ * An old authority is not refused on sight. The bound host looks the request
+ * up before it compares: when the send's chat, as it holds it under the
+ * binding it restored and verified, has this member's row of the request,
+ * it answers from that row whatever the authority, so a Retry across a
+ * re-claim by the same host can find its row. Only on a miss does it
+ * compare the authority with its binding, and refuse one that is no longer
+ * the bot's with `E_BOT_AUTHORITY_MOVED`, before this attempt's row
+ * (`notWritten`). The miss speaks for that attempt only: an earlier one may
+ * have been written where this host's store does not show it. A host the
+ * bot is not bound to takes no nonce send and refuses it the same way.
+ */
+export const botSendAuthoritySchema = lazySchema(() =>
+  z.object({
+    hostId: z.string().min(1).max(255),
+    hostEpoch: z.number().int().nonnegative(),
+  }),
+);
+export type BotSendAuthority = z.infer<typeof botSendAuthoritySchema>;
+
+/**
+ * `bot.conversation.send@1.7`: the send's nonce (T249), a UUID the client
+ * mints once per message and sends again, unchanged, with every retry of
+ * it, and the binding it was made for (`authority`), which a nonce always
+ * carries. The host derives the request id from the send's destination, its
+ * authenticated sender, the authority and this nonce (`botSendRequestId`), so
+ * the client knows the stored row's id before the host answers, and a retry
+ * that reaches the host which already wrote the row answers from that row.
+ * Absent for a send whose id the host mints; never set with `redeliver`,
+ * `answer`, `answers` or `supersedes`, whose ids are already fixed. Only the
+ * bot's bound host takes a nonce: it never rides a mailbox delivery.
+ */
+export const botConversationSendRequestSchema = lazySchema(() =>
+  botConversationSendRequestSchemaV16.extend({
+    sendNonce: z.uuid().optional(),
+    authority: botSendAuthoritySchema.optional(),
   }),
 );
 export type BotConversationSendRequest = z.infer<

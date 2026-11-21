@@ -797,6 +797,8 @@ export function Page(): ReactElement {
                     openExchange={null}
                     exchangeRail={{ open: noop, close: noop }}
                     setupHistory={null}
+                    replyMode="direct"
+                    onBindingMoved={noop}
                   />
                 ) : (
                   <BotThreadsView

@@ -89,6 +89,8 @@ import {
   type ChatLowerTurnState,
 } from "@/components/epic-canvas/renderers/chat-tile-lower-surfaces";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 const GUI_APP_SRC = path.resolve(__dirname, "../../..");
 
 /** Pseudo-element seal shared by ChatComposer and ComposerSlotShell. */
@@ -157,6 +159,7 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
         <div style={{ height: 700, width: 800 }}>
           <ChatTimeline
             rows={transcriptListRows({
+              pendingOwnedRowIds: NO_PENDING_ROWS,
               splitLongTurns: true,
               window: null,
               rendered: [makeMessage(0, "user")],

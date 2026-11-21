@@ -20,11 +20,14 @@ import {
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 /** The channel's rows as the real list builder makes them on the legacy line. */
 function channelRows(
   ...createdAts: ReadonlyArray<number>
 ): readonly TranscriptListRow[] {
   return transcriptListRows({
+    pendingOwnedRowIds: NO_PENDING_ROWS,
     window: null,
     rendered: createdAts.map((createdAt, index) =>
       makeMessageAt(index, "user", createdAt),
@@ -235,6 +238,7 @@ describe("createBotExchangeLineCollator across updates", () => {
     ]);
 
     const slid = transcriptListRows({
+      pendingOwnedRowIds: NO_PENDING_ROWS,
       window: null,
       rendered: [makeMessageAt(1, "user", 400), makeMessageAt(2, "user", 500)],
       splitLongTurns: false,
@@ -336,6 +340,7 @@ function windowedRows(
 ): readonly TranscriptListRow[] {
   const ids = ["message-0", "message-1", "message-2"];
   return transcriptListRows({
+    pendingOwnedRowIds: NO_PENDING_ROWS,
     window: windowOver(ids, hydrated),
     rendered: hydrated.map((ordinal) =>
       makeMessageAt(ordinal, "user", 100 + ordinal * 200),

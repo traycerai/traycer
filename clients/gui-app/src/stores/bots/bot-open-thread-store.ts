@@ -1,4 +1,10 @@
 import { create } from "zustand";
+import {
+  currentBotLifetime,
+  retireAtBotLifetimeEdge,
+} from "@/lib/bots/bot-lifetime";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
+import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationSendDelivery,
@@ -46,6 +52,13 @@ export interface BotSentPost {
   readonly sentAt: number;
   /** `queued`: it waits for the bot's host, and the panel says so under it. */
   readonly delivery: BotConversationSendDelivery;
+  /**
+   * Opened at Send, before the host answered (T249): `threadId` is the one
+   * the post's id derives, and the send's receipt or refusal settles it
+   * (`settleSentThread`). `false` once settled, and for a thread opened as a
+   * send was accepted.
+   */
+  readonly provisional: boolean;
 }
 
 /**
@@ -197,9 +210,106 @@ function threadOf(
   return thread;
 }
 
+/**
+ * A thread a rail holds, open or behind another panel: `shown` while it is
+ * the thread the rail draws (its own, or the one a search shows), and the
+ * rail with it replaced by `next`, or without it (`null`).
+ */
+export interface BotHeldThread {
+  readonly thread: BotOpenThread;
+  readonly shown: boolean;
+  readonly replace: (next: BotOpenThread | null) => BotRail | null;
+}
+
+/**
+ * Every thread `rail` holds, in the order the rail brings them back: its own,
+ * the one memory displaced, the one a search shows, then those behind a
+ * pair's log or a search. A thread opened at Send can sit in any of them but
+ * a search's own, which only a search landing writes, with no post sent.
+ */
+export function heldThreadsOf(
+  rail: BotRail | null,
+): ReadonlyArray<BotHeldThread> {
+  if (rail === null) return [];
+  switch (rail.kind) {
+    case "thread":
+      return [
+        {
+          thread: threadOf(rail),
+          shown: true,
+          replace: (next) =>
+            next === null ? null : { kind: "thread", ...next },
+        },
+      ];
+    case "memory":
+      return rail.back === null
+        ? []
+        : [
+            {
+              thread: rail.back,
+              shown: false,
+              replace: (next) => ({ kind: "memory", back: next }),
+            },
+          ];
+    case "exchange":
+      return heldBehind(rail, heldThreadsOf(rail.back));
+    case "search":
+      return [
+        ...shownBySearch(rail),
+        ...heldBehind(rail, heldThreadsOf(rail.back)),
+      ];
+  }
+}
+
+/** The thread one of `search`'s results opened, taken back to the results. */
+function shownBySearch(
+  search: { readonly kind: "search" } & BotOpenSearch,
+): ReadonlyArray<BotHeldThread> {
+  const { showing } = search;
+  if (showing.kind !== "thread") return [];
+  return [
+    {
+      thread: showing.thread,
+      shown: true,
+      replace: (next) => ({
+        ...search,
+        showing:
+          next === null
+            ? { kind: "results" }
+            : { kind: "thread", thread: next },
+      }),
+    },
+  ];
+}
+
+/** The threads `over` holds behind it, each rebuilt under it. */
+function heldBehind(
+  over:
+    | ({ readonly kind: "exchange" } & BotOpenExchange)
+    | ({ readonly kind: "search" } & BotOpenSearch),
+  held: ReadonlyArray<BotHeldThread>,
+): ReadonlyArray<BotHeldThread> {
+  return held.map((entry) => ({
+    thread: entry.thread,
+    shown: false,
+    replace: (next) => ({ ...over, back: entry.replace(next) }),
+  }));
+}
+
 interface BotOpenThreadState {
   readonly byBotId: Readonly<Record<string, BotRail>>;
-  readonly setRail: (botId: string, rail: BotRail | null) => void;
+  /**
+   * Puts `rail` in `botId`'s slot, or empties it, for an operation of bot
+   * lifetime `lifetime`: the lifetime its control was drawn in, or the one
+   * an async step was started in. An operation of an ended lifetime changes
+   * nothing, so a rail read before an account change is never written back
+   * after it.
+   */
+  readonly setRail: (
+    botId: string,
+    rail: BotRail | null,
+    lifetime: number,
+  ) => void;
 }
 
 /**
@@ -208,22 +318,150 @@ interface BotOpenThreadState {
  * started yet still opens as the box that starts it). Closing the surface
  * drops its entry. Not persisted: after a restart the rail is what the
  * surface's route names for the channel (`useTracyPlaceRoute`), and nothing
- * where it names none.
+ * where it names none. Every change of account empties it, at the bot
+ * lifetime's edge.
  */
 export const useBotOpenThreadStore = create<BotOpenThreadState>()((set) => ({
   byBotId: {},
-  setRail: (botId, rail) =>
+  setRail: (botId, rail, lifetime) => {
+    if (lifetime !== currentBotLifetime()) return;
     set((state) => {
       const next = { ...state.byBotId };
       if (rail === null) delete next[botId];
       else next[botId] = rail;
       return { byBotId: next };
-    }),
+    });
+  },
 }));
+
+// The edge empties every rail, and nobody made that move by hand: the
+// surface's route records it over the entry it leaves, so a step back
+// after an account change never reopens a rail of the account that left.
+retireAtBotLifetimeEdge(() => {
+  useTracyPlaceStore.getState().markAutomaticMove();
+  useBotOpenThreadStore.setState({ byBotId: {} });
+});
 
 /** What `botId`'s tab has in its rail, or `null`. */
 export function useBotRail(botId: string): BotRail | null {
   return useBotOpenThreadStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
+}
+
+/**
+ * Shows, at Send, the thread a first reply under `anchorMessageId` opens
+ * (T249), in `botId`'s rail while it still shows that anchor's box; the
+ * reply's receipt or refusal settles it (`settleSentThread`). `lifetime` is
+ * the bot lifetime the reply was pressed in.
+ */
+export function openSentThread(
+  botId: string,
+  anchorMessageId: string,
+  sent: BotSentPost,
+  lifetime: number,
+): void {
+  const { byBotId, setRail } = useBotOpenThreadStore.getState();
+  const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
+  if (rail?.kind !== "thread" || rail.anchorMessageId !== anchorMessageId) {
+    return;
+  }
+  setRail(botId, { ...rail, sent }, lifetime);
+}
+
+/** How a send that opened its thread at Send ended: the host's answer, or a refusal that wrote nothing. */
+export type BotSentThreadSettlement =
+  | {
+      readonly kind: "answered";
+      /** The thread the post went into; `null` where the bot answered it in the channel. */
+      readonly threadId: string | null;
+      readonly delivery: BotConversationSendDelivery;
+    }
+  | { readonly kind: "refused" };
+
+/**
+ * Settles the thread `botId`'s rail opened at Send for the send `requestId`
+ * (T249), found by that request wherever the rail holds it: shown, or behind
+ * memory, a pair's log or a search (`heldThreadsOf`). The host's answer is
+ * what holds: the thread it names, or none where the bot answered in the
+ * channel, and a refusal opened none: a post's own thread leaves the rail,
+ * and one a reply started under a row goes back to its box. A thread the
+ * person closed or replaced
+ * since is held nowhere, and nothing moves. Answers whether the rail shows
+ * the thread, so its panel says the send's delivery. `lifetime` is the bot
+ * lifetime the send was pressed in: an answer heard after it ended settles
+ * nothing.
+ */
+export function settleSentThread(
+  botId: string,
+  requestId: string,
+  settlement: BotSentThreadSettlement,
+  lifetime: number,
+): boolean {
+  const { byBotId, setRail } = useBotOpenThreadStore.getState();
+  const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
+  const held = heldThreadsOf(rail).find(
+    ({ thread }) =>
+      thread.sent !== null &&
+      thread.sent.provisional &&
+      thread.sent.requestId === requestId,
+  );
+  const sent = held?.thread.sent ?? null;
+  if (held === undefined || sent === null) return false;
+  const { thread } = held;
+  // The post's own thread, opened as the post was sent, or one a reply
+  // started under a row the channel already has.
+  const ownPost =
+    thread.anchorMessageId === conversationRequestMessageId(sent.requestId);
+  const threadId = settlement.kind === "answered" ? settlement.threadId : null;
+  if (settlement.kind === "refused" || threadId === null) {
+    // A reply's box stays open to start its thread again; a post's own
+    // thread was never opened, and taking it out of the rail, wherever it
+    // sits, is nobody's own move: the route records it over its entry.
+    if (ownPost) useTracyPlaceStore.getState().markAutomaticMove();
+    setRail(
+      botId,
+      held.replace(ownPost ? null : { ...thread, sent: null }),
+      lifetime,
+    );
+    return false;
+  }
+  setRail(
+    botId,
+    held.replace({
+      ...thread,
+      sent: {
+        ...sent,
+        threadId,
+        delivery: settlement.delivery,
+        provisional: false,
+      },
+    }),
+    lifetime,
+  );
+  return held.shown;
+}
+
+/**
+ * Closes `botId`'s thread of `anchorMessageId` where the rail shows it with
+ * no post its send was accepted with, once the host has answered that it
+ * holds no such row: a place a step back or a reload restored, naming a
+ * post whose send was refused or never written (T249). Nobody's own move,
+ * so the route records it over the entry that named the post.
+ */
+export function closeUnwrittenPostThread(
+  botId: string,
+  anchorMessageId: string,
+): void {
+  const { byBotId, setRail } = useBotOpenThreadStore.getState();
+  const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
+  const held = heldThreadsOf(rail).find(
+    ({ thread, shown }) =>
+      shown &&
+      thread.anchorMessageId === anchorMessageId &&
+      thread.sent === null,
+  );
+  if (held === undefined) return;
+  useTracyPlaceStore.getState().markAutomaticMove();
+  setRail(botId, held.replace(null), currentBotLifetime());
 }

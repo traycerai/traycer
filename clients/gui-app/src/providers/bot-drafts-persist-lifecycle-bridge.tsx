@@ -34,8 +34,11 @@ export interface BotDraftsPersistLifecycleBridgeProps {
  * yet, go into that box's draft; its drafts are written under its own key,
  * and the store is emptied, so nothing of it reaches the next account. Its
  * answers to surface cards and its settled sends go from the stores that kept
- * them. A card, send or box of it that answers late changes nothing
- * (`useBotDraftActions`), and the bot tab shows none of the store until it
+ * them; its sends still drawn before their stored rows (T249) went at the bot
+ * lifetime's edge, before this runs, their content given to no box. A card,
+ * send or box of it that
+ * answers late changes nothing (`useBotDraftActions`), and the bot tab shows
+ * none of the store until it
  * is the next account's, its own drafts read (`useBotDraftsAdmitted`). Its
  * stored drafts stay, for when it signs in again. Then a signed-in account's
  * own drafts are read. Signed out, none are read and nothing is written.

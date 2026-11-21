@@ -4,6 +4,7 @@
  * drafts. The tree, the host client and the per-case lifecycle are in
  * `bot-tab-surface-identity-harness.tsx`.
  */
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   botListChangedMock,
   botListQueryMock,
@@ -696,13 +697,17 @@ describe("<BotTabSurface /> the account's stored drafts and the bot tab (T186)",
       chatSessionWithThreadRows([postRow("reply-1", "A reply")]),
     );
     act(() =>
-      useBotOpenThreadStore.getState().setRail(BOT_ID, {
-        kind: "thread",
-        anchorMessageId: "post-1",
-        announcement: false,
-        anchorKind: null,
-        sent: null,
-      }),
+      useBotOpenThreadStore.getState().setRail(
+        BOT_ID,
+        {
+          kind: "thread",
+          anchorMessageId: "post-1",
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        },
+        currentBotLifetime(),
+      ),
     );
 
     mountSurface();

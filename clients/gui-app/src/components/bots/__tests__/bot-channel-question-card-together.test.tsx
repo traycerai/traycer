@@ -148,11 +148,17 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   >()),
   useHostMethodSupport: () => true,
 }));
-vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
-  usePaneVisible: () => true,
-  usePaneFocused: () => true,
-  usePaneFocusProbe: () => () => true,
-}));
+vi.mock(
+  "@/components/epic-tabs/pane-visibility-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-tabs/pane-visibility-context")
+    >()),
+    usePaneVisible: () => true,
+    usePaneFocused: () => true,
+    usePaneFocusProbe: () => () => true,
+  }),
+);
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: [{ conversationId: CHANNEL_ID }] },
@@ -516,6 +522,11 @@ function connectHost(handshake: SchemaVersion, enforced: SchemaVersion): void {
           sent = [...sent, params];
           return outcome();
         },
+        // The reads the channel makes as the signed-in viewer: nothing followed,
+        // read or muted.
+        "bot.threadFollow.read": () => ({ follows: {} }),
+        "bot.readCursor.read": () => ({ cursors: {}, latest: {} }),
+        "bot.notificationLevel.read": () => ({ levels: {} }),
         "bot.thread.list": () => {
           threadListReads += 1;
           return {
@@ -538,7 +549,16 @@ function connectHost(handshake: SchemaVersion, enforced: SchemaVersion): void {
     messenger,
   });
   spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-1",
+      // The send leaves as the signed-in viewer.
+      identity: {
+        userId: VIEWER_USER_ID,
+        username: "olive",
+        providerHandle: null,
+      },
+    }),
   );
   mocks.client = spine.createRequester(mockRemoteHostEntry);
 }
@@ -563,7 +583,18 @@ let channelQueryClient: QueryClient;
 /** The channel's reads and mutations have answered. */
 async function settleRequests(): Promise<void> {
   await vi.waitFor(() => {
-    expect(channelQueryClient.isFetching()).toBe(0);
+    expect(
+      channelQueryClient.isFetching(),
+      `still fetching: ${channelQueryClient
+        .getQueryCache()
+        .findAll()
+        .filter((query) => query.state.fetchStatus !== "idle")
+        .map(
+          (query) =>
+            `${JSON.stringify(query.queryKey)} ${query.state.fetchStatus}`,
+        )
+        .join("; ")}`,
+    ).toBe(0);
     expect(channelQueryClient.isMutating()).toBe(0);
   });
 }
@@ -592,11 +623,13 @@ function mountChannel(args: {
           <TooltipProvider>
             <ChatExpansionTestProviders tileInstanceId="tile-1">
               <BotChannelView
+                replyMode="direct"
                 tiles={null}
                 botId={BOT_ID}
                 hostId={HOST_ID}
                 boundHostId={args.boundHostId}
                 boundHostEpoch={BOUND_EPOCH}
+                onBindingMoved={vi.fn()}
                 botTitle="Release Bot"
                 directive={null}
                 appConversationChatId={CHANNEL_ID}
@@ -2173,6 +2206,23 @@ describe("<BotChannelView tiles={null} /> a question a thread's session asks in 
     );
     await user.click(choice(cardQuestion(card, DEPLOY), "Now"));
     await user.click(submitButton(card));
+    // The send leaves in the mutation's own ticks after the click.
+    await vi.waitFor(() =>
+      expect(
+        sent,
+        `the thread's answers never left: mutations ${JSON.stringify(
+          channelQueryClient
+            .getMutationCache()
+            .getAll()
+            .map((mutation) => [
+              mutation.state.status,
+              mutation.state.error === null
+                ? null
+                : String(mutation.state.error),
+            ]),
+        )}`,
+      ).toHaveLength(1),
+    );
 
     expect(sent).toEqual([
       {

@@ -1,39 +1,19 @@
 import { cleanup, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  ChatLoadRangeRequest,
-  ChatTranscriptDerived,
-} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import {
-  buildRowSkeleton,
-  transcriptPreviewProjection,
-} from "@traycer/protocol/persistence/chat-transcript/build-skeleton";
-import {
-  buildTranscriptRecordLookup,
-  sliceTranscriptRange,
-  sliceTranscriptTail,
-  type TranscriptTailSlice,
-} from "@traycer/protocol/persistence/chat-transcript/read-range";
 import {
   autoJudgeNoticeRowId,
   projectTranscriptRows,
   type TranscriptRowProjectionInput,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
-import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { buildChatFindRows } from "@/components/chat/chat-find-projection";
 import { withholdUnpaintedRows } from "@/components/chat/chat-special-segment";
-import {
-  createChatSessionStore,
-  type ChatSessionStoreHandle,
-} from "@/stores/chats/chat-session-store";
+import { type ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
-import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
-import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import {
   transcriptListRows,
   type TranscriptListRow,
@@ -76,6 +56,19 @@ import type {
  * `useRenderedMessages` and the real `transcriptListRows`, joined the way the
  * chat tile joins them.
  */
+import {
+  EMPTY_TAIL,
+  answerLatestRange,
+  appendedDeltaFrame,
+  createWindowedSession,
+  eventAppendedFrame,
+  skeletonChunkFrame,
+  wholeTail,
+  windowedSnapshotFrame,
+  type WindowedChatIds,
+} from "@/stores/chats/__tests__/windowed-session-frames";
+
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
 
 const EPIC_ID = "epic-notice";
 const CHAT_ID = "chat-notice";
@@ -203,233 +196,13 @@ const AFTER_LIVE_NOTICE: TranscriptRowProjectionInput<
 
 const OPENED_DRAWN = [{ kind: "hydrated", key: "u-1", ordinal: 0 }];
 
-interface Harness {
-  readonly handle: ChatSessionStoreHandle;
-  readonly rangeRequests: ChatLoadRangeRequest[];
-  callbacks(): ChatStreamCallbacks;
-}
-
-function createHarness(): Harness {
-  const rangeRequests: ChatLoadRangeRequest[] = [];
-  let callbacks: ChatStreamCallbacks | null = null;
-  const handle = createChatSessionStore({
-    environment: CHAT_STORE_TEST_ENVIRONMENT,
-    hostId: "host-notice",
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    userId: OWNER_ID,
-    onAuthError: null,
-    onProviderAuthError: null,
-    wakeTransport: null,
-    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
-    streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
-      callbacks = nextCallbacks;
-      return {
-        sendAction: () => undefined,
-        sameTurnSteeringProtocolSupported: () => true,
-        draftBlobBridgeSupported: () => true,
-        requestTranscriptRange: (request) => {
-          rangeRequests.push(request);
-        },
-        requestResnapshot: () => undefined,
-        close: () => undefined,
-      };
-    },
-  });
-  return {
-    handle,
-    rangeRequests,
-    callbacks: () => {
-      if (callbacks === null) throw new Error("Expected callbacks");
-      return callbacks;
-    },
-  };
-}
-
-const EMPTY_TAIL = (
-  rowCount: number,
-): TranscriptTailSlice<OpenMessage, OpenChatEvent> => ({
-  fromOrdinal: rowCount,
-  rowIds: [],
-  incompleteRowIds: [],
-  messages: [],
-  events: [],
-  rowContext: {},
-});
-
-/** The whole transcript as one tail slice, as a host serves a short chat. */
-function wholeTail(
-  input: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>,
-): TranscriptTailSlice<OpenMessage, OpenChatEvent> {
-  return sliceTranscriptTail(
-    projectTranscriptRows(input),
-    buildTranscriptRecordLookup(input.messages, input.events),
-    1_000_000,
-    null,
-  );
-}
-
-function snapshot(input: {
-  readonly rowCount: number;
-  readonly tail: TranscriptTailSlice<OpenMessage, OpenChatEvent>;
-  readonly indexRevision: number | null;
-}): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
-  const derived: ChatTranscriptDerived = {
-    latestAssistantUsage: null,
-    pinnedTodo: null,
-    pinnedTaskTodoItems: [],
-    latestForkableAssistantMessageId: null,
-    restorableSetupInterruption: null,
-    interviewAnswerability: [],
-    latestAssistantAuthFailureTurnKey: null,
-    setupCardWindows: [],
-  };
-  return {
-    kind: "snapshot",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    snapshot: {
-      chat: {
-        id: CHAT_ID,
-        parentId: null,
-        userId: OWNER_ID,
-        hostId: "host-notice",
-        title: "Judge notices",
-        createdAt: 1,
-        updatedAt: 1,
-        isTitleEditedByUser: false,
-        settings: null,
-        archivedAt: null,
-        lastDeliveredRolesDigest: null,
-        activeSessionChain: null,
-        claudePendingWakes: [],
-        pinnedUserProviderHandle: null,
-      },
-      access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
-      queue: { status: "idle", items: [] },
-      runStatus: "idle",
-      activeTurn: null,
-      pendingApprovals: [],
-      pendingInterviews: [],
-      worktreeBinding: null,
-      missingWorktreePaths: [],
-      pendingFileEditApprovals: [],
-      accumulatedFileChangeCount: 0,
-      managedCommands: [],
-      heldUpdates: [],
-      portForwards: [],
-      transcriptEpoch: 1,
-      rowCount: input.rowCount,
-      indexRevision: input.indexRevision,
-      tail: {
-        fromOrdinal: input.tail.fromOrdinal,
-        rowIds: [...input.tail.rowIds],
-        incompleteRowIds: [...input.tail.incompleteRowIds],
-        messages: [...input.tail.messages],
-        events: [...input.tail.events],
-        rowContext: { ...input.tail.rowContext },
-      },
-      derived,
-    },
-  };
-}
-
-/** The whole skeleton of `input` in one final chunk, as the host builds it. */
-function skeletonChunk(
-  input: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>,
-): Parameters<ChatStreamCallbacks["onSkeletonChunk"]>[0] {
-  return {
-    kind: "skeletonChunk",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    chunk: {
-      epoch: 1,
-      fromOrdinal: 0,
-      entries: [...buildRowSkeleton(input, transcriptPreviewProjection, null)],
-      isFinal: true,
-    },
-  };
-}
-
-/** The shared frame an append broadcast leads with. */
-function eventAppended(
-  event: OpenChatEvent,
-): Parameters<ChatStreamCallbacks["onEventAppended"]>[0] {
-  return {
-    kind: "eventAppended",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    event,
-  };
-}
-
-/**
- * The `indexChanged` delta for a one-row append that took the transcript from
- * `before` to `after`: the new row's skeleton entry, as the host builds it.
- */
-function appendedDelta(input: {
-  readonly after: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>;
-  readonly indexRevision: number;
-}): Parameters<ChatStreamCallbacks["onIndexChanged"]>[0] {
-  const entries = buildRowSkeleton(
-    input.after,
-    transcriptPreviewProjection,
-    null,
-  );
-  const appended = entries.at(-1);
-  if (appended === undefined) throw new Error("expected an appended row");
-  return {
-    kind: "indexChanged",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    epoch: 1,
-    rowCount: entries.length,
-    indexRevision: input.indexRevision,
-    changes: [{ type: "appended", entries: [appended] }],
-  };
-}
-
-/** Answer the harness's latest `loadRange` from `input`, as the host would. */
-function answerLatestRange(
-  harness: Harness,
-  input: TranscriptRowProjectionInput<OpenMessage, OpenChatEvent>,
-): ChatLoadRangeRequest {
-  const request = harness.rangeRequests.at(-1);
-  if (request === undefined) throw new Error("expected a loadRange");
-  const slice = sliceTranscriptRange(
-    projectTranscriptRows(input),
-    buildTranscriptRecordLookup(input.messages, input.events),
-    {
-      fromOrdinal: request.fromOrdinal,
-      toOrdinal: request.toOrdinal,
-      maxBytes: request.maxBytes,
-    },
-    null,
-  );
-  harness.callbacks().onRange({
-    kind: "range",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    range: {
-      requestId: request.requestId,
-      epoch: request.epoch,
-      fromOrdinal: slice.fromOrdinal,
-      rowIds: [...slice.rowIds],
-      incompleteRowIds: [...slice.incompleteRowIds],
-      messages: [...slice.messages],
-      events: [...slice.events],
-      rowContext: { ...slice.rowContext },
-      reachedStart: slice.reachedStart,
-      reachedEnd: slice.reachedEnd,
-    },
-  });
-  return request;
-}
+const IDS: WindowedChatIds = {
+  epicId: EPIC_ID,
+  chatId: CHAT_ID,
+  hostId: "host-notice",
+  ownerId: OWNER_ID,
+  title: "Judge notices",
+};
 
 const DISPLAY_CONTEXT: RenderedMessagesDisplayContext = {
   resolveUserSenderLabel: () => "You",
@@ -481,6 +254,7 @@ function drawnRows(
   handle: ChatSessionStoreHandle,
 ): ReadonlyArray<TranscriptListRow> {
   return transcriptListRows({
+    pendingOwnedRowIds: NO_PENDING_ROWS,
     splitLongTurns: true,
     window: handle.store.getState().transcriptWindow,
     rendered: withholdUnpaintedRows(renderedRows(handle)),
@@ -546,14 +320,16 @@ describe("auto-mode judge notices in the windowed transcript", () => {
     // The whole chat fits, so the tail IS the transcript.
     expect(tail.fromOrdinal).toBe(0);
 
-    const harness = createHarness();
+    const harness = createWindowedSession(IDS);
     try {
-      harness
-        .callbacks()
-        .onWindowedSnapshot(
-          snapshot({ rowCount: rows.length, tail, indexRevision: null }),
-        );
-      harness.callbacks().onSkeletonChunk(skeletonChunk(PERSISTED));
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshotFrame(IDS, {
+          rowCount: rows.length,
+          tail,
+          indexRevision: null,
+        }),
+      );
+      harness.callbacks().onSkeletonChunk(skeletonChunkFrame(IDS, PERSISTED));
 
       // The host still numbers the three notices at ordinals 1-3...
       const window = harness.handle.store.getState().transcriptWindow;
@@ -597,16 +373,16 @@ describe("auto-mode judge notices in the windowed transcript", () => {
 
   it("reopen: legacy notices outside the tail hydrate through loadRange and then draw nothing, not even a placeholder", () => {
     const rows = projectTranscriptRows(PERSISTED);
-    const harness = createHarness();
+    const harness = createWindowedSession(IDS);
     try {
       harness.callbacks().onWindowedSnapshot(
-        snapshot({
+        windowedSnapshotFrame(IDS, {
           rowCount: rows.length,
           tail: EMPTY_TAIL(rows.length),
           indexRevision: null,
         }),
       );
-      harness.callbacks().onSkeletonChunk(skeletonChunk(PERSISTED));
+      harness.callbacks().onSkeletonChunk(skeletonChunkFrame(IDS, PERSISTED));
       // Nothing hydrated yet: every ordinal is a placeholder, the notices'
       // included, which is what makes the viewport ask for them.
       expect(drawnSummary(harness.handle).map((row) => row.kind)).toEqual([
@@ -617,7 +393,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
         "placeholder",
       ]);
 
-      answerLatestRange(harness, PERSISTED);
+      answerLatestRange(harness, IDS, PERSISTED);
 
       // The range delivered the notices, the renderer enumerates them...
       expect(enumeratedNotices(harness.handle).map(({ id }) => id)).toEqual(
@@ -632,20 +408,20 @@ describe("auto-mode judge notices in the windowed transcript", () => {
   });
 
   it("live: an older host's appended notice draws nothing at any step of its broadcast (shared frame, republished snapshot, delta)", () => {
-    const harness = createHarness();
+    const harness = createWindowedSession(IDS);
     try {
       harness.callbacks().onWindowedSnapshot(
-        snapshot({
+        windowedSnapshotFrame(IDS, {
           rowCount: projectTranscriptRows(OPENED).length,
           tail: wholeTail(OPENED),
           indexRevision: 0,
         }),
       );
-      harness.callbacks().onSkeletonChunk(skeletonChunk(OPENED));
+      harness.callbacks().onSkeletonChunk(skeletonChunkFrame(IDS, OPENED));
       expect(drawnSummary(harness.handle)).toEqual(OPENED_DRAWN);
 
       // The host's append broadcast, in its real order: the shared frame...
-      harness.callbacks().onEventAppended(eventAppended(LIVE_NOTICE));
+      harness.callbacks().onEventAppended(eventAppendedFrame(IDS, LIVE_NOTICE));
       // (enumerated, and still withheld rather than appended to the tail)
       expect(enumeratedNotices(harness.handle).map(({ id }) => id)).toEqual([
         autoJudgeNoticeRowId(LIVE_NOTICE.eventId),
@@ -655,7 +431,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
       // ...then the bounded snapshot at the post-append `rowCount` and the
       // held revision, whose tail carries the new row...
       harness.callbacks().onWindowedSnapshot(
-        snapshot({
+        windowedSnapshotFrame(IDS, {
           rowCount: projectTranscriptRows(AFTER_LIVE_NOTICE).length,
           tail: wholeTail(AFTER_LIVE_NOTICE),
           indexRevision: 0,
@@ -664,11 +440,12 @@ describe("auto-mode judge notices in the windowed transcript", () => {
       expect(drawnSummary(harness.handle)).toEqual(OPENED_DRAWN);
 
       // ...then the delta naming it.
-      harness
-        .callbacks()
-        .onIndexChanged(
-          appendedDelta({ after: AFTER_LIVE_NOTICE, indexRevision: 1 }),
-        );
+      harness.callbacks().onIndexChanged(
+        appendedDeltaFrame(IDS, {
+          after: AFTER_LIVE_NOTICE,
+          indexRevision: 1,
+        }),
+      );
       const window = harness.handle.store.getState().transcriptWindow;
       expect(window.invalidated).toBe(false);
       expect(window.rowCount).toBe(2);
@@ -684,25 +461,26 @@ describe("auto-mode judge notices in the windowed transcript", () => {
   });
 
   it("live: when the republished snapshot is lost, the notice's placeholder asks for its row and then draws nothing", () => {
-    const harness = createHarness();
+    const harness = createWindowedSession(IDS);
     try {
       harness.callbacks().onWindowedSnapshot(
-        snapshot({
+        windowedSnapshotFrame(IDS, {
           rowCount: projectTranscriptRows(OPENED).length,
           tail: wholeTail(OPENED),
           indexRevision: 0,
         }),
       );
-      harness.callbacks().onSkeletonChunk(skeletonChunk(OPENED));
+      harness.callbacks().onSkeletonChunk(skeletonChunkFrame(IDS, OPENED));
 
       // The shared frame and the delta arrive; the snapshot between them was
       // dropped by a flaky write, which the pump tolerates.
-      harness.callbacks().onEventAppended(eventAppended(LIVE_NOTICE));
-      harness
-        .callbacks()
-        .onIndexChanged(
-          appendedDelta({ after: AFTER_LIVE_NOTICE, indexRevision: 1 }),
-        );
+      harness.callbacks().onEventAppended(eventAppendedFrame(IDS, LIVE_NOTICE));
+      harness.callbacks().onIndexChanged(
+        appendedDeltaFrame(IDS, {
+          after: AFTER_LIVE_NOTICE,
+          indexRevision: 1,
+        }),
+      );
 
       // No span holds the new tail row yet, so it stands as a placeholder -
       // and that is transient, not permanent: the eager-tail plan asks for it.
@@ -715,7 +493,7 @@ describe("auto-mode judge notices in the windowed transcript", () => {
         },
       ]);
       // `ChatLoadRangeRequest` bounds are inclusive at both ends.
-      const request = answerLatestRange(harness, AFTER_LIVE_NOTICE);
+      const request = answerLatestRange(harness, IDS, AFTER_LIVE_NOTICE);
       expect(request.fromOrdinal).toBeLessThanOrEqual(1);
       expect(request.toOrdinal).toBeGreaterThanOrEqual(1);
 
@@ -728,16 +506,16 @@ describe("auto-mode judge notices in the windowed transcript", () => {
   });
 
   it("a notice model that reaches a ChatMessage anyway paints nothing - no note, no text, no System overline - and indexes nothing for find", () => {
-    const harness = createHarness();
+    const harness = createWindowedSession(IDS);
     try {
       harness.callbacks().onWindowedSnapshot(
-        snapshot({
+        windowedSnapshotFrame(IDS, {
           rowCount: projectTranscriptRows(PERSISTED).length,
           tail: wholeTail(PERSISTED),
           indexRevision: null,
         }),
       );
-      harness.callbacks().onSkeletonChunk(skeletonChunk(PERSISTED));
+      harness.callbacks().onSkeletonChunk(skeletonChunkFrame(IDS, PERSISTED));
       const notices = enumeratedNotices(harness.handle);
       expect(notices).toHaveLength(3);
 

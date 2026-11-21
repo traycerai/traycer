@@ -6,6 +6,7 @@
  * a layer portalled out of a pane is not the pane's. Only the session registry
  * and the reads beside the transcripts are replaced.
  */
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
@@ -253,7 +254,11 @@ async function mountChannel(open: boolean): Promise<void> {
   if (open) {
     useBotOpenThreadStore
       .getState()
-      .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN });
+      .setRail(
+        BOT_ID,
+        { kind: "thread", ...THREAD_OPEN },
+        currentBotLifetime(),
+      );
   }
   render(<MountedChannel />);
   await settleLegendList();

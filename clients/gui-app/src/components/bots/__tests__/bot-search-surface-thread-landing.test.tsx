@@ -32,6 +32,7 @@ import {
   useBotOpenThreadStore,
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 
 installSearchSurfaceLifecycle();
 
@@ -45,7 +46,9 @@ const PLAIN_THREAD: BotRail = {
 
 function setRail(rail: BotRail | null): void {
   act(() => {
-    useBotOpenThreadStore.getState().setRail(SEARCH_BOT_A, rail);
+    useBotOpenThreadStore
+      .getState()
+      .setRail(SEARCH_BOT_A, rail, currentBotLifetime());
   });
 }
 

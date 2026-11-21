@@ -141,10 +141,21 @@ function hostClient(): HostRequester<HostRpcRegistry> {
       hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
     messenger,
   });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
+  spine.setRequestContext(requestContextOf(ACCOUNT_A));
+  hostSpine = spine;
   return spine.createRequester(mockRemoteHostEntry);
+}
+
+/** The host client's spine the case sends through, whose request context follows the signed-in account. */
+let hostSpine: HostClient<HostRpcRegistry> | null = null;
+
+/** The request context of `userId`, as the auth service sets it before the store follows. */
+function requestContextOf(userId: string) {
+  return createRequestContextFixture({
+    origin: "renderer",
+    bearerToken: "tok-1",
+    identity: { userId, username: userId, providerHandle: null },
+  });
 }
 
 export function question(settled: boolean): Message {
@@ -187,6 +198,7 @@ export function channelRows(settled: boolean): ReadonlyArray<Message> {
 }
 
 export function signInAs(userId: string): void {
+  hostSpine?.setRequestContext(requestContextOf(userId));
   act(() => {
     useAuthStore.setState({
       status: "signed-in",
@@ -204,6 +216,7 @@ export function signInAs(userId: string): void {
 }
 
 export function signOut(): void {
+  hostSpine?.setRequestContext(null);
   act(() => {
     useAuthStore.setState({
       status: "signed-out",

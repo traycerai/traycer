@@ -340,6 +340,7 @@ function mountTranscript(): { readonly rerender: () => void } {
                 header={listHeader}
                 landOn={landing}
                 flow={null}
+                sendBinding={null}
               />
             </BotTestRunnerHost>
           </PaneVisibilityContext.Provider>

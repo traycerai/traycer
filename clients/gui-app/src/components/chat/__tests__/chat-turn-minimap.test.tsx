@@ -24,6 +24,8 @@ import {
 } from "@/stores/settings/settings-store";
 import { makeMessage } from "./chat-message-fixtures";
 
+const NO_PENDING_ROWS: ReadonlySet<string> = new Set();
+
 function user(index: number, content: string): ChatMessageModel {
   return { ...makeMessage(index, "user"), content };
 }
@@ -105,6 +107,7 @@ function renderMinimap(
       })}
       atEndRef={atEndRef}
       rows={transcriptListRows({
+        pendingOwnedRowIds: NO_PENDING_ROWS,
         window: null,
         rendered: messages,
         splitLongTurns: true,
@@ -150,6 +153,7 @@ function renderRegisteredMinimap(input: {
         listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
         atEndRef={{ current: false }}
         rows={transcriptListRows({
+          pendingOwnedRowIds: NO_PENDING_ROWS,
           window: null,
           rendered: messages,
           splitLongTurns: true,
@@ -379,6 +383,7 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
           listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
           atEndRef={{ current: false }}
           rows={transcriptListRows({
+            pendingOwnedRowIds: NO_PENDING_ROWS,
             splitLongTurns: true,
             window: null,
             rendered: makeTranscript(3),

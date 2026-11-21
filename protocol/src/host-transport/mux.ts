@@ -18,6 +18,7 @@ import {
   staleWriteWireFieldSchema,
   type EnvironmentStaleWrite,
 } from "../framework/environment-stale-write";
+import { notWrittenWireFieldSchema } from "../framework/not-written";
 import {
   clientHandshakeIdentitySchema,
   type ClientHandshakeIdentity,
@@ -381,6 +382,7 @@ export interface WireRpcErrorDetails {
   readonly holders?: readonly WorktreeBusyHolder[];
   readonly holdersRevision?: string;
   readonly staleWrite?: EnvironmentStaleWrite;
+  readonly notWritten?: true;
   /** A transient refusal: the call may be sent again unchanged. */
   readonly retryable?: boolean;
   /** As on a local `/rpc` reply; absent from an older host. */
@@ -503,6 +505,7 @@ export const unaryResponsePayloadSchema: z.ZodType<UnaryResponsePayload> =
           holders: worktreeBusyHoldersWireFieldSchema,
           holdersRevision: holdersRevisionWireFieldSchema,
           staleWrite: staleWriteWireFieldSchema,
+          notWritten: notWrittenWireFieldSchema,
           retryable: z.boolean().optional(),
           doorReason: doorReasonWireFieldSchema,
         })

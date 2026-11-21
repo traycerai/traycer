@@ -16,6 +16,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
   BotQuestionSettlement,
   Message,
@@ -57,6 +58,7 @@ import {
   hold,
   holdField,
   HOST_ID,
+  hostSpine,
   installQuestionCardCaseLifecycle,
   mountChannel,
   onOpenThread,
@@ -351,7 +353,17 @@ describe("<BotChannelView tiles={null} /> what a member has not sent, across the
 const ACCOUNT_A = "user-account-a";
 const ACCOUNT_B = "user-account-b";
 
+/** The request context of `userId`, as the auth service sets it before the store follows. */
+function requestContextOf(userId: string) {
+  return createRequestContextFixture({
+    origin: "renderer",
+    bearerToken: "tok-1",
+    identity: { userId, username: userId, providerHandle: null },
+  });
+}
+
 function signInAs(userId: string): void {
+  hostSpine?.setRequestContext(requestContextOf(userId));
   act(() => {
     useAuthStore.setState({
       status: "signed-in",
@@ -367,6 +379,7 @@ function signInAs(userId: string): void {
 }
 
 function signOut(): void {
+  hostSpine?.setRequestContext(null);
   act(() => {
     useAuthStore.setState({
       status: "signed-out",
@@ -554,7 +567,10 @@ describe("<BotChannelView tiles={null} /> a moved answer and the signed-in accou
           name: "Submit",
         }),
       );
-      expect(heldSends).toHaveLength(1);
+      expect(
+        heldSends,
+        `the host was never asked for the send (${String(sent.length)} sent): ${document.body.textContent.slice(0, 300)}`,
+      ).toHaveLength(1);
 
       signInAs(ACCOUNT_B);
       await vi.waitFor(() => expect(holdField().value).toBe(""));

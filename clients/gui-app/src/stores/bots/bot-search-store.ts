@@ -13,6 +13,7 @@ import {
   useBotOpenThreadStore,
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import { botSearchHitKey, botSearchWordsOf } from "@/lib/bots/bot-search-model";
 
 export const BOT_SEARCH_RECENTS_LIMIT = 10;
@@ -281,14 +282,16 @@ function railOf(botId: string): BotRail | null {
 export function openBotSearch(botId: string, scope: BotSearchScope): void {
   const rail = railOf(botId);
   useBotSearchStore.getState().present(scope, rail?.kind !== "search");
-  useBotOpenThreadStore.getState().setRail(botId, searchRailOver(rail));
+  useBotOpenThreadStore
+    .getState()
+    .setRail(botId, searchRailOver(rail), currentBotLifetime());
 }
 
 /** Closes the panel and drops its search: the thread it displaced comes back. */
 export function closeBotSearch(botId: string): void {
   const rail = railOf(botId);
   const back = rail?.kind === "search" ? rail.back : null;
-  useBotOpenThreadStore.getState().setRail(botId, back);
+  useBotOpenThreadStore.getState().setRail(botId, back, currentBotLifetime());
   useBotSearchStore.getState().reset();
 }
 
@@ -298,7 +301,11 @@ export function showBotSearchResults(botId: string): void {
   if (rail?.kind !== "search") return;
   useBotOpenThreadStore
     .getState()
-    .setRail(botId, { ...rail, showing: { kind: "results" } });
+    .setRail(
+      botId,
+      { ...rail, showing: { kind: "results" } },
+      currentBotLifetime(),
+    );
 }
 
 /**
@@ -317,7 +324,8 @@ export function jumpToBotSearchHit(
   const rail = railOf(fromBotId);
   const back = rail?.kind === "search" ? rail.back : null;
   const { setRail } = useBotOpenThreadStore.getState();
-  setRail(fromBotId, back);
-  setRail(hit.botId, searchRailOver(railOf(hit.botId)));
+  const lifetime = currentBotLifetime();
+  setRail(fromBotId, back, lifetime);
+  setRail(hit.botId, searchRailOver(railOf(hit.botId)), lifetime);
   return true;
 }

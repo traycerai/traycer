@@ -24,6 +24,7 @@ import {
   THREAD_ID,
   postThread,
 } from "@/components/bots/__tests__/bot-turn-test-support";
+import { VIEWER_USER_ID } from "@/components/bots/__tests__/bot-failed-request-test-support";
 
 /**
  * The REAL `bot.conversation.list` and `bot.thread.list` reads under a bot's
@@ -135,7 +136,16 @@ export function hostClientAnswering(
     messenger,
   });
   spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-1",
+      // The send leaves as the signed-in viewer.
+      identity: {
+        userId: VIEWER_USER_ID,
+        username: "olive",
+        providerHandle: null,
+      },
+    }),
   );
   return spine.createRequester(mockRemoteHostEntry);
 }

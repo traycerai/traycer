@@ -21,6 +21,7 @@ const SENT: BotSentPost = {
   senderUserId: null,
   sentAt: 1,
   delivery: "written",
+  provisional: false,
 };
 
 function openThread(

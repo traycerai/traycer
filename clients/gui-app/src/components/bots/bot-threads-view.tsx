@@ -980,6 +980,8 @@ function FullThread(props: {
             botId={botId}
             hostId={hostId}
             boundHostId={boundHostId}
+            boundHostEpoch={boundHostEpoch}
+            onBindingMoved={subscription.resubscribe}
             imageReach={imageReach}
             answerReach={answerReach}
             replyReach={replyReach}
