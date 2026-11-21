@@ -3,7 +3,6 @@ import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   providersListResponseSchema as liveProvidersListResponseSchema,
   providersListResponseSchemaV1012Preimage,
-  providersListResponseSchemaV1013Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 
 const providersList = hostRpcRegistry["providers.list"][10];
@@ -435,14 +434,11 @@ describe("providers.list@10.9 additive response projection", () => {
   });
 
   it("carries optional usage reporting in 10.9 and strips it for 10.8", () => {
-    expect(providersList.latestMinor).toBe(14);
+    expect(providersList.latestMinor).toBe(13);
     expect(providersList.versions[12].contract.responseSchema).toBe(
       providersListResponseSchemaV1012Preimage,
     );
     expect(providersList.versions[13].contract.responseSchema).toBe(
-      providersListResponseSchemaV1013Preimage,
-    );
-    expect(providersList.versions[14].contract.responseSchema).toBe(
       liveProvidersListResponseSchema,
     );
     const usageReporting = { ...provider, usageReporting: true };
