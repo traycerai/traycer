@@ -312,7 +312,17 @@ describe("<SyncLinksAskController />", () => {
     fireEvent.click(screen.getByRole("button", { name: STOP }));
 
     await waitFor(() => expect(reads.listCalls).toBeGreaterThan(listed));
-    expect(reads.stopRequests).toEqual([{ scope: { kind: "all" } }]);
+    expect(reads.stopRequests).toEqual([
+      {
+        scope: {
+          kind: "folders",
+          folders: [
+            { providerId: "claude-code", profileId: "ambient" },
+            { providerId: "codex", profileId: WORK_PROFILE_ID },
+          ],
+        },
+      },
+    ]);
     await waitFor(() =>
       expect(screen.queryByRole("heading", { name: DIALOG_TITLE })).toBeNull(),
     );
