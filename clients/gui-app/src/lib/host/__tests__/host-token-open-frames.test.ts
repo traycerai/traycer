@@ -521,12 +521,10 @@ describe("local stream host-token open frame", () => {
     );
 
     await vi.advanceTimersToNextTimerAsync();
-    await vi.waitFor(() => expect(mintCalls).toBe(4));
-    expect(FakeNativeWebSocket.instances).toHaveLength(1);
-    await vi.advanceTimersToNextTimerAsync();
     await vi.waitFor(() =>
       expect(FakeNativeWebSocket.instances).toHaveLength(2),
     );
+    await vi.waitFor(() => expect(mintCalls).toBe(4));
     const recoveredSocket = FakeNativeWebSocket.instances[1];
     recoveredSocket.fireOpen();
     await vi.waitFor(() =>

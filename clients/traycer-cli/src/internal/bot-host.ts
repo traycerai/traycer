@@ -183,6 +183,8 @@ export async function openLocalStreamClient(): Promise<{
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
     bearer: () => bearer,
+    // The session is released, so a sign-in the host refuses ends the read.
+    releasedSignOn: { ...session.releasedSignOn, recovery: null },
     userId: bearer.identity.userId,
     auth: null,
     clock: null,

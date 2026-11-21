@@ -489,38 +489,93 @@ describe("provisionInstalledHostCredential", () => {
     expectCleanTeardown();
   });
 
-  it("ends on a bare host-token 404 without refreshing sign-in or waiting out the bound", async () => {
-    mocks.hostTokenTable = new Map();
-    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
-    mocks.hostTokenMintMock.mockResolvedValueOnce({ kind: "not-admitted" });
-    mocks.onSessionCreated = (): void => {
-      setTimeout(() => {
-        capturedClientOptions().bearer();
-      }, 0);
-    };
+  it("ends after a current host names the placeholder's refusal and the recovery mint 404s, without refreshing sign-in or waiting out the bound", async () => {
+    const ownershipReads: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      async (
+        input: RequestInfo | URL,
+        init: RequestInit | undefined,
+      ): Promise<Response> => {
+        const raw =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        const url = new URL(raw);
+        const method = init?.method ?? "GET";
+        if (url.pathname === "/api/v3/hosts" && method === "GET") {
+          ownershipReads.push(url.toString());
+          return new Response("missing", { status: 404 });
+        }
+        return new Response("unexpected", { status: 500 });
+      },
+    );
+    const refusal = {
+      code: "UNAUTHORIZED",
+      reason: "current host refused the placeholder",
+      doorReason: "not_admitted",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    } as const;
+    try {
+      mocks.hostTokenTable = new Map();
+      mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+      mocks.hostTokenMintMock.mockReset();
+      mocks.hostTokenMintMock
+        .mockResolvedValueOnce({ kind: "not-admitted" })
+        .mockResolvedValueOnce({ kind: "not-admitted" });
+      mocks.onSessionCreated = (session): void => {
+        setTimeout(() => {
+          void (async (): Promise<void> => {
+            const options = capturedClientOptions();
+            // The fake replaces the client, so an empty bearer stands in for
+            // the placeholder that client would have presented.
+            expect(options.bearer()).toBeNull();
+            await vi.waitFor(() =>
+              expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
+            );
+            await vi.waitFor(() => expect(ownershipReads).toHaveLength(1));
+            const revalidateRefused = options.auth?.revalidateRefused;
+            if (revalidateRefused === undefined) {
+              throw new Error("probe wired no refused-token recovery");
+            }
+            void revalidateRefused(refusal).catch(() => undefined);
+            session.emitStatus(
+              "closed",
+              { kind: "fatalError", details: refusal },
+              undefined,
+            );
+          })();
+        }, 0);
+      };
 
-    const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs: 30_000, progress: vi.fn() }),
-    );
+      const outcome = await provisionInstalledHostCredential(
+        makeOptions({ deadlineMs: 30_000, progress: vi.fn() }),
+      );
 
-    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
-      kind: "mint-unavailable",
-    });
-    expect(formatCredentialProvisionNote(outcome)).toBe(
-      "host authorization not confirmed (the authorization did not complete) - run `traycer host doctor` to see how to fix it",
-    );
-    expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
-    expect(mocks.hostTokenMintMock).toHaveBeenCalledWith(
-      config.authnBaseUrl,
-      "host-1",
-      "test-bearer-token",
-      expect.anything(),
-    );
-    expect(mocks.hostTokenMintMock.mock.calls[0][3]).toBe(probeSignal());
-    expect(probeSignal().aborted).toBe(true);
-    expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
-    expect(mocks.sessions).toHaveLength(1);
-    expectCleanTeardown();
+      expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+        kind: "mint-unavailable",
+      });
+      expect(formatCredentialProvisionNote(outcome)).toBe(
+        "host authorization not confirmed (the authorization did not complete) - run `traycer host doctor` to see how to fix it",
+      );
+      expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(2);
+      expect(mocks.hostTokenMintMock).toHaveBeenCalledWith(
+        config.authnBaseUrl,
+        "host-1",
+        "test-bearer-token",
+        expect.anything(),
+      );
+      expect(probeSignal().aborted).toBe(true);
+      expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
+      expect(mocks.sessions).toHaveLength(1);
+      expectCleanTeardown();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("recovers one refused host token with one fresh token and one more open", async () => {

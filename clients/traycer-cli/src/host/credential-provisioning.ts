@@ -1,6 +1,7 @@
 import { localTeamAdmissionCliError } from "../internal/local-open-auth";
 import { hostTokenFailureCliError } from "../internal/host-door-words";
 import {
+  cliReleasedSignOn,
   createCliHostTokens,
   type CliHostTokenFailure,
 } from "../internal/cli-host-tokens";
@@ -301,6 +302,13 @@ export async function provisionInstalledHostCredential(
   // A mint of the host-only token authn refused for good, and the wake-up of
   // the lap waiting on an ack that can now never come.
   let mintRefusal: CliHostTokenFailure | null = null;
+  // authn has no row for this person: a released host is then opened with the
+  // sign-in, as a released CLI's probe opened it, so the probe goes on. It
+  // explains the end only if that does not provision the host.
+  let signInAfterNotAdmitted: CliHostTokenFailure | null = null;
+  // An open was admitted after it: the host took the sign-in, so a later 404
+  // for the host-only token is expected and explains nothing.
+  let admittedAfterNotAdmitted = false;
   let wakeOnMintRefusal: (() => void) | null = null;
   let stopMintRefusals: () => void = () => undefined;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
@@ -360,23 +368,44 @@ export async function provisionInstalledHostCredential(
       lease,
       signal: probeAbort.signal,
     });
-    // The stored sign-in is spent at authn alone; the host sees this CLI's host-only token.
+    // The stored sign-in is spent at authn; the host sees this CLI's host-only
+    // token, or the sign-in only as `cliReleasedSignOn` allows.
     const tokens = createCliHostTokens({
       lease,
       refresh: () => revalidator.revalidateCurrentContext(),
       signal: probeAbort.signal,
     });
+    const releasedSignOn = cliReleasedSignOn(
+      options.auth.authnBaseUrl,
+      () => endpoint?.hostId ?? null,
+      lease,
+      tokens,
+    );
     // A mint authn refuses for good (a computer with no row answers a bare
     // 404) can never become a token, so the probe ends at once rather than
-    // waiting out its budget.
+    // waiting out its budget, unless the first 404 leaves the sign-in to try.
     stopMintRefusals = tokens.onMintRefused((hostId, failure) => {
       if (endpoint?.hostId !== hostId) return;
       options.logger.warn("Host credential provisioning token mint refused", {
         environment: options.environment,
         failure: failure.kind,
       });
-      mintRefusal = failure;
-      if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
+      const refuse = (): void => {
+        mintRefusal = failure;
+        if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
+      };
+      if (failure.kind === "not-admitted" && admittedAfterNotAdmitted) return;
+      if (failure.kind !== "not-admitted" || signInAfterNotAdmitted !== null) {
+        refuse();
+        return;
+      }
+      signInAfterNotAdmitted = failure;
+      void releasedSignOn
+        .allowed()
+        .catch(() => false)
+        .then((allowed) => {
+          if (!allowed) refuse();
+        });
     });
     // Recovery of a refused token, as on every other CLI open: one fresh
     // token and one more open, and a second refusal is final.
@@ -423,7 +452,10 @@ export async function provisionInstalledHostCredential(
       // the host the endpoint names.
       bearer: () =>
         endpoint === null ? null : tokens.streamBearer(endpoint.hostId)(),
+      presentsHeldPastExpiry: () =>
+        endpoint !== null && tokens.presentsHeldPastExpiry(endpoint.hostId),
       userId: lease.identity.userId,
+      releasedSignOn,
       auth: streamAuth,
       // Each admitted open resets the host's recovery, so the one fresh token
       // is earned again after a good open.
@@ -431,6 +463,7 @@ export async function provisionInstalledHostCredential(
         refused: () => undefined,
         admitted: () => {
           doorRetried = false;
+          if (signInAfterNotAdmitted !== null) admittedAfterNotAdmitted = true;
           if (endpoint !== null)
             tokens.streamRecovery(endpoint.hostId).admitted();
         },
@@ -504,7 +537,10 @@ export async function provisionInstalledHostCredential(
       if (credentialRejected || tokens.signInRejected()) {
         return { kind: "unauthorized" };
       }
-      if (mintRefusal !== null) return mintRefusalOutcome(mintRefusal);
+      const refusal =
+        mintRefusal ??
+        (admittedAfterNotAdmitted ? null : signInAfterNotAdmitted);
+      if (refusal !== null) return mintRefusalOutcome(refusal);
       if (mintUnavailable) {
         return { kind: "mint-unavailable" };
       }
@@ -565,6 +601,7 @@ export async function provisionInstalledHostCredential(
       !credentialRejected &&
       !tokens.signInRejected() &&
       mintRefusal === null &&
+      (signInAfterNotAdmitted === null || admittedAfterNotAdmitted) &&
       !mintUnavailable &&
       !mintProvisioned &&
       !mintInvoked &&
@@ -730,6 +767,8 @@ export async function provisionInstalledHostCredential(
           // incompatible ack settles the lap as `state` first, and lands in
           // `unsupported` through the withheld-mint path instead.)
           const reason = observation.reason;
+          if (signInAfterNotAdmitted !== null && !admittedAfterNotAdmitted)
+            return await settleAfterRecovery();
           if (reason !== null && reason.kind === "fatalError") {
             const admissionError = localTeamAdmissionCliError(reason.details);
             if (admissionError !== null)

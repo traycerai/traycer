@@ -3,12 +3,22 @@ import {
   hostDirectoryEntryNeedsUpdate,
 } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
-import { hostTokenBearerFor } from "@traycer-clients/shared/auth/host-token-lease";
+import {
+  hostTokenBearerFor,
+  trackHostTokenMints,
+  type HostTokenAccess,
+} from "@traycer-clients/shared/auth/host-token-lease";
 import {
   appHostDoorObserver,
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
+import {
+  opensReleasedWay,
+  signInForLocalRow,
+  heldTokenRefused,
+  processReleasedHosts,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import { v4 as uuidv4 } from "uuid";
 import type {
@@ -51,6 +61,7 @@ import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
   type RequestIdProvider,
+  type WsRpcClientOptions,
 } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type {
   FatalErrorDetails,
@@ -181,6 +192,7 @@ export function buildRawHostMessengerForTarget<
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       hostTokens: params.hostTokens,
+      opensReleasedWay: opensReleasedWay(params.target, params.userId),
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -234,9 +246,10 @@ export function buildRawHostMessengerForTarget<
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
       doorFor: appHostDoorObserver,
-      hostBearerFor: hostTokenBearerFor(
+      ...localDoorBearers(
         localDoorHostTokens(params.hostTokens),
-        noteHostTokenRefusal,
+        () => params.target,
+        params.auth,
       ),
     }),
     remoteTransport: null,
@@ -449,9 +462,10 @@ class RuntimeHostMessenger<
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
       clientIdentity: getGuiClientIdentity(),
       doorFor: appHostDoorObserver,
-      hostBearerFor: hostTokenBearerFor(
+      ...localDoorBearers(
         localDoorHostTokens(this.hostTokens),
-        noteHostTokenRefusal,
+        this.resolveTarget,
+        this.auth,
       ),
     });
     return this.localMessenger;
@@ -1026,6 +1040,42 @@ interface RemoteBinding<Registry extends VersionedRpcRegistry> {
  */
 export function servesOverLocalSocket(entry: HostDirectoryEntry): boolean {
   return entry.kind === "local" || entry.kind === "mock";
+}
+
+/**
+ * The local socket's two bearer sources over ONE token tracker: the sign-in
+ * is offered with no host-only token only after that tracker saw the mint fail.
+ */
+function localDoorBearers(
+  tokens: HostTokenAccess,
+  resolveRow: (hostId: string) => HostDirectoryEntry | null,
+  recovery: StreamAuthRevalidator | null,
+): Pick<
+  WsRpcClientOptions<VersionedRpcRegistry>,
+  | "hostBearerFor"
+  | "releasedSignOnFor"
+  | "releasedHosts"
+  | "heldTokenRefusedFor"
+  | "forgetHeldRefusalFor"
+> {
+  const tracked = trackHostTokenMints(tokens);
+  return {
+    hostBearerFor: hostTokenBearerFor(tracked, noteHostTokenRefusal),
+    releasedSignOnFor: signInForLocalRow(resolveRow, recovery, tracked),
+    releasedHosts: processReleasedHosts,
+    heldTokenRefusedFor: (authority, presented) =>
+      heldTokenRefused(
+        tracked,
+        authority.bearer.identity.userId,
+        authority.endpoint.hostId,
+        presented,
+      ),
+    forgetHeldRefusalFor: (authority) =>
+      tracked.forgetHeldRefused(
+        authority.bearer.identity.userId,
+        authority.endpoint.hostId,
+      ),
+  };
 }
 
 function remoteTransportKey(entry: HostDirectoryEntry): string | null {

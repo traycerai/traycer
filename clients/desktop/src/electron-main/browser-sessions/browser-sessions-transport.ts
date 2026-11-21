@@ -12,7 +12,9 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearer,
+  hostTokenHeldPastExpiry,
   hostTokenSessionAuth,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import { allowsBrowserLoginSync } from "@traycer-clients/shared/host-client/browser-login-ownership";
@@ -35,6 +37,11 @@ import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/tr
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
 import { isPersonalRemoteHost } from "@traycer-clients/shared/host-client/personal-remote-host";
+import {
+  opensReleasedWay,
+  releasedSignOnForLocalRow,
+  processReleasedHosts,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   DEFAULT_DIAL_TIMEOUT_MS,
   DEFAULT_INITIAL_BACKOFF_MS,
@@ -299,7 +306,7 @@ export interface BrowserSessionsTransportDeps {
   /** Re-read on every (re)dial, so a host that moved is followed. */
   readonly endpoint: () => HostTransportEndpoint | null;
   readonly appVersion: string | null;
-  /** Main's host-only tokens: the only credential this stream sends a host. */
+  /** Main's host-only tokens; the sign-in goes only where `opensReleasedWay` allows. */
   readonly hostTokens: HostTokenSource;
 }
 
@@ -309,7 +316,7 @@ export interface BrowserSessionsTransportDeps {
  * It opens with main's host-only token for the target and recovers a refused
  * or expired one by minting again in main; it never refreshes the sign-in
  * token, which is the renderer's single-flight machinery. A refusal it cannot
- * recover (an older host's, a person not admitted) ends the stream: the
+ * recover (a person not admitted, a refused sign-in) ends the stream: the
  * renderer sees `failed` and its own `retry()` re-opens it.
  * `hostCredentialMint: null` because provisioning the host's own credential is
  * the renderer's too.
@@ -350,6 +357,7 @@ export function openBrowserSessionsTransport(
       hostPublicKey: lane.entry.publicKey,
       bearer: deps.bearer,
       hostTokens: deps.hostTokens,
+      opensReleasedWay: opensReleasedWay(lane.entry, userId),
       door: null,
       onState: ignoreHostTokenState,
       cloudAuthorized: deps.cloudAuthorized,
@@ -373,20 +381,36 @@ export function openBrowserSessionsTransport(
       },
     };
   }
+  const hostTokens = trackHostTokenMints(deps.hostTokens);
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     hostId: target.hostId,
     endpoint: deps.endpoint,
     bearer: hostTokenBearer(
-      deps.hostTokens,
+      hostTokens,
       deps.bearer,
       target.hostId,
       ignoreHostTokenState,
     ),
+    presentsHeldPastExpiry: hostTokenHeldPastExpiry(
+      hostTokens,
+      deps.bearer,
+      target.hostId,
+    ),
+    // Main never refreshes the sign-in, so a refused one ends the stream too.
+    releasedSignOn: releasedSignOnForLocalRow(
+      target,
+      target.hostId,
+      userId,
+      deps.bearer,
+      null,
+      hostTokens,
+      processReleasedHosts,
+    ),
     userId,
     ...hostTokenSessionAuth(
       {
-        tokens: deps.hostTokens,
+        tokens: hostTokens,
         currentUserId: () => deps.bearer()?.identity.userId ?? null,
         hostId: target.hostId,
         signInRecovery: null,

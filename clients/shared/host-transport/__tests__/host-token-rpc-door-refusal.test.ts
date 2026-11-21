@@ -32,6 +32,7 @@ import {
 import {
   hostTokenBearerFor,
   hostTokenUnaryRevalidator,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -158,6 +159,19 @@ const RECOGNISED_RPC_DOOR_OUTCOMES: Record<HostDoorReason, RpcDoorOutcome> = {
   },
   host_claimed: {
     expectedKind: "host-claimed",
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+  // A host gives it only to the probe; on a host-only token it raises nothing.
+  owner_sign_in: {
+    expectedKind: null,
+    expectedMintAttempts: 0,
+    expectedRequests: 1,
+    refuseAgainAfterMint: false,
+  },
+  not_provisioned: {
+    expectedKind: null,
     expectedMintAttempts: 0,
     expectedRequests: 1,
     refuseAgainAfterMint: false,
@@ -389,9 +403,12 @@ function doorHarness(): DoorHarness {
     frameTimeoutMs: 5_000,
     hostAttestationWindowMs: 0,
     evidence: NO_TRANSPORT_EVIDENCE,
-    hostBearerFor: hostTokenBearerFor(tokens, (hostId, kind) => {
-      states.push({ hostId, kind, detail: null });
-    }),
+    hostBearerFor: hostTokenBearerFor(
+      trackHostTokenMints(tokens),
+      (hostId, kind) => {
+        states.push({ hostId, kind, detail: null });
+      },
+    ),
     doorFor: (hostId) => ({
       refused: (details) => {
         refusals.push(details);

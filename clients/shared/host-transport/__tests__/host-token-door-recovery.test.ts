@@ -356,6 +356,7 @@ describe("host-token refusal recovery", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     const transport = createRemoteHostTransport({
+      opensReleasedWay: false,
       hostId: HOST_ID,
       userId: USER_ID,
       relayAttachUrl: "wss://relay.test/attach",

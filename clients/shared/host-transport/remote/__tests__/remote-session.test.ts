@@ -492,6 +492,7 @@ function buildSessionOptions(
         kind: "ok" as const,
         grant: { grant: "grant-jws", expiresInSeconds: 300 },
       }),
+    releasedSignOn: null,
     hostToken: () => {
       try {
         return lease.getBearerToken();

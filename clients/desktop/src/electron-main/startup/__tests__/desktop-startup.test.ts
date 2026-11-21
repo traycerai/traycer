@@ -1,4 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { resetNegotiatedStreamVersions } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
+import {
+  makeStubSocketFactory,
+  type StubStreamWebSocket,
+} from "@traycer-clients/shared/host-transport/__testing__/stub-stream-socket";
+import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
   WindowRegistry,
   type RegistryManagedWindow,
@@ -31,9 +45,15 @@ vi.mock("electron", () => ({
   app: {
     getName: () => "Traycer",
     getPath: () => "/tmp",
+    getVersion: () => "0.0.0-test",
     on: () => undefined,
+    exit: () => undefined,
     whenReady: () => Promise.resolve(),
     dock: null,
+  },
+  dialog: {
+    showErrorBox: () => undefined,
+    showMessageBox: () => Promise.resolve({ response: 0 }),
   },
   nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }) },
 }));
@@ -49,7 +69,10 @@ vi.mock("../../auth/deep-link", () => ({
   registerDeepLinkHandling: () => undefined,
 }));
 vi.mock("../../windows/window-factory", () => ({
-  createMainWindow: () => ({}),
+  createMainWindow: () => ({
+    on: () => undefined,
+    webContents: { id: 1 },
+  }),
   loadMainWindow: () => Promise.resolve(),
 }));
 vi.mock("../../tray/tray", () => ({
@@ -138,9 +161,34 @@ vi.mock("../../windows/epic-window-ownership", () => ({
 vi.mock("../../windows/per-window-state", () => ({
   PerWindowState: class {},
 }));
-vi.mock("../../auth/desktop-auth-session", () => ({
-  DesktopAuthSession: class {},
-}));
+const capturedAuthSessions = vi.hoisted(() => {
+  const sessions: Array<{
+    set(snapshot: {
+      readonly status: "signed-in" | "signed-out" | "signing-in" | "unverified";
+      readonly token: string | null;
+      readonly profile: {
+        readonly userId: string;
+        readonly userName: string;
+        readonly email: string;
+      } | null;
+    }): void;
+  }> = [];
+  return { sessions };
+});
+
+vi.mock("../../auth/desktop-auth-session", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../auth/desktop-auth-session")>();
+  return {
+    ...actual,
+    DesktopAuthSession: class extends actual.DesktopAuthSession {
+      constructor() {
+        super();
+        capturedAuthSessions.sessions.push(this);
+      }
+    },
+  };
+});
 vi.mock("../../app/support", () => ({
   DesktopSupportService: class {},
 }));
@@ -271,9 +319,56 @@ vi.mock("../../app/host-login-item", () => ({
 }));
 vi.mock("../../../config", () => ({
   DESKTOP_APP_NAME: "Traycer",
+  isDevBuild: true,
 }));
 vi.mock("../../app/update-preferences", () => ({
   hydrateUpdatePreferences: () => Promise.resolve({}),
+}));
+vi.mock("@traycer-clients/shared/host-lock/data-migration-admission", () => ({
+  admitClientProcess: () => Promise.resolve({ kind: "admitted" }),
+}));
+vi.mock("@traycer/protocol/config/data-root", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@traycer/protocol/config/data-root")>();
+  return {
+    ...actual,
+    currentDataRootResolution: () => ({
+      kind: "default" as const,
+      root: "/tmp/traycer-test-data-root",
+    }),
+  };
+});
+vi.mock(
+  "@traycer/protocol/config/data-root-default-check",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer/protocol/config/data-root-default-check")
+      >();
+    return {
+      ...actual,
+      inspectDefaultDataRoot: () => ({ kind: "none" as const }),
+    };
+  },
+);
+vi.mock("../../auth/file-token-store", () => ({
+  FileTokenStore: class {
+    constructor() {
+      throw new Error("stop-after-released-host-listener");
+    }
+  },
+}));
+vi.mock("../../browser-view/storage/browser-saved-logins", () => ({
+  browserSavedLoginsFilePath: () => "/tmp/browser-saved-logins.json",
+  initBrowserSavedLogins: () => Promise.resolve(),
+}));
+vi.mock("../../browser-view/storage/browser-forget-ledger", () => ({
+  browserForgetLedgerFilePath: () => "/tmp/browser-forget-ledger.json",
+  initBrowserForgetLedger: () => Promise.resolve(),
+}));
+vi.mock("../../host/host-key-pins", () => ({
+  installDesktopHostKeyPins: () => undefined,
+  setHostKeyPinMismatchEmitter: () => undefined,
 }));
 
 class FakeRegistryWindow implements RegistryManagedWindow {
@@ -461,5 +556,167 @@ describe("runPreReady - scheme/crash-reporter ordering", () => {
     const appSchemeOrder =
       vi.mocked(registerAppScheme).mock.invocationCallOrder[0];
     expect(crashReporterOrder).toBeLessThan(appSchemeOrder);
+  });
+});
+
+const RELEASED_HOST_ID = "desktop-startup-released-host";
+const RELEASED_USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
+const RELEASED_HOST_TOKEN = "desktop-host-token";
+const RELEASED_SIGN_IN = "desktop-person-sign-in";
+const RELEASED_WAIT = { timeout: 2_000, interval: 10 };
+const startupClients: WsStreamClient<typeof hostStreamRpcRegistry>[] = [];
+
+function startupReleasedRefusal(): {
+  readonly kind: "fatalError";
+  readonly details: FatalErrorDetails;
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "released-host-token-refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
+function readStartupFrame(raw: string): Record<string, unknown> {
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("frame was not an object");
+  }
+  const frame: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    frame[key] = entry;
+  }
+  return frame;
+}
+
+function openStartupStream(): {
+  readonly sockets: StubStreamWebSocket[];
+} {
+  const { factory, sockets } = makeStubSocketFactory();
+  const client = new WsStreamClient({
+    clientIdentity: TEST_CLIENT_IDENTITY,
+    registry: hostStreamRpcRegistry,
+    endpoint: () => ({
+      hostId: RELEASED_HOST_ID,
+      websocketUrl: "ws://127.0.0.1:9/rpc",
+    }),
+    hostId: RELEASED_HOST_ID,
+    bearer: () => new MutableBearerLease(RELEASED_HOST_TOKEN, RELEASED_USER_ID),
+    userId: RELEASED_USER_ID,
+    releasedSignOn: {
+      signIn: () => new MutableBearerLease(RELEASED_SIGN_IN, RELEASED_USER_ID),
+      recovery: null,
+      allowed: () => Promise.resolve(true),
+      hostTokenUnobtainable: () => false,
+      ownerSignInEligible: () => false,
+      heldTokenRefused: () => false,
+      forgetHeldRefusal: () => undefined,
+      hosts: processReleasedHosts,
+    },
+    auth: null,
+    clock: null,
+    hostCredentialMint: null,
+    onHostCredentialState: null,
+    evidence: NO_TRANSPORT_EVIDENCE,
+    webSocketFactory: factory,
+    dialTimeoutMs: 1_000,
+    openAckTimeoutMs: 1_000,
+    pingIntervalMs: 25_000,
+    pongTimeoutMs: 50_000,
+    initialBackoffMs: 10,
+    maxBackoffMs: 1_000,
+  });
+  startupClients.push(client);
+  client.subscribe("git.subscribeStatus", {
+    hostId: RELEASED_HOST_ID,
+    runningDir: "/repo",
+    ignoreWhitespace: false,
+    freshNonce: null,
+  });
+  return { sockets };
+}
+
+async function openStartupFrame(
+  socket: StubStreamWebSocket,
+): Promise<Record<string, unknown>> {
+  socket.fireOpen();
+  await vi.waitFor(
+    () => expect(socket.textSent.length).toBeGreaterThan(0),
+    RELEASED_WAIT,
+  );
+  return readStartupFrame(socket.textSent[0]);
+}
+
+async function admitStartupSignIn(): Promise<void> {
+  const { sockets } = openStartupStream();
+  await vi.waitFor(
+    () => expect(sockets.length).toBeGreaterThanOrEqual(1),
+    RELEASED_WAIT,
+  );
+  const first = sockets[0];
+  if (first === undefined) throw new Error("host-token dial missing");
+  const refused = await openStartupFrame(first);
+  expect(refused.token).toBe(RELEASED_HOST_TOKEN);
+  first.fireText(startupReleasedRefusal());
+  await vi.waitFor(
+    () => expect(sockets.length).toBeGreaterThanOrEqual(2),
+    RELEASED_WAIT,
+  );
+  const second = sockets[1];
+  if (second === undefined) throw new Error("sign-in dial missing");
+  const admitted = await openStartupFrame(second);
+  expect(admitted.token).toBe(RELEASED_SIGN_IN);
+  second.fireText({
+    kind: "openAck",
+    manifest: admitted.manifest,
+    capabilities: ["credentialUpdate"],
+  });
+}
+
+async function firstStartupOpenToken(): Promise<unknown> {
+  const { sockets } = openStartupStream();
+  await vi.waitFor(
+    () => expect(sockets.length).toBeGreaterThanOrEqual(1),
+    RELEASED_WAIT,
+  );
+  const socket = sockets[0];
+  if (socket === undefined) throw new Error("dial missing");
+  const opened = await openStartupFrame(socket);
+  return opened.token;
+}
+
+describe("released host memory across a desktop sign-out", () => {
+  afterEach(() => {
+    for (const client of startupClients.splice(0)) client.close("test-done");
+    processReleasedHosts.forgetAll();
+    capturedAuthSessions.sessions.splice(0);
+    resetNegotiatedStreamVersions();
+    resetNegotiatedManifests();
+    vi.useRealTimers();
+  });
+
+  it("starts the next dial with the host-only token after the auth session signs out", async () => {
+    await admitStartupSignIn();
+    const startup = import("../desktop-startup").then((mod) =>
+      mod.runDesktopStartup(),
+    );
+    await expect(startup).rejects.toThrow("stop-after-released-host-listener");
+    const session = capturedAuthSessions.sessions[0];
+    if (session === undefined) throw new Error("auth session missing");
+    session.set({
+      status: "signed-in",
+      token: RELEASED_SIGN_IN,
+      profile: {
+        userId: RELEASED_USER_ID,
+        userName: "person",
+        email: "person@example.com",
+      },
+    });
+    session.set({ status: "signed-out", token: null, profile: null });
+    expect(await firstStartupOpenToken()).toBe(RELEASED_HOST_TOKEN);
   });
 });

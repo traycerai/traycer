@@ -15,7 +15,16 @@ import {
 import type {
   PoolSessionAuth,
   RemoteSessionAuth,
+  RemoteSessionAuthRecoveryOutcome,
+  RemoteSessionOpenAuth,
 } from "@traycer/protocol/host-transport/remote/auth";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { AttachGrantProvider } from "@traycer/protocol/host-transport/remote/grant";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import {
+  isReleasedHostTokenRefusal,
+  type ReleasedSignOn,
+} from "../released-sign-on";
 import { OPEN_AUTHZ_SESSION_GRANT_VERSION } from "@traycer/protocol/host-transport/mux";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import type { RemoteTrafficSnapshot } from "@traycer/protocol/host-transport/remote/traffic-accounting";
@@ -166,12 +175,19 @@ export interface RemoteSessionOptions<
   /**
    * The host-only token, for every host kind: `OPEN` presents it in `authz`
    * v2 with an EMPTY bearer, and a `CREDENTIAL_UPDATE` carries a renewed one
-   * in `bearer`. The sign-in token never reaches a host.
+   * in `bearer`. The sign-in token reaches a host only through
+   * {@link releasedSignOn}.
    */
   readonly hostToken: () => string | null;
   readonly auth: StreamAuthRevalidator | null;
   readonly door: SessionDoorObserver | null;
   readonly evidence: TransportEvidenceReporter;
+  /**
+   * The person's own sign-in for their own personal computer, `null` for every
+   * other row. Presented only on the dial after this host refused the host-only
+   * token the released way (`isReleasedHostTokenRefusal`).
+   */
+  readonly releasedSignOn: ReleasedSignOn | null;
 }
 
 /**
@@ -240,32 +256,213 @@ function bearerReader(bearer: BearerSourceProvider): () => string | null {
   };
 }
 
+function hostTokenOpenAuth(
+  readHostToken: () => string | null,
+): RemoteSessionOpenAuth | null {
+  const grant = readHostToken();
+  if (grant === null) {
+    return null;
+  }
+  return {
+    bearer: "",
+    authz: { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant },
+    fingerprint: grant,
+  };
+}
+
+interface HostTokenSessionDial {
+  readonly auth: RemoteSessionAuth;
+  readonly grantProvider: AttachGrantProvider;
+}
+
 function createHostTokenRemoteSessionAuth(
+  hostId: string,
+  grantProvider: AttachGrantProvider,
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: SessionDoorObserver | null,
-): RemoteSessionAuth {
+  releasedSignOn: ReleasedSignOn | null,
+): HostTokenSessionDial {
+  if (releasedSignOn !== null)
+    return createReleasedSignOnSessionAuth(
+      hostId,
+      grantProvider,
+      readHostToken,
+      auth,
+      door,
+      releasedSignOn,
+    );
   return {
+    grantProvider,
+    auth: {
+      missingOpenAuthCause: "missing-host-token",
+      readOpenAuth: () => hostTokenOpenAuth(readHostToken),
+      readCredentialUpdateBearer: readHostToken,
+      currentFingerprint: readHostToken,
+      // A wrapper over nothing would turn "no revalidator" into an endless retry.
+      revalidateForReconnect:
+        auth === null || auth === undefined
+          ? null
+          : (refusal) => revalidateStream(auth, refusal),
+      ...(door === null ? {} : { door }),
+    },
+  };
+}
+
+/**
+ * A dial presents the host-only token first, unless this process remembers the
+ * host as released for this person (`ReleasedHostMemory`) and the row still
+ * allows the sign-in: `allowed` is asked once the dial's relay pass is in hand,
+ * before its `open`. A released host's typed refusal of the token makes the
+ * next dial present the sign-in, `authz: null`, as a released app did; that
+ * connection's credential pushes carry the sign-in. A host that names its
+ * reason is never handed the sign-in again.
+ */
+function createReleasedSignOnSessionAuth(
+  hostId: string,
+  grantProvider: AttachGrantProvider,
+  readHostToken: () => string | null,
+  auth: StreamAuthRevalidator | null,
+  door: SessionDoorObserver | null,
+  releasedSignOn: ReleasedSignOn,
+): HostTokenSessionDial {
+  const readSignIn = bearerReader(releasedSignOn.signIn);
+  const hosts = releasedSignOn.hosts;
+  let plan: "host-token" | "sign-in-next" | "sign-in" = "host-token";
+  let openAdmitted = false;
+  let signInFromMemory = false;
+  /** The person this dial's sign-in is for, while it presents one. */
+  let signInUserId: string | null = null;
+  /**
+   * The row's answer from the latest relay pass, for the person it was asked
+   * for: every pass sets or clears it, and an open spends it.
+   */
+  let rowAnswer: { readonly userId: string; readonly allowed: boolean } | null =
+    null;
+  const remembered = (): string | null => {
+    const lease = releasedSignOn.signIn();
+    return lease !== null &&
+      plan !== "sign-in-next" &&
+      hosts.opensReleasedWay(lease.identity.userId, hostId)
+      ? lease.identity.userId
+      : null;
+  };
+  const named = (refusal: FatalErrorDetails): boolean =>
+    readDoorReason(refusal.doorReason) !== "absent";
+  // Only a refusal of this dial's open switches to the sign-in: a current host
+  // can end a session it admitted the same way. With no sign-in to present,
+  // the refusal takes the host-only token's own path.
+  const answersReleasedWay = (refusal: FatalErrorDetails): boolean =>
+    isReleasedHostTokenRefusal(refusal) &&
+    !hosts.namedReason(hostId) &&
+    (plan === "sign-in" || (!openAdmitted && readSignIn() !== null));
+  const recoverSignIn = async (
+    refusal: FatalErrorDetails,
+  ): Promise<RemoteSessionAuthRecoveryOutcome> => {
+    const recovery = releasedSignOn.recovery;
+    const outcome =
+      recovery === null
+        ? "rejected"
+        : await revalidateStream(recovery, refusal);
+    if (outcome === "rotated" || outcome === "network-error") {
+      plan = "sign-in-next";
+      return outcome;
+    }
+    door?.refused(refusal);
+    return outcome;
+  };
+  const recoverHostToken = (
+    refusal: FatalErrorDetails,
+  ): Promise<RemoteSessionAuthRecoveryOutcome> => {
+    plan = "host-token";
+    return auth === null
+      ? Promise.resolve("rejected")
+      : revalidateStream(auth, refusal);
+  };
+  const answerHostTokenRefusal = async (
+    refusal: FatalErrorDetails,
+  ): Promise<RemoteSessionAuthRecoveryOutcome> => {
+    const allowed = await releasedSignOn.allowed().catch(() => false);
+    if (allowed) {
+      plan = "sign-in-next";
+      return "rotated";
+    }
+    door?.refused(refusal);
+    return recoverHostToken(refusal);
+  };
+  const sessionAuth: RemoteSessionAuth = {
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
-      const grant = readHostToken();
-      if (grant === null) {
-        return null;
+      openAdmitted = false;
+      const rememberedFor = remembered();
+      signInFromMemory =
+        rememberedFor !== null &&
+        rowAnswer !== null &&
+        rowAnswer.userId === rememberedFor &&
+        rowAnswer.allowed;
+      rowAnswer = null;
+      if (plan === "sign-in-next" || signInFromMemory) {
+        const lease = releasedSignOn.signIn();
+        const signIn = readSignIn();
+        if (lease !== null && signIn !== null) {
+          plan = "sign-in";
+          signInUserId = lease.identity.userId;
+          return { bearer: signIn, authz: null, fingerprint: signIn };
+        }
       }
-      return {
-        bearer: "",
-        authz: { v: OPEN_AUTHZ_SESSION_GRANT_VERSION, grant },
-        fingerprint: grant,
-      };
+      signInFromMemory = false;
+      signInUserId = null;
+      plan = "host-token";
+      return hostTokenOpenAuth(readHostToken);
     },
-    readCredentialUpdateBearer: readHostToken,
-    currentFingerprint: readHostToken,
-    // A wrapper over nothing would turn "no revalidator" into an endless retry.
-    revalidateForReconnect:
-      auth === null || auth === undefined
-        ? null
-        : (refusal) => revalidateStream(auth, refusal),
-    ...(door === null ? {} : { door }),
+    readCredentialUpdateBearer: () =>
+      plan === "sign-in" ? readSignIn() : readHostToken(),
+    currentFingerprint: () =>
+      plan === "host-token" ? readHostToken() : readSignIn(),
+    revalidateForReconnect: (refusal) => {
+      // Remembered as released, now updated: the next dial presents the token.
+      if (signInFromMemory && named(refusal)) {
+        signInFromMemory = false;
+        plan = "host-token";
+        return Promise.resolve("rotated");
+      }
+      if (answersReleasedWay(refusal)) {
+        if (plan === "sign-in") return recoverSignIn(refusal);
+        return answerHostTokenRefusal(refusal);
+      }
+      return recoverHostToken(refusal);
+    },
+    door: {
+      // Answered by the next dial, or reported once its recovery gives up.
+      refused: (details) => {
+        if (named(details)) hosts.refusedNamingReason(hostId);
+        if (answersReleasedWay(details) || (signInFromMemory && named(details)))
+          return;
+        door?.refused(details);
+      },
+      admitted: () => {
+        openAdmitted = true;
+        if (plan === "sign-in" && signInUserId !== null)
+          hosts.signInAdmitted(signInUserId, hostId);
+        else hosts.hostTokenAdmitted(hostId);
+        door?.admitted();
+      },
+    },
+  };
+  return {
+    auth: sessionAuth,
+    grantProvider: async () => {
+      const provision = await grantProvider();
+      const rememberedFor = provision.kind === "ok" ? remembered() : null;
+      rowAnswer =
+        rememberedFor === null
+          ? null
+          : {
+              userId: rememberedFor,
+              allowed: await releasedSignOn.allowed().catch(() => false),
+            };
+      return provision;
+    },
   };
 }
 
@@ -324,10 +521,19 @@ function toProtocolSessionOptions<
       auth: createClientPoolSessionAuth(bearer, auth),
     };
   }
-  const { hostToken, auth, door, ...coreOptions } = options;
+  const { hostToken, auth, door, releasedSignOn, ...coreOptions } = options;
+  const dial = createHostTokenRemoteSessionAuth(
+    options.hostId,
+    options.grantProvider,
+    hostToken,
+    auth,
+    door,
+    releasedSignOn,
+  );
   return {
     ...coreOptions,
     ...clientWiring,
-    auth: createHostTokenRemoteSessionAuth(hostToken, auth, door),
+    grantProvider: dial.grantProvider,
+    auth: dial.auth,
   };
 }

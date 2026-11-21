@@ -11,8 +11,9 @@ import type {
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import { createHostTokenFilePersistence } from "@traycer-clients/shared/auth/host-token-file";
 import {
+  heldWhileAuthnUnreachable,
   hostTokenRevalidator,
-  type HostTokenAccess,
+  trackHostTokenMints,
   type HostTokenSessionRevalidator,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import {
@@ -23,6 +24,14 @@ import {
 } from "@traycer-clients/shared/auth/host-token-source";
 import { isUsableHostToken } from "@traycer-clients/shared/auth/host-token-store";
 import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
+import {
+  heldTokenRefused,
+  hostTokenUnobtainable,
+  ownerSignInEligible,
+  releasedLocalSignOnFromRegistry,
+  type ReleasedSignOn,
+  processReleasedHosts,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import { config } from "../config";
 import {
   CREDENTIALS_LOCK_WAIT_MS,
@@ -113,6 +122,16 @@ export interface CliHostTokens {
   refreshSignIn(): Promise<RevalidateOutcome>;
   /** `true` when one was minted; a mint refused for good reaches the listeners like any other. */
   renewAfterSignInRefresh(hostId: string): Promise<boolean>;
+  /** The held token is presented past its end: authn could not be reached for a new one. */
+  presentsHeldPastExpiry(hostId: string): boolean;
+  /** See `hostTokenUnobtainable`. */
+  hostTokenUnobtainable(hostId: string): boolean;
+  /** See `ownerSignInEligible`. */
+  ownerSignInEligible(hostId: string): boolean;
+  /** See `ReleasedSignOn.heldTokenRefused`. */
+  heldTokenRefused(hostId: string, presented: string): boolean;
+  /** See `ReleasedSignOn.forgetHeldRefusal`. */
+  forgetHeldRefusal(hostId: string): void;
 }
 
 function createSource(signIn: VerifiedSignIn | null): HostTokenSource {
@@ -157,7 +176,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // Every mint passes here, so a refusal for good is reported wherever asked. A token
   // that could not be saved is transient like an unreachable authn, never a rejected
   // sign-in. A mint with no signal of its own is cancelled with this process's mints.
-  const source: HostTokenAccess = {
+  const source = trackHostTokenMints({
     current: (id, hostId) => stored.current(id, hostId),
     obtain: async (id, hostId, fresh, signal) => {
       const outcome: HostTokenMintOutcome = await stored
@@ -173,7 +192,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       if (isHostRefusal(outcome)) report(hostId, outcome);
       return outcome;
     },
-  };
+  });
   const signInRejected = (): boolean => refreshRefused || refusedAfterRefresh;
   const signInRecovery = {
     revalidateForReconnect: refreshSignIn,
@@ -182,6 +201,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     identity: { userId },
     getBearerToken: () => source.current(userId, hostId)?.token ?? "",
   });
+  const presentsHeld = (hostId: string): boolean =>
+    heldWhileAuthnUnreachable(source, userId, hostId) !== null;
   const answer = (
     hostId: string,
     outcome: HostTokenMintOutcome,
@@ -242,6 +263,9 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     signal: AbortSignal | null,
   ): Promise<CliHostBearer> => {
     const first = await source.obtain(userId, hostId, fresh, signal);
+    // `traycer login` asks for a fresh token, and only a fresh one will do.
+    if (!fresh && presentsHeld(hostId))
+      return { kind: "ok", bearer: bearerOf(hostId) };
     if (first.kind === "no-sign-in") report(hostId, first);
     if (first.kind !== "sign-in-rejected") return answer(hostId, first);
     return recoverRefusedSignIn(hostId, first, signal);
@@ -277,6 +301,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         provider = () => {
           if (isUsableHostToken(source.current(userId, hostId), Date.now()))
             return lease;
+          const held = presentsHeld(hostId);
           if (!minting.has(hostId)) {
             minting.add(hostId);
             void obtain(hostId, false, null)
@@ -286,7 +311,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
               )
               .finally(() => minting.delete(hostId));
           }
-          return null;
+          return held ? lease : null;
         };
         streamBearers.set(hostId, provider);
       }
@@ -294,6 +319,14 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     },
     signInRejected,
     refreshSignIn,
+    presentsHeldPastExpiry: presentsHeld,
+    hostTokenUnobtainable: (hostId) =>
+      hostTokenUnobtainable(source, userId, hostId),
+    ownerSignInEligible: (hostId) =>
+      ownerSignInEligible(source, userId, hostId),
+    heldTokenRefused: (hostId, presented) =>
+      heldTokenRefused(source, userId, hostId, presented),
+    forgetHeldRefusal: (hostId) => source.forgetHeldRefused(userId, hostId),
     onMintRefused: (listener) => {
       listeners.add(listener);
       return () => {
@@ -317,10 +350,54 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
 
 export interface CliHostSession {
   readonly bearer: OpenFrameBearerSource;
-  /** The stored sign-in, for authn alone: never presented to a host. */
+  /**
+   * The stored sign-in, for authn, and for a released host on this person's own
+   * personal computer through {@link releasedSignOn}.
+   */
   readonly signInLease: BearerLease;
   readonly tokens: CliHostTokens;
+  /** This session's host's answer to a released host's refusal of the host-only token. */
+  readonly releasedSignOn: ReleasedSignOn;
   dispose(): void;
+}
+
+/** The stored sign-in, refreshed under the credentials lock, for `releasedLocalSignOnFromRegistry`. */
+export function cliReleasedSignOn(
+  authnBaseUrl: string,
+  hostId: () => string | null,
+  lease: BearerLease,
+  tokens: Pick<
+    CliHostTokens,
+    | "refreshSignIn"
+    | "hostTokenUnobtainable"
+    | "ownerSignInEligible"
+    | "heldTokenRefused"
+    | "forgetHeldRefusal"
+  >,
+): ReleasedSignOn {
+  return releasedLocalSignOnFromRegistry({
+    authnBaseUrl,
+    hostId,
+    signIn: () => (readLeaseBearer(lease) === null ? null : lease),
+    recovery: { revalidateForReconnect: () => tokens.refreshSignIn() },
+    hostTokenUnobtainable: () => {
+      const id = hostId();
+      return id !== null && tokens.hostTokenUnobtainable(id);
+    },
+    ownerSignInEligible: () => {
+      const id = hostId();
+      return id !== null && tokens.ownerSignInEligible(id);
+    },
+    heldTokenRefused: (presented) => {
+      const id = hostId();
+      return id !== null && tokens.heldTokenRefused(id, presented);
+    },
+    forgetHeldRefusal: () => {
+      const id = hostId();
+      if (id !== null) tokens.forgetHeldRefusal(id);
+    },
+    hosts: processReleasedHosts,
+  });
 }
 
 export type CliHostSessionResult =
@@ -359,16 +436,34 @@ export async function openCliHostSession(
     store.dispose();
     throw error;
   });
-  if (held.kind === "failed") {
+  const releasedSignOn = cliReleasedSignOn(
+    auth.authnBaseUrl,
+    () => hostId,
+    lease,
+    tokens,
+  );
+  // No token can be presented: a released CLI opened this machine's host with
+  // the sign-in, so the session goes on with an empty token, which the
+  // transports answer with the sign-in where `releasedSignOn` allows it.
+  const signInOnly =
+    held.kind === "failed" &&
+    !fresh &&
+    tokens.hostTokenUnobtainable(hostId) &&
+    (await releasedSignOn.allowed().catch(() => false));
+  if (held.kind === "failed" && !signInOnly) {
     store.dispose();
     return { kind: "failed", failure: held.failure };
   }
   return {
     kind: "ok",
     session: {
-      bearer: held.bearer,
+      bearer:
+        held.kind === "ok"
+          ? held.bearer
+          : { identity: { userId: auth.userId }, getBearerToken: () => "" },
       signInLease: lease,
       tokens,
+      releasedSignOn,
       dispose: () => store.dispose(),
     },
   };

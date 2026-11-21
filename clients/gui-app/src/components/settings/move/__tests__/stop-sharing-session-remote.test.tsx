@@ -242,6 +242,7 @@ function makeHarness(
         kind: "ok" as const,
         grant: { grant: "test-grant", expiresInSeconds: 300 },
       }),
+    releasedSignOn: null,
     hostToken: () => {
       try {
         return lease.getBearerToken();

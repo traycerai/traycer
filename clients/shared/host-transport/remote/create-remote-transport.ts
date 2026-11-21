@@ -35,6 +35,7 @@ import {
   type HostTokenStateSink,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import { decodeHostPublicKey } from "./noise-channel";
+import { processReleasedHosts } from "../released-sign-on";
 import {
   acquireRemoteSession,
   type RemoteSessionIdentity,
@@ -79,9 +80,16 @@ export interface CreateRemoteTransportOptions<
   /**
    * The person's host-only tokens. `OPEN` presents this host's, in `authz` v2
    * with an empty bearer, for every host kind; a renewed one goes out as a
-   * `CREDENTIAL_UPDATE`. The sign-in token only buys them at authn.
+   * `CREDENTIAL_UPDATE`. The sign-in token buys them at authn, and reaches a
+   * host only as {@link opensReleasedWay} allows.
    */
   readonly hostTokens: HostTokenSource;
+  /**
+   * `opensReleasedWay` of this host's directory row for `userId`: whether a
+   * released host's typed refusal of the host-only token may be answered with
+   * the sign-in (see `released-sign-on.ts`).
+   */
+  readonly opensReleasedWay: boolean;
   readonly door: SessionDoorObserver | null;
   readonly onState: HostTokenStateSink;
   /**
@@ -269,7 +277,9 @@ export function createRemoteHostTransport<
     // Same reasoning applied to WHICH auth context wired those closures, not
     // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
     authEpoch: authEpochFor(bearerSource),
-    openAuth: "session-grant",
+    openAuth: options.opensReleasedWay
+      ? "session-grant-or-sign-in"
+      : "session-grant",
   };
   const session = acquireRemoteSession(
     identity,
@@ -359,6 +369,18 @@ export function createRemoteHostTransport<
         hostToken: () =>
           options.hostTokens.current(options.userId, options.hostId)?.token ??
           null,
+        releasedSignOn: options.opensReleasedWay
+          ? {
+              signIn: bearer,
+              recovery: options.auth,
+              allowed: () => Promise.resolve(true),
+              hostTokenUnobtainable: () => false,
+              ownerSignInEligible: () => false,
+              heldTokenRefused: () => false,
+              forgetHeldRefusal: () => undefined,
+              hosts: processReleasedHosts,
+            }
+          : null,
         // The SAME read the grant provider above uses, now also reported to the
         // host at the far end. The mint gate decides whether this client may
         // reach the relay; this tells the host what the session it reaches may

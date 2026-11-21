@@ -27,7 +27,22 @@ import {
   transportFailureBeforeSend,
 } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
+import {
+  NO_HOST_TOKEN_PROBE,
+  readDoorReason,
+} from "@traycer/protocol/framework/door-reason";
+import {
+  createReleasedHostMemory,
+  isReleasedHostTokenRefusal,
+  type ReleasedHostMemory,
+  type ReleasedUnaryCause,
+  type ReleasedUnarySignOn,
+} from "./released-sign-on";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  revalidateStream,
+  type StreamAuthRevalidator,
+} from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -252,6 +267,42 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
     hostId: string,
     signIn: OpenFrameBearerSource,
   ) => Promise<OpenFrameBearerSource | null>;
+  /**
+   * Asked only after a released host's typed refusal of the call's host-only
+   * token, with the caller's authority: the sign-in lease to send the call with
+   * once more, or `null` unless the host's row is that person's own personal
+   * computer (`opensReleasedWay`). Asked too, for this machine's host, when
+   * `hostBearerFor` has no token because none can be had. If the host refuses
+   * the sign-in, its `recovery` refreshes it and the call goes once more, as a
+   * released client's did.
+   */
+  readonly releasedSignOnFor?: (
+    authority: HostRequestAuthority,
+    cause: ReleasedUnaryCause,
+  ) => Promise<ReleasedUnarySignOn | null>;
+  /**
+   * What this process has seen of each host's answers. A host it remembers as
+   * released is sent the sign-in first. Without it, this client keeps its own.
+   */
+  readonly releasedHosts?: ReleasedHostMemory;
+  /**
+   * A probe answered `not_provisioned` fails with the host's own refusal, whose
+   * reason is the host's sentence for the person; otherwise with the same error
+   * as no token at all. The command line prints it, as a released one did.
+   */
+  readonly surfacesNotProvisioned?: boolean;
+  /**
+   * The host refused `presented`, the call's host-only token, as expired.
+   * Answers whether it was the held one presented because authn did not answer
+   * the mint: then the call asks `hostBearerFor` once more, which no longer
+   * presents it.
+   */
+  readonly heldTokenRefusedFor?: (
+    authority: HostRequestAuthority,
+    presented: string,
+  ) => boolean;
+  /** No owner's sign-in follows that refusal: see `TrackedHostTokens.forgetHeldRefused`. */
+  readonly forgetHeldRefusalFor?: (authority: HostRequestAuthority) => void;
 }
 
 /**
@@ -349,6 +400,35 @@ export class WsRpcClient<
     | ((hostId: string) => SessionDoorObserver)
     | undefined;
   private readonly hostBearerFor: WsRpcClientOptions<Registry>["hostBearerFor"];
+  private readonly releasedSignOnFor: WsRpcClientOptions<Registry>["releasedSignOnFor"];
+  /** Authorities carrying the released way's sign-in, with its recovery while unspent. */
+  private readonly signInAuthorities = new WeakMap<
+    HostRequestAuthority,
+    StreamAuthRevalidator | null
+  >();
+  /** Authorities carrying `NO_HOST_TOKEN_PROBE` in place of a host-only token that cannot be had. */
+  private readonly probeAuthorities = new WeakSet<HostRequestAuthority>();
+  private readonly releasedHosts: ReleasedHostMemory;
+  private readonly surfacesNotProvisioned: boolean;
+  private readonly heldTokenRefusedFor: WsRpcClientOptions<Registry>["heldTokenRefusedFor"];
+  private readonly forgetHeldRefusalFor: WsRpcClientOptions<Registry>["forgetHeldRefusalFor"];
+  /** Authorities carrying the sign-in a current host invited (`owner_sign_in`), with its recovery while unspent. */
+  private readonly ownerSignInAuthorities = new WeakMap<
+    HostRequestAuthority,
+    StreamAuthRevalidator | null
+  >();
+  /** The invited sign-in was refused as expired, a recovery is left, and the door has not heard of it. */
+  private readonly ownerSignInRefusals = new WeakSet<HostRpcError>();
+  /** A held token presented while authn did not answer was refused as expired; the door has not heard of it. */
+  private readonly heldRefusals = new WeakSet<HostRpcError>();
+  /** Authorities carrying the sign-in only because `releasedHosts` remembers the host as released. */
+  private readonly rememberedAuthorities = new WeakSet<HostRequestAuthority>();
+  /** A remembered released host named its reason: it was updated, and the door has not heard of it. */
+  private readonly updatedRefusals = new WeakSet<HostRpcError>();
+  /** A released host refused the host-only token, and the door has not heard of it. */
+  private readonly releasedRefusals = new WeakSet<HostRpcError>();
+  /** A released host refused the sign-in, a recovery is left, and the door has not heard of it. */
+  private readonly signInRefusals = new WeakSet<HostRpcError>();
   private readonly reprobeErrors = new WeakSet<HostRpcError>();
   private readonly localRevisionByHost = new Map<string, number>();
   /** Counts `releaseIdleLocalSessions`, so a call can tell one ran during its token lookup. */
@@ -358,6 +438,11 @@ export class WsRpcClient<
     this.localOpenAuth = options.localOpenAuth;
     this.doorFor = options.doorFor;
     this.hostBearerFor = options.hostBearerFor;
+    this.releasedSignOnFor = options.releasedSignOnFor;
+    this.releasedHosts = options.releasedHosts ?? createReleasedHostMemory();
+    this.surfacesNotProvisioned = options.surfacesNotProvisioned === true;
+    this.heldTokenRefusedFor = options.heldTokenRefusedFor;
+    this.forgetHeldRefusalFor = options.forgetHeldRefusalFor;
     this.registry = options.registry;
     this.requestIdProvider = options.requestId;
     this.webSocketFactory = options.webSocketFactory;
@@ -402,10 +487,11 @@ export class WsRpcClient<
   ): Promise<ResponseOfMethod<Registry, Method>> {
     let challengeRetried = false;
     let grantReprobed = false;
+    let heldRetried = false;
     const hostBearerFor = this.hostBearerFor;
     const releasesBeforeLookup = this.localReleases;
     // With no token to look up, the claim stays in the caller's tick.
-    const hostOptions =
+    let hostOptions =
       hostBearerFor === undefined
         ? options
         : await this.withHostBearer(hostBearerFor, options, method);
@@ -422,6 +508,121 @@ export class WsRpcClient<
         releasedDuringLookup = false;
         return await pending;
       } catch (cause) {
+        if (cause instanceof HostRpcError && this.releasedRefusals.has(cause)) {
+          const signIn = await this.releasedSignOnFor?.(
+            options.authority,
+            "refused",
+          ).catch(() => null);
+          if (signIn === undefined || signIn === null) {
+            this.reportRefusal(options.authority.endpoint.hostId, cause);
+            throw cause;
+          }
+          const authority = { ...options.authority, bearer: signIn.bearer };
+          this.signInAuthorities.set(authority, signIn.recovery);
+          hostOptions = { ...options, authority };
+          continue;
+        }
+        if (
+          cause instanceof HostRpcError &&
+          this.updatedRefusals.has(cause) &&
+          hostBearerFor !== undefined
+        ) {
+          hostOptions = await this.withHostBearer(
+            hostBearerFor,
+            options,
+            method,
+          );
+          continue;
+        }
+        if (
+          cause instanceof HostRpcError &&
+          this.ownerSignInRefusals.has(cause)
+        ) {
+          const authority = hostOptions.authority;
+          const recovery = this.ownerSignInAuthorities.get(authority) ?? null;
+          // Spent: a second refusal of this call's sign-in reaches the door.
+          this.ownerSignInAuthorities.set(authority, null);
+          const outcome =
+            recovery === null || cause.fatalDetails === null
+              ? "rejected"
+              : await revalidateStream(recovery, cause.fatalDetails).catch(
+                  () => "network-error" as const,
+                );
+          if (outcome === "rotated") continue;
+          this.reportRefusal(options.authority.endpoint.hostId, cause);
+          throw cause;
+        }
+        if (
+          cause instanceof HostRpcError &&
+          this.heldRefusals.has(cause) &&
+          hostBearerFor !== undefined &&
+          !heldRetried
+        ) {
+          heldRetried = true;
+          try {
+            hostOptions = await this.withHostBearer(
+              hostBearerFor,
+              options,
+              method,
+            );
+          } catch {
+            this.reportRefusal(options.authority.endpoint.hostId, cause);
+            throw cause;
+          }
+          continue;
+        }
+        if (cause instanceof HostRpcError && this.signInRefusals.has(cause)) {
+          const authority = hostOptions.authority;
+          const recovery = this.signInAuthorities.get(authority) ?? null;
+          // Spent: a second refusal of this call's sign-in reaches the door.
+          this.signInAuthorities.set(authority, null);
+          const outcome =
+            recovery === null || cause.fatalDetails === null
+              ? "rejected"
+              : await revalidateStream(recovery, cause.fatalDetails).catch(
+                  () => "network-error" as const,
+                );
+          if (outcome === "rotated") continue;
+          this.reportRefusal(options.authority.endpoint.hostId, cause);
+          throw cause;
+        }
+        // The probe carried no credential of the person's: a current host's
+        // answer to it is not theirs to see, and the call fails as with no token.
+        if (
+          cause instanceof HostRpcError &&
+          this.probeAuthorities.has(hostOptions.authority)
+        ) {
+          // Only a refusal naming its reason is a current host's answer; a
+          // transport failure or any other answer leaves the next call to probe again.
+          if (cause.fatalDetails === null) throw cause;
+          const reason = readDoorReason(cause.fatalDetails.doorReason);
+          if (reason === "absent") throw cause;
+          const hostId = options.authority.endpoint.hostId;
+          // A current host invites the sign-in: only while no host-only token
+          // can be had, and only where the row allows it.
+          const invited =
+            reason === "owner_sign_in"
+              ? await this.releasedSignOnFor?.(
+                  options.authority,
+                  "owner-sign-in",
+                ).catch(() => null)
+              : null;
+          if (invited !== undefined && invited !== null) {
+            const authority = { ...options.authority, bearer: invited.bearer };
+            this.ownerSignInAuthorities.set(authority, invited.recovery);
+            hostOptions = { ...options, authority };
+            continue;
+          }
+          this.forgetHeldRefusalFor?.(options.authority);
+          if (reason !== "owner_sign_in" && reason !== "not_provisioned")
+            this.releasedHosts.declineProbe(
+              options.authority.bearer.identity.userId,
+              hostId,
+            );
+          if (reason === "not_provisioned" && this.surfacesNotProvisioned)
+            throw cause;
+          throw noHostTokenError(this.requestIdProvider(), method);
+        }
         if (cause instanceof HostRpcError && cause.doorRefusal !== null)
           this.doorFor?.(options.authority.endpoint.hostId).refused(
             cause.doorRefusal,
@@ -453,19 +654,69 @@ export class WsRpcClient<
     options: HostRequestOptions,
     method: string,
   ): Promise<HostRequestOptions> {
-    const bearer = await hostBearerFor(
-      options.authority.endpoint.hostId,
-      options.authority.bearer,
+    const hostId = options.authority.endpoint.hostId;
+    if (
+      this.releasedHosts.opensReleasedWay(
+        options.authority.bearer.identity.userId,
+        hostId,
+      )
+    ) {
+      const remembered = await this.releasedSignOnFor?.(
+        options.authority,
+        "refused",
+      ).catch(() => null);
+      if (remembered !== undefined && remembered !== null) {
+        const authority = { ...options.authority, bearer: remembered.bearer };
+        this.signInAuthorities.set(authority, remembered.recovery);
+        this.rememberedAuthorities.add(authority);
+        return { ...options, authority };
+      }
+    }
+    const bearer = await hostBearerFor(hostId, options.authority.bearer);
+    if (bearer !== null)
+      return { ...options, authority: { ...options.authority, bearer } };
+    const signIn = this.releasedHosts.probeDeclined(
+      options.authority.bearer.identity.userId,
+      hostId,
+    )
+      ? null
+      : await this.releasedSignOnFor?.(
+          options.authority,
+          "no-host-token",
+        ).catch(() => null);
+    // Only a host that answers the probe the released way is then sent the sign-in.
+    if (signIn !== undefined && signIn !== null) {
+      const authority: HostRequestAuthority = {
+        ...options.authority,
+        bearer: {
+          identity: options.authority.bearer.identity,
+          getBearerToken: () => NO_HOST_TOKEN_PROBE,
+        },
+      };
+      this.probeAuthorities.add(authority);
+      return { ...options, authority };
+    }
+    this.forgetHeldRefusalFor?.(options.authority);
+    throw noHostTokenError(this.requestIdProvider(), method);
+  }
+
+  private reportRefusal(hostId: string, cause: HostRpcError): void {
+    if (cause.fatalDetails !== null)
+      this.doorFor?.(hostId).refused(cause.fatalDetails);
+  }
+
+  /** See `released-sign-on.ts`. */
+  private answersReleasedWay(
+    authority: HostRequestAuthority,
+    usesSessionGrant: boolean,
+    details: FatalErrorDetails,
+  ): boolean {
+    return (
+      this.releasedSignOnFor !== undefined &&
+      !usesSessionGrant &&
+      !this.signInAuthorities.has(authority) &&
+      isReleasedHostTokenRefusal(details)
     );
-    if (bearer === null)
-      throw new HostRpcError({
-        code: "RPC_ERROR",
-        message: "No host-only token is held for this host",
-        requestId: this.requestIdProvider(),
-        method,
-        fatalDetails: null,
-      });
-    return { ...options, authority: { ...options.authority, bearer } };
   }
 
   private async requestWithResponseTimeoutInternal<
@@ -764,24 +1015,72 @@ export class WsRpcClient<
       const ackFrame = await session.next(this.frameTimeoutMs);
 
       if (ackFrame.kind === "fatalError") {
-        this.doorFor?.(selected.hostId).refused(ackFrame.details);
+        const releasedWay = this.answersReleasedWay(
+          authority,
+          usesSessionGrant,
+          ackFrame.details,
+        );
+        const signInRefused =
+          isReleasedHostTokenRefusal(ackFrame.details) &&
+          (this.signInAuthorities.get(authority) ?? null) !== null;
+        const probe = this.probeAuthorities.has(authority);
+        const reason = readDoorReason(ackFrame.details.doorReason);
+        const named = reason !== "absent";
+        if (named) this.releasedHosts.refusedNamingReason(selected.hostId);
+        const updated = named && this.rememberedAuthorities.has(authority);
+        const ownerSignIn = this.ownerSignInAuthorities.has(authority);
+        const ownerSignInRefused =
+          ownerSignIn &&
+          reason === "token_expired" &&
+          (this.ownerSignInAuthorities.get(authority) ?? null) !== null;
+        if (ownerSignIn && named && reason !== "token_expired") {
+          this.releasedHosts.declineProbe(
+            authority.bearer.identity.userId,
+            selected.hostId,
+          );
+          this.forgetHeldRefusalFor?.(authority);
+        }
+        const heldRefused =
+          reason === "token_expired" &&
+          !probe &&
+          !ownerSignIn &&
+          !this.signInAuthorities.has(authority) &&
+          (this.heldTokenRefusedFor?.(authority, token) ?? false);
+        // Reported once the sign-in, or its refresh, cannot answer it; never
+        // for the probe, which carried no credential of the person's, nor for
+        // a remembered host that was updated, whose next dial carries the token.
+        if (
+          !releasedWay &&
+          !signInRefused &&
+          !probe &&
+          !updated &&
+          !ownerSignInRefused &&
+          !heldRefused
+        )
+          this.doorFor?.(selected.hostId).refused(ackFrame.details);
         if (
           ackFrame.details.code === SESSION_GRANT_REQUIRED &&
           !usesSessionGrant
         ) {
           this.localOpenAuth?.noteSessionGrantRequired(selected.hostId);
         }
-        this.localOpenAuth?.noteRefusal(
-          selected.hostId,
-          authority.bearer,
-          ackFrame.details,
-        );
+        if (!probe && !updated)
+          this.localOpenAuth?.noteRefusal(
+            selected.hostId,
+            authority.bearer,
+            ackFrame.details,
+          );
         const error = hostFatalError(
           ackFrame,
           requestId,
           method,
           "beforeRequest",
         );
+        if (releasedWay) this.releasedRefusals.add(error);
+        if (signInRefused) this.signInRefusals.add(error);
+        if (updated) this.updatedRefusals.add(error);
+        if (ownerSignInRefused) this.ownerSignInRefusals.add(error);
+        if (heldRefused) this.heldRefusals.add(error);
         if (
           usesSessionGrant &&
           this.localOpenAuth !== undefined &&
@@ -815,6 +1114,16 @@ export class WsRpcClient<
           fatalDetails: null,
         });
       }
+      if (this.signInAuthorities.has(authority))
+        this.releasedHosts.signInAdmitted(
+          authority.bearer.identity.userId,
+          selected.hostId,
+        );
+      else if (
+        !this.probeAuthorities.has(authority) &&
+        !this.ownerSignInAuthorities.has(authority)
+      )
+        this.releasedHosts.hostTokenAdmitted(selected.hostId);
       this.doorFor?.(selected.hostId).admitted();
       if (usesSessionGrant)
         this.localOpenAuth?.noteAdmitted(selected.hostId, authority.bearer);
@@ -2608,5 +2917,15 @@ function throwIfAuthorityAborted(
     requestId,
     method,
     mayHaveDispatched: false,
+  });
+}
+
+function noHostTokenError(requestId: string, method: string): HostRpcError {
+  return new HostRpcError({
+    code: "RPC_ERROR",
+    message: "No host-only token is held for this host",
+    requestId,
+    method,
+    fatalDetails: null,
   });
 }

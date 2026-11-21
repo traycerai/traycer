@@ -7,6 +7,10 @@ import {
 } from "./agent-session-capability";
 import { localTeamAdmissionCliError } from "./local-open-auth";
 import { openCliHostSession } from "./cli-host-tokens";
+import type {
+  ReleasedSignOn,
+  ReleasedUnaryCause,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   hostDoorRefusalCliError,
   hostTokenFailureCliError,
@@ -326,6 +330,7 @@ export async function callHostRpcWithAgentCredential<
       endpoint,
       capability.bearer,
       capability.recovery,
+      null,
       dispatch.failFast
         ? NO_RETRY_TRANSPORT_POLICY
         : DEFAULT_TRANSPORT_RETRY_POLICY,
@@ -462,6 +467,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       endpoint,
       session.bearer,
       session.tokens.unaryRecovery(endpoint.hostId),
+      session.releasedSignOn,
       retryPolicy,
       dispatch,
       () => session.tokens.signInRejected(),
@@ -479,12 +485,47 @@ async function requestWithHostToken<
   endpoint: HostTransportEndpoint,
   bearer: OpenFrameBearerSource,
   recovery: RefusalAwareAuthRevalidator,
+  releasedSignOn: ReleasedSignOn | null,
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
   signInRejected: () => boolean,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const client = new WsRpcClient<HostRpcRegistry>({
+    ...(releasedSignOn === null
+      ? {}
+      : {
+          // An empty token is a session that could present none; a held one
+          // the host refused as expired is not presented again.
+          hostBearerFor: (_hostId: string, held: OpenFrameBearerSource) =>
+            Promise.resolve(
+              held.getBearerToken() === "" ||
+                releasedSignOn.ownerSignInEligible()
+                ? null
+                : held,
+            ),
+          releasedSignOnFor: async (
+            _authority: HostRequestAuthority,
+            cause: ReleasedUnaryCause,
+          ) => {
+            const signIn = releasedSignOn.signIn();
+            const eligible =
+              cause === "refused" ||
+              (cause === "owner-sign-in"
+                ? releasedSignOn.ownerSignInEligible()
+                : releasedSignOn.hostTokenUnobtainable());
+            return signIn !== null &&
+              eligible &&
+              (await releasedSignOn.allowed())
+              ? { bearer: signIn, recovery: releasedSignOn.recovery }
+              : null;
+          },
+          heldTokenRefusedFor: (_authority, presented) =>
+            releasedSignOn.heldTokenRefused(presented),
+          forgetHeldRefusalFor: () => releasedSignOn.forgetHeldRefusal(),
+          releasedHosts: releasedSignOn.hosts,
+          surfacesNotProvisioned: true,
+        }),
     registry: hostRpcRegistry,
     requestId: () => randomUUID(),
     webSocketFactory: createWhatwgWebSocketFactory(),

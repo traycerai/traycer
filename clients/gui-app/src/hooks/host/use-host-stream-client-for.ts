@@ -39,7 +39,9 @@ import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   hostTokenBearer,
+  hostTokenHeldPastExpiry,
   hostTokenSessionAuth,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
@@ -47,6 +49,11 @@ import {
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
+import {
+  opensReleasedWay,
+  releasedSignOnForLocalRow,
+  processReleasedHosts,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -352,6 +359,7 @@ export function buildHostStreamClient(params: {
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       hostTokens: params.hostTokens,
+      opensReleasedWay: opensReleasedWay(params.target, params.userId),
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -383,7 +391,9 @@ export function buildHostStreamClient(params: {
   }
 
   const hostId = params.target.hostId;
-  const localTokens = localDoorHostTokens(params.hostTokens);
+  const localTokens = trackHostTokenMints(
+    localDoorHostTokens(params.hostTokens),
+  );
   return new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
@@ -407,6 +417,20 @@ export function buildHostStreamClient(params: {
       params.bearer,
       hostId,
       noteHostTokenRefusal,
+    ),
+    presentsHeldPastExpiry: hostTokenHeldPastExpiry(
+      localTokens,
+      params.bearer,
+      hostId,
+    ),
+    releasedSignOn: releasedSignOnForLocalRow(
+      params.target,
+      hostId,
+      params.userId,
+      params.bearer,
+      params.auth,
+      localTokens,
+      processReleasedHosts,
     ),
     // The user every owner builds this client for: the tile cache key, the
     // app-wide stream's effect dependency, the transport key at open.

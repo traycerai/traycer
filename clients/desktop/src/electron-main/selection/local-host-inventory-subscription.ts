@@ -1,8 +1,17 @@
 import {
   hostTokenBearer,
+  hostTokenHeldPastExpiry,
   hostTokenSessionAuth,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import {
+  heldTokenRefused,
+  hostTokenUnobtainable,
+  ownerSignInEligible,
+  releasedLocalSignOnFromRegistry,
+  processReleasedHosts,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   MINIMUM_HOST_VERSION,
   hostVersionNeedsUpdate,
@@ -431,7 +440,8 @@ export function startLocalHostInventorySubscription(
  * The production client: a plain local WebSocket to this machine's host.
  *
  * It opens with main's host-only token and recovers a refused or expired one
- * by minting again here; it never refreshes the sign-in token, which is the
+ * by minting again here. A released host on the person's own personal computer
+ * is opened with the sign-in instead. It never refreshes the sign-in token, which is the
  * renderer's single-flight machinery. A refusal that recovery cannot answer
  * ends the stream, and what that costs is the poll, which is where this read
  * was going to be made anyway. `hostCredentialMint` is null because
@@ -445,6 +455,8 @@ export function createLocalHostInventoryStreamClient(deps: {
   readonly localHost: () => LocalHostEndpoint | null;
   readonly bearer: BearerSourceProvider;
   readonly appVersion: string | null;
+  /** Where this host's row is read after a released host refuses the host-only token. */
+  readonly authnBaseUrl: string;
 }): (
   endpoint: LocalHostEndpoint,
   userId: string,
@@ -452,6 +464,7 @@ export function createLocalHostInventoryStreamClient(deps: {
   return (endpoint, userId) => {
     if (hostVersionNeedsUpdate(endpoint.version, MINIMUM_HOST_VERSION))
       return null;
+    const hostTokens = trackHostTokenMints(deps.hostTokens);
     const client = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,
@@ -466,14 +479,35 @@ export function createLocalHostInventoryStreamClient(deps: {
         return { hostId: current.hostId, websocketUrl: current.websocketUrl };
       },
       bearer: hostTokenBearer(
-        deps.hostTokens,
+        hostTokens,
         deps.bearer,
         endpoint.hostId,
         ignoreHostTokenState,
       ),
+      presentsHeldPastExpiry: hostTokenHeldPastExpiry(
+        hostTokens,
+        deps.bearer,
+        endpoint.hostId,
+      ),
+      // Main never refreshes the sign-in, so a refused one ends the stream too.
+      releasedSignOn: releasedLocalSignOnFromRegistry({
+        authnBaseUrl: deps.authnBaseUrl,
+        hostId: () => deps.localHost()?.hostId ?? null,
+        signIn: deps.bearer,
+        recovery: null,
+        hostTokenUnobtainable: () =>
+          hostTokenUnobtainable(hostTokens, userId, endpoint.hostId),
+        ownerSignInEligible: () =>
+          ownerSignInEligible(hostTokens, userId, endpoint.hostId),
+        heldTokenRefused: (presented) =>
+          heldTokenRefused(hostTokens, userId, endpoint.hostId, presented),
+        forgetHeldRefusal: () =>
+          hostTokens.forgetHeldRefused(userId, endpoint.hostId),
+        hosts: processReleasedHosts,
+      }),
       ...hostTokenSessionAuth(
         {
-          tokens: deps.hostTokens,
+          tokens: hostTokens,
           currentUserId: () => deps.bearer()?.identity.userId ?? null,
           hostId: endpoint.hostId,
           signInRecovery: null,

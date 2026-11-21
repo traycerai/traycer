@@ -12,6 +12,7 @@ import {
 import {
   hostTokenBearerFor,
   hostTokenUnaryRevalidator,
+  trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type {
   RefusalAwareAuthRevalidator,
@@ -181,10 +182,10 @@ export async function unaryDoorHarness(
   const bearer =
     options.hostId === POOL_DOOR_HOST_ID
       ? signInLease
-      : await hostTokenBearerFor(tokens, noteHostTokenRefusal)(
-          options.hostId,
-          signInLease,
-        );
+      : await hostTokenBearerFor(
+          trackHostTokenMints(tokens),
+          noteHostTokenRefusal,
+        )(options.hostId, signInLease);
   if (bearer === null) throw new Error("expected a host-only token bearer");
   const raw = scriptedDoorMessenger(options.refusals, sentBearers);
   const messenger = recordingRefusedHost(
