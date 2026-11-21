@@ -180,6 +180,7 @@ function SetupScriptEditor(props: {
               os: props.os,
               text,
               expectedRevision: props.script?.revision ?? null,
+              executableWriteGrant: null,
             })
           }
         >

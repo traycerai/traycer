@@ -4022,12 +4022,14 @@ export type ProvidersSetEnvOverrideRequestV21 = z.infer<
   typeof providersSetEnvOverrideRequestSchemaV21
 >;
 
+/** `providers.setEnvOverride@2.2` as released, with the inert grant field. */
 export const providersSetEnvOverrideRequestSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     key: z.string().min(1),
     // null = explicit unset; a string sets the value.
     value: z.string().nullable(),
+    executableWriteGrant: releasedExecutableWriteGrantSchema,
   }),
 );
 export const providersSetEnvOverrideRequestSchemaV10 = lazySchema(() =>
