@@ -511,6 +511,10 @@ export type HostProfileSyncGroupHoldersRequest = z.infer<
  * a host that predates it. `moving`: some computer the answer covers is
  * converting or has converted. `stopping`: some computer the answer covers is
  * under a Stop claim. Both are absent from a host that predates them.
+ * `pinned`: the asked link bound to the account the answering end pins it to,
+ * as the asker binds its own end; null when that end pins no account or the
+ * host predates it. The asker walks no further over an edge whose two ends
+ * differ.
  */
 export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
   z.strictObject({
@@ -522,6 +526,7 @@ export const hostProfileSyncGroupHoldersResponseSchema = lazySchema(() =>
     converted: z.boolean().default(false),
     moving: z.boolean().default(false),
     stopping: z.boolean().default(false),
+    pinned: z.string().uuid().nullable().default(null),
   }),
 );
 export type HostProfileSyncGroupHoldersResponse = z.infer<
