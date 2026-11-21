@@ -556,11 +556,10 @@ describe("<SandboxShapeSheet />", () => {
     });
 
     fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
-    fireEvent.click(
-      screen.getByRole("option", {
-        name: /2 vCPU · 4 GB, grows to 16 vCPU · 64 GB/,
-      }),
-    );
+    const restoredGrowingOption = screen.getByRole("option", {
+      name: "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.13–$1.44/h",
+    });
+    fireEvent.click(restoredGrowingOption);
     const restoredDisk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
     if (!(restoredDisk instanceof HTMLInputElement)) {
       throw new Error("Expected Disk (GB) to be an input");
@@ -589,11 +588,10 @@ describe("<SandboxShapeSheet />", () => {
     });
 
     fireEvent.click(screen.getByRole("combobox", { name: "Size" }));
-    fireEvent.click(
-      screen.getByRole("option", {
-        name: /2 vCPU · 4 GB, grows to 16 vCPU · 64 GB/,
-      }),
-    );
+    const defaultGrowingOption = screen.getByRole("option", {
+      name: "2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h",
+    });
+    fireEvent.click(defaultGrowingOption);
     const disk = screen.getByRole("spinbutton", { name: "Disk (GB)" });
     if (!(disk instanceof HTMLInputElement)) {
       throw new Error("Expected Disk (GB) to be an input");

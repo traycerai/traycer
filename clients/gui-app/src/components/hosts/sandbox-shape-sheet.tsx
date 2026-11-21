@@ -302,6 +302,20 @@ function diskOfForm(
   return { diskMb };
 }
 
+/** The disk a size option will use when selected. */
+function diskGbForRung(
+  form: ShapeForm,
+  provider: SandboxCatalogueProvider,
+  rung: SandboxShapeRung,
+  selectedRungGrows: boolean,
+): string {
+  const listedDiskGb = String(rung.diskMb / MB_PER_GIB);
+  if (rung.grows === undefined) return listedDiskGb;
+  if (selectedRungGrows) return form.diskGb;
+  const rememberedDisk = diskOfForm(form.growingDiskGb, provider);
+  return "problem" in rememberedDisk ? listedDiskGb : form.growingDiskGb;
+}
+
 function rungKey(rung: SandboxShapeRung): string {
   return `${rung.cpus}:${rung.memoryMb}:${rung.diskMb}`;
 }
@@ -587,7 +601,12 @@ function ShapeSheetForm(props: {
                   value={selection.value}
                   options={provider.shapes.map((rung) => ({
                     value: rungKey(rung),
-                    label: rungLabel(props.catalogue, form, rung),
+                    label: rungLabel(
+                      props.catalogue,
+                      form,
+                      rung,
+                      diskGbForRung(form, provider, rung, selectedRungGrows),
+                    ),
                   }))}
                   onChange={(value) => {
                     const rung = provider.shapes?.find(
@@ -595,7 +614,15 @@ function ShapeSheetForm(props: {
                     );
                     if (rung === undefined) return;
                     setSizeCommitted(true);
-                    const fields = rungFields(rung);
+                    const fields = {
+                      ...rungFields(rung),
+                      diskGb: diskGbForRung(
+                        form,
+                        provider,
+                        rung,
+                        selectedRungGrows,
+                      ),
+                    };
                     if (rung.grows === undefined) {
                       setForm({
                         ...form,
@@ -606,19 +633,7 @@ function ShapeSheetForm(props: {
                       });
                       return;
                     }
-                    let diskGb = fields.diskGb;
-                    if (selectedRungGrows) {
-                      diskGb = form.diskGb;
-                    } else {
-                      const rememberedDisk = diskOfForm(
-                        form.growingDiskGb,
-                        provider,
-                      );
-                      if (!("problem" in rememberedDisk)) {
-                        diskGb = form.growingDiskGb;
-                      }
-                    }
-                    setForm({ ...form, ...fields, diskGb });
+                    setForm({ ...form, ...fields });
                   }}
                 />
               </div>
@@ -814,13 +829,13 @@ function ShapeStartupPreview(props: {
 /**
  * `2 vCPU · 4 GB · 20 GB · $0.12/h`, priced in the form's region; a start
  * that grows, `2 vCPU · 4 GB, grows to 16 vCPU · 64 GB · $0.14–$1.44/h`,
- * priced at the form's disk, and unpriced while that disk is one the
- * catalogue cannot price.
+ * priced at the disk selecting the option will use.
  */
 function rungLabel(
   catalogue: SandboxCatalogue,
   form: ShapeForm,
   rung: SandboxShapeRung,
+  diskGb: string,
 ): string {
   const size =
     rung.grows === undefined
@@ -831,8 +846,7 @@ function rungLabel(
     region: form.region,
     cpus: rung.cpus,
     memoryMb: rung.memoryMb,
-    diskMb:
-      rung.grows === undefined ? rung.diskMb : Number(form.diskGb) * MB_PER_GIB,
+    diskMb: Number(diskGb) * MB_PER_GIB,
   });
   if (price === null) return size;
   const label = shortAwakePriceLabel(price.awakeMcPerHour, price.offer);
