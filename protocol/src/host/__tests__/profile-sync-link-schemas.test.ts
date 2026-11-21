@@ -10,6 +10,7 @@ import {
   hostProfileSyncFetchResponseSchema,
   hostProfileSyncGroupHoldersResponseSchema,
   hostProfileSyncOfferRequestSchema,
+  hostProfileSyncStopLinkRequestSchema,
   hostProfileSyncStopLinkResponseSchema,
   profileSyncCredentialFitsProvider,
   profileSyncCredentialSchema,
@@ -334,5 +335,22 @@ describe("groupHolders moving and stopping", () => {
         stopping: true,
       }),
     ).toMatchObject({ moving: true, stopping: true });
+  });
+});
+
+describe("stopLink cross step", () => {
+  it("parses a cross step naming the claim and its root", () => {
+    const request = {
+      linkId: "11111111-1111-4111-8111-111111111111",
+      providerId: "codex",
+      step: {
+        kind: "cross",
+        claimId: "22222222-2222-4222-8222-222222222222",
+        root: "host-a",
+      },
+    };
+    expect(hostProfileSyncStopLinkRequestSchema.parse(request)).toEqual(
+      request,
+    );
   });
 });

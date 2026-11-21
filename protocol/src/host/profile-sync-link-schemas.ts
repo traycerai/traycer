@@ -410,6 +410,16 @@ export const hostProfileSyncStopLinkRequestSchema = lazySchema(() =>
         claimId: stopClaimIdSchema,
         generation: generationSchema,
       }),
+      /** The claim reached both ends of this link by other paths: the sender
+       * asks the peer to end it. The peer answers `closed` once it has, in
+       * the same write as its check that the claim and root are unchanged
+       * and that it reaches the root by another link; otherwise it ends
+       * nothing and answers its stance or a refusal. */
+      z.strictObject({
+        kind: z.literal("cross"),
+        claimId: stopClaimIdSchema,
+        root: profileSyncHostIdSchema,
+      }),
     ]),
   }),
 );
