@@ -23,7 +23,10 @@ import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environmen
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
 import {
   isStaleLocalPick,
@@ -88,7 +91,7 @@ export function HostOverviewSettingsCard(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly hostId: string;
   readonly hostName: string;
-  readonly status: EnvironmentStatusResponseV11 | null;
+  readonly status: EnvironmentStatusResponseV13 | null;
   readonly binding: EnvironmentHostBinding | null;
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;

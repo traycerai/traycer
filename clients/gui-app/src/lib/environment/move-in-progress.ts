@@ -1,4 +1,7 @@
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 
 const MOVE_STOPPED_REASONS: Readonly<Partial<Record<string, string>>> = {
   stalled: "it timed out",
@@ -17,7 +20,21 @@ export function moveStoppedReason(state: string): string | null {
 }
 
 /**
- * Where this computer's move into Personal stands, read from `setup` alone.
+ * A move this computer started under an acceptance that has not ended:
+ * `status.move` records it running or waiting to retry. That record stands
+ * from the start until the upload ends, through every stage of a Retry or a
+ * restart. One that needs the person has ended, and a legacy consent and a
+ * first move have no record.
+ */
+export function moveAcceptanceOpen(
+  status: EnvironmentStatusResponseV13,
+): boolean {
+  return status.move?.state === "running" || status.move?.state === "retry";
+}
+
+/**
+ * Where this computer's move into Personal stands, read from `setup` and,
+ * for a move its acceptance still holds open, from `status.move`.
  *
  * `status.consent` says NOTHING about a move that is running, and reading it
  * that way inverts both answers. On the wire the consent is the migration
@@ -34,20 +51,30 @@ export function moveStoppedReason(state: string): string | null {
  * unless it is still waiting for one, and it can still progress unless it has
  * stopped. A state neither of them names is treated as a move under way,
  * which is the reading that keeps a person informed rather than silent.
+ *
+ * A move its acceptance holds open ({@link moveAcceptanceOpen}) is past the
+ * accept at any stage short of done: a Retry or a restart runs first start
+ * from registering, and its moving stage may read `awaiting_consent` before
+ * it finds the acceptance, though nobody is asked.
  */
 export function moveIsPastTheAccept(
-  status: EnvironmentStatusResponseV11,
+  status: EnvironmentStatusResponseV13,
 ): boolean {
   const setup = status.setup;
+  if (setup === null) return false;
+  if (
+    moveAcceptanceOpen(status) &&
+    setup.state !== "done" &&
+    setup.stage !== "done"
+  )
+    return true;
   return (
-    setup !== null &&
-    setup.stage === "moving_settings" &&
-    setup.state !== "awaiting_consent"
+    setup.stage === "moving_settings" && setup.state !== "awaiting_consent"
   );
 }
 
 /** Accepted, and stalled or failed: it waits for its Retry. */
-export function moveHasStopped(status: EnvironmentStatusResponseV11): boolean {
+export function moveHasStopped(status: EnvironmentStatusResponseV13): boolean {
   const setup = status.setup;
   return (
     setup !== null &&
@@ -69,7 +96,7 @@ export function moveAwaitsConsent(
 }
 
 /** Accepted, and neither finished nor stopped: items are moving right now. */
-export function moveIsRunning(status: EnvironmentStatusResponseV11): boolean {
+export function moveIsRunning(status: EnvironmentStatusResponseV13): boolean {
   const setup = status.setup;
   if (setup === null) return false;
   return moveIsPastTheAccept(status) && moveStoppedReason(setup.state) === null;
