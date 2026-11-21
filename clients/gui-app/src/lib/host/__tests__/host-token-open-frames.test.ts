@@ -409,13 +409,14 @@ describe("local stream host-token open frame", () => {
     clearHostDoorState(hostId);
   });
 
-  it("self-heals an expired local token through reconnect backoff after authn returns", async () => {
+  it("self-heals an expired local token and probes again after its replacement expires", async () => {
     const provider = newProvider();
     signIn(provider, USER_A, SIGN_IN_TOKEN);
     const hostId = "local-token-self-heal";
     const target = { ...mockLocalHostEntry, hostId };
     const initialTokenExpiresAtMs = Date.now() + 60_000;
     const renewedTokenExpiresAtMs = Date.now() + 30_000;
+    const freshAfterOutageExpiresAtMs = Date.now() + 60_000;
     const outcomes: HostTokenMintOutcome[] = [
       { kind: "unavailable", detail: "authn offline during renewal" },
       {
@@ -430,9 +431,10 @@ describe("local stream host-token open frame", () => {
         kind: "ok",
         token: {
           token: "fresh-after-outage",
-          expiresAtMs: Date.now() + 60_000,
+          expiresAtMs: freshAfterOutageExpiresAtMs,
         },
       },
+      { kind: "unavailable", detail: "authn went offline again" },
     ];
     let mintCalls = 0;
     const hostTokens = createHostTokenSource({
@@ -563,6 +565,35 @@ describe("local stream host-token open frame", () => {
 
     expect(mintCalls).toBe(4);
     expect(connected).toBe(true);
+    vi.setSystemTime(freshAfterOutageExpiresAtMs + 1);
+    recoveredAgain.fireMessage(
+      JSON.stringify({
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "replacement token expired",
+          doorReason: "token_expired",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(mintCalls).toBe(5));
+    await vi.waitFor(() =>
+      expect(hostDoorStateFor(hostId)?.kind).toBe("token-expired"),
+    );
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(4),
+    );
+    const laterOutage = FakeNativeWebSocket.instances[3];
+    laterOutage.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(laterOutage, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(laterOutage, "open")[0]?.token).toBe(
+      NO_HOST_TOKEN_PROBE,
+    );
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);

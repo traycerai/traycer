@@ -691,6 +691,123 @@ describe("local stream while authn cannot mint", () => {
     clearHostDoorState(hostId);
   });
 
+  it("uses a host-only token on the next dial after invited sign-in admission", async () => {
+    const hostId = "local-owner-sign-in-then-host-token";
+    clearHostDoorState(hostId);
+    const freshToken = "host-token-after-invited-sign-in";
+    let allowFresh = false;
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        Promise.resolve(
+          allowFresh
+            ? {
+                kind: "ok",
+                token: { token: freshToken, expiresAtMs: Date.now() + 60_000 },
+              }
+            : { kind: "unavailable", detail: "authn offline" },
+        ),
+      signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
+      now: () => Date.now(),
+    });
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await vi.waitFor(() => expect(source.current(USER_A, hostId)).toBeNull());
+    const probe = await socketAt(1);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("owner_sign_in"));
+    const invited = await socketOnThisTurn(2);
+    expect((await readOpen(invited)).token).toBe(SIGN_IN_TOKEN);
+    invited.fireMessage(openAckFrame([], null));
+    await settle();
+
+    allowFresh = true;
+    const mint = await source.obtain(USER_A, hostId, true, null);
+    expect(mint.kind).toBe("ok");
+    expect(processReleasedHosts.opensReleasedWay(USER_A, hostId)).toBe(false);
+    invited.fireClose(1006, "dropped after sign-in admission");
+    await vi.advanceTimersToNextTimerAsync();
+    const next = await socketAt(3);
+    expect((await readOpen(next)).token).toBe(freshToken);
+    next.fireMessage(openAckFrame([], null));
+    await settle();
+
+    expect(sentTokens()).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN_TOKEN,
+      freshToken,
+    ]);
+    expect(processReleasedHosts.opensReleasedWay(USER_A, hostId)).toBe(false);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("does not send sign-in when owner_sign_in follows a not-admitted mint", async () => {
+    const hostId = "local-owner-invite-after-not-admitted";
+    clearHostDoorState(hostId);
+    let mintCalls = 0;
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve({ kind: "not-admitted" });
+      },
+      signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
+      now: () => Date.now(),
+    });
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await vi.waitFor(() => expect(mintCalls).toBeGreaterThan(0));
+    const probe = await socketAt(1);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("owner_sign_in"));
+    await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS * 4);
+    expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("uses an expired invited sign-in without waiting for pre-dial refresh", async () => {
+    const hostId = "local-expired-invited-sign-in";
+    clearHostDoorState(hostId);
+    const expiredSignIn = expiredJwt(Date.now());
+    presentedSignIn = expiredSignIn.token;
+    let refreshCalls = 0;
+    streamAuth = {
+      revalidateForReconnect: () => {
+        refreshCalls += 1;
+        return Promise.resolve("network-error");
+      },
+    };
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "unavailable", detail: "offline" }),
+      signIn: (userId) => (userId === USER_A ? expiredSignIn.token : null),
+      now: () => Date.now(),
+    });
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    const probe = await socketAt(1);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("owner_sign_in"));
+    const invited = await socketOnThisTurn(2);
+    expect((await readOpen(invited)).token).toBe(expiredSignIn.token);
+    expect(refreshCalls).toBe(0);
+    invited.fireMessage(openAckFrame([], null));
+    await settle();
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
   it("probes again after not_provisioned, then sends sign-in when invited", async () => {
     const hostId = "local-not-provisioned-then-enrolled";
     clearHostDoorState(hostId);
@@ -1006,7 +1123,7 @@ describe("local stream while authn cannot mint", () => {
     const { client, session } = openClient(hostId, source, owner);
     await vi.waitFor(() => expect(mintCalls()).toBeGreaterThanOrEqual(1));
     await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS * 3);
-    expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
+    expect(sentTokens()).toEqual([]);
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);
