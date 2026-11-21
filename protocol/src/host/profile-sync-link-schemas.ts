@@ -368,87 +368,18 @@ export const PROFILE_SYNC_MAX_GROUP_HOLDERS = 32;
  * incomplete. */
 export const PROFILE_SYNC_MAX_GROUP_LINKS = 256;
 
-const stopClaimIdSchema = lazySchema(() => z.string().uuid());
-
 /**
- * "Stop syncing" between updated hosts, with one keeper fixed before anything
- * is sent. The computer where Stop was pressed walks the group, then sends
- * `prepare` to each member, naming the keeper and every member. Each member
- * hands its copy to the keeper with `handoff` and keeps it; the keeper alone
- * commits once it holds every member's copy, and `status` asks it whether it
- * has. Only then does a member erase, against the keeper's `receipt`, and
- * send `closed`. `abort` drops a claim that did not commit. A member is a
- * folder: one computer can hold two folders of the chain, each its own
- * member. Every step is a direct call between two computers of the claim:
- * `linkId` is the receiver's own link, which finds its folder, and the
- * member steps name the sender's folder by `profileId`. Each step is answered from what the
- * receiver persisted, so each is safe to send again. A host that predates
- * this method refuses it, which is how the caller learns the peer is on
- * 1.5.4.
+ * "Stop syncing" between updated hosts: the computer where Stop was pressed
+ * has ended its side of the link and tells the other end, which ends its
+ * side the same way. Neither erases anything; both keep their sign-in.
+ * `linkId` is the receiver's own link. A host that predates this method
+ * refuses it, which is how the caller learns the peer is on 1.5.4: that
+ * peer learns the link ended at its own next call on it.
  */
 export const hostProfileSyncStopLinkRequestSchema = lazySchema(() =>
   z.strictObject({
     linkId: linkIdSchema,
     providerId: profileSyncProviderSchema,
-    step: z.discriminatedUnion("kind", [
-      z.strictObject({
-        kind: z.literal("prepare"),
-        claimId: stopClaimIdSchema,
-        claimantHostId: profileSyncHostIdSchema,
-        keeperHostId: profileSyncHostIdSchema,
-        /** The keeper's folder on `keeperHostId`. */
-        keeperProfileId: profileSyncSourceProfileIdSchema,
-        /** Every updated holder folder of the group, the keeper and the
-         * receiver included, each with a link it has for the folder; unique
-         * by `hostId` and `profileId`. */
-        members: z
-          .array(
-            z.strictObject({
-              hostId: profileSyncHostIdSchema,
-              profileId: profileSyncSourceProfileIdSchema,
-              linkId: linkIdSchema,
-            }),
-          )
-          .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
-        /** The one 1.5.4 computer the keeper hands over to once every member
-         * closed, and through which it passes a late copy on; null when the
-         * group has none. */
-        gatewayHostId: profileSyncHostIdSchema.nullable(),
-      }),
-      /** `credential` null: the giver holds no sign-in of the chain the wire
-       * carries. `profileId`, here and on `status` and `closed`: the
-       * sender's folder, which with the sender's host names its member
-       * entry. */
-      z.strictObject({
-        kind: z.literal("handoff"),
-        claimId: stopClaimIdSchema,
-        profileId: profileSyncSourceProfileIdSchema,
-        accountId: accountIdSchema,
-        generation: generationSchema,
-        credential: profileSyncCredentialSchemaV10.nullable(),
-      }),
-      z.strictObject({
-        kind: z.literal("status"),
-        claimId: stopClaimIdSchema,
-        profileId: profileSyncSourceProfileIdSchema,
-      }),
-      z.strictObject({
-        kind: z.literal("closed"),
-        claimId: stopClaimIdSchema,
-        profileId: profileSyncSourceProfileIdSchema,
-        generation: generationSchema,
-      }),
-      z.strictObject({
-        kind: z.literal("abort"),
-        claimId: stopClaimIdSchema,
-      }),
-      /** No claim: the sender has nothing to hand over this link (a key, an
-       * account none of its links is pinned to, or ends pinned to different
-       * accounts). The one step authorised by the link: the sender must be
-       * its recorded peer. The receiver ends that one link, erases nothing
-       * and answers `ok`, as it does for a link already ended. */
-      z.strictObject({ kind: z.literal("leave") }),
-    ]),
   }),
 );
 export type HostProfileSyncStopLinkRequest = z.infer<
@@ -456,40 +387,9 @@ export type HostProfileSyncStopLinkRequest = z.infer<
 >;
 export const hostProfileSyncStopLinkResponseSchema = lazySchema(() =>
   z.discriminatedUnion("result", [
-    /** `prepare`: the receiver holds the claim. `status`: the keeper holds
-     * it and has not committed. */
-    z.strictObject({ result: z.literal("prepared") }),
-    /** `prepare`: nothing to hand over (a key, or a copy for another
-     * account than the link's); the receiver ended its links pinned as this
-     * one, erased nothing, and is not a member. */
-    z.strictObject({ result: z.literal("no-chain") }),
-    /** `prepare`: the folder's group has started moving to Personal. */
-    z.strictObject({ result: z.literal("converted") }),
-    /** `prepare`: the folder is held by another Stop claim. */
-    z.strictObject({
-      result: z.literal("held"),
-      claimId: stopClaimIdSchema,
-      claimantHostId: profileSyncHostIdSchema,
-    }),
-    /** `status`, `abort`, or another claim's `prepare`: the keeper has
-     * committed this claim. */
-    z.strictObject({ result: z.literal("committed") }),
-    /** `status`: the keeper's readable file holds no such claim, so it never
-     * committed. */
-    z.strictObject({ result: z.literal("unknown") }),
-    /** The answer to `handoff`: the keeper holds a renewing copy at
-     * `generation` or newer, read back from its store. `none` answers only a
-     * `credential: null` handoff: both ends are empty and nothing is erased. */
-    z.strictObject({
-      result: z.literal("receipt"),
-      generation: generationSchema,
-      held: z.enum(["renewing", "none"]),
-    }),
-    /** The answer to `closed`: the keeper counts the member closed. */
-    z.strictObject({ result: z.literal("closed") }),
-    /** The answer to `abort` (the claim is dropped) and to `leave`. */
-    z.strictObject({ result: z.literal("ok") }),
-    /** Any step: nothing changed on the receiver. `keychain-locked` and
+    /** The receiver's side of the link is ended, now or already. */
+    z.strictObject({ result: z.literal("ended") }),
+    /** Nothing changed on the receiver. `keychain-locked` and
      * `transfer-failed` are asked again. */
     z.strictObject({
       result: z.literal("refused"),

@@ -120,12 +120,8 @@ export const syncLinksStopResponseSchema = lazySchema(() =>
         z.strictObject({
           providerId: syncLinksProviderIdSchema,
           profileId: syncLinksProfileIdSchema,
-          /**
-           * `kept`: it keeps working here. `gave-up-copy`: it reads "Sign in
-           * again" here. `waiting-for-peer`: a linked computer has not
-           * answered yet, so the account keeps syncing with it until it does.
-           */
-          outcome: z.enum(["kept", "gave-up-copy", "waiting-for-peer"]),
+          /** `kept`: its sync ended and it keeps working here. */
+          outcome: z.enum(["kept"]),
         }),
       )
       .max(PROFILE_SYNC_MAX_PROFILES),
