@@ -3536,8 +3536,9 @@ class StreamSession<
   }
 
   /**
-   * The host refused the sign-in a current host invited. Expired: refresh it,
-   * redial with it, and report the refusal unless the refresh rotated it. Any
+   * The host refused the sign-in a current host invited. Expired: refresh it
+   * and redial with it; unless the refresh rotated it, report the refusal and
+   * redial the way a dial with no sign-in goes, which asks for a host-only token. Any
    * other refusal is reported, and that host is not probed again.
    */
   private answerOwnerSignInRefusal(
@@ -3562,7 +3563,12 @@ class StreamSession<
     this.handleUnauthorizedFatalError(details, {
       revalidateForReconnect: async () => {
         const outcome = await revalidateStream(recovery, details);
-        if (outcome !== "rotated") door?.refused(details);
+        if (outcome !== "rotated") {
+          door?.refused(details);
+          // The next dial asks for a host-only token first; only when none can
+          // be had does it probe, and the host invite the sign-in, again.
+          this.releasedPlan = "host-token";
+        }
         return outcome;
       },
     });
