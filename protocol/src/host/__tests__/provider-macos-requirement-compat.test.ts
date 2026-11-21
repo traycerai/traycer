@@ -19,6 +19,7 @@ import {
   providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV1011Preimage,
   providersListResponseSchemaV1012Preimage,
+  providersListResponseSchemaV1013Preimage,
   providersUsePackVersionResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -76,8 +77,9 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     // 10.6 (OpenCode's managed lines), 10.7 (`chatsFollow`),
     // 10.8 (native memory), 10.9 (credential facts),
     // 10.10 (hidden model providers), 10.11 (profile-sync keys) and
-    // 10.12 (the sign-in offer) and 10.13 (key-record environment) opened above it.
-    expect(entry.latestMinor).toBe(13);
+    // 10.12 (the sign-in offer), 10.13 (key-record environment) and 10.14
+    // (a row's `syncStop`) opened above it.
+    expect(entry.latestMinor).toBe(14);
     expect(entry.versions[2].contract.schemaVersion).toEqual({
       major: 10,
       minor: 2,
@@ -213,7 +215,8 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     });
     // 10.10 froze when the profile-sync keys opened 10.11, so its response is
     // the preimage. 10.11 froze when the sign-in offer opened 10.12. 10.12
-    // froze when key-record environment opened 10.13; 10.13 names the live response.
+    // froze when key-record environment opened 10.13. 10.13 froze when a row's
+    // `syncStop` opened 10.14; 10.14 names the live response.
     expect(
       hostRpcRegistry["providers.list"][10].versions[10].contract,
     ).toMatchObject({
@@ -231,6 +234,11 @@ describe("providers.list@10.2 carries macosRequirement", () => {
     });
     expect(
       hostRpcRegistry["providers.list"][10].versions[13].contract,
+    ).toMatchObject({
+      responseSchema: providersListResponseSchemaV1013Preimage,
+    });
+    expect(
+      hostRpcRegistry["providers.list"][10].versions[14].contract,
     ).toMatchObject({ responseSchema: providersListResponseSchema });
   });
 
