@@ -163,8 +163,18 @@ export function SyncLinksAskController(): ReactNode {
         stop.isError ? { kind: "refused", line: stop.error.message } : null
       }
       onStop={() => {
+        // Exactly the folders this dialog shows: the host refuses a request
+        // naming any folder it no longer lists.
         stop.mutate(
-          { scope: { kind: "all" } },
+          {
+            scope: {
+              kind: "folders",
+              folders: folders.map(({ providerId, profileId }) => ({
+                providerId,
+                profileId,
+              })),
+            },
+          },
           {
             onSuccess: () => {
               setDialogOpen(false);

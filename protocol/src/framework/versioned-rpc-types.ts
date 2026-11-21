@@ -50,6 +50,10 @@ export const RPC_ERROR_CODES = [
   "environment-managed",
   // A served legacy key mutation requires the client's direct-to-broker flow.
   "update-required",
+  // `providers.syncLinks.stop` named a folder the host no longer lists, or one
+  // already stopping; nothing changed. Additive: an old peer narrows it to
+  // RPC_ERROR, keeping status and message.
+  "sync-links-changed",
   "SENDER_TUI_UNSUPPORTED",
   // Caller-supplied input is structurally valid but semantically rejected
   // (e.g. minting the reserved `traycer:system` agent id). Additive and

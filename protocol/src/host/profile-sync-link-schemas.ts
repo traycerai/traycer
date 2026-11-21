@@ -358,3 +358,48 @@ export const hostProfileSyncFetchResponseSchema = lazySchema(() =>
 export type HostProfileSyncFetchResponse = z.infer<
   typeof hostProfileSyncFetchResponseSchema
 >;
+
+/**
+ * An updated host to its peer after "Stop syncing": the peer hands over its
+ * current sign-in, then stops renewing it. Under the profile's lock the peer
+ * answers with what its store holds, empties a renewing sign-in (a key stays)
+ * and ends its link, keeping its account row. A host that predates this
+ * method refuses it, which is how the caller learns the peer is on 1.5.4.
+ */
+export const hostProfileSyncStopLinkRequestSchema = lazySchema(() =>
+  z.strictObject({
+    linkId: linkIdSchema,
+    providerId: profileSyncProviderSchema,
+  }),
+);
+export type HostProfileSyncStopLinkRequest = z.infer<
+  typeof hostProfileSyncStopLinkRequestSchema
+>;
+export const hostProfileSyncStopLinkResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("result", [
+    /** The peer stopped. `current` is what its store held; `null` when it
+     * held no sign-in the 1.5.4 wire carries. */
+    z.strictObject({
+      result: z.literal("stopped"),
+      current: z
+        .strictObject({
+          accountId: accountIdSchema,
+          generation: generationSchema,
+          credential: profileSyncCredentialSchemaV10,
+        })
+        .nullable(),
+    }),
+    /** The peer's end is its Terminal account, which keeps the sign-in:
+     * nothing changed there, and the caller gives up its own copy. */
+    z.strictObject({ result: z.literal("terminal") }),
+    /** As fetch: `removed-on-device` for a link the peer no longer serves;
+     * `keychain-locked` and `transfer-failed` are asked again. */
+    z.strictObject({
+      result: z.literal("refused"),
+      reason: profileSyncReasonSchema,
+    }),
+  ]),
+);
+export type HostProfileSyncStopLinkResponse = z.infer<
+  typeof hostProfileSyncStopLinkResponseSchema
+>;
