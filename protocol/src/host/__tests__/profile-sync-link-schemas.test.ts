@@ -308,8 +308,26 @@ describe("stopLink converted stance", () => {
   });
 });
 
-describe("groupHolders moving and stopping", () => {
-  it("defaults moving and stopping to false and keeps true", () => {
+describe("groupHolders moving, stopping and pinned", () => {
+  it("keeps the answering end's pinned link and refuses one that is not a link ref", () => {
+    const answer = {
+      holders: [],
+      complete: true,
+      terminal: false,
+      pinned: LINK_ID,
+    };
+    expect(
+      hostProfileSyncGroupHoldersResponseSchema.parse(answer).pinned,
+    ).toBe(LINK_ID);
+    expect(
+      hostProfileSyncGroupHoldersResponseSchema.safeParse({
+        ...answer,
+        pinned: "account",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("defaults moving, stopping and pinned when absent and keeps them when given", () => {
     expect(
       hostProfileSyncGroupHoldersResponseSchema.parse({
         holders: ["host-a"],
@@ -324,6 +342,7 @@ describe("groupHolders moving and stopping", () => {
       converted: false,
       moving: false,
       stopping: false,
+      pinned: null,
     });
     expect(
       hostProfileSyncGroupHoldersResponseSchema.parse({
