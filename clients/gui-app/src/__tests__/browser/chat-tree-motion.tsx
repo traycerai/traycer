@@ -8,7 +8,7 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { LazyMotion, domMax } from "motion/react";
+import { LazyMotion, domMax, frame } from "motion/react";
 import * as Y from "yjs";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -48,7 +48,7 @@ import "@/index.css";
  * snap when the tree changes, and that scrolling animates nothing.
  *
  * `window.__chatTreeMotion` seeds and changes the tree and samples every row's
- * box and opacity once per frame.
+ * box and opacity once per frame, after Motion has drawn that frame.
  */
 const EPIC_ID = "fixture-chat-tree-motion";
 const TAB_ID = "tab-chat-tree-motion";
@@ -245,10 +245,17 @@ function sampleRows(at: number): RowSample[] {
   }
   return out;
 }
-async function nextFrame(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => {
-      resolve();
+/**
+ * Runs `read` in the next frame of Motion's own frame loop, in its last step
+ * (`postRender`): after every transform and opacity Motion writes in that
+ * frame, so what `read` sees is that frame's drawing, rows and styles alike.
+ * A plain animation frame callback can run before Motion's in the same frame
+ * and read the frame before.
+ */
+function inNextMotionFrame<T>(read: () => T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    frame.postRender(() => {
+      resolve(read());
     });
   });
 }
@@ -262,8 +269,9 @@ let changeCommit: number | null = null;
 /** When the last recorded change ran, as `performance.now()`. */
 let changeStartedAt = 0;
 /**
- * Samples, runs `change`, then samples once per frame until it has taken at
- * least `frames` frames and `RECORD_WINDOW_MS` has passed since the change.
+ * Samples, runs `change`, then samples once per Motion frame until it has
+ * taken at least `frames` frames and `RECORD_WINDOW_MS` has passed since the
+ * change.
  */
 async function record(
   change: () => void,
@@ -279,8 +287,11 @@ async function record(
     samples.length <= frames ||
     performance.now() - start < RECORD_WINDOW_MS
   ) {
-    await nextFrame();
-    samples.push(sampleRows(Math.round((performance.now() - start) * 10) / 10));
+    samples.push(
+      await inNextMotionFrame(() =>
+        sampleRows(Math.round((performance.now() - start) * 10) / 10),
+      ),
+    );
   }
   return samples;
 }

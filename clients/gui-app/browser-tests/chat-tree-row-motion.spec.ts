@@ -8,6 +8,7 @@ import {
   expectClosesGap,
   expectAppearsAtOnce,
   expectFadesInPlace,
+  expectFadesOut,
   expectHeld,
   expectSlides,
   expectOutAndBack,
@@ -69,8 +70,8 @@ interface Place {
    *   92.6, 92;
    * - hide root: d 182, 180.7, 178.6, 174.4, 169.9, 165.8, 162.3, 159, 156.2,
    *   154.1, 152.6, 152; e to h the same shape.
-   * Only the order of the motion and where it ends are asserted: a step's size,
-   * and how late the sampler reads it, depend on the frame rate and the load.
+   * Only the order of the motion and where it ends are asserted: a step's size
+   * depends on the frame rate and the load.
    */
   readonly closesGapAfterFade: boolean;
 }
@@ -288,15 +289,11 @@ for (const place of PLACES) {
       expect(arrived[0].frame, "the new place's first frame").toBe(1);
       expect(arrived.length, "the new place stays").toBe(recording.length - 1);
       for (const row of arrived) expect(row.opacity).toBeGreaterThan(0.99);
-      // The old place fades out and is gone.
-      expect(leaving.length, "the old place fades").toBeGreaterThan(1);
-      expect(
-        Math.min(...leaving.map((row) => row.opacity)),
-      ).toBeLessThanOrEqual(0.05);
-      const lastLeaving = leaving[leaving.length - 1].frame;
-      expect(lastLeaving, "the old place goes").toBeLessThan(
-        recording.length - 1,
-      );
+      // The old place fades out and is gone, held to the same windows as a
+      // row that fades in place; its copy moves with the rows around it.
+      const oldCopy = leaving.filter((row) => row.frame > 0);
+      expectFadesOut(recording, "f", oldCopy);
+      const lastLeaving = oldCopy[oldCopy.length - 1].frame;
       // The rows between the two places make room for the row that arrived.
       for (const id of ["c", "d", "e"]) expectSlides(recording, id, ROW_PITCH);
       for (const id of ["a", "b", "b1", "b2", "b3"]) expectHeld(recording, id);
