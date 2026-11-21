@@ -28,6 +28,7 @@ const HOST_TOKEN_B = "main-host-token-b";
 const RELEASED_HOST = { ...mockLocalHostEntry, version: "1.5.4" };
 const CURRENT_HOST_FOR_USER_SWITCH = "current-host-user-switch";
 const CURRENT_HOST_WHILE_AUTHN_OFFLINE = "current-host-authn-offline";
+const CURRENT_HOST_FOR_INITIAL_INVITE = "current-host-initial-invite";
 let activeClosers: Array<() => void> = [];
 
 type RowOwner = "personal" | "team" | "unknown";
@@ -233,6 +234,51 @@ describe("desktop inventory push against a released local host", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sends the sign-in after a current personal computer invites it", async () => {
+    const opened = await openInventoryFor({
+      hostId: CURRENT_HOST_FOR_INITIAL_INVITE,
+      userId: USER_A,
+      signInToken: SIGN_IN_TOKEN,
+      hostToken: null,
+      rowOwnerId: USER_A,
+    });
+    await vi.waitFor(() => expect(opened.mintCalls()).toBeGreaterThan(0));
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(1),
+    );
+    const probe = FakeNativeWebSocket.instances[0];
+    if (probe === undefined) throw new Error("inventory probe missing");
+    probe.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(probe, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(probe, "open")[0]?.token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(ownerSignInRefusal());
+
+    const invited = await vi.waitFor(() => {
+      expect(FakeNativeWebSocket.instances).toHaveLength(2);
+      return FakeNativeWebSocket.instances[1];
+    });
+    if (invited === undefined) throw new Error("invited dial missing");
+    invited.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(invited, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(invited, "open")[0]?.token).toBe(SIGN_IN_TOKEN);
+    invited.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() => expect(opened.statuses).toContain("open"));
+
+    expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE, SIGN_IN_TOKEN]);
+    expect(
+      processReleasedHosts.opensReleasedWay(
+        USER_A,
+        CURRENT_HOST_FOR_INITIAL_INVITE,
+      ),
+    ).toBe(false);
+    opened.close();
+  });
+
   it("opens the person's own computer with the sign-in after the host-only token is refused", async () => {
     const opened = await openInventory("personal", undefined, undefined);
     await refusedOpen();
@@ -318,7 +364,7 @@ describe("desktop inventory push against a released local host", () => {
     opened.close();
   });
 
-  it("keeps the next person's sign-in off a host the previous person admitted", async () => {
+  it("keeps the next person's sign-in off a previously admitted host that invites it", async () => {
     const first = await openInventoryFor({
       userId: USER_A,
       signInToken: SIGN_IN_TOKEN,
@@ -366,7 +412,7 @@ describe("desktop inventory push against a released local host", () => {
       expect(sentFramesOfKind(dial, "open")).toHaveLength(1),
     );
     expect(sentFramesOfKind(dial, "open")[0]?.token).toBe(HOST_TOKEN_B);
-    dial.fireMessage(releasedRefusal());
+    dial.fireMessage(ownerSignInRefusal());
     await vi.waitFor(() => {
       const redial = FakeNativeWebSocket.instances[1];
       if (
