@@ -259,6 +259,8 @@ async function nextFrame(): Promise<void> {
 const RECORD_WINDOW_MS = 5 * 160;
 /** The index of the commit counted for the last change, when counting. */
 let changeCommit: number | null = null;
+/** When the last recorded change ran, as `performance.now()`. */
+let changeStartedAt = 0;
 /**
  * Samples, runs `change`, then samples once per frame until it has taken at
  * least `frames` frames and `RECORD_WINDOW_MS` has passed since the change.
@@ -271,6 +273,7 @@ async function record(
   const log: unknown = Reflect.get(window, "__chatTreeCommits");
   changeCommit = isCommitLog(log) && log.on ? log.commits.length : null;
   const start = performance.now();
+  changeStartedAt = start;
   change();
   while (
     samples.length <= frames ||
@@ -373,6 +376,8 @@ interface CommitCount {
   readonly rows: number;
   readonly mounted: number;
   readonly panel: number;
+  /** When it committed: `performance.now()` in the log, ms after the change once read. */
+  readonly at: number;
 }
 interface CommitLog {
   on: boolean;
@@ -417,7 +422,10 @@ const probe = {
     const log = commitLog();
     log.on = false;
     if (changeCommit === null) throw new Error("no change was recorded");
-    return log.commits.slice(changeCommit);
+    return log.commits.slice(changeCommit).map((commit) => ({
+      ...commit,
+      at: Math.round((commit.at - changeStartedAt) * 10) / 10,
+    }));
   },
   seedCloudChats,
   recordCloud: (specs: readonly CloudSpec[], frames: number) =>
