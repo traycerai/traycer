@@ -8,6 +8,7 @@ import {
   PROFILE_SYNC_MAX_CREDENTIAL_BYTES,
   hostProfileSyncApplyRequestSchema,
   hostProfileSyncFetchResponseSchema,
+  hostProfileSyncGroupHoldersRequestSchema,
   hostProfileSyncGroupHoldersResponseSchema,
   hostProfileSyncOfferRequestSchema,
   hostProfileSyncStopLinkRequestSchema,
@@ -371,5 +372,24 @@ describe("stopLink cross step", () => {
     expect(hostProfileSyncStopLinkRequestSchema.parse(request)).toEqual(
       request,
     );
+  });
+});
+
+describe("groupHolders onward", () => {
+  it("walks on unless the asker says the asked link alone", () => {
+    const request = {
+      linkId: LINK_ID,
+      providerId: "codex",
+      visited: ["host-a"],
+    };
+    expect(hostProfileSyncGroupHoldersRequestSchema.parse(request).onward).toBe(
+      true,
+    );
+    expect(
+      hostProfileSyncGroupHoldersRequestSchema.parse({
+        ...request,
+        onward: false,
+      }).onward,
+    ).toBe(false);
   });
 });

@@ -488,7 +488,9 @@ export type HostProfileSyncStopLinkResponse = z.infer<
  * Which computers share a linked folder's chain, asked over the caller's own
  * link. The answering host asks each of its own linked peers not already in
  * `visited`, over its own link, so every hop is between two recorded peers.
- * A host without this method (1.5.4) refuses it.
+ * `onward` false asks about the asked link alone: the answering host asks no
+ * one, so a check of a link between two computers already visited never
+ * walks on. A host without this method (1.5.4) refuses it.
  */
 export const hostProfileSyncGroupHoldersRequestSchema = lazySchema(() =>
   z.strictObject({
@@ -497,6 +499,7 @@ export const hostProfileSyncGroupHoldersRequestSchema = lazySchema(() =>
     visited: z
       .array(profileSyncHostIdSchema)
       .max(PROFILE_SYNC_MAX_GROUP_HOLDERS),
+    onward: z.boolean().default(true),
   }),
 );
 export type HostProfileSyncGroupHoldersRequest = z.infer<
