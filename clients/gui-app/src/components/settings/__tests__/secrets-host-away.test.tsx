@@ -9,6 +9,7 @@ import {
   resetWindowHost,
   SECRETS_LIST,
   takeWindowHostOffline,
+  takeWindowHostOnline,
 } from "@/components/settings/__tests__/secrets-host-away-support";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -228,6 +229,53 @@ describe("Personal's Secrets once the window host that answered goes offline", (
       expect(secretsRow()).not.toBeNull();
     });
     expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
+    expect(screen.queryByTestId("personal-source-loading")).toBeNull();
+  });
+});
+
+describe("Personal's Secrets once the window host that went offline comes back", () => {
+  async function mountAnsweredThenOffline(): Promise<void> {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    mountSettings({
+      host: hostScopeOptionFixture({ hostId: "host-a", name: "dev-box" }),
+      manifest: { "environment.status": 1 },
+      handlers: {
+        "environment.status": () =>
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+      },
+    });
+    await screen.findByTestId("settings-sidebar-item-general");
+    await waitFor(() => {
+      expect(screen.queryByTestId("personal-source-loading")).toBeNull();
+    });
+    takeWindowHostOffline();
+    await waitFor(() => {
+      expect(secretsRow()).not.toBeNull();
+    });
+  }
+
+  it("drops the Secrets row and draws the host's page when it runs Personal without the list", async () => {
+    await mountAnsweredThenOffline();
+
+    takeWindowHostOnline({ "environment.status": 1 });
+
+    await waitFor(() => {
+      expect(secretsRow()).toBeNull();
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Secrets" }),
+    ).toBeTruthy();
+    expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
+    expect(screen.queryByTestId("personal-source-loading")).toBeNull();
+  });
+
+  it("keeps the Secrets row when it serves the list", async () => {
+    await mountAnsweredThenOffline();
+
+    takeWindowHostOnline({ "environment.status": 1, [SECRETS_LIST]: 1 });
+
+    expect(await screen.findByText("OPENAI_API_KEY")).toBeTruthy();
+    expect(secretsRow()).not.toBeNull();
     expect(screen.queryByTestId("personal-source-loading")).toBeNull();
   });
 });

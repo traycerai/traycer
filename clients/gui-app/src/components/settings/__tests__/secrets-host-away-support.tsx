@@ -95,6 +95,38 @@ export function takeWindowHostOffline(): void {
   });
 }
 
+/**
+ * Brings the window's host back online in place, as `takeWindowHostOffline`
+ * took it away, with `manifest` as what its handshake negotiated this time.
+ */
+export function takeWindowHostOnline(
+  manifest: Readonly<Record<string, number>>,
+): void {
+  recordManifest(HOST_ID, manifest);
+  personalHostScopeOverrides.current = {
+    ...personalHostScopeOverrides.current,
+    host: hostScopeOptionFixture({ hostId: HOST_ID, name: "dev-box" }),
+  };
+  act(() => {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+  });
+}
+
+function recordManifest(
+  hostId: string,
+  manifest: Readonly<Record<string, number>>,
+): void {
+  recordNegotiatedHostManifest(
+    hostId,
+    Object.fromEntries(
+      Object.entries(manifest).map(([method, minor]) => [
+        method,
+        { major: 1, minor },
+      ]),
+    ),
+  );
+}
+
 export function resetWindowHost(): void {
   windowHost.fakeAuthn?.restore();
   windowHost.client = null;
@@ -166,15 +198,7 @@ export function mountSettings(options: {
       Promise.resolve({ kind: "ok" as const, list: ENVIRONMENTS }),
   };
   if (options.manifest !== null) {
-    recordNegotiatedHostManifest(
-      options.host.hostId,
-      Object.fromEntries(
-        Object.entries(options.manifest).map(([method, minor]) => [
-          method,
-          { major: 1, minor },
-        ]),
-      ),
-    );
+    recordManifest(options.host.hostId, options.manifest);
   }
   personalHostScopeOverrides.current = {
     host: options.host,
