@@ -1289,6 +1289,48 @@ describe("a minted token's write, ordered by the second authn issued it", () => 
     expect(source.current(USER_ID, HOST_ID)).toEqual(EARLIER);
   });
 
+  it("ends a manual retry that joined an owned mint on its own write: the earlier-issued mint replaces the token the retry was sent to replace, though the starter's own write is declined as older", async () => {
+    const { source, mints } = sourceOverSharedFile(NO_FILE_WRITER);
+    const HELD_AT_START = hostTokenIssuedAt("held-at-start", 500);
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      HELD_AT_START,
+      source.era(USER_ID),
+      () => true,
+    );
+    const starter = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: { hostId: HOST_ID, observed: "process-a" },
+      observedNow: () => "process-a",
+    });
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    // A relay adoption installs a later-issued token while the mint runs.
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      LATER,
+      source.era(USER_ID),
+      () => true,
+    );
+    // The host refused it, and the person presses Retry: an ownerless fresh
+    // ask for the token held now, joining the mint already running.
+    const retry = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: null,
+    });
+
+    mints[0].answer({ kind: "ok", token: EARLIER });
+
+    // The starter's own token is the one held when its answer is decided, which
+    // depends on how its write and the retry's interleave: only that it is
+    // answered ok is fixed.
+    expect((await starter).kind).toBe("ok");
+    await expect(retry).resolves.toEqual({ kind: "ok", token: EARLIER });
+    expect(mints).toHaveLength(1);
+    expect(source.current(USER_ID, HOST_ID)).toEqual(EARLIER);
+  });
+
   it("starts no mint for a host process that is no longer the one observed", async () => {
     const { source, mints } = sourceOverSharedFile(NO_FILE_WRITER);
 
