@@ -41,10 +41,7 @@ import {
   releasedSignOnForLocalRow,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
-import {
-  settledWithin,
-  ROW_CONFIRM_CEILING_MS,
-} from "@traycer-clients/shared/host-transport/row-confirmation";
+import { confirmRowWithin } from "@traycer-clients/shared/host-transport/row-confirmation";
 import {
   DEFAULT_DIAL_TIMEOUT_MS,
   DEFAULT_INITIAL_BACKOFF_MS,
@@ -105,10 +102,11 @@ export interface BrowserSessionsHostDirectory {
    * answers whether a read that STARTED after this call, and after the latest
    * `reset`, completed: `false` on a failed read, or with no bearer to read
    * with. One already running may predate the question, so it is waited out
-   * first, and a `reset` during the read is followed by another. Never
-   * throttled.
+   * first, and a `reset` during the read is followed by another. Before each
+   * read it asks `stillWaiting`; once that is false it starts none and answers
+   * `false`. Never throttled.
    */
-  confirmRows(): Promise<boolean>;
+  confirmRows(stillWaiting: () => boolean): Promise<boolean>;
   /**
    * Drops the whole cached registry, and the cooldown that guards refetching
    * it, because the identity it was read for has changed.
@@ -267,13 +265,16 @@ export function createBrowserSessionsHostDirectory(
       cachedRemote.delete(hostId);
       forced = true;
     },
-    confirmRows: async () => {
+    confirmRows: async (stillWaiting) => {
       // A `reset` is a mark: a read started before one answers for the
       // identity before it, so another read follows, checked against the
-      // generation as it stands once the read has settled.
+      // generation as it stands once the read has settled. The loop lives no
+      // longer than its confirmation: past that it starts no read, under any
+      // identity.
       for (;;) {
         const running = inFlight;
         if (running !== null) await running;
+        if (!stillWaiting()) return false;
         const before = readsAdopted;
         const startedIn = generation;
         forced = true;
@@ -358,7 +359,7 @@ export interface BrowserSessionsTransportDeps {
    * keeps current, so a remote attach that would carry the sign-in reads the
    * registry again first; a local door never waits on it.
    */
-  readonly confirmRow: () => Promise<boolean>;
+  readonly confirmRow: (stillWaiting: () => boolean) => Promise<boolean>;
   readonly appVersion: string | null;
   /** Main's host-only tokens; the sign-in goes only where `opensReleasedWay` allows. */
   readonly hostTokens: HostTokenSource;
@@ -417,8 +418,8 @@ export function openBrowserSessionsTransport(
       },
       // A read that committed has moved the row `liveRow` reads; a failed
       // read, or none by the ceiling, leaves the row last read.
-      confirmRowBeforeSignIn: () =>
-        settledWithin(deps.confirmRow(), ROW_CONFIRM_CEILING_MS),
+      confirmRowBeforeSignIn: (attach) =>
+        confirmRowWithin(deps.confirmRow, attach),
       door: null,
       onState: ignoreHostTokenState,
       cloudAuthorized: deps.cloudAuthorized,

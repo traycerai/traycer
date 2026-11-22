@@ -27,6 +27,7 @@ import {
   type RelayPassMintOutcome,
 } from "./grant-client";
 import type { HostDoorObserver } from "../host-door-state";
+import type { RowConfirmationAttach } from "../row-confirmation";
 import {
   isIssuedHostTokenEra,
   type HostTokenSource,
@@ -94,7 +95,9 @@ export interface CreateRemoteTransportOptions<
    */
   readonly opensReleasedWay: () => boolean;
   /** See `RemoteReleasedSignOn.confirmRow`: `null` where {@link opensReleasedWay} reads a row kept current. */
-  readonly confirmRowBeforeSignIn: (() => Promise<unknown>) | null;
+  readonly confirmRowBeforeSignIn:
+    | ((attach: RowConfirmationAttach) => Promise<unknown>)
+    | null;
   readonly door: HostDoorObserver | null;
   readonly onState: HostTokenStateSink;
   /**

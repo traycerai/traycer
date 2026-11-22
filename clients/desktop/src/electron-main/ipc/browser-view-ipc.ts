@@ -660,7 +660,8 @@ export function registerBrowserViewIpc(
       authnBaseUrl: () => bridge.options.authnBaseUrl,
       endpoint: () => browserSessionsDirectory.endpoint(target.hostId),
       liveRow: () => browserSessionsDirectory.peek(target.hostId),
-      confirmRow: () => browserSessionsDirectory.confirmRows(),
+      confirmRow: (stillWaiting) =>
+        browserSessionsDirectory.confirmRows(stillWaiting),
       bearer: () => {
         const principal = jarPlanePrincipal();
         if (principal === null) return null;

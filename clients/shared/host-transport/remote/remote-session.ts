@@ -48,6 +48,7 @@ import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
 import { recordNegotiatedStreamMethodVersions } from "../negotiated-stream-version-registry";
 import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import { UNARY_RESPONSE_TIMEOUT_MS } from "./config";
+import type { RowConfirmationAttach } from "../row-confirmation";
 
 export type { IRemoteSession, SessionLivenessProbe };
 
@@ -219,11 +220,15 @@ export interface RemoteReleasedSignOn extends ReleasedSignOn {
   /**
    * Where the row {@link opensReleasedWay} reads is a cache that nothing keeps
    * current, a fresh read of it, waited on before an attach whose open would
-   * carry the sign-in; its caller bounds the wait. Its answer is not read: the
-   * row then decides, and a read that failed or ran past the bound leaves the
-   * row last read. `null` where the row is kept current already.
+   * carry the sign-in; it is handed that attach, bounds the wait, and starts
+   * no read once the bound passes or the attach ends (`confirmRowWithin`).
+   * Its answer is not read: the row then decides, and a read that failed or
+   * ran past the bound leaves the row last read. `null` where the row is kept
+   * current already.
    */
-  readonly confirmRow: (() => Promise<unknown>) | null;
+  readonly confirmRow:
+    | ((attach: RowConfirmationAttach) => Promise<unknown>)
+    | null;
 }
 
 /**
@@ -439,7 +444,7 @@ function trackAttaches(
   grantProvider: SignInBudgetedGrantProvider,
   owners: AttachOwners,
   lifetime: SessionLifetime,
-  beforeGrant: () => Promise<void>,
+  beforeGrant: (attach: RowConfirmationAttach) => Promise<void>,
 ): AttachTracking {
   let release: DoorAdmissionRelease | null = null;
   let live: DialSequence | null = null;
@@ -468,7 +473,10 @@ function trackAttaches(
   lifetime.onClose(leave);
   return {
     grantProvider: async (attempt) => {
-      await beforeGrant();
+      // The confirmation ends with the attach: retired, or its session closed.
+      await beforeGrant({
+        current: () => attempt.current() && !lifetime.closed(),
+      });
       // A retired attach opens no sequence: the session discards its answer.
       if (!attempt.current())
         return {
@@ -665,13 +673,13 @@ function createReleasedSignOnSessionAuth(
       credit: (owner) => fencedDoor.admitted(owner),
     },
     lifetime,
-    async () => {
+    async (attach) => {
       const wouldPresentSignIn =
         releasedSignOn.opensReleasedWay() &&
         !hosts.namedReason(hostId) &&
         (plan.kind === "sign-in" || signInPlanned() || remembered() !== null);
       if (confirmRow === null || !wouldPresentSignIn) return;
-      await confirmRow().catch(() => undefined);
+      await confirmRow(attach).catch(() => undefined);
     },
   );
   // Only a refusal of this dial's open switches to the sign-in: a current host
