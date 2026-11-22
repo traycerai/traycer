@@ -1488,3 +1488,122 @@ describe("a minted token's write, ordered by the second authn issued it", () => 
     expect(requests).toHaveLength(2);
   });
 });
+
+describe("a minted token that the ask which started its mint is still saving", () => {
+  const HOST_ID = "computer-still-saving";
+  const MINTED = hostTokenIssuedAt("minted", 2_000);
+
+  /**
+   * The first mint waits for the test, and so does the first write to the
+   * file; a mint after the first answers at once with the same token, so a
+   * duplicate mint shows in `mints()` without ever hanging its asker.
+   */
+  interface Rig {
+    readonly source: HostTokenSource;
+    readonly obtainFresh: () => Promise<HostTokenMintOutcome>;
+    readonly mints: () => number;
+    readonly signInReads: () => number;
+    readonly firstWriteReached: Promise<void>;
+    readonly releaseFirstWrite: () => void;
+    readonly answerFirstMint: () => void;
+  }
+
+  function rig(): Rig {
+    const inner = createMemoryHostTokenPersistence();
+    const firstWriteReached = deferred<void>();
+    const releaseFirstWrite = deferred<void>();
+    const firstMintAnswer = deferred<HostTokenMintOutcome>();
+    let writes = 0;
+    let mints = 0;
+    let signInReads = 0;
+    const source = createHostTokenSource({
+      persistence: {
+        load: () => inner.load(),
+        update: async (change) => {
+          writes += 1;
+          if (writes === 1) {
+            firstWriteReached.resolve(undefined);
+            await releaseFirstWrite.promise;
+          }
+          return inner.update(change);
+        },
+      },
+      mint: () => {
+        mints += 1;
+        if (mints === 1) return firstMintAnswer.promise;
+        const outcome: HostTokenMintOutcome = { kind: "ok", token: MINTED };
+        return Promise.resolve(outcome);
+      },
+      signIn: (userId) => {
+        signInReads += 1;
+        return userId === USER_ID ? SIGN_IN_BEFORE : null;
+      },
+      now: () => 1_000,
+    });
+    const obtainFresh = () =>
+      source.obtain(USER_ID, HOST_ID, true, { signal: null, owner: null });
+    return {
+      source,
+      obtainFresh,
+      mints: () => mints,
+      signInReads: () => signInReads,
+      firstWriteReached: firstWriteReached.promise,
+      releaseFirstWrite: () => releaseFirstWrite.resolve(undefined),
+      answerFirstMint: () =>
+        firstMintAnswer.resolve({ kind: "ok", token: MINTED }),
+    };
+  }
+
+  // Each ask reads the sign-in token once as it looks for a flight to join
+  // (a renewal reads it once more before): once that read has happened, the
+  // ask has decided between joining and minting.
+  it.each([
+    {
+      name: "a renewal",
+      reads: 3,
+      ask: (r: Rig) => r.source.renew(USER_ID, [HOST_ID]),
+    },
+    {
+      name: "an obtain",
+      reads: 2,
+      ask: (r: Rig) => r.obtainFresh(),
+    },
+  ])(
+    "is joined by $name asked after authn answered and before the file write ends, which mints nothing again",
+    async ({ reads, ask }) => {
+      const r = rig();
+      const starter = r.obtainFresh();
+      await vi.waitFor(() => expect(r.mints()).toBe(1));
+      r.answerFirstMint();
+      await r.firstWriteReached;
+
+      const joiner = ask(r);
+      await vi.waitFor(() => expect(r.signInReads()).toBe(reads));
+      r.releaseFirstWrite();
+      await Promise.all([starter, joiner]);
+
+      expect(r.mints()).toBe(1);
+      expect(r.source.current(USER_ID, HOST_ID)).toEqual(MINTED);
+    },
+  );
+
+  it("announces the token once when two asks sharing one mint write it", async () => {
+    const r = rig();
+    r.releaseFirstWrite();
+    const announced: string[] = [];
+    r.source.subscribe(({ hostId }) => announced.push(hostId));
+    const starter = r.obtainFresh();
+    await vi.waitFor(() => expect(r.mints()).toBe(1));
+    const joiner = r.obtainFresh();
+    await vi.waitFor(() => expect(r.signInReads()).toBe(2));
+
+    r.answerFirstMint();
+    await expect(Promise.all([starter, joiner])).resolves.toEqual([
+      { kind: "ok", token: MINTED },
+      { kind: "ok", token: MINTED },
+    ]);
+
+    expect(r.mints()).toBe(1);
+    expect(announced).toEqual([HOST_ID]);
+  });
+});
