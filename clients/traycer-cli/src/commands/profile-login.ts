@@ -20,10 +20,7 @@ import {
 } from "../../../shared/host-client/provider-sign-in-request";
 import { openInBrowser } from "../auth/login-flow";
 import { resolveHostAuth } from "../internal/host-auth";
-import {
-  openStoredSignIn,
-  type StoredSignIn,
-} from "../internal/stored-sign-in-ask";
+import { openStoredSignIn } from "../internal/stored-sign-in-ask";
 import {
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
@@ -101,7 +98,7 @@ export interface ProfileLoginIo {
     onLine: (line: string) => void,
     onInterrupt: () => void,
   ) => (() => void) | null;
-  /** Called once per wait: its records share one stored sign-in and its one refresh. */
+  /** Called once per wait: each record reads the stored sign-in, and the wait refreshes it at most once. */
   readonly openSignInRequests: () => SignInRequestClient;
 }
 
@@ -149,22 +146,25 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
     };
   },
   openSignInRequests: () => {
-    let signIn: StoredSignIn | null = null;
+    // Records are sent one at a time. Once one has spent the refresh, a later
+    // refusal is final: the stored sign-in it read is already the refreshed one.
+    let refreshSpent = false;
     return {
-      // A refused refresh leaves authn's own refusal as the answer.
       recordSignInRequest: async (request, signal) => {
-        if (signIn === null) {
-          const auth = await resolveHostAuth();
-          if (auth === null) return { kind: "unauthorized" };
-          signIn = openStoredSignIn(auth);
-        }
-        const { authnBaseUrl } = signIn.current();
+        // Read for every record, so a sign-out or another account is seen at once.
+        const auth = await resolveHostAuth();
+        if (auth === null) return { kind: "unauthorized" };
+        const record = (token: string) =>
+          recordSignInRequestViaHttp(auth.authnBaseUrl, token, request, signal);
+        if (refreshSpent) return record(auth.token);
+        const signIn = openStoredSignIn(auth);
+        // A refused refresh leaves authn's own refusal as the answer.
         const recorded = await signIn.ask(
-          (token) =>
-            recordSignInRequestViaHttp(authnBaseUrl, token, request, signal),
+          record,
           (answer) => answer.kind === "unauthorized",
           signal,
         );
+        refreshSpent = signIn.refreshSpent();
         return recorded.kind === "answered" ? recorded.answer : recorded.first;
       },
     };

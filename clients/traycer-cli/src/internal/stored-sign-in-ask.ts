@@ -11,8 +11,14 @@ import type { HostAuth } from "./host-auth";
 
 /**
  * When the refresh itself fails, `first` is authn's refusal from before it.
- * A refreshed pair the store could not write to disk is still used, as by every
- * other command: the store re-drives the write and prints the disk line.
+ * When the refreshed pair cannot be saved, as for every other command:
+ * - a full disk refuses the write before anything is spent: the disk line is
+ *   printed, the refresh counts as unavailable, and `first` stands unsent again;
+ * - spent, and still unsaved after the store's three re-drives a second apart:
+ *   the pair is used from memory and the call is sent again on it; the disk line
+ *   is printed only when the disk is out of space, and a later command recovers
+ *   the pair through the spent-base marker;
+ * - spent, and a re-drive saves it: as an ordinary refresh.
  */
 type StoredSignInAnswer<Answer> =
   | { readonly kind: "answered"; readonly answer: Answer }
@@ -28,12 +34,14 @@ type RefreshOutcome =
 export interface StoredSignIn {
   /** The stored sign-in, or the one its refresh returned. */
   current(): HostAuth;
+  /** True once a refusal has asked for the refresh, whatever it answered. */
+  refreshSpent(): boolean;
   /**
    * Asks authn on the current sign-in. A refusal the caller names (a 401) gets
-   * the run's one refresh and one more ask on the refreshed token. Every later
-   * refusal, and every refusal while that refresh is in flight, shares it: the
-   * run never refreshes twice, and an ask already refused on the refreshed
-   * token is not sent again.
+   * the one refresh and one more ask on the refreshed token. Every later
+   * refusal, and every refusal while that refresh is in flight, shares it: it
+   * never refreshes twice, and an ask already refused on the refreshed token is
+   * not sent again.
    */
   ask<Answer>(
     ask: (token: string) => Promise<Answer>,
@@ -44,6 +52,10 @@ export interface StoredSignIn {
 
 export function openStoredSignIn(auth: HostAuth): StoredSignIn {
   let signedIn = auth;
+  // Runs under the signal of the first caller it refuses, which cuts it. A
+  // caller that joins it in flight waits for that refresh's own bound (about
+  // 14 s), whatever its own signal does; no caller asks on one sign-in
+  // concurrently today.
   let refresh: Promise<RefreshOutcome> | null = null;
   const refreshOnce = (signal: AbortSignal | null): Promise<RefreshOutcome> => {
     if (refresh === null) {
@@ -57,6 +69,7 @@ export function openStoredSignIn(auth: HostAuth): StoredSignIn {
   };
   return {
     current: () => signedIn,
+    refreshSpent: () => refresh !== null,
     async ask(ask, refused, signal) {
       const sentOn = signedIn.token;
       const first = await ask(sentOn);
