@@ -97,7 +97,10 @@ interface Rig {
 
 const directories: HostDirectoryService[] = [];
 
-async function startedWindow(hidden: boolean): Promise<Rig> {
+async function startedWindow(
+  hidden: boolean,
+  shellPushes: boolean,
+): Promise<Rig> {
   const host = new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
@@ -108,10 +111,12 @@ async function startedWindow(hidden: boolean): Promise<Rig> {
     traycerCli: undefined,
   });
   const handlers = new Set<(change: RegisteredHostsChange) => void>();
-  host.onRegisteredHostsChange = (handler) => {
-    handlers.add(handler);
-    return { dispose: () => handlers.delete(handler) };
-  };
+  // With no push subscription the directory polls, as a browser window does.
+  if (shellPushes)
+    host.onRegisteredHostsChange = (handler) => {
+      handlers.add(handler);
+      return { dispose: () => handlers.delete(handler) };
+    };
   const reads = heldReads();
   let credential = 1;
   let identity = IDENTITY;
@@ -150,7 +155,7 @@ async function startedWindow(hidden: boolean): Promise<Rig> {
 }
 
 function startedHiddenWindow(): Promise<Rig> {
-  return startedWindow(true);
+  return startedWindow(true, true);
 }
 
 /** Lets what a settled read or an elapsed ceiling resolves run; no timer is due at 0. */
@@ -320,7 +325,7 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
 
   // A guard: a shown window that skipped nothing has a current row.
   it("(F2 guard) returns at once, reading nothing, in a visible window with no mark outstanding", async () => {
-    const rig = await startedWindow(false);
+    const rig = await startedWindow(false, true);
 
     const confirmation = rig.confirm();
     await drain();
@@ -522,5 +527,38 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS);
     expect(confirmation.resolved()).toBe(true);
     expect(rig.reads.issued()).toBe(2);
+  });
+
+  // In poll mode a skipped tick is a time. A tick that came due during the
+  // hidden span marks the directory even though no timer ran for it: the clock
+  // passes it, and the show clears the interval before a late callback can.
+  it("(poll tick) reads for a confirmation in a shown window when a poll tick came due while hidden, though no timer ran for it and an earlier read followed the hide", async () => {
+    const rig = await startedWindow(false, false);
+    const hiddenAt = Date.now();
+    __setBrowserDocumentHiddenForTests(true);
+    // A read starts while hidden, after the hide's mark, and settles.
+    vi.setSystemTime(hiddenAt + 10_000);
+    void rig.directory.refresh();
+    expect(rig.reads.issued()).toBe(2);
+    rig.reads.answer(1, "row-r");
+    await drain();
+    // The poll's tick comes due; the clock passes it and no timer runs.
+    vi.setSystemTime(hiddenAt + 60_000 + 1);
+    // The show reads once, as the poll does on a show.
+    __setBrowserDocumentHiddenForTests(false);
+    expect(rig.reads.issued()).toBe(3);
+
+    const confirmation = rig.confirm();
+    await drain();
+
+    expect(confirmation.resolved()).toBe(false);
+    expect(rig.reads.issued()).toBe(3);
+
+    rig.reads.answer(2, "row-after-tick");
+    await drain();
+
+    expect(confirmation.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["row-after-tick"]);
+    expect(rig.reads.mostAtOnce()).toBe(1);
   });
 });
