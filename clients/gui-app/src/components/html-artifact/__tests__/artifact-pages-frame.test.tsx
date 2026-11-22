@@ -311,7 +311,7 @@ it("closes on the first Escape immediately after opening and restores focus", as
 
 describe("the floating controls chip", () => {
   it("asks the page for a typed zoom level, and shows the level the page then reports", () => {
-    renderPages({ pageZoom: true });
+    renderPages({});
     const bridge = realBridge();
     const setHtmlView = vi.spyOn(bridge, "setHtmlView");
     act(() => frameProps().onBridge?.(bridge));
@@ -323,7 +323,11 @@ describe("the floating controls chip", () => {
     fireEvent.keyDown(zoomLevel, { key: "Enter" });
 
     expect(setHtmlView).toHaveBeenCalledTimes(1);
-    expect(setHtmlView).toHaveBeenCalledWith({ enabled: true, scale: 1.5, commenting: false });
+    expect(setHtmlView).toHaveBeenCalledWith({
+      enabled: true,
+      scale: 1.5,
+      commenting: false,
+    });
     // The field follows the page, not the draft: it reads 100% until the page reports 1.5.
     expect(zoomLevel.value).toBe("100%");
     act(() => frameProps().onHtmlZoom?.(1.5));

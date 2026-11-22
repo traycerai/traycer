@@ -16,7 +16,13 @@
  * Keyboard shortcuts live on the buttons themselves, so they work whenever
  * the cluster has focus: `+`/`-` step, `0` actual size, `F` fit.
  */
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { Maximize2, Minus, Plus, Scan } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -211,6 +217,30 @@ export function ZoomLevelField(props: {
   readonly onZoomTo: (percent: number) => void;
 }): ReactNode {
   const [draft, setDraft] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    const ownerWindow = input?.ownerDocument.defaultView;
+    if (input === null || ownerWindow === null || ownerWindow === undefined)
+      return;
+    // Dialog dismissal listens on document capture, before React's input
+    // handler. Own only this field's active edit (or IME composition), at
+    // the earlier window phase; an unedited field leaves Escape to its dialog.
+    const cancelEdit = (event: globalThis.KeyboardEvent): void => {
+      if (event.target !== input || event.key !== "Escape") return;
+      if (event.isComposing) {
+        event.stopPropagation();
+        return;
+      }
+      if (draft === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setDraft(null);
+    };
+    ownerWindow.addEventListener("keydown", cancelEdit, true);
+    return () => ownerWindow.removeEventListener("keydown", cancelEdit, true);
+  }, [draft]);
 
   const commit = (): void => {
     if (draft === null) return;
@@ -225,6 +255,7 @@ export function ZoomLevelField(props: {
   return (
     <>
       <Input
+        ref={inputRef}
         value={props.ready ? (draft ?? level) : "–"}
         disabled={!props.ready}
         onChange={(event) => setDraft(event.target.value)}
@@ -236,7 +267,6 @@ export function ZoomLevelField(props: {
           // composition, not the level.
           if (event.nativeEvent.isComposing) return;
           if (event.key === "Enter") commit();
-          if (event.key === "Escape") setDraft(null);
         }}
         inputMode="numeric"
         aria-label="Zoom level"
