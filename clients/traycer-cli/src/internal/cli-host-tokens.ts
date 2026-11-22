@@ -61,6 +61,81 @@ function processHeldRefusals(instance: HostInstance): Map<string, string> {
   return refusals;
 }
 
+/**
+ * One mint request per host and sign-in at a time for this process: every
+ * unary call builds its own tokens, so without it each call that found no
+ * usable token sent its own. The request ends when its last asker stops
+ * waiting, or on its own timeout; each asker stops on its own signal, as when
+ * the request was its own, and is not cut short by another call's.
+ */
+interface MintFlight {
+  readonly answer: Promise<HostTokenMintOutcome>;
+  readonly controller: AbortController;
+  askers: number;
+}
+const mintFlights = new Map<string, MintFlight>();
+
+// What an asker whose signal ended was told when the request was its own.
+const abandonedMint = (signal: AbortSignal): HostTokenMintOutcome => ({
+  kind: "unavailable",
+  detail: `the mint request never completed (${
+    signal.reason instanceof Error ? signal.reason.name : "a non-Error throw"
+  })`,
+});
+
+function sharedMint(
+  hostId: string,
+  signInToken: string,
+  signal: AbortSignal | null,
+): Promise<HostTokenMintOutcome> {
+  if (signal?.aborted === true) return Promise.resolve(abandonedMint(signal));
+  const key = `${hostId}\u0000${signInToken}`;
+  let flight = mintFlights.get(key);
+  if (flight === undefined) {
+    const controller = new AbortController();
+    const started: MintFlight = {
+      controller,
+      askers: 0,
+      answer: mintHostTokenViaHttp(
+        config.authnBaseUrl,
+        hostId,
+        signInToken,
+        controller.signal,
+      ).finally(() => {
+        if (mintFlights.get(key) === started) mintFlights.delete(key);
+      }),
+    };
+    // Settled for nobody once every asker has left.
+    started.answer.catch(() => undefined);
+    mintFlights.set(key, started);
+    flight = started;
+  }
+  const joined = flight;
+  joined.askers += 1;
+  if (signal === null) return joined.answer;
+  return new Promise<HostTokenMintOutcome>((resolve, reject) => {
+    const leave = (): void => {
+      joined.askers -= 1;
+      if (joined.askers === 0) {
+        if (mintFlights.get(key) === joined) mintFlights.delete(key);
+        joined.controller.abort(signal.reason);
+      }
+      resolve(abandonedMint(signal));
+    };
+    signal.addEventListener("abort", leave, { once: true });
+    joined.answer.then(
+      (outcome) => {
+        signal.removeEventListener("abort", leave);
+        resolve(outcome);
+      },
+      (cause: unknown) => {
+        signal.removeEventListener("abort", leave);
+        reject(cause);
+      },
+    );
+  });
+}
+
 export interface CliSignIn {
   readonly lease: BearerLease;
   /** Refreshes the sign-in under the credentials lock and rotates `lease`. */
@@ -195,8 +270,7 @@ function createSource(signIn: VerifiedSignIn | null): HostTokenSource {
       lockWaitMs: CREDENTIALS_LOCK_WAIT_MS,
       lockPollIntervalMs: LOCK_POLL_INTERVAL_MS,
     }),
-    mint: (hostId, signInToken, signal) =>
-      mintHostTokenViaHttp(config.authnBaseUrl, hostId, signInToken, signal),
+    mint: sharedMint,
     signIn,
     now: Date.now,
   });
