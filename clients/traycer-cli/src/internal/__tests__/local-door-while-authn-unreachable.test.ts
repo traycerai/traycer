@@ -27,6 +27,7 @@ import type {
 import { CLI_CLIENT_IDENTITY } from "../../cli-version";
 import { openCliHostSession, type CliHostSession } from "../cli-host-tokens";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
+import { UNWORDED_MINT_REFUSAL_MESSAGE } from "../host-door-words";
 import type { HostAuth } from "../host-auth";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
@@ -698,9 +699,6 @@ describe("CLI local doors while authn cannot mint", () => {
     });
     expect(harness.sockets).toHaveLength(1);
     expect(openToken(probe)).toBe(NO_HOST_TOKEN_PROBE);
-    expect(harness.sockets.map((socket) => openToken(socket))).not.toContain(
-      SIGN_IN,
-    );
     const retry = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
     await expect(toAgentCliError(retry)).rejects.toMatchObject({
       exitCode: 1,
@@ -717,7 +715,7 @@ describe("CLI local doors while authn cannot mint", () => {
     const first = await socketAt(0);
     expect((await readOpen(first)).token).toBe(expired.token);
     first.fireFrame(expiredTokenRefusal());
-    await expect(firstCall).rejects.toThrow();
+    await expect(firstCall).rejects.toThrow("host token expired");
 
     const nextCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
     const second = await socketAt(1);
@@ -730,12 +728,6 @@ describe("CLI local doors while authn cannot mint", () => {
       expired.token,
       expired.token,
     ]);
-    expect(harness.sockets.map((socket) => openToken(socket))).not.toContain(
-      SIGN_IN,
-    );
-    expect(harness.sockets.map((socket) => openToken(socket))).not.toContain(
-      NO_HOST_TOKEN_PROBE,
-    );
   });
 
   it.each([
@@ -744,11 +736,12 @@ describe("CLI local doors while authn cannot mint", () => {
   ])("never sends the sign-in for $name", async ({ mode }) => {
     harness.state.mode = mode;
     await expect(
-      callHostRpcAtEndpoint("host.status", {}, ENDPOINT),
-    ).rejects.toThrow();
+      toAgentCliError(callHostRpcAtEndpoint("host.status", {}, ENDPOINT)),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.FORBIDDEN,
+      exitCode: 1,
+      message: UNWORDED_MINT_REFUSAL_MESSAGE,
+    });
     expect(harness.sockets).toHaveLength(0);
-    expect(harness.sockets.map((socket) => openToken(socket))).not.toContain(
-      SIGN_IN,
-    );
   });
 });

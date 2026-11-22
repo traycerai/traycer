@@ -429,7 +429,9 @@ async function answerReleasedHost(
         });
         continue;
       }
-      if (open.token === SIGN_IN && ownership === "current") {
+      // A current host names its refusal of whatever it is handed, the
+      // probe's placeholder included, so it never reaches the sign-in.
+      if (ownership === "current") {
         socket.fireText(namedRefusal());
         continue;
       }
@@ -540,12 +542,12 @@ describe("CLI credential probe against a released host", () => {
     expect(provisionFrames()).toHaveLength(1);
   }, 30_000);
 
-  it("sends the sign-in once when a current host names its refusal, then ends on the second 404", async () => {
+  it("never opens with the sign-in when a current host names its refusal of the probe, and ends on the 404", async () => {
     const outcome = await probe("current", 20_000);
+    const tokens = openTokens();
     expect(outcome).toEqual({ kind: "mint-unavailable" });
-    expect(openTokens().filter((token) => token === SIGN_IN)).toEqual([
-      SIGN_IN,
-    ]);
+    expect(tokens.length).toBeGreaterThan(0);
+    expect(tokens.every((token) => token === NO_HOST_TOKEN_PROBE)).toBe(true);
     expect(provisionFrames()).toEqual([]);
   }, 30_000);
 

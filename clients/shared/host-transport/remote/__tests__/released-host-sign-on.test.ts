@@ -395,6 +395,7 @@ describe("released personal host, remote door", () => {
   }, 20_000);
 
   it("reports the refusal once when the personal host refuses the sign-in too", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const relay = new FakeRelayHost();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const { door, refusals } = recordingDoor();
@@ -413,7 +414,6 @@ describe("released personal host, remote door", () => {
       expect(refusals).toHaveLength(1);
       expect(hostDoorStateOfRefusal(refusals[0])).toBe("older-host");
       const opensAtClose = relay.openBearers.length;
-      vi.useFakeTimers();
       await vi.advanceTimersByTimeAsync(30_000);
       expect(session.isClosed()).toBe(true);
       expect(relay.openBearers).toHaveLength(opensAtClose);
@@ -423,7 +423,42 @@ describe("released personal host, remote door", () => {
     }
   }, 20_000);
 
+  it("goes terminal after the no-progress bound when the released host refuses the sign-in on every open and its refresh returns the same one", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door, refusals } = recordingDoor();
+    relay.decideOpen = () => ({ kind: "fatal", details: releasedRefusal() });
+    const base = signOnFor(PERSONAL_ROW, signIn);
+    if (base === null) throw new Error("personal row must open released");
+    const session = openSession(
+      relay,
+      signIn,
+      {
+        ...base,
+        recovery: {
+          revalidateForReconnect: () => Promise.resolve("rotated"),
+          revalidateRefused: () => Promise.resolve("rotated"),
+        },
+      },
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN, SIGN_IN, SIGN_IN]);
+      expect(refusals).toEqual([]);
+      const opensAtClose = relay.openBearers.length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(relay.openBearers).toHaveLength(opensAtClose);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
   it("keeps every later open on the host-only token when an admitted session is closed without a door reason", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const relay = new FakeRelayHost();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const { door, refusals } = recordingDoor();
@@ -448,7 +483,6 @@ describe("released personal host, remote door", () => {
         expect(session.isClosed()).toBe(true);
       }, WAIT);
       const opensAtClose = relay.openBearers.length;
-      vi.useFakeTimers();
       await vi.advanceTimersByTimeAsync(30_000);
       expect(session.isClosed()).toBe(true);
       expect(relay.openBearers).toHaveLength(opensAtClose);

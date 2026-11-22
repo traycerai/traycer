@@ -166,7 +166,7 @@ function harness() {
     remoteEntry("physical-team", "key-team"),
     {
       sandbox: null,
-      owner: { kind: "user" as const, id: "user-a" },
+      owner: { kind: "user" as const, id: bearer.identity.userId },
     },
   );
   const otherHost = remoteEntry("host-b", "key-b");
@@ -277,18 +277,21 @@ describe("RuntimeHostMessenger binding map", () => {
     h.dispose();
   });
 
-  it("keeps the unary binding when an unchanged physical host transfers to a team", async () => {
+  it("rebuilds a person's own computer's binding without the sign-in when the host moves to a team", async () => {
     const h = harness();
     await h.request(h.physicalHost());
     h.transferPhysicalHostToTeam();
     await h.request(h.physicalHost());
 
-    // Owner is not part of the transport key. Both owners open with the
-    // host-only token, so the transfer does not mint a second session.
-    expect(h.sessions).toHaveLength(1);
-    expect(h.sessions[0]?.closeCalls).toBe(0);
-    expect(h.opened).toHaveLength(1);
-    expect(h.opened[0]?.hostTokens).toBe(h.hostTokens);
+    // The binding's session decides at build whether the sign-in may go to
+    // this host, so the owner change must replace it.
+    expect(h.sessions).toHaveLength(2);
+    expect(h.sessions[0]?.closeCalls).toBe(1);
+    expect(h.sessions[1]?.closeCalls).toBe(0);
+    expect(h.opened.map((options) => options.opensReleasedWay)).toEqual([
+      true,
+      false,
+    ]);
     h.dispose();
   });
 
