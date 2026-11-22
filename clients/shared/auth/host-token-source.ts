@@ -91,11 +91,16 @@ interface TableWrite {
   readonly replaces: string | null;
 }
 
-// How a write ended: kept; dropped because the era moved, or because the
-// writer's own check failed; or declined because the token held for the pair
-// was issued later (`held`).
+// How a write ended: kept (`written`: false when the identical token was
+// already held, so nothing was written or announced again); dropped because
+// the era moved, or because the writer's own check failed; or declined
+// because the token held for the pair was issued later (`held`).
 type TableWriteResult =
-  | { readonly kind: "kept"; readonly replaced: string | null }
+  | {
+      readonly kind: "kept";
+      readonly replaced: string | null;
+      readonly written: boolean;
+    }
   | { readonly kind: "era-moved" }
   | { readonly kind: "not-wanted" }
   | { readonly kind: "older"; readonly held: HostToken };
@@ -371,6 +376,12 @@ export function createHostTokenSource(deps: {
         return latest;
       }
       const inFile = latest.get(userId)?.get(hostId) ?? null;
+      // One token, one broadcast: the identical token already held is kept
+      // as it stands, with no second write or announce.
+      if (inFile !== null && inFile.token === token.token) {
+        decided.result = { kind: "kept", replaced: null, written: false };
+        return latest;
+      }
       if (
         inFile !== null &&
         inFile.token !== write.replaces &&
@@ -379,7 +390,11 @@ export function createHostTokenSource(deps: {
         decided.result = { kind: "older", held: inFile };
         return latest;
       }
-      decided.result = { kind: "kept", replaced: inFile?.token ?? null };
+      decided.result = {
+        kind: "kept",
+        replaced: inFile?.token ?? null,
+        written: true,
+      };
       const next = new Map(latest);
       const forUser = new Map(latest.get(userId) ?? []);
       forUser.set(hostId, token);
@@ -391,7 +406,7 @@ export function createHostTokenSource(deps: {
     const { result } = decided;
     if (result.kind === "kept" || result.kind === "older")
       storedIn.set(key, write.era);
-    if (result.kind === "kept" && eraOf(userId) === write.era)
+    if (result.kind === "kept" && result.written && eraOf(userId) === write.era)
       announce({ userId, hostId, replaced: result.replaced });
     return result;
   };
@@ -463,7 +478,12 @@ export function createHostTokenSource(deps: {
     const attempt = (async (): Promise<HostTokenMintOutcome> => {
       const outcome = await deps.mint(hostId, signInToken, signal);
       return eraOf(userId) !== era ? { kind: "superseded" } : outcome;
-    })().finally(() => {
+    })();
+    const starterAnswer = attempt.then(answerFor);
+    // The flight stays joinable until its starter's own write has settled, so
+    // an ask in between joins authn's answer instead of minting again. Each
+    // map entry is removed only while it is still this flight.
+    const leave = (): void => {
       if (asker.kind === "none") {
         if (renewFlights.get(flightKey) === attempt)
           renewFlights.delete(flightKey);
@@ -476,12 +496,13 @@ export function createHostTokenSource(deps: {
         observedFlights.delete(ownerKey(flightKey, asker.observed));
       if (latestFlight.get(flightKey) === attempt)
         latestFlight.delete(flightKey);
-    });
+    };
+    void starterAnswer.then(leave, leave);
     if (asker.kind === "none") renewFlights.set(flightKey, attempt);
     else if (asker.kind === "unknown") unknownFlights.set(flightKey, attempt);
     else observedFlights.set(ownerKey(flightKey, asker.observed), attempt);
     latestFlight.set(flightKey, attempt);
-    return attempt.then(answerFor);
+    return starterAnswer;
   };
 
   return {
