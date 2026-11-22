@@ -339,36 +339,52 @@ export class HostDirectoryService implements IHostDirectoryService {
    * possibly stale until the read this starts settles.
    */
   private readonly handleVisibilityChangeWhileRidingPushes = (): void => {
+    if (!isDocumentVisible()) {
+      this.markMissedWhileHidden();
+      return;
+    }
     if (
-      !isDocumentVisible() ||
-      this.missedThrough === null ||
-      this.catchUpAppliedThrough === this.missedThrough
+      this.pushSkippedThrough === null ||
+      this.catchUpAppliedThrough === this.pushSkippedThrough
     ) {
       return;
     }
-    this.catchUpAppliedThrough = this.missedThrough;
+    this.catchUpAppliedThrough = this.pushSkippedThrough;
     this.applyRegistryPush();
   };
-  /** The skip a show has already applied its one catch-up push for. */
+  /** The latest mark that was a skipped push: what a show catches up on. */
+  private pushSkippedThrough: number | null = null;
+  /** The skipped push a show has already applied its one catch-up push for. */
   private catchUpAppliedThrough: number | null = null;
   /**
-   * Poll mode's clock stops while the window is hidden, so every tick of a
-   * hidden span is skipped. Only a read started once shown covers the span
-   * (`readStartedNowCoversMissed`), so the hide alone is marked.
+   * Poll mode's clock stops while the window is hidden, so each tick of a
+   * hidden span is skipped: the hide is marked, and so is each tick the span
+   * then skips, on the poll's own interval.
    */
   private readonly handleVisibilityChangeWhilePolling = (): void => {
-    if (!isDocumentVisible()) this.markMissedWhileHidden();
+    if (isDocumentVisible()) {
+      this.stopHiddenTickMarks();
+      return;
+    }
+    this.markMissedWhileHidden();
+    if (this.hiddenTickMarks !== null) return;
+    this.hiddenTickMarks = window.setInterval(() => {
+      this.markMissedWhileHidden();
+    }, HOST_DIRECTORY_REFRESH_POLL_MS);
   };
   private stopPollVisibility: (() => void) | null = null;
+  private hiddenTickMarks: number | null = null;
   /**
-   * POSSIBLY STALE FROM BEING HIDDEN: the registry changes this window skipped
-   * while hidden, numbered. `missedThrough` is the latest one still
-   * outstanding, and `null` when the directory has skipped nothing. It ends
-   * only when a read that started after it settles, committed or failed
-   * ({@link catchUpAfterHidden}); a show does not end it.
+   * POSSIBLY STALE FROM BEING HIDDEN, as an ordered mark. Every hide, every
+   * push skipped while hidden and, in poll mode, every tick a hidden span
+   * skips advances `marks`; `staleThrough` is the latest mark still
+   * outstanding, and `null` when there is none. It ends only when a read that
+   * STARTED after that mark settles, committed or failed, while it is still
+   * the current read of the current era ({@link catchUpAfterHidden}). A show
+   * does not end it, and neither does an abandoned or superseded read.
    */
-  private missedWhileHidden = 0;
-  private missedThrough: number | null = null;
+  private marks = 0;
+  private staleThrough: number | null = null;
 
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
@@ -634,21 +650,24 @@ export class HostDirectoryService implements IHostDirectoryService {
     ) {
       return inFlight.request;
     }
-    const coversMissed = this.readStartedNowCoversMissed();
-    const missedAtStart = this.missedWhileHidden;
+    const marksAtStart = this.marks;
     const request = this.performRefresh(era).finally(() => {
+      // Owned only while still the current read of the current era: a read a
+      // rotation abandoned, or an identity change superseded, settles nothing
+      // of the state the current read answers for.
+      const owned =
+        this.refreshInFlight?.request === request && this.isCurrentEra(era);
       // Only clear OUR slot: a request superseded by an identity change must
       // not clear the newer one when it finally settles.
       if (this.refreshInFlight?.request === request) {
         this.refreshInFlight = null;
       }
       if (
-        coversMissed &&
-        this.missedThrough !== null &&
-        missedAtStart >= this.missedThrough
-      ) {
-        this.missedThrough = null;
-      }
+        owned &&
+        this.staleThrough !== null &&
+        marksAtStart >= this.staleThrough
+      )
+        this.staleThrough = null;
       this.emitRefreshState();
     });
     this.refreshInFlight = { era, request };
@@ -678,18 +697,15 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * Waits for a read that answers for the registry changes this window may
-   * have skipped while hidden: it joins the read in flight, or starts one, and
-   * never starts a second beside a running one. While the window is hidden, or
-   * possibly stale from having been, one read is waited for, and a second
-   * once the first only joined a read that started before the latest skip.
-   * Resolves at once for a shown window that skipped nothing. Never rejects.
+   * Waits until a read that started after the latest mark has settled as the
+   * current read of the current era: it joins the read in flight, or starts
+   * one, and never starts a second beside a running one. A read that started
+   * before the latest mark, or was abandoned or superseded, settles nothing,
+   * and another read follows. Stops starting reads once `stillWaiting` says
+   * no one waits. Resolves at once when nothing is outstanding. Never rejects.
    */
-  async catchUpAfterHidden(): Promise<void> {
-    for (let reads = 0; reads < 2; reads += 1) {
-      if (this.missedThrough === null && (reads > 0 || isDocumentVisible()))
-        return;
-      if (reads > 0 && !this.readStartedNowCoversMissed()) return;
+  async catchUpAfterHidden(stillWaiting: () => boolean): Promise<void> {
+    while (this.staleThrough !== null && stillWaiting()) {
       await this.refresh().then(
         () => undefined,
         () => undefined,
@@ -698,18 +714,21 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   private markMissedWhileHidden(): void {
-    this.missedWhileHidden += 1;
-    this.missedThrough = this.missedWhileHidden;
+    this.marks += 1;
+    this.staleThrough = this.marks;
   }
 
-  /**
-   * Whether a read started now would answer for every skip so far. A push
-   * marks each change it carries, so a read started while hidden covers the
-   * ones before it. Poll mode has no such marks: its skips run until the show,
-   * so only a read started while shown covers them.
-   */
-  private readStartedNowCoversMissed(): boolean {
-    return this.registrySubscription !== null || isDocumentVisible();
+  private stopHiddenTickMarks(): void {
+    if (this.hiddenTickMarks === null) return;
+    window.clearInterval(this.hiddenTickMarks);
+    this.hiddenTickMarks = null;
+  }
+
+  private isCurrentEra(era: AuthEra): boolean {
+    return (
+      era.identity === this.authContextId() &&
+      era.credentialGeneration === this.credentialGeneration()
+    );
   }
 
   /**
@@ -982,6 +1001,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       // acted on when the window next becomes visible.
       if (!isDocumentVisible()) {
         this.markMissedWhileHidden();
+        this.pushSkippedThrough = this.marks;
         return;
       }
       this.applyRegistryPush();
@@ -993,6 +1013,8 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.stopPushVisibility = subscribeDocumentVisibility(
       this.handleVisibilityChangeWhileRidingPushes,
     );
+    // Started hidden: the hidden span is already running.
+    if (!isDocumentVisible()) this.markMissedWhileHidden();
     return true;
   }
 
@@ -1058,7 +1080,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.stopPushVisibility = null;
     this.stopPollVisibility?.();
     this.stopPollVisibility = null;
-    this.missedThrough = null;
+    this.stopHiddenTickMarks();
+    this.staleThrough = null;
+    this.pushSkippedThrough = null;
   }
 
   /**

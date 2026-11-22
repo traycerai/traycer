@@ -5,7 +5,7 @@ import {
 
 /** The one directory call a confirmation makes. */
 interface CatchingUpDirectory {
-  catchUpAfterHidden(): Promise<void>;
+  catchUpAfterHidden(stillWaiting: () => boolean): Promise<void>;
 }
 
 /**
@@ -13,10 +13,11 @@ interface CatchingUpDirectory {
  * (`confirmRowBeforeSignIn`), a wait. A shown window that skipped no registry
  * change has a current row, so it stands at once. A window that is hidden, or
  * possibly stale from having been, waits for the directory's read of what it
- * skipped (`HostDirectoryService.catchUpAfterHidden`), at most the row
- * re-read's ceiling. Then the row the directory holds decides: a read that
- * committed has moved it, and one that failed or ran past the ceiling leaves
- * the row last read, as every attach before had.
+ * skipped (`HostDirectoryService.catchUpAfterHidden`), however many reads that
+ * takes, within one row re-read ceiling measured from the confirmation's
+ * start. Then the row the directory holds decides: a read that committed has
+ * moved it, and one that failed or ran past the ceiling leaves the row last
+ * read, as every attach before had.
  */
 export function confirmRowWhenHidden(
   directory: () => CatchingUpDirectory | null,
@@ -24,6 +25,14 @@ export function confirmRowWhenHidden(
   return async () => {
     const current = directory();
     if (current === null) return;
-    await settledWithin(current.catchUpAfterHidden(), ROW_CONFIRM_CEILING_MS);
+    let waiting = true;
+    try {
+      await settledWithin(
+        current.catchUpAfterHidden(() => waiting),
+        ROW_CONFIRM_CEILING_MS,
+      );
+    } finally {
+      waiting = false;
+    }
   };
 }
