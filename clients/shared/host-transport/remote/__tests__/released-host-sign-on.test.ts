@@ -12,6 +12,10 @@ import {
   SESSION_CONTROL_STREAM_ID,
 } from "@traycer/protocol/host-transport/mux";
 import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
+import type {
+  AttachGrantProvider,
+  AttachGrantProvision,
+} from "@traycer/protocol/host-transport/remote/grant";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostDoorStateOfRefusal } from "../../host-door-state";
 import { resetNegotiatedManifests } from "../../negotiated-manifest-registry";
@@ -132,22 +136,34 @@ function scriptHost(relay: FakeRelayHost, released: { value: boolean }): void {
   };
 }
 
+const OK_GRANT: AttachGrantProvision = {
+  kind: "ok",
+  grant: { grant: "grant-jws", expiresInSeconds: 300 },
+};
+
 function openSession(
   relay: FakeRelayHost,
   signIn: MutableBearerLease,
   releasedSignOn: RemoteReleasedSignOn | null,
   door: SessionDoorObserver,
 ): RemoteSession<typeof emptyRpcRegistry, typeof emptyStreamRegistry> {
+  return openSessionWithGrants(relay, releasedSignOn, door, () =>
+    Promise.resolve(OK_GRANT),
+  );
+}
+
+function openSessionWithGrants(
+  relay: FakeRelayHost,
+  releasedSignOn: RemoteReleasedSignOn | null,
+  door: SessionDoorObserver,
+  grantProvider: AttachGrantProvider,
+): RemoteSession<typeof emptyRpcRegistry, typeof emptyStreamRegistry> {
   let nextRequestId = 0;
   return new RemoteSession({
     hostId: "host-1",
     attachBaseUrl: "wss://relay.test/attach",
     hostStaticPublicKey: relay.hostStaticPublicKey,
-    grantProvider: () =>
-      Promise.resolve({
-        kind: "ok" as const,
-        grant: { grant: "grant-jws", expiresInSeconds: 300 },
-      }),
+    grantProvider,
     hostToken: () => HOST_TOKEN,
     releasedSignOn,
     auth: null,
@@ -484,6 +500,69 @@ describe("released personal host, remote door", () => {
     },
     20_000,
   );
+
+  it("opens the redial with the refreshed sign-in when the refresh that ran past the budget answers rotated after the redial's attach began and before its open was read, with no admission remembered", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
+    const heldGrants: Array<(grant: AttachGrantProvision) => void> = [];
+    let grantsAsked = 0;
+    const { door, refusals } = recordingDoor();
+    relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+    relay.decideOpen = (_grant, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: releasedRefusal() }
+        : { kind: "ack" };
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    // The third attach, the redial after the budget, waits for the test to
+    // release its grant: the session has begun the dial and read no open.
+    const session = openSessionWithGrants(
+      relay,
+      {
+        ...personal,
+        recovery: {
+          revalidateForReconnect: () =>
+            new Promise<RevalidateOutcome>((resolve) => {
+              refreshes.push(resolve);
+            }),
+        },
+      },
+      door,
+      () => {
+        grantsAsked += 1;
+        return grantsAsked < 3
+          ? Promise.resolve(OK_GRANT)
+          : new Promise<AttachGrantProvision>((resolve) => {
+              heldGrants.push(resolve);
+            });
+      },
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => expect(heldGrants).toHaveLength(1), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+      signIn.rotate(ROTATED_SIGN_IN);
+      refreshes[0]("rotated");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+      heldGrants[0](OK_GRANT);
+
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN, ROTATED_SIGN_IN]);
+      expect(relay.openAuthz[2]).toBeNull();
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
 
   it("reports the refusal once when the personal host refuses the sign-in too", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
