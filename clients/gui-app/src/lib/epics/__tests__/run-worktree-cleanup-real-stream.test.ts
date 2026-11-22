@@ -11,6 +11,7 @@ import {
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { signalsBackoff } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
 import {
@@ -152,6 +153,8 @@ function startCleanup(
     const subscribe = client.subscribe.bind(client);
     vi.spyOn(client, "subscribe").mockImplementation((method, params) => {
       const session = subscribe(method, params);
+      if (!signalsBackoff(session))
+        throw new Error("the stream session does not signal backoff");
       session.onBackoffEntered(() => {
         backoffEntries += 1;
       });
