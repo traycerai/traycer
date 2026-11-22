@@ -529,6 +529,11 @@ export class WsStreamClient<
    * credential it asks for.
    */
   private readonly provisionRetryTimers = new Map<string, TimerHandle>();
+  /**
+   * Hosts whose last ack withheld the provision capability. A retry that fires
+   * meanwhile mints nothing; the ack that next offers the capability does.
+   */
+  private readonly provisionWithheldHostIds = new Set<string>();
   private readonly provisionGenerations = new Map<string, number>();
   private openedCredentialSocketSequence = 0;
   private readonly teamCredentialSocketBarriers = new Map<string, number>();
@@ -1129,7 +1134,11 @@ export class WsStreamClient<
       // Whatever we handed this host, it is not holding it any more.
       this.handedOffHostIds.delete(hostId);
     }
-    if (!canProvision) return;
+    if (!canProvision) {
+      this.provisionWithheldHostIds.add(hostId);
+      return;
+    }
+    this.provisionWithheldHostIds.delete(hostId);
     if (this.flushPendingProvision(hostId)) {
       return;
     }
@@ -1349,6 +1358,7 @@ export class WsStreamClient<
         // is protecting.
         return;
       }
+      if (this.provisionWithheldHostIds.has(hostId)) return;
       this.provisionAttemptedHostIds.add(hostId);
       void this.runMintFlow(mint, hostId, reason);
     }, delayMs);
