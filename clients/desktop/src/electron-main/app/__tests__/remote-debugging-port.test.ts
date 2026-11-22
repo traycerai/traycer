@@ -42,31 +42,11 @@ afterEach(() => {
   rmSync(electronFake.userDataPath, { recursive: true, force: true });
 });
 
+const ENABLED_PREFERENCE = '{ "remoteDebuggingPortEnabled": true }';
+
 describe("applyRemoteDebuggingPortPreference", () => {
-  it("never opens the port in production, even when the preference file enables it", () => {
-    writePreferenceFile('{ "remoteDebuggingPortEnabled": true }');
-
-    applyRemoteDebuggingPortPreference("production");
-
-    expect(electronFake.appendedSwitches).toEqual([]);
-  });
-
-  it.each(["preview", "dev"])("opens nothing in %s", (environment) => {
-    applyRemoteDebuggingPortPreference(environment);
-
-    expect(electronFake.appendedSwitches).toEqual([]);
-  });
-
-  it("opens a system-picked port in staging when there is no preference file", () => {
-    applyRemoteDebuggingPortPreference("staging");
-
-    expect(electronFake.appendedSwitches).toEqual([
-      ["remote-debugging-port", "0"],
-    ]);
-  });
-
-  it("opens the port in staging when the preference file does not say false", () => {
-    writePreferenceFile("{}");
+  it("opens a system-picked port in staging when the preference file enables it", () => {
+    writePreferenceFile(ENABLED_PREFERENCE);
 
     applyRemoteDebuggingPortPreference("staging");
 
@@ -75,25 +55,42 @@ describe("applyRemoteDebuggingPortPreference", () => {
     ]);
   });
 
-  it("respects the off switch in staging", () => {
-    writePreferenceFile('{ "remoteDebuggingPortEnabled": false }');
-
+  it("opens nothing in staging when there is no preference file", () => {
     applyRemoteDebuggingPortPreference("staging");
 
     expect(electronFake.appendedSwitches).toEqual([]);
   });
 
-  it("treats a preference file that cannot be parsed as the off switch", () => {
-    writePreferenceFile("{remoteDebuggingPortEnabled: false}");
+  it.each([
+    ["disabled", '{ "remoteDebuggingPortEnabled": false }'],
+    ["silent", "{}"],
+    ["unparseable", "{remoteDebuggingPortEnabled: true}"],
+  ])(
+    "opens nothing in staging when the preference file is %s",
+    (_, contents) => {
+      writePreferenceFile(contents);
 
-    applyRemoteDebuggingPortPreference("staging");
+      applyRemoteDebuggingPortPreference("staging");
 
-    expect(electronFake.appendedSwitches).toEqual([]);
-  });
+      expect(electronFake.appendedSwitches).toEqual([]);
+    },
+  );
+
+  it.each(["production", "preview", "dev"])(
+    "opens nothing in %s even when the preference file enables it",
+    (environment) => {
+      writePreferenceFile(ENABLED_PREFERENCE);
+
+      applyRemoteDebuggingPortPreference(environment);
+
+      expect(electronFake.appendedSwitches).toEqual([]);
+    },
+  );
 
   it.each(["remote-debugging-port", "remote-debugging-pipe"])(
-    "leaves an existing %s switch alone",
+    "leaves an existing %s switch alone even when the preference file enables the port",
     (existingSwitch) => {
+      writePreferenceFile(ENABLED_PREFERENCE);
       electronFake.presentSwitches.add(existingSwitch);
 
       applyRemoteDebuggingPortPreference("staging");
