@@ -20,7 +20,7 @@ export interface HostTokenEraReply {
   readonly era: number;
 }
 
-/** The host process a window's ask is for, as that window observed it. */
+/** The host process a window's ask or adoption is for, as that window observed it. */
 export interface HostTokenObtainOwner {
   readonly observed: string | null;
 }
@@ -74,11 +74,16 @@ export interface HostTokensBridgeSurface {
     hostIds: readonly string[],
     expectedEra: number,
   ): Promise<HostTokenRenewReply>;
+  /**
+   * `owner` is the host process the window holds the token for: main writes
+   * it only while that is still the process main observes for the host id.
+   */
   adopt(
     userId: string,
     hostId: string,
     token: HostToken,
     expectedEra: number,
+    owner: HostTokenObtainOwner,
   ): Promise<HostTokenEraReply>;
   forgetUser(userId: string): Promise<HostTokenEraReply>;
   snapshot(): Promise<HostTokenSnapshotReply>;

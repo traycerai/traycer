@@ -1121,3 +1121,42 @@ describe("an adopted token whose caller stopped wanting it before the write", ()
     expect(source.current(USER_ID, HOST_ID)).toEqual(OLD_TOKEN);
   });
 });
+
+describe("two adopted tokens for one pair, the older one's write landing last", () => {
+  const HOST_ID = "computer-adopt-write-order";
+  const OLDER = { token: "older-adopted-token", expiresAtMs: 10_000_000 };
+  const NEWER = { token: "newer-adopted-token", expiresAtMs: 10_000_000 };
+
+  it("drops the older adopt's write and keeps the table at the newer token", async () => {
+    const inner = createMemoryHostTokenPersistence();
+    let writes = 0;
+    let releaseFirstWrite: () => void = () => undefined;
+    const firstWriteHeld = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    const source = createHostTokenSource({
+      persistence: {
+        load: () => inner.load(),
+        update: async (change) => {
+          writes += 1;
+          if (writes === 1) await firstWriteHeld;
+          return inner.update(change);
+        },
+      },
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => 1_000,
+    });
+    const era = source.era(USER_ID);
+
+    const olderAdopt = source.adopt(USER_ID, HOST_ID, OLDER, era, () => true);
+    await vi.waitFor(() => expect(writes).toBe(1));
+    await source.adopt(USER_ID, HOST_ID, NEWER, era, () => true);
+    expect(source.current(USER_ID, HOST_ID)).toEqual(NEWER);
+
+    releaseFirstWrite();
+    await olderAdopt;
+
+    expect(source.current(USER_ID, HOST_ID)).toEqual(NEWER);
+  });
+});

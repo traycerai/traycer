@@ -70,6 +70,14 @@ export interface HostMintRecords {
   ) => HostTokenMintFailure | null;
 }
 
+// A token write: the era it began in, its place in the order, and the
+// writer's own check, read in the same step as the write.
+interface TableWrite {
+  readonly era: number;
+  readonly started: number;
+  readonly mayWrite: () => boolean;
+}
+
 // An observed process's own flight key: the pair's flight key and that process.
 function ownerKey(flightKey: string, observed: string): string {
   return `${flightKey}\u0000${observed}`;
@@ -194,7 +202,8 @@ export interface HostTokenSource {
   /** One refresh buys at most one token per host, however many windows ask. */
   renew(userId: string, hostIds: readonly string[]): Promise<HostTokenRenewal>;
   /**
-   * Dropped if the person signed out or was replaced since `era`, or if
+   * Dropped if the person signed out or was replaced since `era`, if a token
+   * for the pair that started after it was written first, or if
    * `stillWanted` is false when the token would be written: it is read in the
    * same step as the write.
    */
@@ -270,27 +279,31 @@ export function createHostTokenSource(deps: {
     for (const listener of Array.from(listeners)) listener(change);
   };
 
+  // Each pair's newest written token's place in the order (`records.start`):
+  // an adopted token that started before it is older, and is not written.
+  const writtenFrom = new Map<string, number>();
   const store = async (
     userId: string,
     hostId: string,
     token: HostToken,
-    era: number,
-    stillWanted: () => boolean,
+    write: TableWrite,
   ): Promise<boolean> => {
     let kept = false;
+    const key = keyOf(userId, hostId);
     // Checked inside the atomic update, so it is ordered against the update
-    // that forgets this person, and the asker's own check is the write's.
+    // that forgets this person, and the writer's own check is the write's.
     table = await deps.persistence.update((latest) => {
-      kept = eraOf(userId) === era && stillWanted();
+      kept = eraOf(userId) === write.era && write.mayWrite();
       if (!kept) return latest;
-      storedIn.set(keyOf(userId, hostId), era);
+      storedIn.set(key, write.era);
+      writtenFrom.set(key, Math.max(writtenFrom.get(key) ?? 0, write.started));
       const next = new Map(latest);
       const forUser = new Map(latest.get(userId) ?? []);
       forUser.set(hostId, token);
       next.set(userId, forUser);
       return next;
     });
-    if (!kept || eraOf(userId) !== era) return false;
+    if (!kept || eraOf(userId) !== write.era) return false;
     announce({ userId, hostId });
     return true;
   };
@@ -318,12 +331,19 @@ export function createHostTokenSource(deps: {
           : (observedFlights.get(ownerKey(flightKey, asker.observed)) ??
             renewFlights.get(flightKey));
     if (running !== undefined) return running;
+    const started = records.start();
     const attempt = (async (): Promise<HostTokenMintOutcome> => {
       const outcome = await deps.mint(hostId, signInToken, signal);
       if (eraOf(userId) !== era) return { kind: "superseded" };
       if (outcome.kind === "ok") {
         // A mint's own token: every asker of it is waiting for this write.
-        if (!(await store(userId, hostId, outcome.token, era, () => true)))
+        if (
+          !(await store(userId, hostId, outcome.token, {
+            era,
+            started,
+            mayWrite: () => true,
+          }))
+        )
           return { kind: "superseded" };
         if (mark === null) mintedWith.delete(key);
         else mintedWith.set(key, mark);
@@ -423,9 +443,17 @@ export function createHostTokenSource(deps: {
     },
 
     adopt: async (userId, hostId, token, era, stillWanted) => {
+      // Its place in the order, before any wait.
+      const started = records.start();
       if (eraOf(userId) !== era) return;
       await loaded;
-      await store(userId, hostId, token, era, stillWanted);
+      const key = keyOf(userId, hostId);
+      await store(userId, hostId, token, {
+        era,
+        started,
+        mayWrite: () =>
+          (writtenFrom.get(key) ?? 0) < started && stillWanted(),
+      });
     },
 
     forgetUser: async (userId) => {
@@ -434,6 +462,8 @@ export function createHostTokenSource(deps: {
         if (key.startsWith(`${userId}\u0000`)) mintedWith.delete(key);
       for (const key of Array.from(storedIn.keys()))
         if (key.startsWith(`${userId}\u0000`)) storedIn.delete(key);
+      for (const key of Array.from(writtenFrom.keys()))
+        if (key.startsWith(`${userId}\u0000`)) writtenFrom.delete(key);
       await loaded;
       const hostIds = Array.from(table.get(userId)?.keys() ?? []);
       table = await deps.persistence.update((latest) => {

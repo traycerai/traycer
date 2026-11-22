@@ -785,13 +785,14 @@ export function buildHostTokensBridge(): HostTokensBridgeSurface {
         hostIds,
         expectedEra,
       ) as Promise<HostTokenRenewReply>,
-    adopt: (userId, hostId, token, expectedEra) =>
+    adopt: (userId, hostId, token, expectedEra, owner) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.hostTokensAdopt,
         userId,
         hostId,
         token,
         expectedEra,
+        owner,
       ) as Promise<HostTokenEraReply>,
     forgetUser: (userId) =>
       ipcRenderer.invoke(

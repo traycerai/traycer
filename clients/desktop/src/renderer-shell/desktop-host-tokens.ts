@@ -7,6 +7,7 @@ import type {
   HostToken,
   HostTokenChange,
 } from "@traycer-clients/shared/auth/host-token-store";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   NO_ISSUED_HOST_TOKEN_ERA,
   type HostTokensBridgeSurface,
@@ -168,9 +169,12 @@ export function createDesktopHostTokenSource(
     adopt: async (userId, hostId, token, era, stillWanted) => {
       if (forgetting.has(userId) || era === NO_ISSUED_HOST_TOKEN_ERA) return;
       // Main writes it: asked in the step that sends it there, the last this
-      // window can check before main's write.
+      // window can check before main's write. Main checks the host process
+      // this window observes for the host id now against its own, at the write.
       if (!stillWanted()) return;
-      const reply = await bridge.adopt(userId, hostId, token, era);
+      const reply = await bridge.adopt(userId, hostId, token, era, {
+        observed: processReleasedHosts.currentInstance(hostId).observed,
+      });
       learn(userId, reply.era);
       // Main kept it only if the era it began in had not moved.
       if (stillIn(userId, era, reply.era)) apply(userId, hostId, token, era);

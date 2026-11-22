@@ -130,6 +130,7 @@ import {
   readSenderWebContentsId,
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { registerLocalAuthSessionRestore } from "./local-auth-session";
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -157,14 +158,16 @@ function hostIdsOf(value: unknown): readonly string[] {
   });
 }
 
-function obtainOwnerOf(value: unknown): HostTokenObtainOwner | null {
-  if (value === null) return null;
-  if (typeof value !== "object")
-    throw new Error("hostTokensObtain.owner requires an object or null");
+function ownerOf(value: unknown, context: string): HostTokenObtainOwner {
+  if (typeof value !== "object" || value === null)
+    throw new Error(`${context} requires an object argument`);
   const observed: unknown = Reflect.get(value, "observed");
-  if (observed !== null)
-    assertString(observed, "hostTokensObtain.owner.observed");
+  if (observed !== null) assertString(observed, `${context}.observed`);
   return { observed };
+}
+
+function obtainOwnerOf(value: unknown): HostTokenObtainOwner | null {
+  return value === null ? null : ownerOf(value, "hostTokensObtain.owner");
 }
 
 function hostTokenOf(value: unknown): HostToken {
@@ -281,17 +284,24 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       hostId: unknown,
       token: unknown,
       expectedEra: unknown,
+      owner: unknown,
     ): Promise<HostTokenEraReply> => {
       assertString(userId, "hostTokensAdopt.userId");
       assertString(hostId, "hostTokensAdopt.hostId");
       assertNumber(expectedEra, "hostTokensAdopt.expectedEra");
-      // Main holds no attempt for it: the window asked its own before sending.
+      const { observed } = ownerOf(owner, "hostTokensAdopt.owner");
+      // What main can know of the window's attempt: the host process it was
+      // for, compared with the one main observes now, in the step that writes.
+      // A host main never observes (reached only through the relay) reads
+      // `null` on both sides for life, so there only the era and the order
+      // apply. Whether the window retired the attempt for another reason main
+      // cannot see; the token is still this person's for this process and era.
       await tokens.adopt(
         userId,
         hostId,
         hostTokenOf(token),
         expectedEra,
-        () => true,
+        () => processReleasedHosts.currentInstance(hostId).observed === observed,
       );
       return { era: tokens.era(userId) };
     },
