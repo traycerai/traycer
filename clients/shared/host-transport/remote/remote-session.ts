@@ -218,13 +218,12 @@ export interface RemoteReleasedSignOn extends ReleasedSignOn {
   readonly opensReleasedWay: () => boolean;
   /**
    * Where the row {@link opensReleasedWay} reads is a cache that nothing keeps
-   * current, a fresh read of it: asked before an attach whose open would carry
-   * the sign-in. `false` when the read committed and the row may not be handed
-   * the sign-in; `null` when there was no answer (the read failed, or did not
-   * answer within its caller's ceiling), which keeps the last answer. `null`
-   * in place of the function where the row is kept current already.
+   * current, a fresh read of it, waited on before an attach whose open would
+   * carry the sign-in; its caller bounds the wait. Its answer is not read: the
+   * row then decides, and a read that failed or ran past the bound leaves the
+   * row last read. `null` where the row is kept current already.
    */
-  readonly confirmRow: (() => Promise<boolean | null>) | null;
+  readonly confirmRow: (() => Promise<unknown>) | null;
 }
 
 /**
@@ -600,16 +599,6 @@ function createReleasedSignOnSessionAuth(
     hosts,
   );
   /**
-   * The last answered confirmation of the row (`confirmRow`): a confirmation
-   * still pending, failed or unanswered changes nothing. Before any, the live
-   * row alone decides, as in c8b3e988.
-   */
-  let rowConfirmed = true;
-  /** Confirmations asked; only the latest one's answer is kept. */
-  let confirmationsAsked = 0;
-  const rowAllows = (): boolean =>
-    rowConfirmed && releasedSignOn.opensReleasedWay();
-  /**
    * What the next open presents. A sign-in plan carries the instance it was
    * made for, and acts only while that instance is current: a plan made for
    * an instance this process has since seen replaced is dropped, and the new
@@ -619,7 +608,7 @@ function createReleasedSignOnSessionAuth(
   let plan: SignInPlan = HOST_TOKEN_PLAN;
   const writeCheck: SignInWriteCheck = {
     hosts,
-    rowAllows,
+    rowAllows: releasedSignOn.opensReleasedWay,
     ownerSignInEligible: releasedSignOn.ownerSignInEligible,
   };
   /** The authority the next open's sign-in would rest on, if one is planned. */
@@ -682,11 +671,7 @@ function createReleasedSignOnSessionAuth(
         !hosts.namedReason(hostId) &&
         (plan.kind === "sign-in" || signInPlanned() || remembered() !== null);
       if (confirmRow === null || !wouldPresentSignIn) return;
-      confirmationsAsked += 1;
-      const asked = confirmationsAsked;
-      const confirmed = await confirmRow().catch(() => null);
-      if (asked === confirmationsAsked && confirmed !== null)
-        rowConfirmed = confirmed;
+      await confirmRow().catch(() => undefined);
     },
   );
   // Only a refusal of this dial's open switches to the sign-in: a current host
@@ -700,7 +685,7 @@ function createReleasedSignOnSessionAuth(
     isReleasedHostTokenRefusal(refusal) &&
     (plan.kind === "sign-in" ||
       (!hosts.namedReason(hostId) &&
-        rowAllows() &&
+        releasedSignOn.opensReleasedWay() &&
         !openAdmitted &&
         readSignIn() !== null));
   const recoverSignIn = async (
@@ -755,7 +740,8 @@ function createReleasedSignOnSessionAuth(
       signInsGiven.clear();
       dialOwner = hosts.currentInstance(hostId);
       openAdmitted = false;
-      signInFromMemory = rowAllows() && remembered() !== null;
+      signInFromMemory =
+        releasedSignOn.opensReleasedWay() && remembered() !== null;
       const authority: SignInAuthority | null = signInPlanned()
         ? plannedAuthority()
         : signInFromMemory

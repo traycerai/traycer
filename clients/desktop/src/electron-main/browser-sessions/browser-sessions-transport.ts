@@ -408,13 +408,9 @@ export function openBrowserSessionsTransport(
         return row !== null && opensReleasedWay(row, userId);
       },
       // A read that committed has moved the row `liveRow` reads; a failed
-      // read, or none by the ceiling, is no answer, and the row last read
-      // stands.
+      // read, or none by the ceiling, leaves the row last read.
       confirmRowBeforeSignIn: () =>
-        answeredWithin(
-          deps.confirmRow().then((committed) => (committed ? true : null)),
-          ROW_CONFIRM_CEILING_MS,
-        ),
+        answeredWithin(deps.confirmRow(), ROW_CONFIRM_CEILING_MS),
       door: null,
       onState: ignoreHostTokenState,
       cloudAuthorized: deps.cloudAuthorized,
