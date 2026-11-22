@@ -6730,13 +6730,11 @@ export class RemoteSession<
       if (frame.chunked)
         rememberChunkBearer(connection, frame.seq, write.bearer);
     }
-    const enqueued = encodeMuxFrame(frame);
-    const plaintext = written === frame ? enqueued : encodeMuxFrame(written);
-    // The frame as enqueued is appended before the seal, in pull order: the
-    // scheduler runs one write at a time, so ring order is wire order, and a
-    // write that fails below leaves the frame in the gap rather than nowhere.
-    // A rewrite replaces that entry only as it is sent.
-    const index = connection.ledger.append(enqueued);
+    const plaintext = encodeMuxFrame(written);
+    // The bytes about to be sealed are appended before the seal, in pull order:
+    // the scheduler runs one write at a time, so ring order is wire order, and
+    // a write that fails below leaves the frame in the gap rather than nowhere.
+    connection.ledger.append(plaintext);
     const pending = this.pendingUnary.get(frame.streamId);
     if (pending !== undefined) {
       pending.sealed = true;
@@ -6747,7 +6745,7 @@ export class RemoteSession<
       plaintext,
       sealedBearer,
       reportSent,
-      written === frame ? null : index,
+      null,
     );
   }
 
