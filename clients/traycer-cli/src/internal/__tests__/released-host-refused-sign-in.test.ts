@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nameReason } from "./released-memory-test-support";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
@@ -13,7 +12,9 @@ import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 const USER_ID = "user-1";
 const SIGN_IN = "unary-sign-in";
 const HELD_TOKEN = "unary-held-host-token";
+/** The fake clock steps, and the longest the client may take to write an OPEN once its socket is open. */
 const WAIT_STEP_MS = 10;
+const OPEN_DEADLINE_MS = 5_000;
 
 const OLDER_HOST_SENTENCE =
   "The host is out of date. Reinstall the latest host with 'traycer host update'.";
@@ -38,9 +39,19 @@ const harness = vi.hoisted(() => {
         }) => void)
       | null = null;
     readonly sent: string[] = [];
+    /** Settles when the client writes its first frame: its OPEN. */
+    readonly openWritten: Promise<void>;
+    private noteOpenWritten: () => void = () => undefined;
+
+    constructor() {
+      this.openWritten = new Promise<void>((resolve) => {
+        this.noteOpenWritten = resolve;
+      });
+    }
 
     send(data: string): void {
       this.sent.push(data);
+      this.noteOpenWritten();
     }
 
     close(_code: number, _reason: string): void {}
@@ -136,6 +147,7 @@ const params = {
 };
 
 beforeEach(() => {
+  vi.useFakeTimers();
   harness.sockets.splice(0);
   harness.state.refresh = "network-error";
   hostCount += 1;
@@ -154,6 +166,7 @@ beforeEach(() => {
 
 afterEach(() => {
   processReleasedHosts.forgetAll();
+  vi.useRealTimers();
 });
 
 /** A released host's refusal: bare, with no door reason, naming its own reason. */
@@ -203,12 +216,22 @@ async function refuseEveryOpen(
       handled.add(socket);
       socket.fireOpen();
       // The client writes its OPEN once the socket is open; the host answers that.
-      while (socket.sent.length === 0 && !finished.value) {
-        await sleep(WAIT_STEP_MS);
+      const written = { value: false };
+      void socket.openWritten.then(() => {
+        written.value = true;
+      });
+      for (let waited = 0; !written.value && !finished.value;) {
+        if (waited >= OPEN_DEADLINE_MS) {
+          throw new Error(
+            `expected an OPEN frame on socket ${harness.sockets.indexOf(socket)}, none written in ${OPEN_DEADLINE_MS} ms`,
+          );
+        }
+        await vi.advanceTimersByTimeAsync(WAIT_STEP_MS);
+        waited += WAIT_STEP_MS;
       }
       socket.fireMessage(refusal);
     }
-    await sleep(WAIT_STEP_MS);
+    await vi.advanceTimersByTimeAsync(WAIT_STEP_MS);
   }
 }
 

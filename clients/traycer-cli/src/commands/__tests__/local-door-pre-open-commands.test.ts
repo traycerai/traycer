@@ -186,6 +186,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: () => ({ dispose: () => undefined }),
     createStoreBackedRevalidator: () => ({
       revalidateCurrentContext: async () => harness.state.refresh,
+      rotateSignIn: async () => harness.state.refresh,
     }),
   };
 });
@@ -388,18 +389,20 @@ async function refuseEveryOpenBare(
   settled: Promise<unknown>,
 ): Promise<void> {
   const handled = new Set<Socket>();
-  for (let step = 0; step < 40; step += 1) {
-    const done = await Promise.race([
-      settled.then(() => true),
-      Promise.resolve(false),
-    ]);
-    if (done) return;
+  const command = { settled: false };
+  const note = (): void => {
+    command.settled = true;
+  };
+  void settled.then(note, note);
+  for (let step = 0; step < 40 && !command.settled; step += 1) {
     await vi.advanceTimersByTimeAsync(500);
     for (const socket of harness.sockets) {
+      if (command.settled) return;
       if (handled.has(socket) || socket.onopen === null) continue;
       handled.add(socket);
       socket.fireOpen();
       await vi.advanceTimersByTimeAsync(0);
+      if (command.settled) return;
       socket.fireFrame(releasedRefusalWith(reason));
     }
   }
