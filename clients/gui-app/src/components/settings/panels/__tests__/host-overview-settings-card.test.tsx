@@ -355,7 +355,8 @@ async function expectGiveChatCount(
 }
 
 interface CardRenderOptions {
-  readonly binding: EnvironmentHostBinding;
+  /** Null is what the card is given for a computer that runs its own settings, and while the binding is unread. */
+  readonly binding: EnvironmentHostBinding | null;
   readonly retrySupported: boolean;
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
@@ -447,7 +448,7 @@ function renderCardWithBinding(
             hostName="Old laptop"
             status={status}
             binding={
-              options.binding.hostId === hostId
+              options.binding === null || options.binding.hostId === hostId
                 ? options.binding
                 : { ...options.binding, hostId }
             }
@@ -460,6 +461,20 @@ function renderCardWithBinding(
     </QueryClientProvider>,
   );
   return queryClient;
+}
+
+/** The card as production draws it for a computer that runs its own settings: no binding. */
+function renderCardWithoutBinding(
+  status: EnvironmentStatusResponseV13,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): QueryClient {
+  return renderCardWithBinding(status, handlers, {
+    binding: null,
+    retrySupported: true,
+    owner: null,
+    isLocalMachine: false,
+    previewLocalFactsSupported: true,
+  });
 }
 
 function renderCardOnThisComputer(
@@ -1521,6 +1536,23 @@ describe("hostSettingsCardState", () => {
     },
   );
 
+  it.each([
+    ["running", "running"],
+    ["stalled", "retry"],
+  ] as const)(
+    "reads a stage this app does not know (%s), with the host's move in state %s, as a Local row",
+    (state, move) => {
+      expect(
+        hostSettingsCardState(
+          unboundMoveStatusFixture(
+            { stage: "verifying", state },
+            moveAttemptFixture(move),
+          ),
+        ),
+      ).toEqual({ kind: "local", verb: "move_to_personal" });
+    },
+  );
+
   it("keeps a registering stage that stalled before any move was accepted as a Local row", () => {
     expect(
       hostSettingsCardState(
@@ -1762,6 +1794,43 @@ describe("hostSettingsRowModel", () => {
     });
   });
 
+  // The card is given no binding for a computer that runs its own settings. With every plane moved and no
+  // pending upload it has no Local row, so the row waits on the binding read, a registering stage with an open
+  // record as main's moving settings stage does one step later.
+  it.each([
+    {
+      name: "registering, running, record running",
+      setup: { stage: "registering", state: "running" },
+      move: moveAttemptFixture("running"),
+    },
+    {
+      name: "registering, stalled, record retry",
+      setup: { stage: "registering", state: "stalled" },
+      move: moveAttemptFixture("retry"),
+    },
+    {
+      name: "moving settings, running, no record",
+      setup: { stage: "moving_settings", state: "running" },
+      move: null,
+    },
+    {
+      name: "moving settings, stalled, no record",
+      setup: { stage: "moving_settings", state: "stalled" },
+      move: null,
+    },
+  ])(
+    "reserves the row, with no binding and every plane moved, in $name",
+    ({ setup, move }) => {
+      expect(
+        hostSettingsRowModel(
+          environmentStatusFixture({ setup, move }),
+          null,
+          "Old laptop",
+        ),
+      ).toEqual({ kind: "loading" });
+    },
+  );
+
   it("reserves the row while status or binding is unread", () => {
     expect(
       hostSettingsRowModel(null, PERSONAL_BINDING, "Old laptop").kind,
@@ -1941,11 +2010,37 @@ describe("a move whose record is open while setup is applying", () => {
   });
 });
 
+describe("a move whose record is open while setup names a stage this app does not know", () => {
+  it.each([
+    ["running", "running"],
+    ["stalled", "retry"],
+  ] as const)(
+    "draws the settings row, not the move's progress or stopped row, while a stage this app does not know is %s and the host's move is in state %s",
+    (state, move) => {
+      renderCard(
+        unboundMoveStatusFixture(
+          { stage: "verifying", state },
+          moveAttemptFixture(move),
+        ),
+        {},
+      );
+
+      expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
+      expect(
+        screen.queryByTestId("host-settings-card-move-stopped"),
+      ).toBeNull();
+      expect(screen.getByTestId("host-settings-source").textContent).toContain(
+        "Runs its own settings",
+      );
+    },
+  );
+});
+
 describe("<HostOverviewSettingsCard /> for a move accepted before authn bound this computer", () => {
   it.each(ACCEPTED_MOVE_CASES)(
     "shows the move's progress with no row to move again in %s while its state is %s",
     (_name, state, setup) => {
-      renderCard(
+      renderCardWithoutBinding(
         unboundMoveStatusFixture(setup, moveAttemptFixture(state)),
         {},
       );
@@ -1960,7 +2055,7 @@ describe("<HostOverviewSettingsCard /> for a move accepted before authn bound th
   it.each(STOPPED_REGISTERING_CASES)(
     "offers Retry, not a row to move again, in a registering stage that %s with the host's move in state %s",
     (state, move, reason) => {
-      renderCard(
+      renderCardWithoutBinding(
         unboundMoveStatusFixture(
           { stage: "registering", state },
           moveAttemptFixture(move),
@@ -1977,7 +2072,7 @@ describe("<HostOverviewSettingsCard /> for a move accepted before authn bound th
   );
 
   it("still offers Personal, with no Retry, for a registering stage that stalled before any move was accepted", () => {
-    renderCard(
+    renderCardWithoutBinding(
       unboundMoveStatusFixture(
         { stage: "registering", state: "stalled" },
         null,
@@ -1993,7 +2088,10 @@ describe("<HostOverviewSettingsCard /> for a move accepted before authn bound th
   });
 
   it("still offers Personal to a first computer whose move was never accepted", async () => {
-    renderCard(unboundMoveStatusFixture(REGISTERING_SETUP, null), {});
+    renderCardWithoutBinding(
+      unboundMoveStatusFixture(REGISTERING_SETUP, null),
+      {},
+    );
 
     expect(screen.queryByTestId("host-settings-card-progress")).toBeNull();
     const trigger = screen.getByRole("combobox", { name: "Environment" });
