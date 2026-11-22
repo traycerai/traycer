@@ -30,7 +30,7 @@ type RefreshOutcome =
   | { readonly kind: "rejected" }
   | { readonly kind: "unavailable" };
 
-/** The stored sign-in for one command run. */
+/** A stored sign-in and its one refresh, held by one claim, one record or one environments read. */
 export interface StoredSignIn {
   /** The stored sign-in, or the one its refresh returned. */
   current(): HostAuth;
