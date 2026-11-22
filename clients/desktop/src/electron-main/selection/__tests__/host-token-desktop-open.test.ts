@@ -230,7 +230,6 @@ describe("desktop main local streams open with host tokens", () => {
     };
     const localHost = () => endpoint;
     const inventoryClient = createLocalHostInventoryStreamClient({
-      authnBaseUrl: "https://authn.invalid",
       hostTokens,
       localHost,
       bearer: liveBearer(provider),
@@ -369,7 +368,6 @@ describe("desktop main local streams open with host tokens", () => {
       version: belowFloor.version,
     };
     const inventoryFactory = createLocalHostInventoryStreamClient({
-      authnBaseUrl: "https://authn.invalid",
       hostTokens,
       localHost: () => endpoint,
       bearer: liveBearer(provider),
@@ -488,7 +486,6 @@ describe("desktop main local streams open with host tokens", () => {
     let currentVersion = MINIMUM_HOST_VERSION;
     const observedVersions: string[] = [];
     const inventoryFactory = createLocalHostInventoryStreamClient({
-      authnBaseUrl: "https://authn.invalid",
       hostTokens,
       localHost: () => {
         observedVersions.push(currentVersion);

@@ -29,52 +29,24 @@ const RELEASED_HOST = { ...mockLocalHostEntry, version: "1.5.4" };
 const CURRENT_HOST_FOR_USER_SWITCH = "current-host-user-switch";
 const CURRENT_HOST_WHILE_AUTHN_OFFLINE = "current-host-authn-offline";
 const CURRENT_HOST_FOR_INITIAL_INVITE = "current-host-initial-invite";
+const CURRENT_HOST_NAMING_REASON = "current-host-naming-reason";
 let activeClosers: Array<() => void> = [];
 
-type RowOwner = "personal" | "team" | "unknown";
+/** Every request authn is sent, kept; none is ever answered. */
+const authnRequests: string[] = [];
+
+function installSilentAuthn(): void {
+  authnRequests.length = 0;
+  vi.stubGlobal("fetch", (input: RequestInfo | URL): Promise<Response> => {
+    authnRequests.push(requestUrl(input));
+    return new Promise<Response>(() => undefined);
+  });
+}
 
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.toString();
   return input.url;
-}
-
-function ownershipBody(owner: RowOwner): unknown {
-  return {
-    hosts: [
-      owner === "team"
-        ? {
-            hostId: RELEASED_HOST.hostId,
-            owner: { kind: "team", id: "team-1", name: "Team" },
-            kind: "machine",
-            remoteAccess: false,
-          }
-        : {
-            hostId: RELEASED_HOST.hostId,
-            owner: { kind: "user", id: USER_A },
-            kind: "personal",
-            remoteAccess: false,
-          },
-    ],
-  };
-}
-
-function installFetch(owner: RowOwner): void {
-  vi.stubGlobal(
-    "fetch",
-    async (input: RequestInfo | URL): Promise<Response> => {
-      const url = new URL(requestUrl(input));
-      if (url.pathname === "/api/v3/hosts") {
-        if (owner === "unknown")
-          return new Response("authn unavailable", { status: 503 });
-        return new Response(JSON.stringify(ownershipBody(owner)), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      return new Response("unexpected", { status: 500 });
-    },
-  );
 }
 
 function releasedRefusal(): string {
@@ -132,7 +104,6 @@ function ownerSignInRefusal(): string {
 }
 
 async function openInventory(
-  owner: RowOwner,
   expiresAtMs: number | undefined,
   hostId: string | undefined,
 ): Promise<{
@@ -140,7 +111,7 @@ async function openInventory(
   readonly mintCalls: () => number;
   readonly close: () => void;
 }> {
-  installFetch(owner);
+  installSilentAuthn();
   const selectedHostId = hostId ?? RELEASED_HOST.hostId;
   const provider = newProvider();
   signIn(provider, USER_A, SIGN_IN_TOKEN);
@@ -170,7 +141,6 @@ async function openInventory(
     version: RELEASED_HOST.version,
   };
   const inventoryClient = createLocalHostInventoryStreamClient({
-    authnBaseUrl: "https://authn.test",
     hostTokens,
     localHost: () => endpoint,
     bearer: liveBearer(provider),
@@ -240,7 +210,6 @@ describe("desktop inventory push against a released local host", () => {
       userId: USER_A,
       signInToken: SIGN_IN_TOKEN,
       hostToken: null,
-      rowOwnerId: USER_A,
     });
     await vi.waitFor(() => expect(opened.mintCalls()).toBeGreaterThan(0));
     await vi.advanceTimersToNextTimerAsync();
@@ -279,43 +248,76 @@ describe("desktop inventory push against a released local host", () => {
     opened.close();
   });
 
-  it("opens the person's own computer with the sign-in after the host-only token is refused", async () => {
-    const opened = await openInventory("personal", undefined, undefined);
+  it("opens the sign-in at once after the host-only token is refused, on every dial sequence, while authn answers nothing", async () => {
+    const opened = await openInventory(undefined, undefined);
     await refusedOpen();
     await vi.waitFor(() =>
-      expect(
-        FakeNativeWebSocket.instances.length >= 2 ||
-          opened.statuses.includes("closed"),
-      ).toBe(true),
+      expect(FakeNativeWebSocket.instances).toHaveLength(2),
     );
-    expect(FakeNativeWebSocket.instances).toHaveLength(2);
     const signInSocket = FakeNativeWebSocket.instances[1];
     if (signInSocket === undefined) throw new Error("sign-in socket missing");
     signInSocket.fireOpen();
     await vi.waitFor(() =>
       expect(sentFramesOfKind(signInSocket, "open")).toHaveLength(1),
     );
-    expect(sentTokens()).toEqual([HOST_TOKEN, SIGN_IN_TOKEN]);
+    signInSocket.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() => expect(opened.statuses).toContain("open"));
+
+    signInSocket.fireClose(1006, "drop");
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(3),
+    );
+    const again = FakeNativeWebSocket.instances[2];
+    if (again === undefined) throw new Error("redial missing");
+    again.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(again, "open")).toHaveLength(1),
+    );
+    again.fireMessage(releasedRefusal());
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(4),
+    );
+    const secondSignIn = FakeNativeWebSocket.instances[3];
+    if (secondSignIn === undefined) throw new Error("second sign-in missing");
+    secondSignIn.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(secondSignIn, "open")).toHaveLength(1),
+    );
+    expect(sentTokens()).toEqual([
+      HOST_TOKEN,
+      SIGN_IN_TOKEN,
+      HOST_TOKEN,
+      SIGN_IN_TOKEN,
+    ]);
+    expect(authnRequests).toEqual([]);
     opened.close();
   });
 
-  it("never sends the sign-in when authn says the computer is a team's", async () => {
-    const opened = await openInventory("team", undefined, undefined);
-    await refusedOpen();
+  it("never sends the sign-in when the host names its reason for the host-only token", async () => {
+    // A named reason lives in process memory for the host id, so no other test
+    // dials this one.
+    const opened = await openInventory(undefined, CURRENT_HOST_NAMING_REASON);
     await vi.waitFor(() =>
-      expect(
-        FakeNativeWebSocket.instances.length >= 2 ||
-          opened.statuses.includes("closed"),
-      ).toBe(true),
+      expect(FakeNativeWebSocket.instances).toHaveLength(1),
     );
+    const socket = FakeNativeWebSocket.instances[0];
+    if (socket === undefined) throw new Error("inventory socket missing");
+    socket.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
+    );
+    socket.fireMessage(notAdmittedRefusal());
+    await vi.waitFor(() => expect(opened.statuses).toContain("reconnecting"));
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
-    expect(sentTokens()).toEqual([HOST_TOKEN]);
+    expect(sentTokens()[0]).toBe(HOST_TOKEN);
+    expect(authnRequests).toEqual([]);
     opened.close();
   });
 
   it("re-presents a refused held token after an unknown registry row declines the probe", async () => {
     const opened = await openInventory(
-      "unknown",
       Date.now() - 11 * 60_000,
       CURRENT_HOST_WHILE_AUTHN_OFFLINE,
     );
@@ -368,7 +370,6 @@ describe("desktop inventory push against a released local host", () => {
       userId: USER_A,
       signInToken: SIGN_IN_TOKEN,
       hostToken: HOST_TOKEN,
-      rowOwnerId: USER_A,
     });
     await refusedOpen();
     await vi.waitFor(() =>
@@ -399,7 +400,6 @@ describe("desktop inventory push against a released local host", () => {
       userId: USER_B,
       signInToken: SIGN_IN_B,
       hostToken: HOST_TOKEN_B,
-      rowOwnerId: USER_A,
     });
     await vi.waitFor(() =>
       expect(FakeNativeWebSocket.instances).toHaveLength(1),
@@ -437,7 +437,6 @@ describe("desktop inventory push against a released local host", () => {
       userId: USER_A,
       signInToken: SIGN_IN_TOKEN,
       hostToken: null,
-      rowOwnerId: null,
     });
     await vi.waitFor(() => expect(first.mintCalls()).toBeGreaterThan(0));
     await vi.advanceTimersToNextTimerAsync();
@@ -471,7 +470,6 @@ describe("desktop inventory push against a released local host", () => {
       userId: USER_B,
       signInToken: SIGN_IN_B,
       hostToken: null,
-      rowOwnerId: USER_B,
     });
     await vi.waitFor(() => expect(next.mintCalls()).toBeGreaterThan(0));
     await vi.advanceTimersToNextTimerAsync();
@@ -510,37 +508,13 @@ async function openInventoryFor(input: {
   readonly userId: string;
   readonly signInToken: string;
   readonly hostToken: string | null;
-  readonly rowOwnerId: string | null;
 }): Promise<{
   readonly statuses: string[];
   readonly mintCalls: () => number;
   readonly close: () => void;
 }> {
   const hostId = input.hostId ?? RELEASED_HOST.hostId;
-  vi.stubGlobal(
-    "fetch",
-    async (request: RequestInfo | URL): Promise<Response> => {
-      const url = new URL(requestUrl(request));
-      if (url.pathname === "/api/v3/hosts") {
-        if (input.rowOwnerId === null)
-          return new Response("authn unavailable", { status: 503 });
-        return new Response(
-          JSON.stringify({
-            hosts: [
-              {
-                hostId,
-                owner: { kind: "user", id: input.rowOwnerId },
-                kind: "personal",
-                remoteAccess: false,
-              },
-            ],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-      return new Response("unexpected", { status: 500 });
-    },
-  );
+  installSilentAuthn();
   const provider = newProvider();
   signIn(provider, input.userId, input.signInToken);
   let mintCalls = 0;
@@ -571,7 +545,6 @@ async function openInventoryFor(input: {
     version: RELEASED_HOST.version,
   };
   const inventoryClient = createLocalHostInventoryStreamClient({
-    authnBaseUrl: "https://authn.test",
     hostTokens,
     localHost: () => endpoint,
     bearer: liveBearer(provider),

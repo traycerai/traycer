@@ -504,7 +504,7 @@ async function requestWithHostToken<
                 ? null
                 : held,
             ),
-          releasedSignOnFor: async (
+          releasedSignOnFor: (
             _authority: HostRequestAuthority,
             cause: ReleasedUnaryCause,
           ) => {
@@ -514,11 +514,11 @@ async function requestWithHostToken<
               (cause === "owner-sign-in"
                 ? releasedSignOn.ownerSignInEligible()
                 : releasedSignOn.hostTokenUnobtainable());
-            return signIn !== null &&
-              eligible &&
-              (await releasedSignOn.allowed())
-              ? { bearer: signIn, recovery: releasedSignOn.recovery }
-              : null;
+            return Promise.resolve(
+              signIn !== null && eligible
+                ? { bearer: signIn, recovery: releasedSignOn.recovery }
+                : null,
+            );
           },
           heldTokenRefusedFor: (_authority, presented) =>
             releasedSignOn.heldTokenRefused(presented),

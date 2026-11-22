@@ -180,7 +180,6 @@ export function registerSelectionAuthorityIpc(bridge: RunnerIpcBridge): void {
       hostTokens: bridge.hostTokens,
       localHost: localHostEndpoint,
       appVersion: app.getVersion(),
-      authnBaseUrl: bridge.options.authnBaseUrl,
       bearer: () => {
         // Who is signed in, one lease per account. The stream sends that
         // person's host-only token, and this lease only as `releasedSignOn` allows.

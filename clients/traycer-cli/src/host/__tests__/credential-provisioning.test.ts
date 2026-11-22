@@ -186,8 +186,7 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      | ((session: FakeStreamSession, lapIndex: number) => void)
-      | null,
+      ((session: FakeStreamSession, lapIndex: number) => void) | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
@@ -537,7 +536,6 @@ describe("provisionInstalledHostCredential", () => {
             await vi.waitFor(() =>
               expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
             );
-            await vi.waitFor(() => expect(ownershipReads).toHaveLength(1));
             const revalidateRefused = options.auth?.revalidateRefused;
             if (revalidateRefused === undefined) {
               throw new Error("probe wired no refused-token recovery");
@@ -571,6 +569,7 @@ describe("provisionInstalledHostCredential", () => {
       );
       expect(probeSignal().aborted).toBe(true);
       expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
+      expect(ownershipReads).toEqual([]);
       expect(mocks.sessions).toHaveLength(1);
       expectCleanTeardown();
     } finally {
@@ -593,7 +592,7 @@ describe("provisionInstalledHostCredential", () => {
       } as HostCredentialProvisionOutcome,
     },
   ])(
-    "reports $name ahead of a first host-token mint refused as not admitted, while the sign-in is still allowed",
+    "reports $name ahead of a first host-token mint refused as not admitted",
     async ({ code, expected }) => {
       const ownershipReads: string[] = [];
       vi.stubGlobal(
@@ -634,7 +633,6 @@ describe("provisionInstalledHostCredential", () => {
                 expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
               );
               // The sign-in's allowance is read once the mint is refused.
-              await vi.waitFor(() => expect(ownershipReads).toHaveLength(1));
               session.emitStatus(
                 "closed",
                 fatalReason("the host named the cause", code),
@@ -649,6 +647,7 @@ describe("provisionInstalledHostCredential", () => {
         );
 
         expect(outcome).toEqual(expected);
+        expect(ownershipReads).toEqual([]);
         expect(mocks.sessions).toHaveLength(1);
         expectCleanTeardown();
       } finally {

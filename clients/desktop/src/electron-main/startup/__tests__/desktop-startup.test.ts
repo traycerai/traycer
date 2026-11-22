@@ -636,7 +636,6 @@ function openStartupStream(
     releasedSignOn: {
       signIn: () => new MutableBearerLease(RELEASED_SIGN_IN, RELEASED_USER_ID),
       recovery: null,
-      allowed: () => Promise.resolve(true),
       hostTokenUnobtainable: () => hostToken === null,
       ownerSignInEligible: () => hostToken === null,
       heldTokenRefused: () => false,
