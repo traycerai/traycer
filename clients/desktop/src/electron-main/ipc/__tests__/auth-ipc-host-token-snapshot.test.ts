@@ -20,7 +20,10 @@ import {
   type HostTokenBridgeChange,
   type HostTokensBridgeSurface,
 } from "../../../ipc-contracts/host-token-types";
-import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
+import {
+  RunnerHostEvent,
+  RunnerHostInvoke,
+} from "../../../ipc-contracts/ipc-channels";
 import { registerAuthIpc } from "../auth-ipc";
 import {
   RunnerIpcBridge,
@@ -138,6 +141,14 @@ function registerFor(
   tokens: HostTokenSource,
   signedInUserId: string | null,
 ): void {
+  registerForWindow(tokens, signedInUserId, window);
+}
+
+function registerForWindow(
+  tokens: HostTokenSource,
+  signedInUserId: string | null,
+  target: IpcManagedWindow,
+): void {
   registerAuthIpc(
     new RunnerIpcBridge({
       host: new IdleHost(),
@@ -152,7 +163,7 @@ function registerFor(
           ? null
           : buildStoredCredentials(signedInUserId, "sign-in-token"),
       ),
-      window,
+      window: target,
     }),
   );
 }
@@ -640,5 +651,121 @@ describe("a window's copy of what main wrote", () => {
     ).resolves.toBe(true);
     expect(window.current("user-a", hostId)).toEqual(NEWER);
     expect(main.current("user-a", hostId)).toEqual(NEWER);
+  });
+});
+
+/** An unsigned token with the issue second authn's `iat` carries, the one the tokens are ordered by. */
+function tokenIssuedAt(label: string, iatSeconds: number): HostToken {
+  const encode = (value: object): string =>
+    Buffer.from(JSON.stringify(value)).toString("base64url");
+  return {
+    token: `${encode({ alg: "none" })}.${encode({ iat: iatSeconds, label })}.`,
+    expiresAtMs: 9_000_000_000_000,
+  };
+}
+
+function isBridgeChange(value: unknown): value is HostTokenBridgeChange {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, "userId") === "string" &&
+    typeof Reflect.get(value, "hostId") === "string" &&
+    typeof Reflect.get(value, "era") === "number"
+  );
+}
+
+describe("main's broadcast of a kept host-token write", () => {
+  const USER = "user-a";
+  const HOST = "host-refused-token";
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * Two windows over main's real handlers and main's real broadcast: every
+   * change main announces reaches each window as the payload `fanOut` sent,
+   * and what a window asks or snapshots crosses as the IPC carries it.
+   */
+  function twoWindowsOverMain(main: HostTokenSource): {
+    readonly windows: readonly [HostTokenSource, HostTokenSource];
+  } {
+    const subscribers = new Set<(change: HostTokenBridgeChange) => void>();
+    const broadcasting: IpcManagedWindow = {
+      ...window,
+      webContents: {
+        send: (channel: string, payload: unknown): void => {
+          if (channel !== RunnerHostEvent.hostTokensChange) return;
+          if (!isBridgeChange(payload)) throw new Error("malformed change");
+          for (const subscriber of Array.from(subscribers)) subscriber(payload);
+        },
+      },
+    };
+    registerForWindow(main, USER, broadcasting);
+    const windowOver = (): HostTokenSource =>
+      createDesktopHostTokenSource({
+        era: (userId) => main.era(userId),
+        obtain: async (userId, hostId, fresh, expectedEra, owner) => {
+          const reply: unknown = await invokeHandler(
+            RunnerHostInvoke.hostTokensObtain,
+          )(RENDERER, userId, hostId, fresh, expectedEra, owner);
+          return {
+            outcome: Reflect.get(Object(reply), "outcome"),
+            held: Reflect.get(Object(reply), "held") === true,
+            era: Reflect.get(Object(reply), "era"),
+          };
+        },
+        renew: async (userId) => ({
+          renewal: { kind: "already-current" },
+          era: main.era(userId),
+        }),
+        adopt: async () => ({ kept: false, era: NO_ISSUED_HOST_TOKEN_ERA }),
+        forgetUser: async (userId) => ({ era: main.era(userId) }),
+        snapshot: async () => {
+          const reply: unknown = await invokeHandler(
+            RunnerHostInvoke.hostTokensSnapshot,
+          )(RENDERER);
+          return {
+            userId: Reflect.get(Object(reply), "userId"),
+            era: Reflect.get(Object(reply), "era"),
+            tokens: Reflect.get(Object(reply), "tokens"),
+          };
+        },
+        subscribe: (next) => {
+          subscribers.add(next);
+          return { dispose: () => subscribers.delete(next) };
+        },
+      });
+    return { windows: [windowOver(), windowOver()] };
+  }
+
+  it("makes a sibling window drop the refused token for the older-issued one main kept, as the asking window does", async () => {
+    const refused = tokenIssuedAt("refused", 2_000);
+    const reissued = tokenIssuedAt("reissued", 1_990);
+    const main = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      // authn issues the replacement with an earlier issue second (skew).
+      mint: () => Promise.resolve({ kind: "ok", token: reissued }),
+      signIn: () => "sign-in-token",
+      now: () => 1_000_000,
+    });
+    await main.adopt(USER, HOST, refused, main.era(USER), () => true);
+    const { windows } = twoWindowsOverMain(main);
+    const [asking, sibling] = windows;
+    await Promise.all([asking.whenLoaded(), sibling.whenLoaded()]);
+    expect(asking.current(USER, HOST)).toEqual(refused);
+    expect(sibling.current(USER, HOST)).toEqual(refused);
+
+    // A host refused the token; the asking window asks for a fresh one.
+    const outcome = await asking.obtain(USER, HOST, true, {
+      signal: null,
+      owner: null,
+      observedNow: () => null,
+    });
+
+    expect(outcome).toEqual({ kind: "ok", token: reissued });
+    expect(main.current(USER, HOST)).toEqual(reissued);
+    expect(asking.current(USER, HOST)).toEqual(reissued);
+    expect(sibling.current(USER, HOST)).toEqual(reissued);
   });
 });
