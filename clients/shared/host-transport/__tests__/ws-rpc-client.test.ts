@@ -323,6 +323,8 @@ function mutableTokenAccess(
   return {
     access: {
       current: () => current,
+      loaded: () => true,
+      whenLoaded: () => Promise.resolve(),
       obtain: async () => {
         const outcome =
           outcomes.shift() ??
@@ -472,7 +474,10 @@ async function completeReleasedStatusCall(
 
 function doorFatal(
   doorReason:
-    "not_admitted" | "owner_sign_in" | "not_provisioned" | "token_expired",
+    | "not_admitted"
+    | "owner_sign_in"
+    | "not_provisioned"
+    | "token_expired",
   reason: string,
 ): HostFrame {
   return {

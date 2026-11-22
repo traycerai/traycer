@@ -101,6 +101,12 @@ export interface BuildRawHostMessengerForTargetParams<
   Registry extends VersionedRpcRegistry,
 > {
   readonly target: HostDirectoryEntry;
+  /**
+   * The in-memory directory's current row for a host, read on every remote
+   * dial: `target` is this binding's snapshot, and the session it builds
+   * redials on its own after the row has moved on.
+   */
+  readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
   readonly registry: Registry;
   /**
    * Reads the bearer the CURRENT request is authorized under. The remote
@@ -192,7 +198,10 @@ export function buildRawHostMessengerForTarget<
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       hostTokens: params.hostTokens,
-      opensReleasedWay: opensReleasedWay(params.target, params.userId),
+      opensReleasedWay: () => {
+        const row = params.resolveTarget(params.target.hostId);
+        return row !== null && opensReleasedWay(row, params.userId);
+      },
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -671,6 +680,7 @@ class RuntimeHostMessenger<
 
     const built = buildRawHostMessengerForTarget({
       target,
+      resolveTarget: this.resolveTarget,
       userId,
       registry: this.registry,
       bearer: () => this.currentBearer,
@@ -1096,9 +1106,9 @@ function remoteTransportKey(entry: HostDirectoryEntry): string | null {
   // `status` is deliberately excluded: it doesn't feed `createRemoteHostTransport`,
   // so folding it into the identity key would rotate the session (tearing down a
   // healthy Noise/relay transport) on every availability/busy poll update.
-  // The owner is part of it: the binding's session decides at build whether
-  // the sign-in may go to this host (`opensReleasedWay`), so an owner change
-  // must rebuild it, as the stream key does.
+  // The owner is part of it: the session's cache key says whether it may ever
+  // present the sign-in (`opensReleasedWay` at build), so an owner change
+  // rebuilds it, as the stream key does. Each dial reads the row again.
   return [
     entry.hostId,
     entry.websocketUrl,

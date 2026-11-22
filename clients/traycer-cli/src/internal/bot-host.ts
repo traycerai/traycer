@@ -158,9 +158,24 @@ export interface BotSnapshot {
   readonly openRequestCount: number | null;
 }
 
+// The mint refusal that ended a client's command: each read on it fails with
+// that refusal's line, as the command did when the mint came before the dial.
+const refusalEndingReads = new WeakMap<BotStreamClient, CliError>();
+
+/**
+ * The mint refusal's line when one ended the command `client` serves (it is
+ * closed by then), else `null`. Every wait on the client reads it first.
+ */
+export function refusalEndingCommand(client: BotStreamClient): CliError | null {
+  return refusalEndingReads.get(client) ?? null;
+}
+
 /**
  * Opens a stream client against the local host, as `worktree delete` does.
  * No host credential is minted: these sessions only read, and end in seconds.
+ * The first dial presents the held host-only token, or probes with none,
+ * while its mint runs in the background; a mint refusal that ends the command
+ * closes the client.
  */
 export async function openLocalStreamClient(): Promise<{
   readonly client: BotStreamClient;
@@ -169,24 +184,26 @@ export async function openLocalStreamClient(): Promise<{
   const auth = await resolveHostAuth();
   if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();
+  const hostId = endpoint.hostId;
   // The token is all these short reads need: nothing here refreshes the
   // sign-in once the client is built, so the session is released at once.
-  const session = await requireCliHostSession(
-    auth,
-    endpoint.hostId,
-    hostTokenFailureCliError,
-  );
+  const session = await requireCliHostSession(auth, hostId, null);
   session.dispose();
-  const bearer = session.bearer;
+  const tokens = session.tokens;
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
-    hostId: endpoint.hostId,
+    hostId,
     endpoint: () => endpoint,
-    bearer: () => bearer,
+    bearer: tokens.streamBearer(hostId),
     // The session is released, so a sign-in the host refuses ends the read.
     releasedSignOn: { ...session.releasedSignOn, recovery: null },
-    userId: bearer.identity.userId,
+    userId: session.bearer.identity.userId,
     auth: null,
+    // An admitted open fences off a `not-admitted` of a mint begun before it.
+    door: {
+      refused: () => undefined,
+      admitted: () => tokens.admitted(hostId),
+    },
     clock: null,
     hostCredentialMint: null,
     onHostCredentialState: null,
@@ -199,6 +216,11 @@ export async function openLocalStreamClient(): Promise<{
     initialBackoffMs: STREAM_INITIAL_BACKOFF_MS,
     maxBackoffMs: STREAM_MAX_BACKOFF_MS,
     clientIdentity: CLI_CLIENT_IDENTITY,
+  });
+  tokens.onRefusalEndingCommand((refusedHostId, failure) => {
+    if (refusedHostId !== hostId || refusalEndingReads.has(client)) return;
+    refusalEndingReads.set(client, hostTokenFailureCliError(failure));
+    client.close("host-token-refused");
   });
   return { client, endpoint };
 }
@@ -241,6 +263,7 @@ export function readBotSnapshot(
       session.close();
       act();
     };
+    let opened = false;
     session.onServerFrame((envelope) => {
       const parsed = botSubscribeServerFrameSchema.safeParse(envelope);
       if (!parsed.success) {
@@ -261,7 +284,13 @@ export function readBotSnapshot(
       if (frame.kind === "deleted") finish(() => resolve(null));
     });
     session.onStatusChange((status, reason, retryCause) => {
+      if (status === "open") opened = true;
       if (status === "connecting" || status === "open") return;
+      const refused = refusalEndingCommand(client);
+      if (refused !== null) {
+        finish(() => reject(refused));
+        return;
+      }
       if (retryCause) {
         const admissionError = localTeamAdmissionCliError(retryCause);
         if (admissionError !== null) {
@@ -269,6 +298,10 @@ export function readBotSnapshot(
           return;
         }
       }
+      // Before the first open a reconnect is the stream finding its
+      // credential (a released host's refusal, the probe, the owner's
+      // invitation, a token still being minted); the read's deadline bounds it.
+      if (status === "reconnecting" && !opened) return;
       if (
         client.getMethodSupport("bot.subscribe") === "unsupported" ||
         isIncompatibleCloseForMethod(reason, "bot.subscribe")

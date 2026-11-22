@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
+import { processReleasedHosts } from "../../../../shared/host-transport/released-sign-on";
 import { runMonitor } from "../monitor";
 import { resolveHostAuth } from "../../internal/host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
@@ -216,6 +217,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  processReleasedHosts.forgetAll();
   vi.clearAllTimers();
   vi.useRealTimers();
 });
@@ -312,18 +314,22 @@ describe("runMonitor host-token renewal", () => {
     );
   });
 
+  // A `not-admitted` ends the command only once the host has named a reason
+  // (a sign-in could still follow before); the other refusals end it at once.
   it.each([
-    ["not-admitted", { kind: "not-admitted" }, CLI_ERROR_CODES.FORBIDDEN],
+    ["not-admitted", { kind: "not-admitted" }, CLI_ERROR_CODES.FORBIDDEN, true],
     [
       "sandbox-frozen",
       { kind: "sandbox-frozen" },
       CLI_ERROR_CODES.HOST_UNREACHABLE,
+      false,
     ],
   ] as const)(
     "ends on initial %s refusal with the ruled empty message",
-    async (_name, failure, code) => {
+    async (_name, failure, code, hostNamedReason) => {
       state.minted.push(failure);
       const { result, options } = await startMonitor();
+      if (hostNamedReason) processReleasedHosts.refusedNamingReason("host-1");
       options.bearer();
       await waitForMintCount(1);
 
@@ -364,6 +370,8 @@ describe("runMonitor host-token renewal", () => {
     const { result, options } = await startMonitor();
     options.bearer();
     await waitForMintCount(1);
+    // The stream records a refusal that names its reason before it reports it.
+    processReleasedHosts.refusedNamingReason("host-1");
     state.sessions[0]?.statusChange?.(
       "closed",
       unauthorizedFatal("not_admitted"),

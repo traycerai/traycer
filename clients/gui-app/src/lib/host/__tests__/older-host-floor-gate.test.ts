@@ -127,6 +127,7 @@ function hostTokens() {
 function messengerFor(target: HostDirectoryEntry) {
   return buildRawHostMessengerForTarget({
     target,
+    resolveTarget: () => target,
     hostTokens: hostTokens(),
     registry: hostRpcRegistry,
     bearer: () => null,

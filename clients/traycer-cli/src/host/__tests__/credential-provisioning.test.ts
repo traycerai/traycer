@@ -186,7 +186,8 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      ((session: FakeStreamSession, lapIndex: number) => void) | null,
+      | ((session: FakeStreamSession, lapIndex: number) => void)
+      | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
@@ -276,6 +277,7 @@ import {
   type HostCredentialProvisionOutcome,
   type ProvisionHostCredentialOptions,
 } from "../credential-provisioning";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { noopLogger } from "../../logger";
 import { formatCredentialProvisionNote } from "../install-auth";
 
@@ -575,6 +577,100 @@ describe("provisionInstalledHostCredential", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("provisions through a sign-in the host admitted, though a second host-only token mint begun before it answers not-admitted after it", async () => {
+    const mintAnswer = createDeferred<{ readonly kind: "not-admitted" }>();
+    mocks.hostTokenTable = new Map();
+    // A named reason is remembered per computer for the whole process.
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      ...localHostMetadata(),
+      hostId: "host-named-reason",
+    });
+    mocks.hostTokenMintMock.mockReset();
+    mocks.hostTokenMintMock
+      .mockResolvedValueOnce({ kind: "not-admitted" })
+      .mockReturnValueOnce(mintAnswer.promise);
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void (async (): Promise<void> => {
+          const options = capturedClientOptions();
+          // The first mint answers not-admitted while no sign-in can follow
+          // yet: the run goes on past it.
+          expect(options.bearer()).toBeNull();
+          await vi.waitFor(() =>
+            expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
+          );
+          await sleep(0);
+          // The host then names a reason and invites the sign-in. The next ask
+          // starts a second mint, and the host admits the sign-in before it
+          // answers.
+          processReleasedHosts.refusedNamingReason("host-named-reason");
+          expect(options.bearer()).toBeNull();
+          await vi.waitFor(() =>
+            expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(2),
+          );
+          options.door.admitted();
+          mintAnswer.resolve({ kind: "not-admitted" });
+          await sleep(0);
+          options.onHostCredentialState("host-named-reason", "active");
+        })();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "active",
+      minted: false,
+    });
+    expectCleanTeardown();
+  });
+
+  it("provisions through a sign-in a released host admitted, though the host-only token's mint answers not-admitted after the admission and again on the next ask", async () => {
+    const mintAnswer = createDeferred<{ readonly kind: "not-admitted" }>();
+    mocks.hostTokenTable = new Map();
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    mocks.hostTokenMintMock.mockReset();
+    mocks.hostTokenMintMock
+      .mockReturnValueOnce(mintAnswer.promise)
+      .mockResolvedValue({ kind: "not-admitted" });
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void (async (): Promise<void> => {
+          const options = capturedClientOptions();
+          // No token yet: the dial goes with the mint running beside it.
+          expect(options.bearer()).toBeNull();
+          await vi.waitFor(() =>
+            expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
+          );
+          // The host admits the sign-in, and authn then says it has no row:
+          // for the mint begun before the admission, and for the next ask.
+          // Neither ends the run, which the host's own answer settles.
+          options.door.admitted();
+          mintAnswer.resolve({ kind: "not-admitted" });
+          await sleep(0);
+          expect(options.bearer()).toBeNull();
+          await vi.waitFor(() =>
+            expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(2),
+          );
+          await sleep(0);
+          options.onHostCredentialState("host-1", "active");
+        })();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "active",
+      minted: false,
+    });
+    expectCleanTeardown();
   });
 
   it.each([

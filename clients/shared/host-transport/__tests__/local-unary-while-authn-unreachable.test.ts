@@ -27,7 +27,11 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import type { IWebSocketFactory } from "../ws-factory";
-import { signInForLocalRow, type ReleasedSignOnRow } from "../released-sign-on";
+import {
+  heldTokenRefused,
+  signInForLocalRow,
+  type ReleasedSignOnRow,
+} from "../released-sign-on";
 import { WsRpcClient } from "../ws-rpc-client";
 import { echoRegistry } from "./__fixtures__/echo-registry";
 
@@ -107,7 +111,9 @@ function releasedRefusal(): {
   };
 }
 
-function namedRefusal(doorReason: "not_admitted"): {
+function namedRefusal(
+  doorReason: "not_admitted" | "owner_sign_in" | "token_expired",
+): {
   readonly kind: "fatalError";
   readonly details: FatalErrorDetails;
 } {
@@ -136,6 +142,36 @@ function expiredJwt(nowMs: number): {
     JSON.stringify({ exp: Math.floor(expiresAtMs / 1000) }),
   ).toString("base64url");
   return { token: `${header}.${payload}.`, expiresAtMs };
+}
+
+/** Authn never answers: every mint for the pair stays pending. */
+function blackHoledTokens(): {
+  readonly tokens: TrackedHostTokens;
+  readonly mintCalls: () => number;
+} {
+  let mintCalls = 0;
+  const source = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => {
+      mintCalls += 1;
+      return new Promise<HostTokenMintOutcome>(() => undefined);
+    },
+    signIn: () => SIGN_IN,
+    now: () => Date.now(),
+  });
+  return { tokens: trackHostTokenMints(source), mintCalls: () => mintCalls };
+}
+
+/** A mint that answers when the test says so. */
+function deferredMint(): {
+  readonly mint: () => Promise<HostTokenMintOutcome>;
+  readonly answer: (outcome: HostTokenMintOutcome) => void;
+} {
+  let answer: (outcome: HostTokenMintOutcome) => void = () => undefined;
+  const pending = new Promise<HostTokenMintOutcome>((resolve) => {
+    answer = resolve;
+  });
+  return { mint: () => pending, answer: (outcome) => answer(outcome) };
 }
 
 function recordingDoor(): {
@@ -289,6 +325,18 @@ function driveCall(
       states.push(kind);
     }),
     releasedSignOnFor: signInForLocalRow(() => row, null, tokens),
+    heldTokenRefusedFor: (authority, presented) =>
+      heldTokenRefused(
+        tokens,
+        authority.bearer.identity.userId,
+        authority.endpoint.hostId,
+        presented,
+      ),
+    forgetHeldRefusalFor: (authority) =>
+      tokens.forgetHeldRefused(
+        authority.bearer.identity.userId,
+        authority.endpoint.hostId,
+      ),
     doorFor: () => door,
   });
   const driven: DrivenCall = {
@@ -633,6 +681,197 @@ describe("local unary while authn cannot mint", () => {
     expect(mintCalls()).toBe(0);
     expect(driven.sockets).toHaveLength(1);
     expect(openToken(socket)).toBe(NO_HOST_TOKEN_PROBE);
+  });
+
+  it.each([
+    {
+      name: "a released host",
+      answer: () => releasedRefusal(),
+      followedBySignIn: true,
+    },
+    {
+      name: "a current personal host",
+      answer: () => namedRefusal("owner_sign_in"),
+      followedBySignIn: true,
+    },
+    {
+      name: "a current team host",
+      answer: () => namedRefusal("not_admitted"),
+      followedBySignIn: false,
+    },
+  ])(
+    "dials $name at once while authn never answers",
+    async ({ answer, followedBySignIn }) => {
+      vi.useFakeTimers();
+      const { tokens, mintCalls } = blackHoledTokens();
+      const driven = driveCall(tokens, null);
+      clients.push(driven.client);
+      // No timer is advanced: the first socket must not wait on the mint.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mintCalls()).toBe(1);
+      expect(driven.sockets).toHaveLength(1);
+      const probe = driven.sockets[0];
+      if (probe === undefined) throw new Error("probe dial missing");
+      expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      probe.fireMessage(answer());
+      if (!followedBySignIn) {
+        await vi.advanceTimersByTimeAsync(0);
+        // The host named its reason: the call waits on the mint for a
+        // host-only token and is never handed the sign-in.
+        expect(driven.finished).toBe(false);
+        expect(driven.sockets.map(openToken)).toEqual([NO_HOST_TOKEN_PROBE]);
+        return;
+      }
+      await vi.waitFor(() => expect(driven.sockets).toHaveLength(2));
+      const second = driven.sockets[1];
+      if (second === undefined) throw new Error("sign-in dial missing");
+      const open = await openAndRead(second);
+      expect(open.token).toBe(SIGN_IN);
+      ackAndEcho(second, open);
+      await answerEcho(second);
+      expect(await driven.settled).toEqual({
+        kind: "fulfilled",
+        value: { echoed: "hi" },
+      });
+      expect(driven.refusals).toEqual([]);
+    },
+  );
+
+  it("hands a current personal host the sign-in once and the host-only token on the next call, once the mint answers ok", async () => {
+    vi.useFakeTimers();
+    const minted = "host-only-token-after-mint";
+    const mint = deferredMint();
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: mint.mint,
+      signIn: () => SIGN_IN,
+      now: () => Date.now(),
+    });
+    const tokens = trackHostTokenMints(source);
+    const first = driveCall(tokens, null);
+    clients.push(first.client);
+    await vi.advanceTimersByTimeAsync(0);
+    const probe = first.sockets[0];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("owner_sign_in"));
+    await vi.waitFor(() => expect(first.sockets).toHaveLength(2));
+    const invited = first.sockets[1];
+    if (invited === undefined) throw new Error("sign-in dial missing");
+    const open = await openAndRead(invited);
+    expect(open.token).toBe(SIGN_IN);
+    ackAndEcho(invited, open);
+    await answerEcho(invited);
+    expect(await first.settled).toMatchObject({ kind: "fulfilled" });
+
+    mint.answer({
+      kind: "ok",
+      token: { token: minted, expiresAtMs: Date.now() + 60_000 },
+    });
+    await vi.waitFor(() =>
+      expect(source.current(USER_ID, mockLocalHostEntry.hostId)?.token).toBe(
+        minted,
+      ),
+    );
+    const next = requestEcho(first.client);
+    await vi.waitFor(() => expect(first.sockets).toHaveLength(3));
+    const third = first.sockets[2];
+    if (third === undefined) throw new Error("host-token dial missing");
+    const carried = await openAndRead(third);
+    ackAndEcho(third, carried);
+    await answerEcho(third);
+    expect(await next).toMatchObject({ kind: "fulfilled" });
+    expect(first.sockets.map(openToken)).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+      minted,
+    ]);
+  });
+
+  it("completes a call to a current team host on the token the pending mint buys, once the host has named its reason", async () => {
+    vi.useFakeTimers();
+    const minted = "host-only-token-bought-in-the-call";
+    const mint = deferredMint();
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: mint.mint,
+      signIn: () => SIGN_IN,
+      now: () => Date.now(),
+    });
+    const driven = driveCall(trackHostTokenMints(source), null);
+    clients.push(driven.client);
+    await vi.advanceTimersByTimeAsync(0);
+    const probe = driven.sockets[0];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("not_admitted"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(driven.sockets).toHaveLength(1);
+    expect(driven.finished).toBe(false);
+
+    mint.answer({
+      kind: "ok",
+      token: { token: minted, expiresAtMs: Date.now() + 60_000 },
+    });
+    await vi.waitFor(() => expect(driven.sockets).toHaveLength(2));
+    const second = driven.sockets[1];
+    if (second === undefined) throw new Error("host-token dial missing");
+    const open = await openAndRead(second);
+    expect(open.token).toBe(minted);
+    ackAndEcho(second, open);
+    await answerEcho(second);
+    expect(await driven.settled).toEqual({
+      kind: "fulfilled",
+      value: { echoed: "hi" },
+    });
+    expect(driven.sockets.map(openToken)).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      minted,
+    ]);
+    expect(driven.refusals).toEqual([]);
+  });
+
+  it("takes the fresh-mint recovery, never the probe, when a locally usable host-only token is refused as expired", async () => {
+    // A clock-skewed host calls a token this clock still reads as usable
+    // expired; a mint failed for the pair earlier, so the held-token rule is
+    // live for it.
+    const usable = {
+      token: "locally-usable-host-token",
+      expiresAtMs: Date.now() + 60_000,
+    };
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        Promise.resolve({ kind: "unavailable", detail: "authn offline" }),
+      signIn: () => SIGN_IN,
+      now: () => Date.now(),
+    });
+    const tokens = trackHostTokenMints(source);
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, true, null);
+    await source.adopt(
+      USER_ID,
+      mockLocalHostEntry.hostId,
+      usable,
+      source.era(USER_ID),
+    );
+    const driven = driveCall(tokens, PERSONAL_ROW);
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const socket = driven.sockets[0];
+    if (socket === undefined) throw new Error("host-token dial missing");
+    expect((await openAndRead(socket)).token).toBe(usable.token);
+    socket.fireMessage(namedRefusal("token_expired"));
+    await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+    expect(await driven.settled).toMatchObject({ kind: "rejected" });
+    // The door hears the refusal, whose recovery is the fresh mint above this
+    // client; no probe and no sign-in is dialed.
+    expect(driven.refusals.map((details) => details.doorReason)).toEqual([
+      "token_expired",
+    ]);
+    expect(driven.sockets).toHaveLength(1);
   });
 });
 

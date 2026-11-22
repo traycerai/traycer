@@ -12,6 +12,13 @@ import {
   noteHostDoorState,
 } from "@/stores/host/host-door-state-store";
 
+/**
+ * When each host last admitted one of this app's connections, by `Date.now()`.
+ * A mint that started before then and failed says nothing about a connection
+ * that works.
+ */
+const lastAdmittedAtMs = new Map<string, number>();
+
 /** The one place a host's refusal becomes this app's state of it. A relay's own session kill never comes here. */
 export function appHostDoorObserver(hostId: string): SessionDoorObserver {
   return {
@@ -28,6 +35,7 @@ export function appHostDoorObserver(hostId: string): SessionDoorObserver {
       });
     },
     admitted: () => {
+      lastAdmittedAtMs.set(hostId, Date.now());
       // An open on the held token says nothing about authn: a state only a renewal clears stays.
       const state = hostDoorStateFor(hostId);
       if (
@@ -40,14 +48,19 @@ export function appHostDoorObserver(hostId: string): SessionDoorObserver {
   };
 }
 
+/** `HostTokenStateSink`: dropped when the host admitted a connection at or after the mint started. */
 export function noteHostTokenRefusal(
   hostId: string,
   kind: HostDoorStateKind,
+  mintStartedAtMs: number,
 ): void {
+  const admittedAtMs = lastAdmittedAtMs.get(hostId);
+  if (admittedAtMs !== undefined && admittedAtMs >= mintStartedAtMs) return;
   noteHostDoorState({ hostId, kind, detail: null });
 }
 
 export function noteHostTokenRenewal(hostId: string, delayed: boolean): void {
-  if (delayed) noteHostTokenRefusal(hostId, "access-check-delayed");
+  if (delayed)
+    noteHostDoorState({ hostId, kind: "access-check-delayed", detail: null });
   else clearHostDoorStateOfKind(hostId, "access-check-delayed");
 }

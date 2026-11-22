@@ -85,11 +85,14 @@ export interface CreateRemoteTransportOptions<
    */
   readonly hostTokens: HostTokenSource;
   /**
-   * `opensReleasedWay` of this host's directory row for `userId`: whether a
-   * released host's typed refusal of the host-only token may be answered with
-   * the sign-in (see `released-sign-on.ts`).
+   * `opensReleasedWay` of this host's row for `userId` in the in-memory
+   * directory, read live: whether a released host's typed refusal of the
+   * host-only token may be answered with the sign-in (see
+   * `released-sign-on.ts`). Read once to key the session and build its
+   * sign-in, and again by that session on every open and credential push
+   * (`RemoteReleasedSignOn.opensReleasedWay`). It never reads the cloud.
    */
-  readonly opensReleasedWay: boolean;
+  readonly opensReleasedWay: () => boolean;
   readonly door: SessionDoorObserver | null;
   readonly onState: HostTokenStateSink;
   /**
@@ -218,6 +221,12 @@ export interface RemoteHostTransport<
   readonly streamClient: RemoteStreamClient<RpcRegistry, StreamRegistry>;
 }
 
+/** A relay-pass mint, and `Date.now()` just before it was sent: the token-state fence. */
+interface TimedRelayPassMint {
+  readonly outcome: RelayPassMintOutcome;
+  readonly startedAtMs: number;
+}
+
 export function createRemoteHostTransport<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
@@ -265,6 +274,9 @@ export function createRemoteHostTransport<
     return null;
   }
 
+  // Keys the session and decides whether it can ever present the sign-in; the
+  // session's own live read decides whether a given dial does.
+  const releasedWayAtBuild = options.opensReleasedWay();
   const identity: RemoteSessionIdentity = {
     hostId: options.hostId,
     userId: options.userId,
@@ -277,9 +289,7 @@ export function createRemoteHostTransport<
     // Same reasoning applied to WHICH auth context wired those closures, not
     // just which policy they implement. See `RemoteSessionIdentity.authEpoch`.
     authEpoch: authEpochFor(bearerSource),
-    openAuth: options.opensReleasedWay
-      ? "session-grant-or-sign-in"
-      : "session-grant",
+    openAuth: releasedWayAtBuild ? "session-grant-or-sign-in" : "session-grant",
   };
   const session = acquireRemoteSession(
     identity,
@@ -296,20 +306,23 @@ export function createRemoteHostTransport<
       const mintInEra = async (
         signInToken: string,
         era: number,
-      ): Promise<RelayPassMintOutcome | null> => {
-        const minted = await mintRelayPassWithHostTokenViaHttp(
+      ): Promise<TimedRelayPassMint | null> => {
+        const startedAtMs = Date.now();
+        const outcome = await mintRelayPassWithHostTokenViaHttp(
           options.authnBaseUrl,
           options.hostId,
           signInToken,
         );
-        return options.hostTokens.era(options.userId) === era ? minted : null;
+        return options.hostTokens.era(options.userId) === era
+          ? { outcome, startedAtMs }
+          : null;
       };
       // authn refused the sign-in: refresh once and mint again. Any other outcome keeps
       // the first provision: the relay's backoff, with no state.
       const mintAfterSignInRefresh = async (
-        refused: RelayPassMintOutcome,
+        refused: TimedRelayPassMint,
         era: number,
-      ): Promise<RelayPassMintOutcome | null> => {
+      ): Promise<TimedRelayPassMint | null> => {
         if (
           options.auth === null ||
           (await options.auth.revalidateForReconnect()) !== "rotated"
@@ -336,16 +349,17 @@ export function createRemoteHostTransport<
             context: "",
           };
         const first = await mintInEra(signInToken, era);
-        const minted =
-          first?.kind === "sign-in-rejected"
+        const timed =
+          first?.outcome.kind === "sign-in-rejected"
             ? await mintAfterSignInRefresh(first, era)
             : first;
-        if (minted === null)
+        if (timed === null)
           return {
             kind: "unavailable",
             detail: "signed out while the relay pass was minted",
             context: "",
           };
+        const minted = timed.outcome;
         if (minted.kind === "ok") {
           await options.hostTokens.adopt(
             options.userId,
@@ -356,9 +370,13 @@ export function createRemoteHostTransport<
           return { kind: "ok", grant: minted.grant };
         }
         if (minted.kind === "not-admitted" || minted.kind === "not-a-member")
-          options.onState(options.hostId, minted.kind);
+          options.onState(options.hostId, minted.kind, timed.startedAtMs);
         else if (minted.kind === "unreachable")
-          options.onState(options.hostId, "token-unavailable");
+          options.onState(
+            options.hostId,
+            "token-unavailable",
+            timed.startedAtMs,
+          );
         return minted.provision;
       };
       const created = new RemoteSession<RpcRegistry, StreamRegistry>({
@@ -369,7 +387,7 @@ export function createRemoteHostTransport<
         hostToken: () =>
           options.hostTokens.current(options.userId, options.hostId)?.token ??
           null,
-        releasedSignOn: options.opensReleasedWay
+        releasedSignOn: releasedWayAtBuild
           ? {
               signIn: bearer,
               recovery: options.auth,
@@ -378,6 +396,7 @@ export function createRemoteHostTransport<
               heldTokenRefused: () => false,
               forgetHeldRefusal: () => undefined,
               hosts: processReleasedHosts,
+              opensReleasedWay: options.opensReleasedWay,
             }
           : null,
         // The SAME read the grant provider above uses, now also reported to the

@@ -41,6 +41,7 @@ import {
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import {
   revalidateStream,
+  type RevalidateOutcome,
   type StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -262,10 +263,17 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
   readonly clientIdentity: FirstPartyClientIdentity;
   readonly localOpenAuth?: LocalOpenAuth;
   readonly doorFor?: (hostId: string) => SessionDoorObserver;
-  /** Replaces the caller's sign-in lease in every frame; `null` when no token can be had now. */
+  /**
+   * Replaces the caller's sign-in lease in every frame; `null` when no token can
+   * be had now. With `waitForMint` false (a call's first ask, before any dial) it
+   * never waits for a mint that has not answered: no dial to this machine's host
+   * waits on the cloud. `true` only after a current host named its reason for
+   * the probe: the host has answered, and only a host-only token opens it.
+   */
   readonly hostBearerFor?: (
     hostId: string,
     signIn: OpenFrameBearerSource,
+    waitForMint: boolean,
   ) => Promise<OpenFrameBearerSource | null>;
   /**
    * Asked only after a released host's typed refusal of this call's host-only
@@ -428,6 +436,11 @@ export class WsRpcClient<
   /** A released host refused the sign-in, a recovery is left, and the door has not heard of it. */
   private readonly signInRefusals = new WeakSet<HostRpcError>();
   private readonly reprobeErrors = new WeakSet<HostRpcError>();
+  /**
+   * Admitted opens per host. A refusal reported after a refresh is reported
+   * only while no call to that host was admitted since the refresh was asked.
+   */
+  private readonly admissionsByHost = new Map<string, number>();
   private readonly localRevisionByHost = new Map<string, number>();
   /** Counts `releaseIdleLocalSessions`, so a call can tell one ran during its token lookup. */
   private localReleases = 0;
@@ -528,6 +541,8 @@ export class WsRpcClient<
           const recovery = this.ownerSignInAuthorities.get(authority) ?? null;
           // Spent: a second refusal of this call's sign-in reaches the door.
           this.ownerSignInAuthorities.set(authority, null);
+          const hostId = options.authority.endpoint.hostId;
+          const askedAt = this.admissionsOf(hostId);
           const outcome =
             recovery === null || cause.fatalDetails === null
               ? "rejected"
@@ -535,7 +550,7 @@ export class WsRpcClient<
                   () => "network-error" as const,
                 );
           if (outcome === "rotated") continue;
-          this.reportRefusal(options.authority.endpoint.hostId, cause);
+          this.reportRefusalAfterRecovery(hostId, cause, outcome, askedAt);
           throw cause;
         }
         if (
@@ -562,6 +577,8 @@ export class WsRpcClient<
           const recovery = this.signInAuthorities.get(authority) ?? null;
           // Spent: a second refusal of this call's sign-in reaches the door.
           this.signInAuthorities.set(authority, null);
+          const hostId = options.authority.endpoint.hostId;
+          const askedAt = this.admissionsOf(hostId);
           const outcome =
             recovery === null || cause.fatalDetails === null
               ? "rejected"
@@ -569,7 +586,7 @@ export class WsRpcClient<
                   () => "network-error" as const,
                 );
           if (outcome === "rotated") continue;
-          this.reportRefusal(options.authority.endpoint.hostId, cause);
+          this.reportRefusalAfterRecovery(hostId, cause, outcome, askedAt);
           throw cause;
         }
         // The probe carried no credential of the person's: a current host's
@@ -607,6 +624,24 @@ export class WsRpcClient<
             );
           if (reason === "not_provisioned" && this.surfacesNotProvisioned)
             throw cause;
+          // The host has answered and takes no sign-in from this person: only a
+          // host-only token opens it, so the mint started before the probe is
+          // awaited now. A computer with no owner has no token to mint.
+          const minted =
+            reason === "not_provisioned" || hostBearerFor === undefined
+              ? null
+              : await hostBearerFor(
+                  hostId,
+                  options.authority.bearer,
+                  true,
+                ).catch(() => null);
+          if (minted !== null) {
+            hostOptions = {
+              ...options,
+              authority: { ...options.authority, bearer: minted },
+            };
+            continue;
+          }
           throw noHostTokenError(this.requestIdProvider(), method);
         }
         if (cause instanceof HostRpcError && cause.doorRefusal !== null)
@@ -641,7 +676,7 @@ export class WsRpcClient<
     method: string,
   ): Promise<HostRequestOptions> {
     const hostId = options.authority.endpoint.hostId;
-    const bearer = await hostBearerFor(hostId, options.authority.bearer);
+    const bearer = await hostBearerFor(hostId, options.authority.bearer, false);
     if (bearer !== null)
       return { ...options, authority: { ...options.authority, bearer } };
     const signIn = this.releasedHosts.probeDeclined(
@@ -672,6 +707,27 @@ export class WsRpcClient<
   private reportRefusal(hostId: string, cause: HostRpcError): void {
     if (cause.fatalDetails !== null)
       this.doorFor?.(hostId).refused(cause.fatalDetails);
+  }
+
+  private admissionsOf(hostId: string): number {
+    return this.admissionsByHost.get(hostId) ?? 0;
+  }
+
+  /**
+   * A refusal the sign-in's refresh could not answer, as the stream and the
+   * remote door report it: only when the refresh was refused (`rejected`,
+   * `local-plane-retained`), never because authn could not be reached, and only
+   * while no call to that host was admitted since the refresh was asked.
+   */
+  private reportRefusalAfterRecovery(
+    hostId: string,
+    cause: HostRpcError,
+    outcome: RevalidateOutcome,
+    askedAt: number,
+  ): void {
+    if (outcome === "network-error") return;
+    if (this.admissionsOf(hostId) !== askedAt) return;
+    this.reportRefusal(hostId, cause);
   }
 
   /** See `released-sign-on.ts`. */
@@ -959,6 +1015,21 @@ export class WsRpcClient<
 
       await session.dial();
       throwIfAuthorityAborted(authority, requestId, method);
+      // The released sign-in goes only to a host no transport has heard name a
+      // reason: asked again at OPEN, because the dial can wait for a slot.
+      if (
+        this.signInAuthorities.has(authority) &&
+        this.releasedHosts.namedReason(selected.hostId)
+      ) {
+        throw new RetryableTransportError({
+          code: "RPC_ERROR",
+          message: "The host named a reason before the sign-in was sent",
+          requestId,
+          method,
+          replaySafetyFromKey: false,
+          fatalDetails: null,
+        });
+      }
       // A queued dial must still belong to its bearer lease at OPEN, even
       // when the wire token is the grant minted before socket construction.
       const liveBearer = extractBearerOrThrowRpcError(
@@ -1102,6 +1173,10 @@ export class WsRpcClient<
         !this.ownerSignInAuthorities.has(authority)
       )
         this.releasedHosts.hostTokenAdmitted(selected.hostId);
+      this.admissionsByHost.set(
+        selected.hostId,
+        this.admissionsOf(selected.hostId) + 1,
+      );
       this.doorFor?.(selected.hostId).admitted();
       if (usesSessionGrant)
         this.localOpenAuth?.noteAdmitted(selected.hostId, authority.bearer);

@@ -129,6 +129,7 @@ async function openInventory(
   if (websocketUrl === null) {
     throw new Error("the mock local host has no websocket URL");
   }
+  await hostTokens.whenLoaded();
   await hostTokens.adopt(
     USER_A,
     selectedHostId,
@@ -211,8 +212,6 @@ describe("desktop inventory push against a released local host", () => {
       signInToken: SIGN_IN_TOKEN,
       hostToken: null,
     });
-    await vi.waitFor(() => expect(opened.mintCalls()).toBeGreaterThan(0));
-    await vi.advanceTimersToNextTimerAsync();
     await vi.waitFor(() =>
       expect(FakeNativeWebSocket.instances).toHaveLength(1),
     );
@@ -321,11 +320,11 @@ describe("desktop inventory push against a released local host", () => {
       Date.now() - 11 * 60_000,
       CURRENT_HOST_WHILE_AUTHN_OFFLINE,
     );
-    await vi.waitFor(() => expect(opened.mintCalls()).toBeGreaterThan(0));
-    await vi.advanceTimersToNextTimerAsync();
+    // The held token, expired as it is, goes out at once; the mint runs beside it.
     await vi.waitFor(() =>
       expect(FakeNativeWebSocket.instances).toHaveLength(1),
     );
+    await vi.waitFor(() => expect(opened.mintCalls()).toBeGreaterThan(0));
     const first = FakeNativeWebSocket.instances[0];
     if (first === undefined) throw new Error("inventory socket missing");
     first.fireOpen();
@@ -438,8 +437,6 @@ describe("desktop inventory push against a released local host", () => {
       signInToken: SIGN_IN_TOKEN,
       hostToken: null,
     });
-    await vi.waitFor(() => expect(first.mintCalls()).toBeGreaterThan(0));
-    await vi.advanceTimersToNextTimerAsync();
     await vi.waitFor(() =>
       expect(FakeNativeWebSocket.instances).toHaveLength(1),
     );
@@ -471,8 +468,6 @@ describe("desktop inventory push against a released local host", () => {
       signInToken: SIGN_IN_B,
       hostToken: null,
     });
-    await vi.waitFor(() => expect(next.mintCalls()).toBeGreaterThan(0));
-    await vi.advanceTimersToNextTimerAsync();
     await vi.waitFor(() =>
       expect(FakeNativeWebSocket.instances).toHaveLength(1),
     );
@@ -501,6 +496,67 @@ describe("desktop inventory push against a released local host", () => {
     expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE, SIGN_IN_B]);
     next.close();
   });
+
+  describe("with authn taking the mint and never answering it", () => {
+    it.each([
+      {
+        host: "a released computer",
+        hostId: "silent-released-host",
+        refusal: releasedRefusal(),
+        sendsSignIn: true,
+      },
+      {
+        host: "a current personal computer",
+        hostId: "silent-personal-host",
+        refusal: ownerSignInRefusal(),
+        sendsSignIn: true,
+      },
+      {
+        host: "a current team computer",
+        hostId: "silent-team-host",
+        refusal: notAdmittedRefusal(),
+        sendsSignIn: false,
+      },
+    ])(
+      "opens $host's first socket at once with the probe, and sends the sign-in only where it is invited",
+      async ({ hostId, refusal, sendsSignIn }) => {
+        const opened = await openInventoryFor({
+          hostId,
+          userId: USER_A,
+          signInToken: SIGN_IN_TOKEN,
+          hostToken: null,
+          silentMint: true,
+        });
+        // No timer has run: the dial did not wait for the mint it started.
+        await settle();
+        expect(opened.mintCalls()).toBeGreaterThan(0);
+        expect(FakeNativeWebSocket.instances).toHaveLength(1);
+        const probe = FakeNativeWebSocket.instances[0];
+        if (probe === undefined) throw new Error("inventory probe missing");
+        probe.fireOpen();
+        await settle();
+        expect(sentFramesOfKind(probe, "open")[0]?.token).toBe(
+          NO_HOST_TOKEN_PROBE,
+        );
+
+        probe.fireMessage(refusal);
+        // A redial, if any, is dialed after the backoff: open each as it comes.
+        const opens = new Set([probe]);
+        for (let elapsed = 0; elapsed < 10_000; elapsed += 500) {
+          await vi.advanceTimersByTimeAsync(500);
+          for (const redial of FakeNativeWebSocket.instances) {
+            if (opens.has(redial)) continue;
+            opens.add(redial);
+            redial.fireOpen();
+          }
+        }
+
+        expect(sentTokens().includes(SIGN_IN_TOKEN)).toBe(sendsSignIn);
+        expect(authnRequests).toEqual([]);
+        opened.close();
+      },
+    );
+  });
 });
 
 async function openInventoryFor(input: {
@@ -508,6 +564,8 @@ async function openInventoryFor(input: {
   readonly userId: string;
   readonly signInToken: string;
   readonly hostToken: string | null;
+  /** The mint is never answered, as when authn takes the request and says nothing. */
+  readonly silentMint?: boolean;
 }): Promise<{
   readonly statuses: string[];
   readonly mintCalls: () => number;
@@ -522,6 +580,7 @@ async function openInventoryFor(input: {
     persistence: createMemoryHostTokenPersistence(),
     mint: () => {
       mintCalls += 1;
+      if (input.silentMint === true) return new Promise(() => undefined);
       return Promise.resolve({ kind: "unavailable", detail: "authn offline" });
     },
     signIn: (userId) => (userId === input.userId ? input.signInToken : null),
@@ -531,6 +590,7 @@ async function openInventoryFor(input: {
   if (websocketUrl === null) {
     throw new Error("the mock local host has no websocket URL");
   }
+  await hostTokens.whenLoaded();
   if (input.hostToken !== null) {
     await hostTokens.adopt(
       input.userId,

@@ -176,6 +176,7 @@ async function openLocalBrowserTransport(
       hostId: target.hostId,
       websocketUrl,
     }),
+    liveRow: () => target,
     appVersion: "1.0.0-test",
     hostTokens,
   });
@@ -263,6 +264,7 @@ describe("desktop main local streams open with host tokens", () => {
         bearer: liveBearer(provider),
         cloudAuthorized: () => true,
         endpoint: localHost,
+        liveRow: () => LOCAL_HOST_AT_FLOOR,
         appVersion: "1.0.0-test",
         hostTokens,
       },
@@ -382,6 +384,7 @@ describe("desktop main local streams open with host tokens", () => {
         bearer: liveBearer(provider),
         cloudAuthorized: () => true,
         endpoint: () => endpoint,
+        liveRow: () => belowFloor,
         appVersion: "1.0.0-test",
         hostTokens,
       }),
@@ -424,14 +427,15 @@ describe("desktop main local streams open with host tokens", () => {
         ),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const deps = {
+    const depsFor = (row: RemoteHostDirectoryEntry) => ({
       authnBaseUrl: () => "https://authn.test",
       bearer: liveBearer(provider),
       cloudAuthorized: () => true,
       endpoint: () => null,
+      liveRow: () => row,
       appVersion: "1.0.0-test",
       hostTokens,
-    };
+    });
     const belowFloor = remoteHostEntry("1.5.4", peer.hostPublicKey);
     const atFloor = remoteHostEntry(MINIMUM_HOST_VERSION, peer.hostPublicKey);
 
@@ -439,12 +443,18 @@ describe("desktop main local streams open with host tokens", () => {
     expect(belowFloor.owner).toBeNull();
     expect(belowFloor.sandbox).toBeNull();
     expect(belowFloor.publicKey).toBe(peer.hostPublicKey);
-    expect(openBrowserSessionsTransport(belowFloor, USER_A, deps)).toBeNull();
+    expect(
+      openBrowserSessionsTransport(belowFloor, USER_A, depsFor(belowFloor)),
+    ).toBeNull();
     expect(vi.mocked(createRemoteHostTransport)).not.toHaveBeenCalled();
     expect(peer.openCount).toBe(0);
     expect(fetchMock).not.toHaveBeenCalled();
 
-    const transport = openBrowserSessionsTransport(atFloor, USER_A, deps);
+    const transport = openBrowserSessionsTransport(
+      atFloor,
+      USER_A,
+      depsFor(atFloor),
+    );
     if (transport === null)
       throw new Error("the personal remote at the minimum did not build");
     try {

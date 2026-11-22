@@ -79,6 +79,7 @@ const TRANSPORT_DEPS = {
   bearer: BEARER,
   cloudAuthorized: () => true,
   endpoint: () => null,
+  liveRow: () => null,
   appVersion: "1.5.0",
   hostTokens: HOST_TOKENS,
 };

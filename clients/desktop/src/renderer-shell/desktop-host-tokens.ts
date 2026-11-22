@@ -15,6 +15,8 @@ import {
  * Reads come from a copy main keeps current; every mint happens in main. An entry
  * is read only in the era main last reported for its person, and an answer from an
  * era this window has left is dropped. A forget takes nothing in until main answers it.
+ * The copy counts as loaded once main's snapshot of the signed-in person's tokens
+ * is taken in, or could not be had (then it is loaded empty).
  */
 export function createDesktopHostTokenSource(
   bridge: HostTokensBridgeSurface,
@@ -78,14 +80,50 @@ export function createDesktopHostTokenSource(
     !forgetting.has(userId) &&
     issued(answered) === began &&
     reported.get(userId) === began;
+  // Pairs a change reached before the snapshot was taken in: the change is
+  // the newer of the two.
+  const delivered = new Set<string>();
+  let isLoaded = false;
   bridge.subscribe((change) => {
+    if (!isLoaded) delivered.add(keyOf(change.userId, change.hostId));
     apply(change.userId, change.hostId, change.token, change.era);
   });
+  // Asked after subscribing, so no change falls between the two. An entry of
+  // an era older than one this window already took in is dropped by `apply`.
+  const loaded = Promise.resolve()
+    .then(() => bridge.snapshot())
+    .then(
+      (reply) => {
+        const userId = reply.userId;
+        if (userId === null) return;
+        for (const { hostId, token } of reply.tokens)
+          if (!delivered.has(keyOf(userId, hostId)))
+            apply(userId, hostId, token, reply.era);
+      },
+      () => undefined,
+    )
+    .then(() => {
+      isLoaded = true;
+      delivered.clear();
+    });
+  const current = (userId: string, hostId: string): HostToken | null => {
+    const entry = copy.get(keyOf(userId, hostId));
+    if (entry === undefined || forgetting.has(userId)) return null;
+    return entry.era === reported.get(userId) ? entry.token : null;
+  };
   return {
-    current: (userId, hostId) => {
-      const entry = copy.get(keyOf(userId, hostId));
-      if (entry === undefined || forgetting.has(userId)) return null;
-      return entry.era === reported.get(userId) ? entry.token : null;
+    current,
+    loaded: () => isLoaded,
+    whenLoaded: () => loaded,
+    heldFor: (userId) => {
+      const held = new Map<string, HostToken>();
+      for (const key of copy.keys()) {
+        if (!key.startsWith(`${userId}\u0000`)) continue;
+        const hostId = key.slice(userId.length + 1);
+        const token = current(userId, hostId);
+        if (token !== null) held.set(hostId, token);
+      }
+      return held;
     },
     obtain: async (userId, hostId, fresh) => {
       const era = eraOf(userId);

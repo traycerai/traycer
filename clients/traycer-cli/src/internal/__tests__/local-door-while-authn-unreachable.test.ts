@@ -40,7 +40,11 @@ const UNARY_ENDPOINT = { ...ENDPOINT, hostId: UNARY_HOST_ID };
 const WAIT = { timeout: 2_000, interval: 10 };
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000;
 
-type DoorMode = "unavailable" | "unavailable-once" | "not-admitted";
+type DoorMode =
+  | "unavailable"
+  | "unavailable-once"
+  | "not-admitted"
+  | "black-hole";
 
 const harness = vi.hoisted(() => {
   class ScriptSocket implements StreamWebSocketLike {
@@ -218,6 +222,10 @@ function installFetch(): void {
       }
       if (method === "POST" && url.pathname.endsWith("/session-grant")) {
         harness.state.grants += 1;
+        if (harness.state.mode === "black-hole") {
+          harness.state.hung += 1;
+          return new Promise<Response>(() => undefined);
+        }
         if (harness.state.mode === "unavailable-once") {
           if (harness.state.grants === 1) {
             return jsonResponse({ message: "offline" }, 503);
@@ -765,5 +773,145 @@ describe("CLI local doors while authn cannot mint", () => {
       NO_HOST_TOKEN_PROBE,
     ]);
     expect(harness.state.hostRowReads).toEqual([]);
+  });
+});
+
+describe("CLI local doors while authn takes the mint and never answers it", () => {
+  // The mint's own request deadline: past it the mint answers `unavailable`.
+  const MINT_BUDGET_MS = 10_000;
+  const FIRST_OPEN = "the first socket opens at once with the probe";
+  const THREE_HOSTS = [
+    {
+      host: "a released host",
+      refusal: releasedRefusal(),
+      sendsSignIn: true,
+    },
+    {
+      host: "a current personal host",
+      refusal: ownerSignInRefusal(),
+      sendsSignIn: true,
+    },
+    {
+      host: "a current team host",
+      refusal: namedProbeRefusal(),
+      sendsSignIn: false,
+    },
+  ] as const;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    harness.state.mode = "black-hole";
+  });
+
+  /** Opens every socket the transport dials from now on, as the host would. */
+  async function openEveryRedial(
+    opened: Set<InstanceType<typeof harness.ScriptSocket>>,
+    forMs: number,
+  ): Promise<void> {
+    for (let elapsed = 0; elapsed < forMs; elapsed += 500) {
+      await vi.advanceTimersByTimeAsync(500);
+      for (const socket of harness.sockets) {
+        if (opened.has(socket)) continue;
+        opened.add(socket);
+        socket.fireOpen();
+      }
+    }
+  }
+
+  it.each(THREE_HOSTS)(
+    `unary: ${FIRST_OPEN} for $host`,
+    async ({ refusal, sendsSignIn }) => {
+      const settled = callHostRpcAtEndpoint("host.status", {}, ENDPOINT).then(
+        (value) => ({ value, error: null }),
+        (error: unknown) => ({ value: null, error }),
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.sockets).toHaveLength(1);
+      const first = await socketAt(0);
+      expect((await readOpen(first)).token).toBe(NO_HOST_TOKEN_PROBE);
+      expect(harness.state.hung).toBeGreaterThan(0);
+      first.fireFrame(refusal);
+
+      if (sendsSignIn) {
+        const invited = await socketAt(1);
+        const open = await readOpen(invited);
+        expect(open.token).toBe(SIGN_IN);
+        await admitStatus(invited, open);
+        expect((await settled).value).toMatchObject({ ready: true });
+        return;
+      }
+      // A current team host takes no sign-in: only the mint's token opens it,
+      // and the call waits for that alone, for as long as the mint may take.
+      await openEveryRedial(new Set([first]), MINT_BUDGET_MS - 1_000);
+      expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+        NO_HOST_TOKEN_PROBE,
+      ]);
+      expect(await Promise.race([settled, Promise.resolve("waiting")])).toBe(
+        "waiting",
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await settled).error).toMatchObject({
+        message: "No host-only token is held for this host",
+      });
+      expect(harness.sockets).toHaveLength(1);
+    },
+  );
+
+  it.each(THREE_HOSTS)(
+    `stream: ${FIRST_OPEN} for $host`,
+    async ({ refusal, sendsSignIn }) => {
+      const opened = await openCliHostSession(auth(), HOST_ID, false, null);
+      if (opened.kind !== "ok") throw new Error("session did not open");
+      await openStream(opened.session);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(harness.sockets).toHaveLength(1);
+      const first = await socketAt(0);
+      expect((await readOpen(first)).token).toBe(NO_HOST_TOKEN_PROBE);
+      expect(harness.state.hung).toBeGreaterThan(0);
+      first.fireFrame(refusal);
+
+      if (sendsSignIn) {
+        const invited = await socketAt(1);
+        expect((await readOpen(invited)).token).toBe(SIGN_IN);
+      } else {
+        await openEveryRedial(new Set([first]), MINT_BUDGET_MS);
+        expect(
+          harness.sockets.map((socket) => openToken(socket)),
+        ).not.toContain(SIGN_IN);
+      }
+      opened.session.dispose();
+    },
+  );
+
+  it("unary: opens a held token that ran out at once, with the mint unanswered", async () => {
+    const expired = expiredJwt(Date.now());
+    hold(expired);
+    const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.sockets).toHaveLength(1);
+    const socket = await socketAt(0);
+    const open = await readOpen(socket);
+    expect(open.token).toBe(expired.token);
+    await admitStatus(socket, open);
+    await expect(pending).resolves.toMatchObject({ ready: true });
+    expect(harness.state.hostRowReads).toEqual([]);
+  });
+
+  it("stream: opens a held token that ran out at once, with the mint unanswered", async () => {
+    const expired = expiredJwt(Date.now());
+    hold(expired);
+    const opened = await openCliHostSession(auth(), HOST_ID, false, null);
+    if (opened.kind !== "ok") throw new Error("session did not open");
+    await openStream(opened.session);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.sockets).toHaveLength(1);
+    const socket = await socketAt(0);
+    expect((await readOpen(socket)).token).toBe(expired.token);
+    expect(harness.state.hostRowReads).toEqual([]);
+    opened.session.dispose();
   });
 });

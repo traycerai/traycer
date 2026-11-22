@@ -252,7 +252,7 @@ describe("host-token renewal", () => {
       relayTokens.era(USER_A),
     );
     const remote = createRemoteHostTransport({
-      opensReleasedWay: false,
+      opensReleasedWay: () => false,
       hostId: relayHostId,
       userId: USER_A,
       relayAttachUrl: "wss://relay.test/attach",
@@ -385,6 +385,8 @@ describe("host-token lease after a user era changes", () => {
     const access: HostTokenAccess = {
       current: (userId, requestedHostId) =>
         tokens.current(userId, requestedHostId),
+      loaded: () => tokens.loaded(),
+      whenLoaded: () => tokens.whenLoaded(),
       obtain: (userId, requestedHostId, fresh, signal) => {
         const pending = tokens.obtain(userId, requestedHostId, fresh, signal);
         bearerMint.resolve({ pending });
@@ -430,7 +432,7 @@ describe("host-token lease after a user era changes", () => {
       trackHostTokenMints(tokens),
       (_refusedHostId, state) => states.push(state),
     );
-    const pending = bearerFor(hostId, signInLease);
+    const pending = bearerFor(hostId, signInLease, true);
     await started.promise;
     await tokens.forgetUser(USER_A);
     answer.resolve({ kind: "not-a-member" });

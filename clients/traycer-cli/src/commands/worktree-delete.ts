@@ -36,7 +36,7 @@ import type {
 } from "../../../shared/host-transport/i-stream-session";
 import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
-import { resolveEndpoint } from "../internal/host-rpc";
+import { FRAME_TIMEOUT_MS, resolveEndpoint } from "../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 import { writeStderr } from "../runner/std-write";
@@ -50,7 +50,7 @@ import { clientCompatibilityRecoveryHint } from "../host/compat-recovery";
 // worktree, so the ping/pong keepalive must outlast a quiet teardown. A fatal
 // close ends the command - unlike the monitor there is no forever-reconnect
 // loop and no auth-refresh recovery (`auth: null`); a short-lived delete runs
-// on the host-only token read when it starts.
+// on the host-only token it holds, or the probe with none.
 const OPEN_ACK_TIMEOUT_MS = 10_000;
 const PING_INTERVAL_MS = 25_000;
 const PONG_TIMEOUT_MS = 60_000;
@@ -142,11 +142,7 @@ async function runWorktreeDelete(
   const auth = await resolveHostAuth();
   if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();
-  const session = await requireCliHostSession(
-    auth,
-    endpoint.hostId,
-    hostTokenFailureCliError,
-  );
+  const session = await requireCliHostSession(auth, endpoint.hostId, null);
   try {
     return await deleteWithHostToken(
       worktreePath,
@@ -168,7 +164,10 @@ async function deleteWithHostToken(
   authnBaseUrl: string,
 ): Promise<WorktreeDeleteOutcome> {
   const lease = session.signInLease;
-  const bearer = session.bearer;
+  const tokens = session.tokens;
+  const hostId = endpoint.hostId;
+  let admitted = false;
+  const ended: { error: CliError | null } = { error: null };
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     // The host this endpoint already resolves to. Safe even where `endpoint` is
@@ -177,10 +176,20 @@ async function deleteWithHostToken(
     // one, and the latch closes it for good after that.
     hostId: endpoint.hostId,
     endpoint: () => endpoint,
-    bearer: () => bearer,
+    // The held host-only token at once, or the probe with none: the mint
+    // runs in the background.
+    bearer: tokens.streamBearer(hostId),
     releasedSignOn: session.releasedSignOn,
-    userId: bearer.identity.userId,
+    userId: session.bearer.identity.userId,
     auth: null,
+    // An admitted open fences off a `not-admitted` of a mint begun before it.
+    door: {
+      refused: () => undefined,
+      admitted: () => {
+        admitted = true;
+        tokens.admitted(hostId);
+      },
+    },
     clock: null,
     // Provisioning rides along here too. It used to be opted out because a
     // one-shot command must not interrupt with an email-OTP challenge; now that
@@ -213,21 +222,72 @@ async function deleteWithHostToken(
     clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
-  const attempt = await runDeleteCommand(worktreePath, ctx, client);
-  if (attempt.kind === "settled") {
-    client.close("worktree-delete-settled");
-    if (attempt.error !== null) throw attempt.error;
-    return { deleted: attempt.deleted, declined: attempt.declined };
+  // A mint refusal that ends the command ends it with that refusal's line,
+  // while the host has admitted no open of it. Once one was, the delete may be
+  // running, and its own answer ends the command.
+  const stopRefusals = tokens.onRefusalEndingCommand(
+    (refusedHostId, failure) => {
+      if (refusedHostId !== hostId || admitted || ended.error !== null) return;
+      ended.error = hostTokenFailureCliError(failure);
+      client.close("host-token-refused");
+    },
+  );
+  try {
+    const attempt = await runDeleteCommand(worktreePath, ctx, client);
+    if (ended.error !== null) throw ended.error;
+    if (attempt.kind === "settled") {
+      client.close("worktree-delete-settled");
+      if (attempt.error !== null) throw attempt.error;
+      return { deleted: attempt.deleted, declined: attempt.declined };
+    }
+    const deleted = await runLegacyDeleteStream(worktreePath, ctx, client)
+      .catch((error: unknown) => {
+        throw ended.error ?? error;
+      })
+      .finally(() => {
+        client.close("worktree-delete-settled");
+      });
+    // The released single-target stream cannot say why.
+    return { deleted, declined: null };
+  } finally {
+    stopRefusals();
   }
-  const deleted = await runLegacyDeleteStream(
-    worktreePath,
-    ctx,
-    client,
-  ).finally(() => {
-    client.close("worktree-delete-settled");
-  });
-  // The released single-target stream cannot say why.
-  return { deleted, declined: null };
+}
+
+/**
+ * Before a stream's first `open`, a `reconnecting` is the stream finding its
+ * credential: a released host's bare refusal before the sign-in, the probe, an
+ * owner's invitation, or a host-only token still being minted. Nothing was sent,
+ * so nothing can be sent twice, and it is waited out for at most the CLI's
+ * response deadline; past it, `expired` ends the command as a drop. After the
+ * first `open` nothing is waited out.
+ */
+function preOpenCredentialWait(expired: () => void): {
+  /** Every status the stream reports, so the first `open` is seen. */
+  readonly saw: (status: StreamConnectionStatus) => void;
+  /** Whether this status is waited out rather than ending the command. */
+  readonly waits: (status: StreamConnectionStatus) => boolean;
+  readonly end: () => void;
+} {
+  let opened = false;
+  let bound: NodeJS.Timeout | null = null;
+  const end = (): void => {
+    if (bound !== null) clearTimeout(bound);
+    bound = null;
+  };
+  return {
+    saw: (status) => {
+      if (status !== "open") return;
+      opened = true;
+      end();
+    },
+    waits: (status) => {
+      if (opened || status !== "reconnecting") return false;
+      bound ??= setTimeout(expired, FRAME_TIMEOUT_MS);
+      return true;
+    },
+    end,
+  };
 }
 
 type DeleteAttempt =
@@ -267,9 +327,18 @@ function runDeleteCommand(
     const finish = (attempt: DeleteAttempt): void => {
       if (settled) return;
       settled = true;
+      preOpen.end();
       holder.command?.close();
       resolve(attempt);
     };
+    const preOpen = preOpenCredentialWait(() =>
+      finish({
+        kind: "settled",
+        deleted: false,
+        declined: null,
+        error: streamDroppedCliError(),
+      }),
+    );
     const command = new WorktreeDeleteBatchStreamClient({
       wsStreamClient: client,
       commandId: randomUUID(),
@@ -325,6 +394,7 @@ function runDeleteCommand(
           }),
         onUnsupported: () => finish({ kind: "unsupported" }),
         onConnectionStatus: ({ status, reason, retryCause }) => {
+          preOpen.saw(status);
           if (status === "connecting" || status === "open") return;
           const admissionError = retryCause
             ? localTeamAdmissionCliError(retryCause)
@@ -338,6 +408,7 @@ function runDeleteCommand(
             });
             return;
           }
+          if (preOpen.waits(status)) return;
           if (
             status === "closed" &&
             reason !== null &&
@@ -390,9 +461,13 @@ async function runLegacyDeleteStream(
     const finish = (act: () => void): void => {
       if (settled) return;
       settled = true;
+      preOpen.end();
       session.close();
       act();
     };
+    const preOpen = preOpenCredentialWait(() =>
+      finish(() => reject(streamDroppedCliError())),
+    );
     session.onServerFrame((envelope) => {
       // The CANONICAL v1.3 frame, not a frozen earlier schema. v1.1 added
       // `holders` to the `failed` arm; v1.2 added optional `code` and
@@ -444,12 +519,15 @@ async function runLegacyDeleteStream(
         retryCause: FatalErrorDetails | null,
       ) => {
         // The initial dial (`connecting`) and a healthy connection (`open`) are
-        // normal; everything else is a drop. For this one-shot DESTRUCTIVE
-        // command a drop before an application terminal frame (`complete` /
-        // `failed`) must be terminal: the shared client would otherwise
-        // reconnect and RE-SEND `worktree.deleteByPath`, re-entering the host's
-        // delete pipeline. So the first `reconnecting`/`closed` transition
-        // (before `finish` has run) fails the command with no resubscribe.
+        // normal, and so is a `reconnecting` before the first `open`: nothing
+        // was sent yet (see `preOpenCredentialWait`). Everything else is a
+        // drop. For this one-shot DESTRUCTIVE command a drop before an
+        // application terminal frame (`complete` / `failed`) must be terminal:
+        // the shared client would otherwise reconnect and RE-SEND
+        // `worktree.deleteByPath`, re-entering the host's delete pipeline. So
+        // any other `reconnecting`/`closed` transition (before `finish` has
+        // run) fails the command with no resubscribe.
+        preOpen.saw(status);
         if (status === "connecting" || status === "open") {
           return;
         }
@@ -460,6 +538,7 @@ async function runLegacyDeleteStream(
           finish(() => reject(admissionError));
           return;
         }
+        if (preOpen.waits(status)) return;
         if (
           status === "closed" &&
           reason !== null &&

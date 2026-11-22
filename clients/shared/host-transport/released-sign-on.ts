@@ -10,6 +10,7 @@ import {
   heldWhileAuthnUnreachable,
   type TrackedHostTokens,
 } from "../auth/host-token-lease";
+import { isUsableHostToken } from "../auth/host-token-store";
 import { hostDoorStateOfRefusal } from "./host-door-state";
 import type { HostRequestAuthority } from "./host-messenger";
 
@@ -200,7 +201,11 @@ export function ownerSignInEligible(
   );
 }
 
-/** See {@link ReleasedSignOn.heldTokenRefused}. */
+/**
+ * See {@link ReleasedSignOn.heldTokenRefused}. Only a held token already past
+ * its end here: one this clock still calls usable, refused as expired, takes
+ * the fresh-mint recovery instead.
+ */
 export function heldTokenRefused(
   tokens: TrackedHostTokens,
   userId: string,
@@ -209,7 +214,11 @@ export function heldTokenRefused(
 ): boolean {
   const held = heldWhileAuthnUnreachable(tokens, userId, hostId);
   tokens.noteHeldRefused(userId, hostId, presented);
-  return held !== null && held.token === presented;
+  return (
+    held !== null &&
+    held.token === presented &&
+    !isUsableHostToken(held, Date.now())
+  );
 }
 
 /** For this machine's host when the caller holds its row; `null` unless the row allows it. */
