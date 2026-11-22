@@ -183,7 +183,13 @@ describe("desktop host-token source eras", () => {
       owner: null,
     });
     setEra(2);
-    emit({ userId: USER_ID, hostId: HOST_ID, token: null, era: 2 });
+    emit({
+      userId: USER_ID,
+      hostId: HOST_ID,
+      token: null,
+      era: 2,
+      replaced: null,
+    });
     answer.resolve({
       outcome: { kind: "unavailable", detail: "authn answered HTTP 503" },
       era: 1,
@@ -209,7 +215,13 @@ describe("desktop host-token source eras", () => {
       owner: null,
     });
     setEra(2);
-    emit({ userId: USER_ID, hostId: HOST_ID, token: null, era: 2 });
+    emit({
+      userId: USER_ID,
+      hostId: HOST_ID,
+      token: null,
+      era: 2,
+      replaced: null,
+    });
     answer.resolve({
       outcome: {
         kind: "ok",
@@ -232,7 +244,13 @@ describe("desktop host-token source eras", () => {
 
     const pending = tokens.renew(USER_ID, [HOST_ID]);
     setEra(2);
-    emit({ userId: USER_ID, hostId: HOST_ID, token: null, era: 2 });
+    emit({
+      userId: USER_ID,
+      hostId: HOST_ID,
+      token: null,
+      era: 2,
+      replaced: null,
+    });
     answer.resolve({ renewal: { kind: "renewed", delayed: [] }, era: 1 });
 
     await expect(pending).resolves.toEqual({ kind: "superseded" });
@@ -272,7 +290,13 @@ describe("desktop host-token source eras", () => {
 
     const forgetting = tokens.forgetUser(USER_ID);
     expect(tokens.current(USER_ID, HOST_ID)).toBeNull();
-    emit({ userId: USER_ID, hostId: HOST_ID, token: HOST_TOKEN, era: 0 });
+    emit({
+      userId: USER_ID,
+      hostId: HOST_ID,
+      token: HOST_TOKEN,
+      era: 0,
+      replaced: null,
+    });
     expect(tokens.current(USER_ID, HOST_ID)).toBeNull();
     await forgetting;
   });
@@ -323,7 +347,13 @@ describe("desktop host-token source eras", () => {
     );
 
     setEra(1);
-    emit({ userId: USER_ID, hostId: eventHostId, token: null, era: 1 });
+    emit({
+      userId: USER_ID,
+      hostId: eventHostId,
+      token: null,
+      era: 1,
+      replaced: null,
+    });
 
     expect(changes).toEqual([
       { userId: USER_ID, hostId: HOST_ID },
@@ -346,7 +376,13 @@ describe("desktop host-token source eras", () => {
     expect(tokens.current(USER_ID, otherHostId)).toEqual(HOST_TOKEN);
 
     setEra(1);
-    emit({ userId: USER_ID, hostId: HOST_ID, token: null, era: 1 });
+    emit({
+      userId: USER_ID,
+      hostId: HOST_ID,
+      token: null,
+      era: 1,
+      replaced: null,
+    });
 
     expect(tokens.current(USER_ID, HOST_ID)).toBeNull();
     expect(tokens.current(USER_ID, otherHostId)).toBeNull();
@@ -445,6 +481,7 @@ describe("desktop host-token source eras", () => {
         hostId: HOST_ID,
         token: HOST_TOKEN,
         era: 0,
+        replaced: null,
       };
       Reflect.set(change, "era", era);
 
@@ -523,13 +560,13 @@ describe("desktop host-token source snapshot", () => {
     {
       name: "a newer token of the same era",
       changedHostId: HOST_ID,
-      change: { token: HOST_TOKEN, era: 0 },
+      change: { token: HOST_TOKEN, era: 0, replaced: null },
       expected: HOST_TOKEN,
     },
     {
       name: "a removal of the same era",
       changedHostId: HOST_ID,
-      change: { token: null, era: 0 },
+      change: { token: null, era: 0, replaced: null },
       expected: null,
     },
     {
@@ -537,7 +574,7 @@ describe("desktop host-token source snapshot", () => {
       // which the snapshot's entries (read in the older one) are not in.
       name: "a newer era's change of another computer",
       changedHostId: "computer-b",
-      change: { token: HOST_TOKEN, era: 1 },
+      change: { token: HOST_TOKEN, era: 1, replaced: null },
       expected: null,
     },
   ])(
@@ -741,7 +778,13 @@ describe("desktop host-token source ordering by the second authn issued each tok
     const { tokens, emit, answer, asking } =
       await windowAskingToReplaceTheRefusedToken();
 
-    emit({ userId: USER_ID, hostId: HOST_ID, token: REPLACEMENT, era: 0 });
+    emit({
+      userId: USER_ID,
+      hostId: HOST_ID,
+      token: REPLACEMENT,
+      era: 0,
+      replaced: REFUSED.token,
+    });
     answer.resolve(replacementReply);
     await asking;
 
@@ -754,7 +797,13 @@ describe("desktop host-token source ordering by the second authn issued each tok
 
     answer.resolve(replacementReply);
     await asking;
-    emit({ userId: USER_ID, hostId: HOST_ID, token: REPLACEMENT, era: 0 });
+    emit({
+      userId: USER_ID,
+      hostId: HOST_ID,
+      token: REPLACEMENT,
+      era: 0,
+      replaced: null,
+    });
 
     expect(tokens.current(USER_ID, HOST_ID)).toEqual(REPLACEMENT);
   });
@@ -768,7 +817,13 @@ describe("desktop host-token source ordering by the second authn issued each tok
       signal: null,
       owner: null,
     });
-    emit({ userId: USER_ID, hostId: HOST_ID, token: NEWER, era: 0 });
+    emit({
+      userId: USER_ID,
+      hostId: HOST_ID,
+      token: NEWER,
+      era: 0,
+      replaced: null,
+    });
     const announced: string[] = [];
     tokens.subscribe(({ hostId }) => announced.push(hostId));
 
@@ -809,7 +864,13 @@ describe("desktop host-token source ordering by the second authn issued each tok
     const tokens = createDesktopHostTokenSource(bridge);
     await tokens.obtain(USER_ID, HOST_ID, true, { signal: null, owner: null });
 
-    emit({ userId: USER_ID, hostId: HOST_ID, token: OLDER, era: 0 });
+    emit({
+      userId: USER_ID,
+      hostId: HOST_ID,
+      token: OLDER,
+      era: 0,
+      replaced: null,
+    });
 
     expect(tokens.current(USER_ID, HOST_ID)).toEqual(NEWER);
   });

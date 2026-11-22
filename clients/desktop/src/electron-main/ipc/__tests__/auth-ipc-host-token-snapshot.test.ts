@@ -439,12 +439,13 @@ function invokeHandler(channel: string): InvokeHandler {
  */
 function windowOverMain(main: HostTokenSource): HostTokenSource {
   let onChange: ((change: HostTokenBridgeChange) => void) | null = null;
-  main.subscribe(({ userId, hostId }) => {
+  main.subscribe(({ userId, hostId, replaced }) => {
     onChange?.({
       userId,
       hostId,
       token: main.current(userId, hostId),
       era: main.era(userId),
+      replaced,
     });
   });
   const bridge: HostTokensBridgeSurface = {
@@ -760,7 +761,6 @@ describe("main's broadcast of a kept host-token write", () => {
     const outcome = await asking.obtain(USER, HOST, true, {
       signal: null,
       owner: null,
-      observedNow: () => null,
     });
 
     expect(outcome).toEqual({ kind: "ok", token: reissued });
