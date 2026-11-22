@@ -482,7 +482,7 @@ export class WsRpcClient<
   >();
   private readonly reprobeErrors = new WeakSet<HostRpcError>();
   private readonly localRevisionByHost = new Map<string, number>();
-  /** Counts `releaseIdleLocalSessions`, so a call can tell one ran during its token lookup. */
+  /** Counts `releaseIdleLocalSessions`, so a call can tell one ran since its previous claim. */
   private localReleases = 0;
 
   constructor(options: WsRpcClientOptions<Registry>) {
@@ -559,7 +559,10 @@ export class WsRpcClient<
     let signInReplanned = false;
     let replacedRedialed = false;
     const hostBearerFor = this.hostBearerFor;
-    const releasesBeforeLookup = this.localReleases;
+    // Every claim this call makes follows an await (the token lookup, a
+    // redial's plan, a refresh, a mint) that a release can land in while the
+    // call holds no slot to arm. Each claim compares against the one before.
+    let releasesSeen = this.localReleases;
     // With no token to look up, the claim stays in the caller's tick.
     let hostOptions =
       hostBearerFor === undefined
@@ -570,18 +573,17 @@ export class WsRpcClient<
             method,
             "no-host-token",
           );
-    let releasedDuringLookup = this.localReleases !== releasesBeforeLookup;
     for (;;) {
+      const releasedBeforeClaim = this.localReleases !== releasesSeen;
+      releasesSeen = this.localReleases;
       try {
-        const pending = this.requestWithResponseTimeoutInternal(
+        return await this.requestWithResponseTimeoutInternal(
           method,
           params,
           responseTimeoutMs,
           hostOptions,
-          releasedDuringLookup,
+          releasedBeforeClaim,
         );
-        releasedDuringLookup = false;
-        return await pending;
       } catch (cause) {
         if (
           cause instanceof HostRpcError &&
@@ -996,7 +998,7 @@ export class WsRpcClient<
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
     options: HostRequestOptions,
-    releasedDuringLookup: boolean,
+    releasedBeforeClaim: boolean,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
     const selected = options.authority.endpoint;
@@ -1118,8 +1120,8 @@ export class WsRpcClient<
         }
         continue;
       }
-      // A release between the token lookup and the claim found no slot to arm.
-      if (releasedDuringLookup) this.sessions.armReleaseBeforeReady(sessionKey);
+      // A release since this call's previous claim found no slot to arm.
+      if (releasedBeforeClaim) this.sessions.armReleaseBeforeReady(sessionKey);
       return this.requestOnFreshSocket(
         method,
         params,
