@@ -2,28 +2,28 @@ import {
   ROW_CONFIRM_CEILING_MS,
   settledWithin,
 } from "@traycer-clients/shared/host-transport/row-confirmation";
-import { isDocumentVisible } from "@/lib/dom/document-visibility";
 
 /** The one directory call a confirmation makes. */
-interface RefreshableDirectory {
-  refresh(): Promise<unknown>;
+interface CatchingUpDirectory {
+  catchUpAfterHidden(): Promise<void>;
 }
 
 /**
  * A remote attach's row confirmation in this window
- * (`confirmRowBeforeSignIn`), a wait. A visible window applies each registry
- * change as it lands, so its row stands at once. A hidden one skips them, so
- * it reads the registry again first and waits at most the row re-read's
- * ceiling. Then the row the directory holds decides: a read that committed has
- * moved it, and one that failed or ran past the ceiling leaves the row last
- * read, as every attach before had.
+ * (`confirmRowBeforeSignIn`), a wait. A shown window that skipped no registry
+ * change has a current row, so it stands at once. A window that is hidden, or
+ * possibly stale from having been, waits for the directory's read of what it
+ * skipped (`HostDirectoryService.catchUpAfterHidden`), at most the row
+ * re-read's ceiling. Then the row the directory holds decides: a read that
+ * committed has moved it, and one that failed or ran past the ceiling leaves
+ * the row last read, as every attach before had.
  */
 export function confirmRowWhenHidden(
-  directory: () => RefreshableDirectory | null,
+  directory: () => CatchingUpDirectory | null,
 ): () => Promise<void> {
   return async () => {
     const current = directory();
-    if (current === null || isDocumentVisible()) return;
-    await settledWithin(current.refresh(), ROW_CONFIRM_CEILING_MS);
+    if (current === null) return;
+    await settledWithin(current.catchUpAfterHidden(), ROW_CONFIRM_CEILING_MS);
   };
 }

@@ -335,16 +335,40 @@ export class HostDirectoryService implements IHostDirectoryService {
   private lastCommitIdentity: string | null = null;
   /**
    * Resume while riding the shell's registry push: no poll clock to rearm, so
-   * a show acts only on a push that arrived while hidden.
+   * a show acts only on a push that arrived while hidden. The window stays
+   * possibly stale until the read this starts settles.
    */
   private readonly handleVisibilityChangeWhileRidingPushes = (): void => {
-    if (!isDocumentVisible() || !this.pushMissedWhileHidden) {
+    if (
+      !isDocumentVisible() ||
+      this.missedThrough === null ||
+      this.catchUpAppliedThrough === this.missedThrough
+    ) {
       return;
     }
-    this.pushMissedWhileHidden = false;
+    this.catchUpAppliedThrough = this.missedThrough;
     this.applyRegistryPush();
   };
-  private pushMissedWhileHidden = false;
+  /** The skip a show has already applied its one catch-up push for. */
+  private catchUpAppliedThrough: number | null = null;
+  /**
+   * Poll mode's clock stops while the window is hidden, so every tick of a
+   * hidden span is skipped. Only a read started once shown covers the span
+   * (`readStartedNowCoversMissed`), so the hide alone is marked.
+   */
+  private readonly handleVisibilityChangeWhilePolling = (): void => {
+    if (!isDocumentVisible()) this.markMissedWhileHidden();
+  };
+  private stopPollVisibility: (() => void) | null = null;
+  /**
+   * POSSIBLY STALE FROM BEING HIDDEN: the registry changes this window skipped
+   * while hidden, numbered. `missedThrough` is the latest one still
+   * outstanding, and `null` when the directory has skipped nothing. It ends
+   * only when a read that started after it settles, committed or failed
+   * ({@link catchUpAfterHidden}); a show does not end it.
+   */
+  private missedWhileHidden = 0;
+  private missedThrough: number | null = null;
 
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
@@ -610,11 +634,20 @@ export class HostDirectoryService implements IHostDirectoryService {
     ) {
       return inFlight.request;
     }
+    const coversMissed = this.readStartedNowCoversMissed();
+    const missedAtStart = this.missedWhileHidden;
     const request = this.performRefresh(era).finally(() => {
       // Only clear OUR slot: a request superseded by an identity change must
       // not clear the newer one when it finally settles.
       if (this.refreshInFlight?.request === request) {
         this.refreshInFlight = null;
+      }
+      if (
+        coversMissed &&
+        this.missedThrough !== null &&
+        missedAtStart >= this.missedThrough
+      ) {
+        this.missedThrough = null;
       }
       this.emitRefreshState();
     });
@@ -642,6 +675,41 @@ export class HostDirectoryService implements IHostDirectoryService {
   invalidateInFlightRefresh(): void {
     this.refreshInFlight = null;
     this.emitRefreshState();
+  }
+
+  /**
+   * Waits for a read that answers for the registry changes this window may
+   * have skipped while hidden: it joins the read in flight, or starts one, and
+   * never starts a second beside a running one. While the window is hidden, or
+   * possibly stale from having been, one read is waited for, and a second
+   * once the first only joined a read that started before the latest skip.
+   * Resolves at once for a shown window that skipped nothing. Never rejects.
+   */
+  async catchUpAfterHidden(): Promise<void> {
+    for (let reads = 0; reads < 2; reads += 1) {
+      if (this.missedThrough === null && (reads > 0 || isDocumentVisible()))
+        return;
+      if (reads > 0 && !this.readStartedNowCoversMissed()) return;
+      await this.refresh().then(
+        () => undefined,
+        () => undefined,
+      );
+    }
+  }
+
+  private markMissedWhileHidden(): void {
+    this.missedWhileHidden += 1;
+    this.missedThrough = this.missedWhileHidden;
+  }
+
+  /**
+   * Whether a read started now would answer for every skip so far. A push
+   * marks each change it carries, so a read started while hidden covers the
+   * ones before it. Poll mode has no such marks: its skips run until the show,
+   * so only a read started while shown covers them.
+   */
+  private readStartedNowCoversMissed(): boolean {
+    return this.registrySubscription !== null || isDocumentVisible();
   }
 
   /**
@@ -869,6 +937,10 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.armPollInterval();
+    this.stopPollVisibility = subscribeDocumentVisibility(
+      this.handleVisibilityChangeWhilePolling,
+    );
+    this.handleVisibilityChangeWhilePolling();
   }
 
   /**
@@ -909,7 +981,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       // the removed per-window timer used to skip. The push is remembered and
       // acted on when the window next becomes visible.
       if (!isDocumentVisible()) {
-        this.pushMissedWhileHidden = true;
+        this.markMissedWhileHidden();
         return;
       }
       this.applyRegistryPush();
@@ -984,7 +1056,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.stopVisiblePoll = null;
     this.stopPushVisibility?.();
     this.stopPushVisibility = null;
-    this.pushMissedWhileHidden = false;
+    this.stopPollVisibility?.();
+    this.stopPollVisibility = null;
+    this.missedThrough = null;
   }
 
   /**
