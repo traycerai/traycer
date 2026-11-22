@@ -522,6 +522,38 @@ describe("main resolves the browser.sessions host itself", () => {
       }
     });
 
+    it("starts no read once the clock is past its ceiling, though the ceiling's timer has not run, and answers false when it runs", async () => {
+      vi.useFakeTimers();
+      try {
+        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+        const confirmation: { running: Promise<boolean> | null } = {
+          running: null,
+        };
+        const released = confirmRowWithin(
+          (stillWaiting) => {
+            confirmation.running = directory.confirmRows(stillWaiting);
+            return confirmation.running;
+          },
+          { current: () => true },
+        );
+        await vi.waitFor(() => expect(gets()).toBe(1));
+
+        // Read A can no longer answer; the clock passes the ceiling without
+        // the timer's callback running.
+        directory.reset();
+        vi.setSystemTime(Date.now() + ROW_CONFIRM_CEILING_MS + 1);
+        firstRead.resolve(remoteResponse("host-1"));
+        const answer = await confirmation.running;
+
+        expect(gets()).toBe(1);
+        await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS);
+        await released;
+        expect(answer).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("starts no read when its attach ended before the ceiling and the account resets before its read settled", async () => {
       const { directory, firstRead, gets } = directoryWithFirstReadHeld();
       let attached = true;
