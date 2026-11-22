@@ -268,21 +268,23 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
     signIn: OpenFrameBearerSource,
   ) => Promise<OpenFrameBearerSource | null>;
   /**
-   * Asked only after a released host's typed refusal of the call's host-only
-   * token, with the caller's authority: the sign-in lease to send the call with
-   * once more, or `null` unless the host's row is that person's own personal
-   * computer (`opensReleasedWay`). Asked too, for this machine's host, when
-   * `hostBearerFor` has no token because none can be had. If the host refuses
-   * the sign-in, its `recovery` refreshes it and the call goes once more, as a
-   * released client's did.
+   * Asked only after a released host's typed refusal of this call's host-only
+   * token or probe, with the caller's authority: the sign-in lease to send the
+   * call with once more, or `null`. A caller holding the host's row refuses a
+   * row that is a team's, a sandbox's or another person's
+   * (`opensReleasedWayOnThisMachine`); no caller reads a row for it. Asked too,
+   * for this machine's host, when `hostBearerFor` has no token because none can
+   * be had (the call then probes), and when a current host answers the probe
+   * `owner_sign_in`. If the host refuses the sign-in, its `recovery` refreshes
+   * it and the call goes once more, as a released client's did.
    */
   readonly releasedSignOnFor?: (
     authority: HostRequestAuthority,
     cause: ReleasedUnaryCause,
   ) => Promise<ReleasedUnarySignOn | null>;
   /**
-   * What this process has seen of each host's answers. A host it remembers as
-   * released is sent the sign-in first. Without it, this client keeps its own.
+   * What this process has seen of each host's answers: a host that has named a
+   * reason is never sent the sign-in. Without it, this client keeps its own.
    */
   readonly releasedHosts?: ReleasedHostMemory;
   /**
@@ -421,10 +423,6 @@ export class WsRpcClient<
   private readonly ownerSignInRefusals = new WeakSet<HostRpcError>();
   /** A held token presented while authn did not answer was refused as expired; the door has not heard of it. */
   private readonly heldRefusals = new WeakSet<HostRpcError>();
-  /** Authorities carrying the sign-in only because `releasedHosts` remembers the host as released. */
-  private readonly rememberedAuthorities = new WeakSet<HostRequestAuthority>();
-  /** A remembered released host named its reason: it was updated, and the door has not heard of it. */
-  private readonly updatedRefusals = new WeakSet<HostRpcError>();
   /** A released host refused the host-only token, and the door has not heard of it. */
   private readonly releasedRefusals = new WeakSet<HostRpcError>();
   /** A released host refused the sign-in, a recovery is left, and the door has not heard of it. */
@@ -524,18 +522,6 @@ export class WsRpcClient<
         }
         if (
           cause instanceof HostRpcError &&
-          this.updatedRefusals.has(cause) &&
-          hostBearerFor !== undefined
-        ) {
-          hostOptions = await this.withHostBearer(
-            hostBearerFor,
-            options,
-            method,
-          );
-          continue;
-        }
-        if (
-          cause instanceof HostRpcError &&
           this.ownerSignInRefusals.has(cause)
         ) {
           const authority = hostOptions.authority;
@@ -599,7 +585,7 @@ export class WsRpcClient<
           if (reason === "absent") throw cause;
           const hostId = options.authority.endpoint.hostId;
           // A current host invites the sign-in: only while no host-only token
-          // can be had, and only where the row allows it.
+          // can be had.
           const invited =
             reason === "owner_sign_in"
               ? await this.releasedSignOnFor?.(
@@ -655,23 +641,6 @@ export class WsRpcClient<
     method: string,
   ): Promise<HostRequestOptions> {
     const hostId = options.authority.endpoint.hostId;
-    if (
-      this.releasedHosts.opensReleasedWay(
-        options.authority.bearer.identity.userId,
-        hostId,
-      )
-    ) {
-      const remembered = await this.releasedSignOnFor?.(
-        options.authority,
-        "refused",
-      ).catch(() => null);
-      if (remembered !== undefined && remembered !== null) {
-        const authority = { ...options.authority, bearer: remembered.bearer };
-        this.signInAuthorities.set(authority, remembered.recovery);
-        this.rememberedAuthorities.add(authority);
-        return { ...options, authority };
-      }
-    }
     const bearer = await hostBearerFor(hostId, options.authority.bearer);
     if (bearer !== null)
       return { ...options, authority: { ...options.authority, bearer } };
@@ -715,6 +684,7 @@ export class WsRpcClient<
       this.releasedSignOnFor !== undefined &&
       !usesSessionGrant &&
       !this.signInAuthorities.has(authority) &&
+      !this.releasedHosts.namedReason(authority.endpoint.hostId) &&
       isReleasedHostTokenRefusal(details)
     );
   }
@@ -752,6 +722,19 @@ export class WsRpcClient<
         options.authority.bearer.identity.userId,
         websocketUrl,
       ) + (this.localOpenAuth === undefined ? "" : `\u0000${revision}`);
+    // The probe is answered at open, so it dials its own socket: a session
+    // another call opened would dispatch it, and the probe catch would take
+    // that dispatched call's error for the host's answer to the probe.
+    if (this.probeAuthorities.has(options.authority))
+      return this.requestOnFreshSocket(
+        method,
+        params,
+        responseTimeoutMs,
+        options,
+        requestId,
+        null,
+        sessionKey,
+      );
     let handoff: SessionHandoff | null = null;
     for (;;) {
       const admission = this.sessions.claim(sessionKey, handoff);
@@ -1027,17 +1010,19 @@ export class WsRpcClient<
         const reason = readDoorReason(ackFrame.details.doorReason);
         const named = reason !== "absent";
         if (named) this.releasedHosts.refusedNamingReason(selected.hostId);
-        const updated = named && this.rememberedAuthorities.has(authority);
         const ownerSignIn = this.ownerSignInAuthorities.has(authority);
         const ownerSignInRefused =
           ownerSignIn &&
           reason === "token_expired" &&
           (this.ownerSignInAuthorities.get(authority) ?? null) !== null;
         if (ownerSignIn && named && reason !== "token_expired") {
-          this.releasedHosts.declineProbe(
-            authority.bearer.identity.userId,
-            selected.hostId,
-          );
+          // As on the stream: neither describes this person, so neither
+          // latches the probe.
+          if (reason !== "not_provisioned" && reason !== "owner_sign_in")
+            this.releasedHosts.declineProbe(
+              authority.bearer.identity.userId,
+              selected.hostId,
+            );
           this.forgetHeldRefusalFor?.(authority);
         }
         const heldRefused =
@@ -1047,13 +1032,11 @@ export class WsRpcClient<
           !this.signInAuthorities.has(authority) &&
           (this.heldTokenRefusedFor?.(authority, token) ?? false);
         // Reported once the sign-in, or its refresh, cannot answer it; never
-        // for the probe, which carried no credential of the person's, nor for
-        // a remembered host that was updated, whose next dial carries the token.
+        // for the probe, which carried no credential of the person's.
         if (
           !releasedWay &&
           !signInRefused &&
           !probe &&
-          !updated &&
           !ownerSignInRefused &&
           !heldRefused
         )
@@ -1064,7 +1047,7 @@ export class WsRpcClient<
         ) {
           this.localOpenAuth?.noteSessionGrantRequired(selected.hostId);
         }
-        if (!probe && !updated)
+        if (!probe)
           this.localOpenAuth?.noteRefusal(
             selected.hostId,
             authority.bearer,
@@ -1078,7 +1061,6 @@ export class WsRpcClient<
         );
         if (releasedWay) this.releasedRefusals.add(error);
         if (signInRefused) this.signInRefusals.add(error);
-        if (updated) this.updatedRefusals.add(error);
         if (ownerSignInRefused) this.ownerSignInRefusals.add(error);
         if (heldRefused) this.heldRefusals.add(error);
         if (
@@ -1114,12 +1096,8 @@ export class WsRpcClient<
           fatalDetails: null,
         });
       }
-      if (this.signInAuthorities.has(authority))
-        this.releasedHosts.signInAdmitted(
-          authority.bearer.identity.userId,
-          selected.hostId,
-        );
-      else if (
+      if (
+        !this.signInAuthorities.has(authority) &&
         !this.probeAuthorities.has(authority) &&
         !this.ownerSignInAuthorities.has(authority)
       )

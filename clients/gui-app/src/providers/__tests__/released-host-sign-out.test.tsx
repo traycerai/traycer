@@ -3,8 +3,9 @@ import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/tr
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -19,13 +20,12 @@ import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream
 
 const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const HOST_ID = "gui-sign-out-released-host";
-const HOST_TOKEN = "gui-host-token";
 const SIGN_IN = "gui-person-sign-in";
 const WAIT = { timeout: 2_000, interval: 10 };
 
 const clients: WsStreamClient<typeof hostStreamRpcRegistry>[] = [];
 
-function releasedRefusal(): {
+function notAdmittedProbeRefusal(): {
   readonly kind: "fatalError";
   readonly details: FatalErrorDetails;
 } {
@@ -33,7 +33,9 @@ function releasedRefusal(): {
     kind: "fatalError",
     details: {
       code: "UNAUTHORIZED",
-      reason: "released-host-token-refusal",
+      reason: "the host has not admitted this sign-in",
+      doorReason: "not_admitted",
+      retryable: false,
       incompatibleMethods: null,
       upgradeGuidance: null,
     },
@@ -52,7 +54,7 @@ function readFrame(raw: string): Record<string, unknown> {
   return frame;
 }
 
-function openStream(): {
+function openStream(hostToken: string | null): {
   readonly sockets: StubStreamWebSocket[];
   readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
 } {
@@ -65,14 +67,14 @@ function openStream(): {
       websocketUrl: "ws://127.0.0.1:9/rpc",
     }),
     hostId: HOST_ID,
-    bearer: () => new MutableBearerLease(HOST_TOKEN, USER_ID),
+    bearer: () =>
+      hostToken === null ? null : new MutableBearerLease(hostToken, USER_ID),
     userId: USER_ID,
     releasedSignOn: {
       signIn: () => new MutableBearerLease(SIGN_IN, USER_ID),
       recovery: null,
-      allowed: () => Promise.resolve(true),
-      hostTokenUnobtainable: () => false,
-      ownerSignInEligible: () => false,
+      hostTokenUnobtainable: () => hostToken === null,
+      ownerSignInEligible: () => hostToken === null,
       heldTokenRefused: () => false,
       forgetHeldRefusal: () => undefined,
       hosts: processReleasedHosts,
@@ -111,42 +113,6 @@ async function openFrame(
   return readFrame(socket.textSent[0]);
 }
 
-async function admitSignIn(): Promise<void> {
-  const { sockets } = openStream();
-  await vi.waitFor(
-    () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-    WAIT,
-  );
-  const refused = await openFrame(sockets[0]);
-  expect(refused.token).toBe(HOST_TOKEN);
-  sockets[0].fireText(releasedRefusal());
-  await vi.waitFor(
-    () => expect(sockets.length).toBeGreaterThanOrEqual(2),
-    WAIT,
-  );
-  const admitted = await openFrame(sockets[1]);
-  expect(admitted.token).toBe(SIGN_IN);
-  sockets[1].fireText({
-    kind: "openAck",
-    manifest: admitted.manifest,
-    capabilities: ["credentialUpdate"],
-  });
-  await vi.waitFor(
-    () => expect(sockets[1].textSent.length).toBeGreaterThan(0),
-    WAIT,
-  );
-}
-
-async function firstOpenToken(): Promise<unknown> {
-  const { sockets } = openStream();
-  await vi.waitFor(
-    () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-    WAIT,
-  );
-  const opened = await openFrame(sockets[0]);
-  return opened.token;
-}
-
 function setSignedIn(): void {
   useAuthStore.setState({
     status: "signed-in",
@@ -170,6 +136,12 @@ function setSignedOut(): void {
 }
 
 describe("released host memory across a gui sign-out", () => {
+  beforeEach(() => {
+    // The stream's waits and reconnect backoff run on this clock; `vi.waitFor`
+    // advances it by its interval on every check.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
   afterEach(() => {
     for (const client of clients.splice(0)) client.close("test-done");
     processReleasedHosts.forgetAll();
@@ -180,20 +152,45 @@ describe("released host memory across a gui sign-out", () => {
     vi.useRealTimers();
   });
 
-  it("starts the next dial with the host-only token after signing out and back in", async () => {
-    await admitSignIn();
+  it("forgets a host remembered as released when the person signs out", () => {
     setSignedIn();
     render(
       <EpicSessionLifecycleBridge>
         <div />
       </EpicSessionLifecycleBridge>,
     );
-    act(() => {
-      setSignedOut();
-    });
-    act(() => {
-      setSignedIn();
-    });
-    expect(await firstOpenToken()).toBe(HOST_TOKEN);
+    processReleasedHosts.signInAdmitted(USER_ID, HOST_ID);
+    expect(processReleasedHosts.opensReleasedWay(USER_ID, HOST_ID)).toBe(true);
+
+    act(() => setSignedOut());
+
+    expect(processReleasedHosts.opensReleasedWay(USER_ID, HOST_ID)).toBe(false);
+  });
+
+  it("probes again after sign-out clears a declined probe", async () => {
+    setSignedIn();
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    const first = openStream(null);
+    await vi.waitFor(() => expect(first.sockets).toHaveLength(1), WAIT);
+    const probe = await openFrame(first.sockets[0]);
+    expect(probe.token).toBe(NO_HOST_TOKEN_PROBE);
+    first.sockets[0]?.fireText(notAdmittedProbeRefusal());
+    await vi.waitFor(() =>
+      expect(processReleasedHosts.probeDeclined(USER_ID, HOST_ID)).toBe(true),
+    );
+    first.client.close("probe declined");
+
+    act(() => setSignedOut());
+    expect(processReleasedHosts.probeDeclined(USER_ID, HOST_ID)).toBe(false);
+    act(() => setSignedIn());
+
+    const next = openStream(null);
+    await vi.waitFor(() => expect(next.sockets).toHaveLength(1), WAIT);
+    expect((await openFrame(next.sockets[0])).token).toBe(NO_HOST_TOKEN_PROBE);
   });
 });

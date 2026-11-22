@@ -311,9 +311,9 @@ function createHostTokenRemoteSessionAuth(
 
 /**
  * A dial presents the host-only token first, unless this process remembers the
- * host as released for this person (`ReleasedHostMemory`) and the row still
- * allows the sign-in: `allowed` is asked once the dial's relay pass is in hand,
- * before its `open`. A released host's typed refusal of the token makes the
+ * host as released for this person (`ReleasedHostMemory`); the row was read
+ * from the directory when this session was built, and an owner change builds
+ * another. A released host's typed refusal of the token makes the
  * next dial present the sign-in, `authz: null`, as a released app did; that
  * connection's credential pushes carry the sign-in. A host that names its
  * reason is never handed the sign-in again.
@@ -331,14 +331,14 @@ function createReleasedSignOnSessionAuth(
   let plan: "host-token" | "sign-in-next" | "sign-in" = "host-token";
   let openAdmitted = false;
   let signInFromMemory = false;
+  /**
+   * Opens read so far. A recovery that answers after the session's budget acts
+   * only while no open has been read since it was asked: a later dial owns the
+   * plan and the door.
+   */
+  let dialsStarted = 0;
   /** The person this dial's sign-in is for, while it presents one. */
   let signInUserId: string | null = null;
-  /**
-   * The row's answer from the latest relay pass, for the person it was asked
-   * for: every pass sets or clears it, and an open spends it.
-   */
-  let rowAnswer: { readonly userId: string; readonly allowed: boolean } | null =
-    null;
   const remembered = (): string | null => {
     const lease = releasedSignOn.signIn();
     return lease !== null &&
@@ -360,10 +360,12 @@ function createReleasedSignOnSessionAuth(
     refusal: FatalErrorDetails,
   ): Promise<RemoteSessionAuthRecoveryOutcome> => {
     const recovery = releasedSignOn.recovery;
+    const askedAt = dialsStarted;
     const outcome =
       recovery === null
         ? "rejected"
         : await revalidateStream(recovery, refusal);
+    if (dialsStarted !== askedAt) return outcome;
     if (outcome === "rotated" || outcome === "network-error") {
       plan = "sign-in-next";
       return outcome;
@@ -379,29 +381,18 @@ function createReleasedSignOnSessionAuth(
       ? Promise.resolve("rejected")
       : revalidateStream(auth, refusal);
   };
-  const answerHostTokenRefusal = async (
-    refusal: FatalErrorDetails,
-  ): Promise<RemoteSessionAuthRecoveryOutcome> => {
-    const allowed = await releasedSignOn.allowed().catch(() => false);
-    if (allowed) {
-      plan = "sign-in-next";
-      return "rotated";
-    }
-    door?.refused(refusal);
-    return recoverHostToken(refusal);
-  };
   const sessionAuth: RemoteSessionAuth = {
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
+      dialsStarted += 1;
       openAdmitted = false;
-      const rememberedFor = remembered();
-      signInFromMemory =
-        rememberedFor !== null &&
-        rowAnswer !== null &&
-        rowAnswer.userId === rememberedFor &&
-        rowAnswer.allowed;
-      rowAnswer = null;
-      if (plan === "sign-in-next" || signInFromMemory) {
+      signInFromMemory = remembered() !== null;
+      // Asked again here: another transport may have heard this host name a
+      // reason since the refusal that planned the sign-in.
+      if (
+        (plan === "sign-in-next" || signInFromMemory) &&
+        !hosts.namedReason(hostId)
+      ) {
         const lease = releasedSignOn.signIn();
         const signIn = readSignIn();
         if (lease !== null && signIn !== null) {
@@ -428,7 +419,8 @@ function createReleasedSignOnSessionAuth(
       }
       if (answersReleasedWay(refusal)) {
         if (plan === "sign-in") return recoverSignIn(refusal);
-        return answerHostTokenRefusal(refusal);
+        plan = "sign-in-next";
+        return Promise.resolve("rotated");
       }
       return recoverHostToken(refusal);
     },
@@ -449,21 +441,7 @@ function createReleasedSignOnSessionAuth(
       },
     },
   };
-  return {
-    auth: sessionAuth,
-    grantProvider: async () => {
-      const provision = await grantProvider();
-      const rememberedFor = provision.kind === "ok" ? remembered() : null;
-      rowAnswer =
-        rememberedFor === null
-          ? null
-          : {
-              userId: rememberedFor,
-              allowed: await releasedSignOn.allowed().catch(() => false),
-            };
-      return provision;
-    },
-  };
+  return { auth: sessionAuth, grantProvider };
 }
 
 /**

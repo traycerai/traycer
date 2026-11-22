@@ -186,8 +186,7 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      | ((session: FakeStreamSession, lapIndex: number) => void)
-      | null,
+      ((session: FakeStreamSession, lapIndex: number) => void) | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
@@ -537,7 +536,6 @@ describe("provisionInstalledHostCredential", () => {
             await vi.waitFor(() =>
               expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
             );
-            await vi.waitFor(() => expect(ownershipReads).toHaveLength(1));
             const revalidateRefused = options.auth?.revalidateRefused;
             if (revalidateRefused === undefined) {
               throw new Error("probe wired no refused-token recovery");
@@ -571,12 +569,92 @@ describe("provisionInstalledHostCredential", () => {
       );
       expect(probeSignal().aborted).toBe(true);
       expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
+      expect(ownershipReads).toEqual([]);
       expect(mocks.sessions).toHaveLength(1);
       expectCleanTeardown();
     } finally {
       vi.unstubAllGlobals();
     }
   });
+
+  it.each([
+    {
+      name: "a version refusal",
+      code: "INCOMPATIBLE",
+      expected: { kind: "unsupported" } as HostCredentialProvisionOutcome,
+    },
+    {
+      name: "a team admission refusal",
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      expected: {
+        kind: "error",
+        message: NOT_A_MEMBER_MESSAGE,
+      } as HostCredentialProvisionOutcome,
+    },
+  ])(
+    "reports $name ahead of a first host-token mint refused as not admitted",
+    async ({ code, expected }) => {
+      const ownershipReads: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        async (
+          input: RequestInfo | URL,
+          init: RequestInit | undefined,
+        ): Promise<Response> => {
+          const raw =
+            typeof input === "string"
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+          const url = new URL(raw);
+          if (
+            url.pathname === "/api/v3/hosts" &&
+            (init?.method ?? "GET") === "GET"
+          ) {
+            ownershipReads.push(url.toString());
+            return new Response("missing", { status: 404 });
+          }
+          return new Response("unexpected", { status: 500 });
+        },
+      );
+      try {
+        mocks.hostTokenTable = new Map();
+        mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+        mocks.hostTokenMintMock.mockReset();
+        mocks.hostTokenMintMock.mockResolvedValue({ kind: "not-admitted" });
+        mocks.onSessionCreated = (session): void => {
+          setTimeout(() => {
+            void (async (): Promise<void> => {
+              // The fake replaces the client, so reading the bearer stands in
+              // for the open that asks for the host-only token.
+              expect(capturedClientOptions().bearer()).toBeNull();
+              await vi.waitFor(() =>
+                expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
+              );
+              // The sign-in's allowance is read once the mint is refused.
+              session.emitStatus(
+                "closed",
+                fatalReason("the host named the cause", code),
+                null,
+              );
+            })();
+          }, 0);
+        };
+
+        const outcome = await provisionInstalledHostCredential(
+          makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+        );
+
+        expect(outcome).toEqual(expected);
+        expect(ownershipReads).toEqual([]);
+        expect(mocks.sessions).toHaveLength(1);
+        expectCleanTeardown();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("recovers one refused host token with one fresh token and one more open", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());

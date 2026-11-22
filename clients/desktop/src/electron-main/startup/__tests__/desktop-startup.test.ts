@@ -2,6 +2,7 @@ import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -560,6 +561,7 @@ describe("runPreReady - scheme/crash-reporter ordering", () => {
 });
 
 const RELEASED_HOST_ID = "desktop-startup-released-host";
+const PROBE_DECLINE_HOST_ID = "desktop-startup-probe-decline-host";
 const RELEASED_USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const RELEASED_HOST_TOKEN = "desktop-host-token";
 const RELEASED_SIGN_IN = "desktop-person-sign-in";
@@ -581,6 +583,23 @@ function startupReleasedRefusal(): {
   };
 }
 
+function startupProbeDeclined(): {
+  readonly kind: "fatalError";
+  readonly details: FatalErrorDetails;
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "the host has not admitted this sign-in",
+      doorReason: "not_admitted",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
 function readStartupFrame(raw: string): Record<string, unknown> {
   const value: unknown = JSON.parse(raw);
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -593,26 +612,32 @@ function readStartupFrame(raw: string): Record<string, unknown> {
   return frame;
 }
 
-function openStartupStream(): {
+function openStartupStream(
+  hostToken: string | null,
+  hostId: string,
+): {
   readonly sockets: StubStreamWebSocket[];
+  readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
 } {
   const { factory, sockets } = makeStubSocketFactory();
   const client = new WsStreamClient({
     clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => ({
-      hostId: RELEASED_HOST_ID,
+      hostId,
       websocketUrl: "ws://127.0.0.1:9/rpc",
     }),
-    hostId: RELEASED_HOST_ID,
-    bearer: () => new MutableBearerLease(RELEASED_HOST_TOKEN, RELEASED_USER_ID),
+    hostId,
+    bearer: () =>
+      hostToken === null
+        ? null
+        : new MutableBearerLease(hostToken, RELEASED_USER_ID),
     userId: RELEASED_USER_ID,
     releasedSignOn: {
       signIn: () => new MutableBearerLease(RELEASED_SIGN_IN, RELEASED_USER_ID),
       recovery: null,
-      allowed: () => Promise.resolve(true),
-      hostTokenUnobtainable: () => false,
-      ownerSignInEligible: () => false,
+      hostTokenUnobtainable: () => hostToken === null,
+      ownerSignInEligible: () => hostToken === null,
       heldTokenRefused: () => false,
       forgetHeldRefusal: () => undefined,
       hosts: processReleasedHosts,
@@ -632,12 +657,12 @@ function openStartupStream(): {
   });
   startupClients.push(client);
   client.subscribe("git.subscribeStatus", {
-    hostId: RELEASED_HOST_ID,
+    hostId,
     runningDir: "/repo",
     ignoreWhitespace: false,
     freshNonce: null,
   });
-  return { sockets };
+  return { sockets, client };
 }
 
 async function openStartupFrame(
@@ -652,7 +677,7 @@ async function openStartupFrame(
 }
 
 async function admitStartupSignIn(): Promise<void> {
-  const { sockets } = openStartupStream();
+  const { sockets } = openStartupStream(RELEASED_HOST_TOKEN, RELEASED_HOST_ID);
   await vi.waitFor(
     () => expect(sockets.length).toBeGreaterThanOrEqual(1),
     RELEASED_WAIT,
@@ -678,7 +703,7 @@ async function admitStartupSignIn(): Promise<void> {
 }
 
 async function firstStartupOpenToken(): Promise<unknown> {
-  const { sockets } = openStartupStream();
+  const { sockets } = openStartupStream(RELEASED_HOST_TOKEN, RELEASED_HOST_ID);
   await vi.waitFor(
     () => expect(sockets.length).toBeGreaterThanOrEqual(1),
     RELEASED_WAIT,
@@ -718,5 +743,57 @@ describe("released host memory across a desktop sign-out", () => {
     });
     session.set({ status: "signed-out", token: null, profile: null });
     expect(await firstStartupOpenToken()).toBe(RELEASED_HOST_TOKEN);
+  });
+
+  it("probes again after auth-session sign-out clears a declined probe", async () => {
+    const first = openStartupStream(null, PROBE_DECLINE_HOST_ID);
+    await vi.waitFor(
+      () => expect(first.sockets).toHaveLength(1),
+      RELEASED_WAIT,
+    );
+    const initialProbe = first.sockets[0];
+    if (initialProbe === undefined) throw new Error("probe dial missing");
+    const initialOpen = await openStartupFrame(initialProbe);
+    expect(initialOpen.token).toBe(NO_HOST_TOKEN_PROBE);
+    initialProbe.fireText(startupProbeDeclined());
+    await vi.waitFor(() =>
+      expect(
+        processReleasedHosts.probeDeclined(
+          RELEASED_USER_ID,
+          PROBE_DECLINE_HOST_ID,
+        ),
+      ).toBe(true),
+    );
+    first.client.close("probe declined");
+
+    const startup = import("../desktop-startup").then((mod) =>
+      mod.runDesktopStartup(),
+    );
+    await expect(startup).rejects.toThrow("stop-after-released-host-listener");
+    const session = capturedAuthSessions.sessions[0];
+    if (session === undefined) throw new Error("auth session missing");
+    session.set({
+      status: "signed-in",
+      token: RELEASED_SIGN_IN,
+      profile: {
+        userId: RELEASED_USER_ID,
+        userName: "person",
+        email: "person@example.com",
+      },
+    });
+    session.set({ status: "signed-out", token: null, profile: null });
+    expect(
+      processReleasedHosts.probeDeclined(
+        RELEASED_USER_ID,
+        PROBE_DECLINE_HOST_ID,
+      ),
+    ).toBe(false);
+    const next = openStartupStream(null, PROBE_DECLINE_HOST_ID);
+    await vi.waitFor(() => expect(next.sockets).toHaveLength(1), RELEASED_WAIT);
+    const nextSocket = next.sockets[0];
+    if (nextSocket === undefined) throw new Error("post-sign-out dial missing");
+    expect((await openStartupFrame(nextSocket)).token).toBe(
+      NO_HOST_TOKEN_PROBE,
+    );
   });
 });

@@ -8,6 +8,7 @@ import {
 } from "@traycer/protocol/host/registry";
 import {
   createReleasedHostMemory,
+  processReleasedHosts,
   type ReleasedHostMemory,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { WsStreamClient } from "../../../../shared/host-transport/ws-stream-client";
@@ -25,22 +26,21 @@ import type {
 } from "@traycer/protocol/host-transport/websocket";
 import { CLI_CLIENT_IDENTITY } from "../../cli-version";
 import { openCliHostSession, type CliHostSession } from "../cli-host-tokens";
-import { callHostRpcAtEndpoint } from "../host-rpc";
+import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
+import { UNWORDED_MINT_REFUSAL_MESSAGE } from "../host-door-words";
 import type { HostAuth } from "../host-auth";
+import { CLI_ERROR_CODES } from "../../runner/errors";
 
 const USER_ID = "user-1";
 const HOST_ID = "11111111-1111-4111-8111-111111111111";
 const SIGN_IN = "person-sign-in";
 const ENDPOINT = { hostId: HOST_ID, websocketUrl: "ws://127.0.0.1:9/rpc" };
+const UNARY_HOST_ID = "22222222-2222-4222-8222-222222222222";
+const UNARY_ENDPOINT = { ...ENDPOINT, hostId: UNARY_HOST_ID };
 const WAIT = { timeout: 2_000, interval: 10 };
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000;
 
-type DoorMode =
-  | "unavailable"
-  | "unavailable-once"
-  | "not-admitted"
-  | "team"
-  | "other-user";
+type DoorMode = "unavailable" | "unavailable-once" | "not-admitted";
 
 const harness = vi.hoisted(() => {
   class ScriptSocket implements StreamWebSocketLike {
@@ -72,11 +72,13 @@ const harness = vi.hoisted(() => {
     table: HostTokenTable;
     grants: number;
     hung: number;
+    hostRowReads: string[];
   } = {
     mode: "unavailable",
     table: new Map(),
     grants: 0,
     hung: 0,
+    hostRowReads: [],
   };
   return { ScriptSocket, sockets, state };
 });
@@ -199,31 +201,6 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
-function ownershipBody(): unknown {
-  if (harness.state.mode === "team") {
-    return {
-      hosts: [
-        {
-          hostId: HOST_ID,
-          owner: { kind: "team", id: "team-1", name: "Team" },
-          kind: "machine",
-          remoteAccess: false,
-        },
-      ],
-    };
-  }
-  return {
-    hosts: [
-      {
-        hostId: HOST_ID,
-        owner: { kind: "user", id: "someone-else" },
-        kind: "personal",
-        remoteAccess: false,
-      },
-    ],
-  };
-}
-
 function installFetch(): void {
   vi.stubGlobal(
     "fetch",
@@ -234,13 +211,10 @@ function installFetch(): void {
       const url = new URL(requestUrl(input));
       const method = init?.method ?? "GET";
       if (url.pathname === "/api/v3/hosts" && method === "GET") {
-        if (
-          harness.state.mode === "team" ||
-          harness.state.mode === "other-user"
-        ) {
-          return jsonResponse(ownershipBody(), 200);
-        }
-        return jsonResponse({ message: "missing" }, 404);
+        // The host's row is read by nothing on this machine's doors. A read
+        // that happened would never be answered, as when authn is silent.
+        harness.state.hostRowReads.push(url.pathname);
+        return new Promise<Response>(() => undefined);
       }
       if (method === "POST" && url.pathname.endsWith("/session-grant")) {
         harness.state.grants += 1;
@@ -348,6 +322,55 @@ function namedProbeRefusal(): {
   };
 }
 
+function ownerSignInRefusal(): {
+  readonly kind: "fatalError";
+  readonly details: {
+    readonly code: "UNAUTHORIZED";
+    readonly reason: string;
+    readonly doorReason: "owner_sign_in";
+    readonly retryable: false;
+    readonly incompatibleMethods: null;
+    readonly upgradeGuidance: null;
+  };
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "current personal host invited sign-in",
+      doorReason: "owner_sign_in",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
+function notProvisionedRefusal(): {
+  readonly kind: "fatalError";
+  readonly details: {
+    readonly code: "UNAUTHORIZED";
+    readonly reason: string;
+    readonly doorReason: "not_provisioned";
+    readonly retryable: false;
+    readonly incompatibleMethods: null;
+    readonly upgradeGuidance: null;
+  };
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason:
+        "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+      doorReason: "not_provisioned",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
 function releasedRefusal(): {
   readonly kind: "fatalError";
   readonly details: {
@@ -362,6 +385,30 @@ function releasedRefusal(): {
     details: {
       code: "UNAUTHORIZED",
       reason: "released-host-token-refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
+function expiredTokenRefusal(): {
+  readonly kind: "fatalError";
+  readonly details: {
+    readonly code: "UNAUTHORIZED";
+    readonly reason: string;
+    readonly doorReason: "token_expired";
+    readonly retryable: false;
+    readonly incompatibleMethods: null;
+    readonly upgradeGuidance: null;
+  };
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "host token expired",
+      doorReason: "token_expired",
+      retryable: false,
       incompatibleMethods: null,
       upgradeGuidance: null,
     },
@@ -453,6 +500,7 @@ beforeEach(() => {
   harness.state.table = new Map();
   harness.state.grants = 0;
   harness.state.hung = 0;
+  harness.state.hostRowReads = [];
   installFetch();
 });
 
@@ -461,9 +509,49 @@ afterEach(() => {
   resetNegotiatedManifests();
   resetNegotiatedStreamVersions();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("CLI local doors while authn cannot mint", () => {
+  it("reports not_provisioned and probes again after this computer is enrolled", async () => {
+    harness.state.mode = "unavailable";
+    const firstCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const firstProbe = await socketAt(0);
+    expect((await readOpen(firstProbe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    firstProbe.fireFrame(notProvisionedRefusal());
+    await expect(toAgentCliError(firstCall)).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      exitCode: 1,
+      message:
+        "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+    });
+
+    const secondCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const enrolledProbe = await socketAt(1);
+    expect((await readOpen(enrolledProbe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    enrolledProbe.fireFrame({
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "owner sign-in invited",
+        doorReason: "owner_sign_in",
+        retryable: false,
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    const invited = await socketAt(2);
+    const open = await readOpen(invited);
+    expect(open.token).toBe(SIGN_IN);
+    await admitStatus(invited, open);
+    await expect(secondCall).resolves.toMatchObject({ ready: true });
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+    ]);
+  });
+
   it("reaches the host with the held expired token and does not start another mint", async () => {
     const expired = expiredJwt(Date.now());
     hold(expired);
@@ -479,7 +567,7 @@ describe("CLI local doors while authn cannot mint", () => {
     expect(harness.state.grants).toBe(1);
   });
 
-  it("opens a released host with the sign-in after the held expired token is refused", async () => {
+  it("probes after the held token is refused, then signs in when invited", async () => {
     const expired = expiredJwt(Date.now());
     hold(expired);
     harness.state.mode = "unavailable";
@@ -487,15 +575,23 @@ describe("CLI local doors while authn cannot mint", () => {
     const first = await socketAt(0);
     const refused = await readOpen(first);
     expect(refused.token).toBe(expired.token);
-    first.fireFrame(releasedRefusal());
-    const second = await socketAt(1);
-    const open = await readOpen(second);
+    first.fireFrame(expiredTokenRefusal());
+    const probe = await socketAt(1);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireFrame(ownerSignInRefusal());
+    const invited = await socketAt(2);
+    const open = await readOpen(invited);
     expect(open.token).toBe(SIGN_IN);
-    await admitStatus(second, open);
+    await admitStatus(invited, open);
     await expect(pending).resolves.toMatchObject({ ready: true });
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      expired.token,
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+    ]);
   });
 
-  it("returns a session whose call and stream reach the host with the sign-in when none is held", async () => {
+  it("sends sign-in on current-personal stream and unary invitations", async () => {
     harness.state.mode = "unavailable";
     const opened = await openCliHostSession(auth(), HOST_ID, false, null);
     expect(opened.kind).toBe("ok");
@@ -506,7 +602,7 @@ describe("CLI local doors while authn cannot mint", () => {
     const streamProbe = await socketAt(0);
     const streamProbed = await readOpen(streamProbe);
     expect(streamProbed.token).toBe(NO_HOST_TOKEN_PROBE);
-    streamProbe.fireFrame(releasedRefusal());
+    streamProbe.fireFrame(ownerSignInRefusal());
     const streamSocket = await socketAt(1);
     const streamOpen = await readOpen(streamSocket);
     expect(streamOpen.token).toBe(SIGN_IN);
@@ -516,13 +612,27 @@ describe("CLI local doors while authn cannot mint", () => {
       optionalManifest: streamOpen.optionalManifest,
     });
     opened.session.dispose();
+    expect(processReleasedHosts.opensReleasedWay(USER_ID, HOST_ID)).toBe(false);
     const start = harness.sockets.length;
-    const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const pending = callHostRpcAtEndpoint("host.status", {}, UNARY_ENDPOINT);
     const unary = await socketAt(start);
-    const open = await readOpen(unary);
+    const unaryProbe = await readOpen(unary);
+    expect(unaryProbe.token).toBe(NO_HOST_TOKEN_PROBE);
+    unary.fireFrame(ownerSignInRefusal());
+    const unaryInvited = await socketAt(start + 1);
+    const open = await readOpen(unaryInvited);
     expect(open.token).toBe(SIGN_IN);
-    await admitStatus(unary, open);
+    await admitStatus(unaryInvited, open);
     await expect(pending).resolves.toMatchObject({ ready: true });
+    expect(processReleasedHosts.opensReleasedWay(USER_ID, UNARY_HOST_ID)).toBe(
+      false,
+    );
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+    ]);
   });
 
   it("opens with the placeholder, then the sign-in, when authn has no row for this computer", async () => {
@@ -546,24 +656,114 @@ describe("CLI local doors while authn cannot mint", () => {
     const probed = await readOpen(probe);
     expect(probed.token).toBe(NO_HOST_TOKEN_PROBE);
     probe.fireFrame(namedProbeRefusal());
-    await expect(pending).rejects.toThrow();
+    await expect(toAgentCliError(pending)).rejects.toMatchObject({
+      exitCode: 1,
+      message: "No host-only token is held for this host",
+    });
     expect(harness.sockets).toHaveLength(1);
     expect(openToken(probe)).toBe(NO_HOST_TOKEN_PROBE);
-    expect(harness.sockets.map((socket) => openToken(socket))).not.toContain(
-      SIGN_IN,
-    );
+    const retry = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    await expect(toAgentCliError(retry)).rejects.toMatchObject({
+      exitCode: 1,
+      message: "No host-only token is held for this host",
+    });
+    expect(harness.sockets).toHaveLength(1);
   });
 
-  it.each([
-    { name: "a team row", mode: "team" as const },
-    { name: "another person's row", mode: "other-user" as const },
-  ])("never sends the sign-in for $name", async ({ mode }) => {
-    harness.state.mode = mode;
-    await expect(
-      callHostRpcAtEndpoint("host.status", {}, ENDPOINT),
-    ).rejects.toThrow();
-    expect(harness.sockets.map((socket) => openToken(socket))).not.toContain(
+  it("opens the sign-in at once after a released host refuses the held token while authn answers nothing", async () => {
+    vi.useFakeTimers();
+    harness.state.mode = "unavailable-once";
+    const expired = expiredJwt(Date.now());
+    hold(expired);
+    const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const refused = await socketAt(0);
+    expect((await readOpen(refused)).token).toBe(expired.token);
+    refused.fireFrame(releasedRefusal());
+    const invited = await socketAt(1);
+    const open = await readOpen(invited);
+    expect(open.token).toBe(SIGN_IN);
+    await admitStatus(invited, open);
+    await expect(pending).resolves.toMatchObject({ ready: true });
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      expired.token,
       SIGN_IN,
-    );
+    ]);
+    expect(harness.state.hostRowReads).toEqual([]);
+  });
+
+  it("opens the stream's sign-in at once after a released host refuses the probe, and again after a drop, while authn answers nothing", async () => {
+    vi.useFakeTimers();
+    harness.state.mode = "unavailable";
+    const opened = await openCliHostSession(auth(), HOST_ID, false, null);
+    expect(opened.kind).toBe("ok");
+    if (opened.kind !== "ok") throw new Error("session did not open");
+    await openStream(opened.session);
+    for (const first of [0, 2]) {
+      const probe = await socketAt(first);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      probe.fireFrame(releasedRefusal());
+      const invited = await socketAt(first + 1);
+      const open = await readOpen(invited);
+      expect(open.token).toBe(SIGN_IN);
+      invited.fireFrame({
+        kind: "openAck",
+        manifest: open.manifest,
+        optionalManifest: open.optionalManifest,
+      });
+      if (first === 0)
+        invited.onclose?.({ code: 1006, reason: "drop", wasClean: false });
+    }
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+    ]);
+    expect(harness.state.hostRowReads).toEqual([]);
+    opened.session.dispose();
+  });
+
+  it("re-presents the held expired token after a current host names the probe's refusal", async () => {
+    harness.state.mode = "unavailable";
+    const expired = expiredJwt(Date.now());
+    hold(expired);
+    const firstCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const first = await socketAt(0);
+    expect((await readOpen(first)).token).toBe(expired.token);
+    first.fireFrame(expiredTokenRefusal());
+    const probe = await socketAt(1);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireFrame(namedProbeRefusal());
+    await expect(toAgentCliError(firstCall)).rejects.toMatchObject({
+      exitCode: 1,
+    });
+
+    const nextCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const second = await socketAt(2);
+    const open = await readOpen(second);
+    expect(open.token).toBe(expired.token);
+    await admitStatus(second, open);
+    await expect(nextCall).resolves.toMatchObject({ ready: true });
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      expired.token,
+      NO_HOST_TOKEN_PROBE,
+      expired.token,
+    ]);
+    expect(harness.state.hostRowReads).toEqual([]);
+  });
+
+  it("never sends the sign-in when a current host names the probe's refusal after authn has no row for this computer", async () => {
+    harness.state.mode = "not-admitted";
+    const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const probe = await socketAt(0);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireFrame(namedProbeRefusal());
+    await expect(toAgentCliError(pending)).rejects.toMatchObject({
+      exitCode: 1,
+    });
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      NO_HOST_TOKEN_PROBE,
+    ]);
+    expect(harness.state.hostRowReads).toEqual([]);
   });
 });

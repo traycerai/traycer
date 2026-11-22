@@ -401,7 +401,7 @@ async function signInMonitorCredential(
     signInRejected: () => hostTokens.signInRejected(),
     onMintRefused: (listener) => hostTokens.onMintRefused(listener),
     releasedSignOn: (hostId) =>
-      cliReleasedSignOn(auth.authnBaseUrl, hostId, lease, hostTokens),
+      cliReleasedSignOn(hostId, lease, hostTokens),
     // Delegated host-credential provisioning. `monitor` is the CLI command
     // that most needs it: the host it watches should keep serving after this
     // process exits. Provisioning is silent, so this works the same whether

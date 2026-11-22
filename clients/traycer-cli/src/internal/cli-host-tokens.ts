@@ -28,7 +28,6 @@ import {
   heldTokenRefused,
   hostTokenUnobtainable,
   ownerSignInEligible,
-  releasedLocalSignOnFromRegistry,
   type ReleasedSignOn,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
@@ -361,9 +360,12 @@ export interface CliHostSession {
   dispose(): void;
 }
 
-/** The stored sign-in, refreshed under the credentials lock, for `releasedLocalSignOnFromRegistry`. */
+/**
+ * The stored sign-in, refreshed under the credentials lock, for this machine's
+ * host. The CLI holds no row, and none is read: the sign-in goes only to a host
+ * whose refusal in the same dial sequence showed the released level.
+ */
 export function cliReleasedSignOn(
-  authnBaseUrl: string,
   hostId: () => string | null,
   lease: BearerLease,
   tokens: Pick<
@@ -375,9 +377,7 @@ export function cliReleasedSignOn(
     | "forgetHeldRefusal"
   >,
 ): ReleasedSignOn {
-  return releasedLocalSignOnFromRegistry({
-    authnBaseUrl,
-    hostId,
+  return {
     signIn: () => (readLeaseBearer(lease) === null ? null : lease),
     recovery: { revalidateForReconnect: () => tokens.refreshSignIn() },
     hostTokenUnobtainable: () => {
@@ -397,7 +397,7 @@ export function cliReleasedSignOn(
       if (id !== null) tokens.forgetHeldRefusal(id);
     },
     hosts: processReleasedHosts,
-  });
+  };
 }
 
 export type CliHostSessionResult =
@@ -436,20 +436,13 @@ export async function openCliHostSession(
     store.dispose();
     throw error;
   });
-  const releasedSignOn = cliReleasedSignOn(
-    auth.authnBaseUrl,
-    () => hostId,
-    lease,
-    tokens,
-  );
+  const releasedSignOn = cliReleasedSignOn(() => hostId, lease, tokens);
   // No token can be presented: a released CLI opened this machine's host with
   // the sign-in, so the session goes on with an empty token, which the
-  // transports answer with the sign-in where `releasedSignOn` allows it.
+  // transports answer with the probe, and the sign-in only after the host's
+  // refusal of it shows the released level.
   const signInOnly =
-    held.kind === "failed" &&
-    !fresh &&
-    tokens.hostTokenUnobtainable(hostId) &&
-    (await releasedSignOn.allowed().catch(() => false));
+    held.kind === "failed" && !fresh && tokens.hostTokenUnobtainable(hostId);
   if (held.kind === "failed" && !signInOnly) {
     store.dispose();
     return { kind: "failed", failure: held.failure };

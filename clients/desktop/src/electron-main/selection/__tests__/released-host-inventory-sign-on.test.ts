@@ -9,6 +9,7 @@ import {
   FakeNativeWebSocket,
   liveBearer,
   newProvider,
+  openAckFrame,
   sentFramesOfKind,
   sentTokens,
   settle,
@@ -18,55 +19,34 @@ import {
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { createLocalHostInventoryStreamClient } from "../local-host-inventory-subscription";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 
 const SIGN_IN_TOKEN = "main-sign-in-token";
 const SIGN_IN_B = "main-sign-in-token-b";
 const HOST_TOKEN = "main-host-token";
 const HOST_TOKEN_B = "main-host-token-b";
 const RELEASED_HOST = { ...mockLocalHostEntry, version: "1.5.4" };
+const CURRENT_HOST_FOR_USER_SWITCH = "current-host-user-switch";
+const CURRENT_HOST_WHILE_AUTHN_OFFLINE = "current-host-authn-offline";
+const CURRENT_HOST_FOR_INITIAL_INVITE = "current-host-initial-invite";
+const CURRENT_HOST_NAMING_REASON = "current-host-naming-reason";
+let activeClosers: Array<() => void> = [];
 
-type RowOwner = "personal" | "team";
+/** Every request authn is sent, kept; none is ever answered. */
+const authnRequests: string[] = [];
+
+function installSilentAuthn(): void {
+  authnRequests.length = 0;
+  vi.stubGlobal("fetch", (input: RequestInfo | URL): Promise<Response> => {
+    authnRequests.push(requestUrl(input));
+    return new Promise<Response>(() => undefined);
+  });
+}
 
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.toString();
   return input.url;
-}
-
-function ownershipBody(owner: RowOwner): unknown {
-  return {
-    hosts: [
-      owner === "team"
-        ? {
-            hostId: RELEASED_HOST.hostId,
-            owner: { kind: "team", id: "team-1", name: "Team" },
-            kind: "machine",
-            remoteAccess: false,
-          }
-        : {
-            hostId: RELEASED_HOST.hostId,
-            owner: { kind: "user", id: USER_A },
-            kind: "personal",
-            remoteAccess: false,
-          },
-    ],
-  };
-}
-
-function installFetch(owner: RowOwner): void {
-  vi.stubGlobal(
-    "fetch",
-    async (input: RequestInfo | URL): Promise<Response> => {
-      const url = new URL(requestUrl(input));
-      if (url.pathname === "/api/v3/hosts") {
-        return new Response(JSON.stringify(ownershipBody(owner)), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      return new Response("unexpected", { status: 500 });
-    },
-  );
 }
 
 function releasedRefusal(): string {
@@ -81,17 +61,67 @@ function releasedRefusal(): string {
   });
 }
 
-async function openInventory(owner: RowOwner): Promise<{
+function expiredTokenRefusal(): string {
+  return JSON.stringify({
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "host token expired",
+      doorReason: "token_expired",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
+function notAdmittedRefusal(): string {
+  return JSON.stringify({
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "the host has not admitted this sign-in",
+      doorReason: "not_admitted",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
+function ownerSignInRefusal(): string {
+  return JSON.stringify({
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "current-host-refusal",
+      doorReason: "owner_sign_in",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
+async function openInventory(
+  expiresAtMs: number | undefined,
+  hostId: string | undefined,
+): Promise<{
   readonly statuses: string[];
+  readonly mintCalls: () => number;
   readonly close: () => void;
 }> {
-  installFetch(owner);
+  installSilentAuthn();
+  const selectedHostId = hostId ?? RELEASED_HOST.hostId;
   const provider = newProvider();
   signIn(provider, USER_A, SIGN_IN_TOKEN);
+  let mintCalls = 0;
   const hostTokens = createHostTokenSource({
     persistence: createMemoryHostTokenPersistence(),
-    mint: () =>
-      Promise.resolve({ kind: "unavailable", detail: "authn offline" }),
+    mint: () => {
+      mintCalls += 1;
+      return Promise.resolve({ kind: "unavailable", detail: "authn offline" });
+    },
     signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
     now: () => Date.now(),
   });
@@ -101,17 +131,16 @@ async function openInventory(owner: RowOwner): Promise<{
   }
   await hostTokens.adopt(
     USER_A,
-    RELEASED_HOST.hostId,
-    { token: HOST_TOKEN, expiresAtMs: Date.now() + 60_000 },
+    selectedHostId,
+    { token: HOST_TOKEN, expiresAtMs: expiresAtMs ?? Date.now() + 60_000 },
     hostTokens.era(USER_A),
   );
   const endpoint = {
-    hostId: RELEASED_HOST.hostId,
+    hostId: selectedHostId,
     websocketUrl,
     version: RELEASED_HOST.version,
   };
   const inventoryClient = createLocalHostInventoryStreamClient({
-    authnBaseUrl: "https://authn.test",
     hostTokens,
     localHost: () => endpoint,
     bearer: liveBearer(provider),
@@ -130,12 +159,15 @@ async function openInventory(owner: RowOwner): Promise<{
       },
     },
   });
+  const close = (): void => {
+    inventory.close();
+    stream.close("test complete");
+  };
+  activeClosers.push(close);
   return {
     statuses,
-    close: () => {
-      inventory.close();
-      stream.close("test complete");
-    },
+    mintCalls: () => mintCalls,
+    close,
   };
 }
 
@@ -155,12 +187,14 @@ async function refusedOpen(): Promise<FakeNativeWebSocket> {
 
 describe("desktop inventory push against a released local host", () => {
   beforeEach(() => {
+    activeClosers = [];
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeNativeWebSocket);
     FakeNativeWebSocket.instances.length = 0;
   });
 
   afterEach(async () => {
+    for (const close of activeClosers) close();
     processReleasedHosts.forgetAll();
     for (const socket of FakeNativeWebSocket.instances) {
       socket.fireClose(1006, "test teardown");
@@ -170,46 +204,172 @@ describe("desktop inventory push against a released local host", () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens the person's own computer with the sign-in after the host-only token is refused", async () => {
-    const opened = await openInventory("personal");
+  it("sends the sign-in after a current personal computer invites it", async () => {
+    const opened = await openInventoryFor({
+      hostId: CURRENT_HOST_FOR_INITIAL_INVITE,
+      userId: USER_A,
+      signInToken: SIGN_IN_TOKEN,
+      hostToken: null,
+    });
+    await vi.waitFor(() => expect(opened.mintCalls()).toBeGreaterThan(0));
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(1),
+    );
+    const probe = FakeNativeWebSocket.instances[0];
+    if (probe === undefined) throw new Error("inventory probe missing");
+    probe.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(probe, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(probe, "open")[0]?.token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(ownerSignInRefusal());
+
+    const invited = await vi.waitFor(() => {
+      expect(FakeNativeWebSocket.instances).toHaveLength(2);
+      return FakeNativeWebSocket.instances[1];
+    });
+    if (invited === undefined) throw new Error("invited dial missing");
+    invited.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(invited, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(invited, "open")[0]?.token).toBe(SIGN_IN_TOKEN);
+    invited.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() => expect(opened.statuses).toContain("open"));
+
+    expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE, SIGN_IN_TOKEN]);
+    expect(
+      processReleasedHosts.opensReleasedWay(
+        USER_A,
+        CURRENT_HOST_FOR_INITIAL_INVITE,
+      ),
+    ).toBe(false);
+    opened.close();
+  });
+
+  it("opens the sign-in at once after the host-only token is refused, on every dial sequence, while authn answers nothing", async () => {
+    const opened = await openInventory(undefined, undefined);
     await refusedOpen();
     await vi.waitFor(() =>
-      expect(
-        FakeNativeWebSocket.instances.length >= 2 ||
-          opened.statuses.includes("closed"),
-      ).toBe(true),
+      expect(FakeNativeWebSocket.instances).toHaveLength(2),
     );
-    expect(FakeNativeWebSocket.instances).toHaveLength(2);
     const signInSocket = FakeNativeWebSocket.instances[1];
     if (signInSocket === undefined) throw new Error("sign-in socket missing");
     signInSocket.fireOpen();
     await vi.waitFor(() =>
       expect(sentFramesOfKind(signInSocket, "open")).toHaveLength(1),
     );
-    expect(sentTokens()).toEqual([HOST_TOKEN, SIGN_IN_TOKEN]);
-    opened.close();
-  });
+    signInSocket.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() => expect(opened.statuses).toContain("open"));
 
-  it("never sends the sign-in when authn says the computer is a team's", async () => {
-    const opened = await openInventory("team");
-    await refusedOpen();
+    signInSocket.fireClose(1006, "drop");
+    await vi.advanceTimersToNextTimerAsync();
     await vi.waitFor(() =>
-      expect(
-        FakeNativeWebSocket.instances.length >= 2 ||
-          opened.statuses.includes("closed"),
-      ).toBe(true),
+      expect(FakeNativeWebSocket.instances).toHaveLength(3),
     );
-    expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
-    expect(sentTokens()).toEqual([HOST_TOKEN]);
+    const again = FakeNativeWebSocket.instances[2];
+    if (again === undefined) throw new Error("redial missing");
+    again.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(again, "open")).toHaveLength(1),
+    );
+    again.fireMessage(releasedRefusal());
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(4),
+    );
+    const secondSignIn = FakeNativeWebSocket.instances[3];
+    if (secondSignIn === undefined) throw new Error("second sign-in missing");
+    secondSignIn.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(secondSignIn, "open")).toHaveLength(1),
+    );
+    expect(sentTokens()).toEqual([
+      HOST_TOKEN,
+      SIGN_IN_TOKEN,
+      HOST_TOKEN,
+      SIGN_IN_TOKEN,
+    ]);
+    expect(authnRequests).toEqual([]);
     opened.close();
   });
 
-  it("keeps the next person's sign-in off a host the previous person admitted", async () => {
+  it("never sends the sign-in when the host names its reason for the host-only token", async () => {
+    // A named reason lives in process memory for the host id, so no other test
+    // dials this one.
+    const opened = await openInventory(undefined, CURRENT_HOST_NAMING_REASON);
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(1),
+    );
+    const socket = FakeNativeWebSocket.instances[0];
+    if (socket === undefined) throw new Error("inventory socket missing");
+    socket.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(socket, "open")).toHaveLength(1),
+    );
+    socket.fireMessage(notAdmittedRefusal());
+    await vi.waitFor(() => expect(opened.statuses).toContain("reconnecting"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
+    expect(sentTokens()[0]).toBe(HOST_TOKEN);
+    expect(authnRequests).toEqual([]);
+    opened.close();
+  });
+
+  it("re-presents a refused held token after an unknown registry row declines the probe", async () => {
+    const opened = await openInventory(
+      Date.now() - 11 * 60_000,
+      CURRENT_HOST_WHILE_AUTHN_OFFLINE,
+    );
+    await vi.waitFor(() => expect(opened.mintCalls()).toBeGreaterThan(0));
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(1),
+    );
+    const first = FakeNativeWebSocket.instances[0];
+    if (first === undefined) throw new Error("inventory socket missing");
+    first.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(first, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(first, "open")[0]?.token).toBe(HOST_TOKEN);
+    first.fireMessage(expiredTokenRefusal());
+    await vi.advanceTimersToNextTimerAsync();
+
+    const probe = await vi.waitFor(() => {
+      expect(FakeNativeWebSocket.instances).toHaveLength(2);
+      return FakeNativeWebSocket.instances[1];
+    });
+    if (probe === undefined) throw new Error("probe socket missing");
+    probe.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(probe, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(probe, "open")[0]?.token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(notAdmittedRefusal());
+    await vi.advanceTimersToNextTimerAsync();
+
+    const admitted = await vi.waitFor(() => {
+      expect(FakeNativeWebSocket.instances).toHaveLength(3);
+      return FakeNativeWebSocket.instances[2];
+    });
+    if (admitted === undefined) throw new Error("held-token socket missing");
+    admitted.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(admitted, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(admitted, "open")[0]?.token).toBe(HOST_TOKEN);
+    admitted.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() => expect(opened.statuses).toContain("open"));
+    expect(sentTokens()).toEqual([HOST_TOKEN, NO_HOST_TOKEN_PROBE, HOST_TOKEN]);
+    opened.close();
+  });
+
+  it("keeps the next person's sign-in off a previously admitted host that invites it", async () => {
     const first = await openInventoryFor({
       userId: USER_A,
       signInToken: SIGN_IN_TOKEN,
       hostToken: HOST_TOKEN,
-      rowOwnerId: USER_A,
     });
     await refusedOpen();
     await vi.waitFor(() =>
@@ -240,7 +400,6 @@ describe("desktop inventory push against a released local host", () => {
       userId: USER_B,
       signInToken: SIGN_IN_B,
       hostToken: HOST_TOKEN_B,
-      rowOwnerId: USER_A,
     });
     await vi.waitFor(() =>
       expect(FakeNativeWebSocket.instances).toHaveLength(1),
@@ -252,7 +411,7 @@ describe("desktop inventory push against a released local host", () => {
       expect(sentFramesOfKind(dial, "open")).toHaveLength(1),
     );
     expect(sentFramesOfKind(dial, "open")[0]?.token).toBe(HOST_TOKEN_B);
-    dial.fireMessage(releasedRefusal());
+    dial.fireMessage(ownerSignInRefusal());
     await vi.waitFor(() => {
       const redial = FakeNativeWebSocket.instances[1];
       if (
@@ -271,45 +430,100 @@ describe("desktop inventory push against a released local host", () => {
     expect(sentTokens()).not.toContain(SIGN_IN_B);
     second.close();
   });
+
+  it("lets person B probe after person A's probe was declined", async () => {
+    const first = await openInventoryFor({
+      hostId: CURRENT_HOST_FOR_USER_SWITCH,
+      userId: USER_A,
+      signInToken: SIGN_IN_TOKEN,
+      hostToken: null,
+    });
+    await vi.waitFor(() => expect(first.mintCalls()).toBeGreaterThan(0));
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(1),
+    );
+    const firstProbe = FakeNativeWebSocket.instances[0];
+    if (firstProbe === undefined) throw new Error("first probe dial missing");
+    firstProbe.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(firstProbe, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(firstProbe, "open")[0]?.token).toBe(
+      NO_HOST_TOKEN_PROBE,
+    );
+    firstProbe.fireMessage(notAdmittedRefusal());
+    await vi.waitFor(() =>
+      expect(
+        processReleasedHosts.probeDeclined(
+          USER_A,
+          CURRENT_HOST_FOR_USER_SWITCH,
+        ),
+      ).toBe(true),
+    );
+    first.close();
+    await settle();
+    FakeNativeWebSocket.instances.length = 0;
+
+    const next = await openInventoryFor({
+      hostId: CURRENT_HOST_FOR_USER_SWITCH,
+      userId: USER_B,
+      signInToken: SIGN_IN_B,
+      hostToken: null,
+    });
+    await vi.waitFor(() => expect(next.mintCalls()).toBeGreaterThan(0));
+    await vi.advanceTimersToNextTimerAsync();
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(1),
+    );
+    const nextProbe = FakeNativeWebSocket.instances[0];
+    if (nextProbe === undefined) throw new Error("person B probe dial missing");
+    nextProbe.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(nextProbe, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(nextProbe, "open")[0]?.token).toBe(
+      NO_HOST_TOKEN_PROBE,
+    );
+    nextProbe.fireMessage(ownerSignInRefusal());
+    await vi.waitFor(() =>
+      expect(FakeNativeWebSocket.instances).toHaveLength(2),
+    );
+    const invited = FakeNativeWebSocket.instances[1];
+    if (invited === undefined) throw new Error("person B sign-in dial missing");
+    invited.fireOpen();
+    await vi.waitFor(() =>
+      expect(sentFramesOfKind(invited, "open")).toHaveLength(1),
+    );
+    expect(sentFramesOfKind(invited, "open")[0]?.token).toBe(SIGN_IN_B);
+    invited.fireMessage(openAckFrame([], null));
+    await vi.waitFor(() => expect(next.statuses).toContain("open"));
+    expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE, SIGN_IN_B]);
+    next.close();
+  });
 });
 
 async function openInventoryFor(input: {
+  readonly hostId?: string;
   readonly userId: string;
   readonly signInToken: string;
-  readonly hostToken: string;
-  readonly rowOwnerId: string;
+  readonly hostToken: string | null;
 }): Promise<{
   readonly statuses: string[];
+  readonly mintCalls: () => number;
   readonly close: () => void;
 }> {
-  vi.stubGlobal(
-    "fetch",
-    async (request: RequestInfo | URL): Promise<Response> => {
-      const url = new URL(requestUrl(request));
-      if (url.pathname === "/api/v3/hosts") {
-        return new Response(
-          JSON.stringify({
-            hosts: [
-              {
-                hostId: RELEASED_HOST.hostId,
-                owner: { kind: "user", id: input.rowOwnerId },
-                kind: "personal",
-                remoteAccess: false,
-              },
-            ],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }
-      return new Response("unexpected", { status: 500 });
-    },
-  );
+  const hostId = input.hostId ?? RELEASED_HOST.hostId;
+  installSilentAuthn();
   const provider = newProvider();
   signIn(provider, input.userId, input.signInToken);
+  let mintCalls = 0;
   const hostTokens = createHostTokenSource({
     persistence: createMemoryHostTokenPersistence(),
-    mint: () =>
-      Promise.resolve({ kind: "unavailable", detail: "authn offline" }),
+    mint: () => {
+      mintCalls += 1;
+      return Promise.resolve({ kind: "unavailable", detail: "authn offline" });
+    },
     signIn: (userId) => (userId === input.userId ? input.signInToken : null),
     now: () => Date.now(),
   });
@@ -317,19 +531,20 @@ async function openInventoryFor(input: {
   if (websocketUrl === null) {
     throw new Error("the mock local host has no websocket URL");
   }
-  await hostTokens.adopt(
-    input.userId,
-    RELEASED_HOST.hostId,
-    { token: input.hostToken, expiresAtMs: Date.now() + 60_000 },
-    hostTokens.era(input.userId),
-  );
+  if (input.hostToken !== null) {
+    await hostTokens.adopt(
+      input.userId,
+      hostId,
+      { token: input.hostToken, expiresAtMs: Date.now() + 60_000 },
+      hostTokens.era(input.userId),
+    );
+  }
   const endpoint = {
-    hostId: RELEASED_HOST.hostId,
+    hostId,
     websocketUrl,
     version: RELEASED_HOST.version,
   };
   const inventoryClient = createLocalHostInventoryStreamClient({
-    authnBaseUrl: "https://authn.test",
     hostTokens,
     localHost: () => endpoint,
     bearer: liveBearer(provider),
@@ -348,11 +563,14 @@ async function openInventoryFor(input: {
       },
     },
   });
+  const close = (): void => {
+    inventory.close();
+    stream.close("test complete");
+  };
+  activeClosers.push(close);
   return {
     statuses,
-    close: () => {
-      inventory.close();
-      stream.close("test complete");
-    },
+    mintCalls: () => mintCalls,
+    close,
   };
 }
