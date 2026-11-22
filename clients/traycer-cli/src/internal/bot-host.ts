@@ -215,7 +215,7 @@ export async function openLocalStreamClient(): Promise<{
     // or ended while it stays admitted.
     door: {
       refused: () => undefined,
-      admitted: (admittedHostId) => tokens.admitted(admittedHostId),
+      admitted: (instance) => tokens.admitted(instance.hostId),
     },
     clock: null,
     hostCredentialMint: null,

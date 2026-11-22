@@ -1,4 +1,3 @@
-import type { HostInstance } from "../host-transport/released-sign-on";
 import { readAccessTokenExpiryMs } from "./jwt-exp";
 import {
   isUsableHostToken,
@@ -24,12 +23,22 @@ export type HostTokenMintOutcome =
   | { readonly kind: "superseded" };
 
 /**
+ * The host process an ask is for: its host id and the observer's identity for
+ * that process (`null` until one is observed). A `HostInstance` is one; across
+ * the desktop bridge it is the value the window read when it asked.
+ */
+export interface HostMintOwner {
+  readonly hostId: string;
+  readonly observed: string | null;
+}
+
+/**
  * What an `obtain` is asked with: the signal that cancels its mint, and the
- * host process instance it is for (`null`: none).
+ * host process it is for (`null`: none).
  */
 export interface HostTokenAsk {
   readonly signal: AbortSignal | null;
-  readonly owner: HostInstance | null;
+  readonly owner: HostMintOwner | null;
 }
 
 /** How a pair's `obtain` can end without a token. */
@@ -48,23 +57,28 @@ export type HostTokenMintFailure = Exclude<
 export interface HostMintRecords {
   readonly start: () => number;
   readonly record: (
-    owner: HostInstance,
+    owner: HostMintOwner,
     userId: string,
     era: number,
     started: number,
     kind: HostTokenMintOutcome["kind"],
   ) => void;
   readonly lastFailureOf: (
-    owner: HostInstance,
+    owner: HostMintOwner,
     userId: string,
     era: number,
   ) => HostTokenMintFailure | null;
 }
 
+// An observed process's own flight key: the pair's flight key and that process.
+function ownerKey(flightKey: string, observed: string): string {
+  return `${flightKey}\u0000${observed}`;
+}
+
 export function createHostMintRecords(): HostMintRecords {
   let order = 0;
   const records = new WeakMap<
-    HostInstance,
+    HostMintOwner,
     Map<
       string,
       {
@@ -140,9 +154,11 @@ export interface HostTokenSource {
   /** Every token {@link current} returns for the person, by host id. */
   heldFor(userId: string): ReadonlyMap<string, HostToken>;
   /**
-   * Concurrent asks for one pair by one `owner`, the host's process instance
-   * the ask is for, share one mint; another instance's ask never joins it. An
-   * ask with no owner joins the pair's latest mint and records nothing.
+   * Concurrent asks for one pair share a mint unless they name different
+   * observed processes: an ask for an observed process joins that process's
+   * mint, or else a mint started by an ask naming none (a renewal, or an owner
+   * not yet observed); it never joins another process's. An ask naming none
+   * joins the pair's latest mint. An ask with no owner records nothing.
    */
   obtain(
     userId: string,
@@ -157,7 +173,7 @@ export interface HostTokenSource {
    */
   lastFailureOf(
     userId: string,
-    owner: HostInstance,
+    owner: HostMintOwner,
   ): HostTokenMintFailure | null;
   /** One refresh buys at most one token per host, however many windows ask. */
   renew(userId: string, hostIds: readonly string[]): Promise<HostTokenRenewal>;
@@ -201,24 +217,12 @@ export function createHostTokenSource(deps: {
     },
   );
   const listeners = new Set<(change: HostTokenChange) => void>();
-  // The latest mint per flight key, which an ask with no owner joins, and each
-  // owner's own.
+  // Per flight key: the latest mint, which an ask naming no observed process
+  // joins; the latest mint such an ask started, which any ask joins; and each
+  // observed process's own, under `flightKey\0observed`.
   const latestFlight = new Map<string, Promise<HostTokenMintOutcome>>();
-  const ownedFlights = new WeakMap<
-    HostInstance,
-    Map<string, Promise<HostTokenMintOutcome>>
-  >();
-  const flightsOf = (
-    owner: HostInstance | null,
-  ): Map<string, Promise<HostTokenMintOutcome>> => {
-    if (owner === null) return latestFlight;
-    let flights = ownedFlights.get(owner);
-    if (flights === undefined) {
-      flights = new Map();
-      ownedFlights.set(owner, flights);
-    }
-    return flights;
-  };
+  const sharedFlights = new Map<string, Promise<HostTokenMintOutcome>>();
+  const observedFlights = new Map<string, Promise<HostTokenMintOutcome>>();
   // Each pair's minting refresh (its end, never the token), so a refresh mints once per
   // host. Process memory only: a restart mints once more at most.
   const mintedWith = new Map<string, number>();
@@ -271,7 +275,7 @@ export function createHostTokenSource(deps: {
     hostId: string,
     era: number,
     signal: AbortSignal | null,
-    owner: HostInstance | null,
+    observed: string | null,
   ): Promise<HostTokenMintOutcome> => {
     if (eraOf(userId) !== era) return Promise.resolve({ kind: "superseded" });
     const signInToken = signIn?.(userId) ?? null;
@@ -281,8 +285,11 @@ export function createHostTokenSource(deps: {
     // Keyed by refresh and era too: a mint begun before a refresh or a sign-out must
     // not stand in for a later ask.
     const flightKey = `${key}\u0000${mark ?? "unknown"}\u0000${era}`;
-    const flights = flightsOf(owner);
-    const running = flights.get(flightKey);
+    const running =
+      observed === null
+        ? latestFlight.get(flightKey)
+        : (observedFlights.get(ownerKey(flightKey, observed)) ??
+          sharedFlights.get(flightKey));
     if (running !== undefined) return running;
     const attempt = (async (): Promise<HostTokenMintOutcome> => {
       const outcome = await deps.mint(hostId, signInToken, signal);
@@ -295,11 +302,16 @@ export function createHostTokenSource(deps: {
       }
       return outcome;
     })().finally(() => {
-      if (flights.get(flightKey) === attempt) flights.delete(flightKey);
+      if (observed === null) {
+        if (sharedFlights.get(flightKey) === attempt)
+          sharedFlights.delete(flightKey);
+      } else if (observedFlights.get(ownerKey(flightKey, observed)) === attempt)
+        observedFlights.delete(ownerKey(flightKey, observed));
       if (latestFlight.get(flightKey) === attempt)
         latestFlight.delete(flightKey);
     });
-    flights.set(flightKey, attempt);
+    if (observed === null) sharedFlights.set(flightKey, attempt);
+    else observedFlights.set(ownerKey(flightKey, observed), attempt);
     latestFlight.set(flightKey, attempt);
     return attempt;
   };
@@ -319,6 +331,8 @@ export function createHostTokenSource(deps: {
 
     obtain: async (userId, hostId, fresh, { signal, owner }) => {
       const era = eraOf(userId);
+      // The process the ask is for, as observed when it was asked.
+      const observed = owner?.observed ?? null;
       // Its place in the order, before the load wait: two asks in one load
       // window never tie.
       const started = records.start();
@@ -336,7 +350,7 @@ export function createHostTokenSource(deps: {
       }
       let outcome: HostTokenMintOutcome;
       try {
-        outcome = await mintOnce(userId, hostId, era, signal, owner);
+        outcome = await mintOnce(userId, hostId, era, signal, observed);
       } catch (cause) {
         // A token that could not be saved leaves none to present, like an
         // unreachable authn: an earlier refusal no longer stands.

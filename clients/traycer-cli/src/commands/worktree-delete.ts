@@ -191,9 +191,9 @@ async function deleteWithHostToken(
     // or ended while it stays admitted.
     door: {
       refused: () => undefined,
-      admitted: (admittedHostId) => {
+      admitted: (instance) => {
         admitted = true;
-        return tokens.admitted(admittedHostId);
+        return tokens.admitted(instance.hostId);
       },
     },
     clock: null,
@@ -424,6 +424,8 @@ function runDeleteCommand(
             error: deleteFailedCliError(reason, null, undefined),
           }),
         onUnsupported: () => finish({ kind: "unsupported" }),
+        // Statuses decide; backoff adds nothing here.
+        onBackoffEntered: () => {},
         onConnectionStatus: ({ status, reason, retryCause }) => {
           preOpen.saw(status);
           if (status === "connecting" || status === "open") return;

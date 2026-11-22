@@ -13,7 +13,7 @@ import type {
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
-import { dialsNow } from "./ws-stream-client";
+import { signalsBackoff } from "./i-stream-session";
 
 /**
  * Typed handlers for a `worktree.deleteByPath` session. Frames flow
@@ -51,11 +51,15 @@ export interface WorktreeDeleteStreamCallbacks {
    * Connection-status changes. `reason` is non-null only on the `closed`
    * transition (e.g. an unreachable host, or a fatal handshake error). A
    * `reconnecting` or `closed` here came before the request was sent, so no
-   * deletion was started. During one, the client's
-   * {@link WorktreeDeleteStreamClient.dialsNow} says whether the stream dials
-   * again at once.
+   * deletion was started.
    */
   readonly onConnectionStatus: StatusChangeHandler;
+  /**
+   * Before the request was sent: the transport put the session on a delayed
+   * redial (it entered backoff). Nothing was started. A `reconnecting` it
+   * follows at once with its next dial does not report this.
+   */
+  readonly onBackoffEntered: () => void;
 }
 
 export interface WorktreeDeleteStreamClientOptions {
@@ -129,15 +133,14 @@ export class WorktreeDeleteStreamClient {
       }
       this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
-  }
-
-  /**
-   * Read during a status change: whether it is a `reconnecting` the stream
-   * follows at once by another dial (`dialsNow`). One without it is the
-   * stream entering backoff.
-   */
-  dialsNow(): boolean {
-    return dialsNow(this.session);
+    // A transport that does not report backoff never does; its sessions end
+    // with `closed`.
+    const session = this.session;
+    if (signalsBackoff(session))
+      session.onBackoffEntered(() => {
+        if (this.closed || session.hasSentOpenRequest()) return;
+        this.callbacks.onBackoffEntered();
+      });
   }
 
   /**

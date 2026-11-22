@@ -18,6 +18,8 @@ function nextHostId(): string {
 const SIGN_IN = "monitor-test-sign-in";
 const TEAM_REFUSAL = "the host has not admitted this sign-in";
 const WAIT = { timeout: 2_000, interval: 10 };
+/** When the proactive upkeep refreshes the sign-in, after the command starts (never before 60 s). */
+const UPKEEP_FIRES_AT_MS = 68_500;
 
 const monitorHarness = vi.hoisted(() => {
   class ScriptSocket {
@@ -65,6 +67,9 @@ const monitorHarness = vi.hoisted(() => {
     printed: [] as string[],
     /** The host each host-only mint request authn took was for, in the order asked. */
     grantHosts: [] as string[],
+    /** The sign-in each of those requests carried, and the fake time each began. */
+    grantSignIns: [] as string[],
+    grantStartedAt: [] as number[],
     /** The exit code each `finishAndExit` the command reached was given. */
     exits: [] as number[],
     state: {
@@ -76,6 +81,16 @@ const monitorHarness = vi.hoisted(() => {
       /** The host process the pid file names; a new one is a restarted host. */
       pid: 1,
       startedAt: "2026-01-01T00:00:00.000Z",
+      /** The stored sign-in the command reads; set to `SIGN_IN` before each test. */
+      signIn: "",
+      /** What the scripted store answers its first `rotate`: a sibling's pair adopted, or a real refresh. */
+      firstRotation: "superseded" as "superseded" | "applied",
+      /** The sign-in a real refresh stores. */
+      refreshedSignIn: "refreshed-token",
+      /** When set, the stored sign-in is refreshed by the real revalidator against the scripted store below. */
+      realRevalidator: false,
+      /** What the scripted credentials store answered each `rotate`, in order: the first is a sibling's pair adopted, later ones refresh. */
+      rotations: [] as string[],
       /** What refreshing the stored sign-in answers. */
       refresh: "network-error" as "network-error" | "rotated" | "rejected",
       /** What authn answers a host-token mint with. */
@@ -107,7 +122,7 @@ vi.mock("../../internal/host-auth", async (importOriginal) => {
   return {
     ...actual,
     resolveHostAuth: async () => ({
-      token: SIGN_IN,
+      token: monitorHarness.state.signIn,
       authnBaseUrl: "https://authn.test",
       userId: USER_ID,
     }),
@@ -156,10 +171,32 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     await importOriginal<typeof import("../../store/credentials-store")>();
   return {
     ...actual,
-    createCliCredentialsStore: () => ({ dispose: () => undefined }),
-    createStoreBackedRevalidator: () => ({
-      revalidateCurrentContext: async () => monitorHarness.state.refresh,
+    createCliCredentialsStore: () => ({
+      dispose: () => undefined,
+      rotate: async () => {
+        const adopted =
+          monitorHarness.state.rotations.length === 0 &&
+          monitorHarness.state.firstRotation === "superseded";
+        monitorHarness.state.rotations.push(adopted ? "superseded" : "applied");
+        return {
+          outcome: adopted ? "superseded" : "applied",
+          credentials: {
+            token: adopted
+              ? "adopted-expired-token"
+              : monitorHarness.state.refreshedSignIn,
+          },
+        };
+      },
     }),
+    createStoreBackedRevalidator: (
+      args: Parameters<typeof actual.createStoreBackedRevalidator>[0],
+    ) =>
+      monitorHarness.state.realRevalidator
+        ? actual.createStoreBackedRevalidator(args)
+        : {
+            revalidateCurrentContext: async () => monitorHarness.state.refresh,
+            rotateSignIn: async () => monitorHarness.state.refresh,
+          },
   };
 });
 
@@ -367,10 +404,17 @@ beforeEach(() => {
   monitorHarness.printed.splice(0);
   monitorHarness.exits.splice(0);
   monitorHarness.grantHosts.splice(0);
+  monitorHarness.grantSignIns.splice(0);
+  monitorHarness.grantStartedAt.splice(0);
   monitorHarness.state.hostTokenTable = new Map();
   monitorHarness.state.reader = new AbortController();
   monitorHarness.state.grants = 0;
   monitorHarness.state.refresh = "network-error";
+  monitorHarness.state.realRevalidator = false;
+  monitorHarness.state.rotations.splice(0);
+  monitorHarness.state.signIn = SIGN_IN;
+  monitorHarness.state.firstRotation = "superseded";
+  monitorHarness.state.refreshedSignIn = "refreshed-token";
   monitorHarness.state.pid = 1;
   monitorHarness.state.startedAt = "2026-01-01T00:00:00.000Z";
   monitorHarness.state.hostId = nextHostId();
@@ -390,6 +434,13 @@ beforeEach(() => {
         monitorHarness.grantHosts.push(
           decodeURIComponent(url.pathname.split("/")[4] ?? ""),
         );
+        monitorHarness.grantSignIns.push(
+          (new Headers(init?.headers).get("authorization") ?? "").replace(
+            "Bearer ",
+            "",
+          ),
+        );
+        monitorHarness.grantStartedAt.push(Date.now());
         return monitorHarness.state.grantResponse();
       }
       if (method === "GET" && url.pathname.startsWith("/api/v3/hosts"))
@@ -1015,6 +1066,170 @@ describe("traycer monitor local released-host sign-in", () => {
       expect(ended?.error).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
     });
 
+    it("re-subscribes only after the ordinary delay when a verdict arrives from a replaced process", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      const mints = holdMints();
+      startMonitor();
+      const earlier = await socketAt(0);
+      expect((await readOpen(earlier)).token).toBe("held-token");
+      earlier.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(1),
+        WAIT,
+      );
+      await replaceHostProcess();
+
+      mints.answer(0, grantedToken("fresh-1"));
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(monitorHarness.sockets).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await socketAt(1);
+      expect(await outcomeOf()).toBe("running");
+    });
+
+    it("reaches the refresh bound through three replaced processes, every re-subscribe paced", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      const mints = holdMints();
+      startMonitor();
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const socket = await socketAt(attempt);
+        await readOpen(socket);
+        socket.fireFrame(fatal("token_expired", "host token expired"));
+        await vi.waitFor(
+          () => expect(monitorHarness.grantHosts).toHaveLength(attempt + 1),
+          WAIT,
+        );
+        await replaceHostProcess();
+        mints.answer(attempt, grantedToken(`fresh-${attempt + 1}`));
+        if (attempt < 3) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(monitorHarness.sockets).toHaveLength(attempt + 1);
+          // The re-subscribe comes after the ordinary 5 s delay.
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+      }
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({
+        message: expect.stringContaining("session rejected after 4 refreshes"),
+      });
+    });
+
+    it("ends for a replaced process when the person's sign-in itself is rejected", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      monitorHarness.state.refresh = "rejected";
+      const mints = holdMints();
+      startMonitor();
+      const earlier = await socketAt(0);
+      expect((await readOpen(earlier)).token).toBe("held-token");
+      earlier.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(1),
+        WAIT,
+      );
+      await replaceHostProcess();
+
+      mints.answer(0, new Response("rejected", { status: 401 }));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({
+        message: expect.stringContaining("The stored credential was rejected"),
+      });
+    });
+
+    it("does not end when an older mint answers not-a-member after a newer mint, begun on a refreshed sign-in, succeeded", async () => {
+      // The background mints ask with the old sign-in; the proactive upkeep then refreshes
+      // the sign-in and buys a token with the new one, a mint that does not join them.
+      const oldSignIn = expiredJwt(
+        Date.now() + 10 * 60 * 1000 + UPKEEP_FIRES_AT_MS,
+      );
+      const newSignIn = expiredJwt(Date.now() + 8 * 60 * 60 * 1000);
+      monitorHarness.state.signIn = oldSignIn;
+      monitorHarness.state.refreshedSignIn = newSignIn;
+      monitorHarness.state.firstRotation = "applied";
+      monitorHarness.state.realRevalidator = true;
+      const mints = holdMints();
+      const startedAt = Date.now();
+      startMonitor();
+      await socketAt(0);
+      // The old-sign-in mints retry on the stream's own dial cadence (observed at 10 ms,
+      // 10.5 s, 21.5 s, 33.5 s, 47.5 s, growing); the upkeep fires inside the next retry's life.
+      for (
+        let step = 0;
+        step < 400 && !monitorHarness.grantSignIns.includes(newSignIn);
+        step += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(250);
+      }
+      // Each request is told apart by the sign-in it carried; the older one must still be live.
+      const newer = monitorHarness.grantSignIns.indexOf(newSignIn);
+      const older = monitorHarness.grantSignIns
+        .slice(0, Math.max(newer, 0))
+        .lastIndexOf(oldSignIn);
+      expect(newer).toBeGreaterThan(-1);
+      expect(older).toBeGreaterThan(-1);
+      const timeline = monitorHarness.grantSignIns
+        .map(
+          (signIn, index) =>
+            `${signIn === newSignIn ? "new" : "old"}@${(monitorHarness.grantStartedAt[index] ?? 0) - startedAt}ms`,
+        )
+        .join(" ");
+      expect(
+        (monitorHarness.grantStartedAt[newer] ?? 0) -
+          (monitorHarness.grantStartedAt[older] ?? 0),
+        `authn requests: ${timeline}`,
+      ).toBeLessThan(9_000);
+
+      mints.answer(newer, grantedToken("fresh-newer"));
+      await vi.advanceTimersByTimeAsync(1_000);
+      mints.answer(
+        older,
+        new Response(JSON.stringify({ code: "team_membership_required" }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(await outcomeOf()).toBe("running");
+    });
+
+    it("subscribes to the new endpoint, and does not end, when the endpoint changes host id during a pending recovery that is then rejected", async () => {
+      const hostA = monitorHarness.state.hostId;
+      const hostB = nextHostId();
+      holdUsableTokens(
+        new Map([
+          [hostA, "token-a"],
+          [hostB, "token-b"],
+        ]),
+      );
+      const mints = holdMints();
+      startMonitor();
+      const toA = await socketAt(0);
+      expect((await readOpen(toA)).token).toBe("token-a");
+      toA.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toEqual([hostA]),
+        WAIT,
+      );
+      monitorHarness.state.hostId = hostB;
+      await letPollRead();
+
+      mints.answer(
+        0,
+        new Response(JSON.stringify({ code: "team_membership_required" }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(await outcomeOf()).toBe("running");
+      const toB = await socketAt(1);
+      expect((await readOpen(toB)).token).toBe("token-b");
+    });
+
     it("gives the replacement a fresh-mint recovery of its own after the earlier process's was spent", async () => {
       holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
       monitorHarness.state.grantResponse = () =>
@@ -1234,6 +1449,23 @@ describe("traycer monitor local released-host sign-in", () => {
         "[traycer monitor] fatal: The stored credential was rejected. Run `traycer login` to re-authenticate.\n",
       ]);
       expect(monitorHarness.exits).toEqual([1]);
+    });
+
+    it("refreshes the sign-in once for real after a sibling's already-rotated pair was adopted and refused", async () => {
+      monitorHarness.state.realRevalidator = true;
+      startMonitorCommand();
+
+      await refuseEveryOpenBare(RELEASED_REASONS[0]);
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      // The sibling's pair is adopted (authn was not asked), and only the next refusal spends a refresh.
+      expect(monitorHarness.state.rotations.slice(0, 2)).toEqual([
+        "superseded",
+        "applied",
+      ]);
+      expect(monitorHarness.sockets.map(openToken)).toContain(
+        "refreshed-token",
+      );
     });
 
     // A guard: it passes at 91ad79a0c. The earlier process takes the released way

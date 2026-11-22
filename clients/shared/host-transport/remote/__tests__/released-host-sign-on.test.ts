@@ -773,14 +773,54 @@ describe("released personal host, remote door", () => {
     try {
       session.start();
       await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      // The rotation to sign-in-1 is progress; the two laps after its first
+      // open present it again and make none.
       expect(relay.openBearers).toEqual([
         "",
         SIGN_IN,
         "sign-in-1",
         "sign-in-1",
+        "sign-in-1",
       ]);
       expect(refreshes).toBe(1);
       expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it("refreshes the sign-in for real on the next refusal when the first refresh only adopted a sibling's rotation", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door } = recordingDoor();
+    relay.decideOpen = () => ({ kind: "fatal", details: releasedRefusal() });
+    const base = signOnFor(PERSONAL_ROW, signIn);
+    if (base === null) throw new Error("personal row must open released");
+    let refreshCalls = 0;
+    // The first answer is a sibling's rotation taken from the store, which
+    // authn did not answer for this sequence; the second is authn's own.
+    const refresh = (): Promise<RevalidateOutcome | "adopted"> => {
+      refreshCalls += 1;
+      signIn.rotate(`sign-in-${refreshCalls}`);
+      return Promise.resolve(refreshCalls === 1 ? "adopted" : "rotated");
+    };
+    const session = openSession(
+      relay,
+      signIn,
+      { ...base, recovery: { revalidateForReconnect: refresh } },
+      door,
+    );
+    try {
+      session.start();
+      // The second refusal's refresh answers `rotated`, and the open after it
+      // presents the sign-in it rotated to.
+      await vi.waitFor(
+        () => expect(relay.openBearers).toContain("sign-in-2"),
+        WAIT,
+      );
+      expect(refreshCalls).toBe(2);
     } finally {
       session.close();
       vi.useRealTimers();

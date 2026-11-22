@@ -37,10 +37,17 @@ export type HostDoorStateKind =
  */
 export type DoorAdmissionRelease = () => void;
 
-/** A stream's door: every answer names the host its socket was selected for. */
+/**
+ * A stream's or a unary client's door: every answer names the host instance
+ * its socket was dialed to. A transport reaches it only through
+ * {@link instanceDoor}, so every instance it is given is current.
+ */
 export interface StreamDoorObserver {
-  readonly admitted: (hostId: string) => DoorAdmissionRelease;
-  readonly refused: (details: FatalErrorDetails, hostId: string) => void;
+  readonly admitted: (instance: HostInstance) => DoorAdmissionRelease;
+  readonly refused: (
+    details: FatalErrorDetails,
+    instance: HostInstance,
+  ) => void;
 }
 
 /** One host's door: a unary call's (`doorFor`), or a remote session's. */
@@ -78,11 +85,9 @@ export function instanceDoor(
 ): InstanceDoor {
   return {
     admitted: (instance) =>
-      memory.isCurrent(instance)
-        ? door.admitted(instance.hostId)
-        : NO_ADMISSION,
+      memory.isCurrent(instance) ? door.admitted(instance) : NO_ADMISSION,
     refused: (details, instance) => {
-      if (memory.isCurrent(instance)) door.refused(details, instance.hostId);
+      if (memory.isCurrent(instance)) door.refused(details, instance);
     },
   };
 }

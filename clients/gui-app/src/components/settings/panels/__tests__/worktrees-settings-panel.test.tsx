@@ -308,7 +308,6 @@ vi.mock(
                 retryCause: null,
                 continuity: null,
                 startSent: status !== "connecting",
-                dialsNow: false,
               }),
           };
           streamMock.callbacksByPath.set(path, perTarget);
@@ -2918,7 +2917,6 @@ describe("WorktreesList delete flow", () => {
         retryCause: null,
         continuity: null,
         startSent: true,
-        dialsNow: false,
       });
     });
 
@@ -2940,7 +2938,6 @@ describe("WorktreesList delete flow", () => {
         retryCause: null,
         continuity: null,
         startSent: false,
-        dialsNow: false,
       });
     });
 

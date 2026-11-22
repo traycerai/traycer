@@ -24,6 +24,7 @@ import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import {
   defineRpcContract,
   defineVersionedRpcRegistry,
+  UNARY_CAPABILITY_PERSISTENT_SESSION,
 } from "@traycer/protocol/framework/index";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -42,6 +43,13 @@ const HOST_TOKEN = "held-host-token";
 function fieldOf(value: object, key: string): unknown {
   const found: unknown = Reflect.get(value, key);
   return found;
+}
+
+function frameOf(raw: string): object {
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null)
+    throw new Error("the frame was not an object");
+  return parsed;
 }
 
 /** Lets queued promise work and zero-delay timers run, on real timers. */
@@ -102,6 +110,20 @@ function notAdmittedRefusal(): string {
       code: "UNAUTHORIZED",
       reason: "current-host-refusal",
       doorReason: "not_admitted",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
+function membershipRemovedRefusal(): string {
+  return JSON.stringify({
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "current-host-refusal",
+      doorReason: "membership_removed",
       retryable: false,
       incompatibleMethods: null,
       upgradeGuidance: null,
@@ -461,6 +483,84 @@ describe("a unary call's reports to the app's door", () => {
       if (outcome.kind !== "rejected") throw new Error("call was admitted");
       expect(outcome.error).toHaveProperty("message", NO_HOST_TOKEN_MESSAGE);
       expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
+    });
+  });
+
+  describe("an answer from a host process that was since replaced", () => {
+    it("starts no revalidation and raises no state when it refuses the held token as not admitted", async () => {
+      const hostId = "unary-stale-not-admitted";
+      processReleasedHosts.observeInstance(hostId, "100");
+      const mints = heldMints();
+      await mints.source.adopt(
+        USER_A,
+        hostId,
+        { token: HOST_TOKEN, expiresAtMs: Date.now() + 3_600_000 },
+        mints.source.era(USER_A),
+      );
+      let revalidations = 0;
+      const driven = begin(personal(hostId), mints.source, {
+        revalidateForReconnect: () => {
+          revalidations += 1;
+          return Promise.resolve("rotated");
+        },
+      });
+      expect(await answerDial(0, null)).toBe(HOST_TOKEN);
+      processReleasedHosts.observeInstance(hostId, "200");
+      FakeNativeWebSocket.instances[0].fireMessage(notAdmittedRefusal());
+      await vi.waitFor(() =>
+        expect(
+          driven.settled() || FakeNativeWebSocket.instances.length > 1,
+        ).toBe(true),
+      );
+      expect(revalidations).toBe(0);
+      expect(mints.asked()).toBe(0);
+      expect(hostDoorStateFor(hostId)).toBeNull();
+      expect(FakeNativeWebSocket.instances.length).toBeGreaterThan(1);
+      expect(driven.settled()).toBe(false);
+    });
+
+    it("never hides the replacement's refusal behind a connection its predecessor was admitted on and never closed", async () => {
+      const hostId = "unary-stale-admission";
+      processReleasedHosts.observeInstance(hostId, "100");
+      const first = begin(
+        personal(hostId),
+        await heldTokenSource(hostId),
+        null,
+      );
+      expect(await answerDial(0, null)).toBe(HOST_TOKEN);
+      const predecessor = FakeNativeWebSocket.instances[0];
+      const open = frameOf(predecessor.sent[0]);
+      predecessor.fireMessage(
+        JSON.stringify({
+          kind: "openAck",
+          manifest: fieldOf(open, "manifest"),
+          optionalManifest: fieldOf(open, "optionalManifest"),
+          capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(predecessor.sent.length).toBeGreaterThanOrEqual(2),
+      );
+      const request = frameOf(predecessor.sent[1]);
+      predecessor.fireMessage(
+        JSON.stringify({
+          kind: "response",
+          requestId: fieldOf(request, "requestId"),
+          method: fieldOf(request, "method"),
+          schemaVersion: fieldOf(request, "schemaVersion"),
+          result: { echoed: "hi" },
+          error: null,
+        }),
+      );
+      expect(await first.call).toMatchObject({ kind: "fulfilled" });
+
+      // The predecessor's socket stays open: its close never arrives.
+      processReleasedHosts.observeInstance(hostId, "200");
+      begin(personal(hostId), await heldTokenSource(hostId), null);
+      expect(await answerDial(1, membershipRemovedRefusal())).toBe(HOST_TOKEN);
+      await vi.waitFor(() =>
+        expect(hostDoorStateFor(hostId)?.kind).toBe("membership-removed"),
+      );
     });
   });
 

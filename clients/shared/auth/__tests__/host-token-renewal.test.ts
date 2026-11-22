@@ -7,6 +7,7 @@ import {
   hostTokenBearerFor,
   hostTokenRevalidator,
   hostTokenStreamAuth,
+  hostTokenUnaryRevalidator,
   trackHostTokenMints,
   type HostTokenAccess,
 } from "../host-token-lease";
@@ -824,7 +825,7 @@ describe("a session recovery's sign-in refresh across an admission", () => {
       refreshRequests,
       refused: () =>
         stream.auth(() => true).revalidateRefused(REFUSED_NOT_ADMITTED),
-      admitted: () => stream.door.admitted(HOST_ID),
+      admitted: () => stream.door.admitted(hosts.currentInstance(HOST_ID)),
     };
   }
 
@@ -855,5 +856,142 @@ describe("a session recovery's sign-in refresh across an admission", () => {
     rig.refreshRequests[1]("network-error");
     rig.refreshRequests[0]("network-error");
     await Promise.all([older, newer]);
+  });
+});
+
+describe("a recovery's bounds across host process instances", () => {
+  const HOST_ID = "computer-recovery-replaced";
+  const REFUSED_NOT_ADMITTED: FatalErrorDetails = {
+    code: "UNAUTHORIZED",
+    reason: "current-host-refusal",
+    doorReason: "not_admitted",
+    retryable: false,
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  /** A source holding a token for the computer, whose every mint buys the next one. */
+  async function sourceHoldingAToken() {
+    const mints: string[] = [];
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: (hostId) => {
+        mints.push(hostId);
+        const outcome: HostTokenMintOutcome = {
+          kind: "ok",
+          token: {
+            token: `host-token-${mints.length}`,
+            expiresAtMs: Date.now() + 3_600_000,
+          },
+        };
+        return Promise.resolve(outcome);
+      },
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => Date.now(),
+    });
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      { token: "held-host-token", expiresAtMs: Date.now() + 3_600_000 },
+      source.era(USER_ID),
+    );
+    return { source, mints };
+  }
+
+  it("asks authn again for the replacement process's first not_admitted refusal, after the earlier process's refusal was recovered", async () => {
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(HOST_ID, "process-a");
+    const { source, mints } = await sourceHoldingAToken();
+    const reports: string[] = [];
+    const stream = hostTokenStreamAuth(
+      {
+        tokens: trackHostTokenMints(source, hosts),
+        hosts,
+        currentUserId: () => USER_ID,
+        hostId: HOST_ID,
+        signInRecovery: null,
+        onState: (_hostId, state) => reports.push(state),
+        now: () => Date.now(),
+      },
+      null,
+    );
+    const revalidator = stream.auth(() => true);
+    await expect(
+      revalidator.revalidateRefused(REFUSED_NOT_ADMITTED),
+    ).resolves.toBe("rotated");
+    expect(mints).toHaveLength(1);
+
+    hosts.observeInstance(HOST_ID, "process-b");
+
+    await expect(
+      revalidator.revalidateRefused(REFUSED_NOT_ADMITTED),
+    ).resolves.toBe("rotated");
+    expect(mints).toHaveLength(2);
+    expect(reports).toEqual([]);
+  });
+
+  it("asks authn again for a call to the replacement process whose first not_admitted refusal follows the earlier process's recovered one", async () => {
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(HOST_ID, "process-a");
+    const { source, mints } = await sourceHoldingAToken();
+    const reports: string[] = [];
+    const unary = hostTokenUnaryRevalidator({
+      tokens: trackHostTokenMints(source, hosts),
+      hosts,
+      currentUserId: () => USER_ID,
+      signInRecovery: null,
+      onState: (_hostId, state) => reports.push(state),
+      now: () => Date.now(),
+    });
+    const lease = new MutableBearerLease(SIGN_IN_BEFORE, USER_ID);
+    const refusedCall = (): Promise<unknown> =>
+      unary.revalidateRefusedBearer(
+        lease,
+        HOST_ID,
+        REFUSED_NOT_ADMITTED,
+        new AbortController().signal,
+      );
+    await expect(refusedCall()).resolves.toBe("rotated");
+    expect(mints).toHaveLength(1);
+
+    hosts.observeInstance(HOST_ID, "process-b");
+
+    await expect(refusedCall()).resolves.toBe("rotated");
+    expect(mints).toHaveLength(2);
+    expect(reports).toEqual([]);
+  });
+});
+
+describe("an owned ask while a renewal's mint is running", () => {
+  const HOST_ID = "computer-owned-ask-joins-renewal";
+  const RENEWED_TOKEN = {
+    token: "renewed-host-token",
+    expiresAtMs: 10_000_000,
+  };
+
+  it("joins the renewal's mint, and takes its outcome", async () => {
+    const renewalMint = deferred<HostTokenMintOutcome>();
+    const mints: string[] = [];
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: (hostId) => {
+        mints.push(hostId);
+        return renewalMint.promise;
+      },
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => 1_000,
+    });
+    const renewal = source.renew(USER_ID, [HOST_ID]);
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+
+    const ask = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: { hostId: HOST_ID, observed: "100" },
+    });
+    renewalMint.resolve({ kind: "ok", token: RENEWED_TOKEN });
+
+    await expect(ask).resolves.toEqual({ kind: "ok", token: RENEWED_TOKEN });
+    await renewal;
+    expect(mints).toHaveLength(1);
   });
 });

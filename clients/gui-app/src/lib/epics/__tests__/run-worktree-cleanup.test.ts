@@ -21,8 +21,8 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
-// No deadline bounds a `reconnecting` the stream follows at once by another
-// dial: the cleanup waits it out, however long a dial takes.
+// No deadline bounds the cleanup's wait before the request is sent: it settles
+// only when the stream enters backoff (`onBackoffEntered`) or closes.
 const LONG_WAIT_MS = 10 * 60_000;
 
 // The current-host path: ONE `worktree.deleteBatchByPath` command per cleanup.
@@ -47,8 +47,6 @@ const legacyMock = vi.hoisted(() => ({
   stopOwnersByPath: new Map<string, boolean>(),
   /** Paths whose stream fails to open, driving `deleteOneWorktree`'s catch. */
   throwForPaths: new Set<string>(),
-  /** Paths whose stream is, at this moment, about to dial again at once. */
-  dialsNowPaths: new Set<string>(),
   closeCount: 0,
 }));
 
@@ -118,9 +116,6 @@ vi.mock(
           throw new Error("could not open the delete stream");
         }
         legacyMock.callbacksByPath.set(options.worktreePath, options.callbacks);
-      }
-      dialsNow(): boolean {
-        return legacyMock.dialsNowPaths.has(this.worktreePath);
       }
       close(): void {
         legacyMock.closeCount += 1;
@@ -194,13 +189,7 @@ function status(
     retryCause: null,
     continuity,
     startSent,
-    dialsNow: false,
   };
-}
-
-/** The `reconnecting` the stream follows at once by another dial. */
-function dialsNowStatus(): WorktreeDeleteBatchConnectionStatus {
-  return { ...status("reconnecting", null, false), dialsNow: true };
 }
 
 /** Drives the command past the send of its start request. */
@@ -237,7 +226,6 @@ beforeEach(() => {
   legacyMock.callbacksByPath.clear();
   legacyMock.stopOwnersByPath.clear();
   legacyMock.throwForPaths.clear();
-  legacyMock.dialsNowPaths.clear();
   legacyMock.closeCount = 0;
   loggerMock.throwForMessages.clear();
 });
@@ -397,7 +385,7 @@ describe("runWorktreeCleanup on a current host", () => {
     expect(legacyMock.paths).toEqual([]);
   });
 
-  it("waits out a reconnecting the stream follows at once BEFORE the command was sent, with no deadline, and reports the paths failed when the stream enters backoff", async () => {
+  it("ignores every reconnecting BEFORE the command was sent, with no deadline, and reports the paths failed when the stream enters backoff", async () => {
     vi.useFakeTimers();
     try {
       const promise = runTaskCleanup(["/wt/a"]);
@@ -406,43 +394,46 @@ describe("runWorktreeCleanup on a current host", () => {
         settled = true;
       });
       // The subscribe frame never got to a socket, so nothing was attempted and
-      // there is nothing uncertain about it; the stream dials again at once.
-      commandCallbacks().onConnectionStatus(dialsNowStatus());
-      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
-      expect(settled).toBe(false);
-
+      // there is nothing uncertain about it; the stream is still dialing.
       commandCallbacks().onConnectionStatus(
         status("reconnecting", null, false),
       );
+      commandCallbacks().onConnectionStatus(
+        status("reconnecting", null, false),
+      );
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
+      expect(settled).toBe(false);
+
+      commandCallbacks().onBackoffEntered(false);
       await expect(promise).resolves.toEqual({
         removed: [],
         failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
         uncertain: [],
       });
       expect(legacyMock.paths).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("reports a drop on the backoff BEFORE the command was sent as failed at once, with no wait armed", async () => {
-    vi.useFakeTimers();
-    try {
-      const promise = runTaskCleanup(["/wt/a"]);
-      commandCallbacks().onConnectionStatus(
-        status("reconnecting", null, false),
-      );
+  it("ignores the stream entering backoff AFTER the command was sent, and settles it unconfirmed on the later drop", async () => {
+    const promise = runTaskCleanup(["/wt/a"]);
+    let settled = false;
+    void promise.then(() => {
+      settled = true;
+    });
+    commandCallbacks().onConnectionStatus(status("connecting", null, true));
+    commandCallbacks().onBackoffEntered(true);
+    await Promise.resolve();
+    expect(settled).toBe(false);
 
-      await expect(promise).resolves.toEqual({
-        removed: [],
-        failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
-        uncertain: [],
-      });
-      expect(vi.getTimerCount()).toBe(0);
-      expect(legacyMock.paths).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
+    commandCallbacks().onConnectionStatus(status("reconnecting", null, true));
+    await expect(promise).resolves.toEqual({
+      removed: [],
+      failed: [],
+      uncertain: ["/wt/a"],
+    });
   });
 
   it("reports a close BEFORE the command was sent as failed at once", async () => {
@@ -534,7 +525,7 @@ describe("runWorktreeCleanup on an older host", () => {
   // (exactly one subscribe, no reconnect re-run), and let the overall promise
   // settle so the summary toast + cache invalidation still fire. Unchanged by
   // the migration: an older host has no command to keep running without us.
-  it("waits out a per-target stream's redial at once with no deadline, and fails the paths when the stream enters backoff", async () => {
+  it("ignores every reconnecting of a per-target stream before the request, with no deadline, and fails the paths when the stream enters backoff", async () => {
     vi.useFakeTimers();
     try {
       const promise = runTaskCleanup(["/wt/a"]);
@@ -543,7 +534,6 @@ describe("runWorktreeCleanup on an older host", () => {
       void promise.then(() => {
         settled = true;
       });
-      legacyMock.dialsNowPaths.add("/wt/a");
       legacyCallbacksFor("/wt/a").onConnectionStatus(
         "reconnecting",
         null,
@@ -553,13 +543,7 @@ describe("runWorktreeCleanup on an older host", () => {
       await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
       expect(settled).toBe(false);
 
-      legacyMock.dialsNowPaths.clear();
-      legacyCallbacksFor("/wt/a").onConnectionStatus(
-        "reconnecting",
-        null,
-        null,
-        null,
-      );
+      legacyCallbacksFor("/wt/a").onBackoffEntered();
       await expect(promise).resolves.toEqual({
         removed: [],
         failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
@@ -567,30 +551,7 @@ describe("runWorktreeCleanup on an older host", () => {
       });
       expect(legacyMock.paths).toEqual(["/wt/a"]);
       expect(legacyMock.closeCount).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("fails a per-target stream at once, with no wait armed, when it drops on the backoff before the request", async () => {
-    vi.useFakeTimers();
-    try {
-      const promise = runTaskCleanup(["/wt/a"]);
-      await reportUnsupported();
-      legacyCallbacksFor("/wt/a").onConnectionStatus(
-        "reconnecting",
-        null,
-        null,
-        null,
-      );
-
-      await expect(promise).resolves.toEqual({
-        removed: [],
-        failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
-        uncertain: [],
-      });
       expect(vi.getTimerCount()).toBe(0);
-      expect(legacyMock.closeCount).toBe(1);
     } finally {
       vi.useRealTimers();
     }

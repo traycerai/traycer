@@ -55,6 +55,8 @@ export function localUnarySessionKey(
 
 export interface PersistentSocketHandlers {
   onFrame(frame: HostFrame): void;
+  /** A frame from a host process that is no longer the host's (see `openSession`). */
+  onReplacedProcessFrame(frame: HostFrame): void;
   onTransportClosed(message: string, selfInitiated: boolean): void;
 }
 
@@ -200,6 +202,9 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
     this.handlers = {
       onFrame: (frame) => {
         this.onFrame(frame);
+      },
+      onReplacedProcessFrame: (frame) => {
+        this.onReplacedProcessFrame(frame);
       },
       onTransportClosed: (message, selfInitiated) => {
         this.onTransportClosed(message, selfInitiated);
@@ -711,6 +716,40 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
       this.failQueued(null);
     }
     this.retireIfUnoccupied(true);
+  }
+
+  /**
+   * A frame from a host process that is no longer the host's. A call's own
+   * answer that says it ran there (its result, or a method error) is
+   * delivered. A retryable error says its call did not run, and a fatal says
+   * none of the sent calls did: those calls fail before send, carrying none
+   * of the replaced process's refusal, and the session closes on a fatal. Any
+   * other frame is the socket's loss.
+   */
+  private onReplacedProcessFrame(frame: HostFrame): void {
+    if (frame.kind === "response") {
+      if (frame.error === null || frame.error.retryable !== true) {
+        this.onFrame(frame);
+        return;
+      }
+      const entry = this.inFlight.get(frame.requestId);
+      if (entry !== undefined)
+        this.rejectInFlight(entry, notRunOnReplacedProcess(entry));
+      return;
+    }
+    if (frame.kind === "fatalError") {
+      // rejectInFlight pumps the queue: drop the socket first.
+      this.closeSocket();
+      for (const entry of Array.from(this.inFlight.values()))
+        this.rejectInFlight(entry, notRunOnReplacedProcess(entry));
+      this.failQueued(null);
+      this.retireIfUnoccupied(true);
+      return;
+    }
+    this.onPeerLoss(
+      `Unexpected host frame '${frame.kind}' on the persistent session`,
+      false,
+    );
   }
 
   private onTransportClosed(message: string, selfInitiated: boolean): void {
@@ -1385,6 +1424,14 @@ function abortedCall(
     method: call.method,
     mayHaveDispatched,
   });
+}
+
+function notRunOnReplacedProcess(entry: InFlightCall): RetryableTransportError {
+  return preSendRetryable(
+    entry.requestId,
+    entry.method,
+    "Persistent session has closed",
+  );
 }
 
 function preSendRetryable(

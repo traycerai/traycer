@@ -995,6 +995,46 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
     expect(pending.states).toEqual([]);
   });
 
+  it("keeps the held host-only token when a successful relay-pass answer arrives after its session closed and the sessions were retired", async () => {
+    const hostId = "late-ok-after-close";
+    const pending = await startPendingRelayMint(hostId);
+    const { tokens, userId } = pending;
+    await tokens.adopt(
+      userId,
+      hostId,
+      { token: "held-host-token", expiresAtMs: Date.now() + 3_600_000 },
+      tokens.era(userId),
+    );
+    const adopt = vi.spyOn(tokens, "adopt");
+    const eraReads = vi.spyOn(tokens, "era");
+    closeAndRetire(pending.built.session);
+    const readsBeforeAnswer = eraReads.mock.calls.length;
+
+    pending.answer(
+      new Response(
+        JSON.stringify({
+          grant: "late-relay-pass",
+          role: "client",
+          expires_in: 300,
+          session_grant: "late-host-token",
+          session_grant_expires_in: 3_600,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    // The mint re-reads the era once authn answers: the answer has been taken.
+    await vi.waitFor(() => {
+      expect(eraReads.mock.calls.length).toBeGreaterThan(readsBeforeAnswer);
+    }, WAIT);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(adopt).not.toHaveBeenCalled();
+    expect(tokens.current(userId, hostId)?.token).toBe("held-host-token");
+    expect(pending.states).toEqual([]);
+  });
+
   it("drops a successful relay-pass answer that arrives after forgetUser", async () => {
     await assertLateGrantAnswerIsDropped(
       "era-late-ok",

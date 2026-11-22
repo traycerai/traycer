@@ -371,9 +371,11 @@ function untilAdmittedBound(): ReplacementBound {
   };
 }
 
-function sameTokenBound(): ReplacementBound & {
+interface SameTokenBound extends ReplacementBound {
   readonly admitted: (userId: string, token: string) => void;
-} {
+}
+
+function sameTokenBound(): SameTokenBound {
   let minted: { readonly userId: string; readonly token: string } | null = null;
   return {
     final: (userId, held) =>
@@ -456,12 +458,12 @@ export function hostTokenStreamAuth(
   return {
     auth: recovery.forCaller,
     door: {
-      refused: (details, hostId) => {
-        door?.refused(details, hostId);
+      refused: (details, instance) => {
+        door?.refused(details, instance);
       },
-      admitted: (hostId) => {
-        if (hostId === deps.hostId) recovery.admitted();
-        return door?.admitted(hostId) ?? NOTHING_TO_RELEASE;
+      admitted: (instance) => {
+        if (instance.hostId === deps.hostId) recovery.admitted();
+        return door?.admitted(instance) ?? NOTHING_TO_RELEASE;
       },
     },
   };
@@ -478,14 +480,20 @@ export function hostTokenRevalidator(
   return { ...recovery.forCaller(ALWAYS_LIVE), admitted: recovery.admitted };
 }
 
-// A session's recovery sequence: its bounds and its sign-in refresh, until an
-// admission replaces it. A recovery writes only to the sequence it started in,
-// so a late refresh never spends a newer sequence, and a newer sequence never
-// joins it: its own refresh joins at the sign-in's revalidator.
-function recoverySequence(): ReplacementBounds {
+// A session's recovery sequence for one host process: its bounds and its
+// sign-in refresh, until an admission or another process replaces it. A
+// recovery writes only to the sequence it started in, so a late refresh never
+// spends a newer sequence, and a newer sequence never joins it: its own
+// refresh joins at the sign-in's revalidator.
+interface RecoverySequence extends ReplacementBounds {
+  readonly owner: HostInstance;
+}
+
+function recoverySequence(owner: HostInstance): RecoverySequence {
   let spent = false;
   let running: Promise<RevalidateOutcome> | null = null;
   return {
+    owner,
     expiry: untilAdmittedBound(),
     notAdmitted: untilAdmittedBound(),
     refreshSignIn: (recovery) => {
@@ -511,21 +519,26 @@ function boundedRecovery(deps: HostTokenRevalidatorDeps): {
   readonly forCaller: (caller: MintCaller) => HostTokenRevalidator;
   readonly admitted: () => void;
 } {
-  let sequence = recoverySequence();
+  // `null` until the next recovery starts one for the process it recovers.
+  let sequence: RecoverySequence | null = null;
+  const sequenceOf = (owner: HostInstance): ReplacementBounds => {
+    if (sequence?.owner !== owner) sequence = recoverySequence(owner);
+    return sequence;
+  };
   return {
-    forCaller: (caller) => revalidatorWithBounds(deps, () => sequence, caller),
+    forCaller: (caller) => revalidatorWithBounds(deps, sequenceOf, caller),
     admitted: () => {
-      sequence = recoverySequence();
+      sequence = null;
     },
   };
 }
 
-// Each recovery takes the bounds current when it starts and the host's current
-// instance as its mints' owner; every state it reports is for `caller` and
-// that owner, and dropped once either is gone.
+// Each recovery takes the host's current instance as its mints' owner and that
+// owner's bounds; every state it reports is for `caller` and that owner, and
+// dropped once either is gone.
 function revalidatorWithBounds(
   deps: HostTokenRevalidatorDeps,
-  boundsNow: () => ReplacementBounds,
+  boundsOf: (owner: HostInstance) => ReplacementBounds,
   caller: MintCaller,
 ): HostTokenRevalidator {
   const mintFresh = async (
@@ -569,8 +582,8 @@ function revalidatorWithBounds(
     userId: string,
     refusal: FatalErrorDetails | null,
   ): Promise<RevalidateOutcome> => {
-    const bounds = boundsNow();
     const owner = deps.hosts.currentInstance(deps.hostId);
+    const bounds = boundsOf(owner);
     const report = mintReport(deps.onState, deps.hosts, owner, caller);
     const mint = (): Promise<RevalidateOutcome> =>
       mintFresh(userId, false, false, bounds, owner, report);
@@ -640,39 +653,33 @@ export function hostTokenUnaryRevalidator(deps: {
 }): Required<
   Pick<RefusalAwareAuthRevalidator, "revalidateRefusedBearer" | "admissionOf">
 > {
-  interface HostRecovery {
-    // The call whose refusal it recovers is the caller of every mint it starts.
-    readonly forCall: (callSignal: AbortSignal) => HostTokenRevalidator;
-    readonly admitted: (userId: string, token: string) => void;
+  interface ProcessBounds {
+    readonly expiry: SameTokenBound;
+    readonly notAdmitted: SameTokenBound;
+    readonly bounds: ReplacementBounds;
   }
-  const byHost = new Map<string, HostRecovery>();
-  const forHost = (hostId: string): HostRecovery => {
-    let recovery = byHost.get(hostId);
-    if (recovery === undefined) {
+  // Each host process's own bounds, so nothing a replaced process refused
+  // counts against the process that replaced it.
+  const boundsByOwner = new WeakMap<HostInstance, ProcessBounds>();
+  const boundsOf = (owner: HostInstance): ReplacementBounds => {
+    let own = boundsByOwner.get(owner);
+    if (own === undefined) {
       const expiry = sameTokenBound();
       const notAdmitted = sameTokenBound();
       // A unary recovery is one call's: `signInRetried` bounds it to one.
-      const bounds: ReplacementBounds = {
+      own = {
         expiry,
         notAdmitted,
-        refreshSignIn: (signInRecovery) =>
-          signInRecovery.revalidateForReconnect(),
-      };
-      recovery = {
-        forCall: (callSignal) =>
-          revalidatorWithBounds(
-            { ...deps, hostId },
-            () => bounds,
-            () => !callSignal.aborted,
-          ),
-        admitted: (userId, token) => {
-          expiry.admitted(userId, token);
-          notAdmitted.admitted(userId, token);
+        bounds: {
+          expiry,
+          notAdmitted,
+          refreshSignIn: (signInRecovery) =>
+            signInRecovery.revalidateForReconnect(),
         },
       };
-      byHost.set(hostId, recovery);
+      boundsByOwner.set(owner, own);
     }
-    return recovery;
+    return own.bounds;
   };
   return {
     revalidateRefusedBearer: async (expected, hostId, refusal, callSignal) => {
@@ -680,15 +687,24 @@ export function hostTokenUnaryRevalidator(deps: {
       if (userId === null) return "rejected";
       if (userId !== expected.identity.userId) return "superseded";
       if (refusal === null) return "rejected";
-      return forHost(hostId).forCall(callSignal).revalidateRefused(refusal);
+      // The call whose refusal it recovers is the caller of every mint it starts.
+      return revalidatorWithBounds(
+        { ...deps, hostId },
+        boundsOf,
+        () => !callSignal.aborted,
+      ).revalidateRefused(refusal);
     },
-    // Read as the call starts: a token minted while it ran is cleared only by a
-    // call that starts with it.
+    // Read as the call starts, with the host process the call is for: a token
+    // minted while it ran is cleared only by a call that starts with it.
     admissionOf: (expected, hostId) => {
       const userId = expected.identity.userId;
       const held = deps.tokens.current(userId, hostId)?.token ?? null;
+      const owner = deps.hosts.currentInstance(hostId);
       return () => {
-        if (held !== null) byHost.get(hostId)?.admitted(userId, held);
+        if (held === null) return;
+        const own = boundsByOwner.get(owner);
+        own?.expiry.admitted(userId, held);
+        own?.notAdmitted.admitted(userId, held);
       };
     },
   };

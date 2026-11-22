@@ -3,14 +3,12 @@ import {
   isIssuedHostTokenEra,
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
-import type { HostInstance } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type {
   HostToken,
   HostTokenChange,
 } from "@traycer-clients/shared/auth/host-token-store";
 import {
   NO_ISSUED_HOST_TOKEN_ERA,
-  type HostTokenObtainReply,
   type HostTokensBridgeSurface,
 } from "../ipc-contracts/host-token-types";
 
@@ -34,22 +32,6 @@ export function createDesktopHostTokenSource(
   // How this window's asks ended, for every client in it: `lastFailureOf` is a
   // synchronous read, so it cannot ask main.
   const records = createHostMintRecords();
-  // Each pair's ask in flight to main and the instance it is for. Main joins
-  // asks by person and host alone, so an ask for another instance waits for
-  // this one to settle and never reaches main beside it.
-  const asking = new Map<
-    string,
-    { readonly owner: HostInstance | null; readonly settled: Promise<void> }
-  >();
-  const untilOwnTurn = async (
-    key: string,
-    owner: HostInstance | null,
-  ): Promise<void> => {
-    const other = asking.get(key);
-    if (owner === null || other === undefined || other.owner === owner) return;
-    await other.settled;
-    return untilOwnTurn(key, owner);
-  };
   const keyOf = (userId: string, hostId: string): string =>
     `${userId}\u0000${hostId}`;
   const announce = (userId: string, hostId: string): void => {
@@ -150,31 +132,16 @@ export function createDesktopHostTokenSource(
     obtain: async (userId, hostId, fresh, { owner }) => {
       // Its place in the order, before any wait.
       const started = records.start();
-      const key = keyOf(userId, hostId);
-      await untilOwnTurn(key, owner);
       const era = eraOf(userId);
       if (era === NO_ISSUED_HOST_TOKEN_ERA) return { kind: "superseded" };
-      const asked = bridge.obtain(userId, hostId, fresh, era);
-      const entry = {
-        owner,
-        settled: asked.then(
-          () => undefined,
-          () => undefined,
-        ),
-      };
-      asking.set(key, entry);
-      void entry.settled.then(() => {
-        if (asking.get(key) === entry) asking.delete(key);
-      });
-      let reply: HostTokenObtainReply;
-      try {
-        reply = await asked;
-      } catch (cause) {
-        // No token came of it, as when authn cannot be reached.
-        if (owner !== null && stillIn(userId, era, era))
-          records.record(owner, userId, era, started, "unavailable");
-        throw cause;
-      }
+      // Main keeps each observed process's mints apart by this value, read now.
+      const reply = await bridge.obtain(
+        userId,
+        hostId,
+        fresh,
+        era,
+        owner === null ? null : { observed: owner.observed },
+      );
       learn(userId, reply.era);
       if (!stillIn(userId, era, reply.era)) return { kind: "superseded" };
       if (reply.outcome.kind === "ok")

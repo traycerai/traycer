@@ -4,7 +4,7 @@ import type {
   BearerSourceProvider,
   OpenFrameBearerSource,
 } from "../auth/bearer-source";
-import type { StreamAuthRevalidator } from "../auth/bearer-revalidator";
+import type { RevalidateOutcome } from "../auth/bearer-revalidator";
 import {
   authnDidNotAnswer,
   heldWhileAuthnUnreachable,
@@ -13,6 +13,15 @@ import {
 import { isUsableHostToken } from "../auth/host-token-store";
 import { hostDoorStateOfRefusal } from "./host-door-state";
 import type { HostRequestAuthority } from "./host-messenger";
+
+/**
+ * The person's sign-in recovery as a transport sees it. `"adopted"` means a
+ * sibling's rotation was taken from the store, which authn did not answer for
+ * this sequence, so it spends no refresh budget.
+ */
+export interface SignInRecovery {
+  revalidateForReconnect(): Promise<RevalidateOutcome | "adopted">;
+}
 
 /** The directory facts the decision reads; a local row has no `sandbox`. */
 export interface ReleasedSignOnRow {
@@ -34,7 +43,7 @@ export interface ReleasedSignOn {
    */
   readonly mayPresentSignIn: () => boolean;
   /** Recovers a sign-in the released host refused, as a released app did. */
-  readonly recovery: StreamAuthRevalidator | null;
+  readonly recovery: SignInRecovery | null;
   /*
    * Each callback below is asked with the host the socket it answers for was
    * selected for, never with what the caller's endpoint reads now. A builder
@@ -84,6 +93,31 @@ export interface ReleasedSignOn {
  */
 export interface HostInstance {
   readonly hostId: string;
+  /**
+   * The observer's own identity for this process: the CLI's
+   * `${pid}\0${startedAt}`, or the app renderer's and desktop main's pid. It
+   * is `null` until a local observer reports this host id, and always `null`
+   * for a relay-only host. It is read live and changes at most once, from
+   * `null` to the first observation, which this instance adopts. A later,
+   * different observation makes a new instance.
+   */
+  readonly observed: string | null;
+}
+
+/** The only implementation: the memory alone builds instances, and only it adopts the first observation. */
+class ObservedHostInstance implements HostInstance {
+  readonly hostId: string;
+  private current: string | null;
+  constructor(hostId: string, observed: string | null) {
+    this.hostId = hostId;
+    this.current = observed;
+  }
+  get observed(): string | null {
+    return this.current;
+  }
+  adopt(observed: string): void {
+    this.current = observed;
+  }
 }
 
 /** Opaque: an invitation as its attempt heard it. Only `invitationHeard` makes one. */
@@ -192,11 +226,8 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
   let person: string | null = null;
   /** Replaced by `forgetAll`, so every released and declined mark of the earlier person ends. */
   let personEra: object = {};
-  /** Per host id: its current instance and the observer's identity for it, `null` until observed. */
-  const instances = new Map<
-    string,
-    { readonly instance: HostInstance; observed: string | null }
-  >();
+  /** Per host id: its current instance. */
+  const instances = new Map<string, ObservedHostInstance>();
   const marks = new WeakMap<HostInstance, InstanceMarks>();
   const marksOf = (instance: HostInstance): InstanceMarks => {
     const known = marks.get(instance);
@@ -213,17 +244,17 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
   };
   const currentInstance = (hostId: string): HostInstance => {
     const known = instances.get(hostId);
-    if (known !== undefined) return known.instance;
-    const instance: HostInstance = { hostId };
-    instances.set(hostId, { instance, observed: null });
+    if (known !== undefined) return known;
+    const instance = new ObservedHostInstance(hostId, null);
+    instances.set(hostId, instance);
     return instance;
   };
   const isCurrent = (instance: HostInstance): boolean =>
-    instances.get(instance.hostId)?.instance === instance;
+    instances.get(instance.hostId) === instance;
   /** The current instance's marks, or `null` for a host id never read. */
   const currentMarks = (hostId: string): InstanceMarks | null => {
     const known = instances.get(hostId);
-    return known === undefined ? null : (marks.get(known.instance) ?? null);
+    return known === undefined ? null : (marks.get(known) ?? null);
   };
   const forgetAll = (): void => {
     person = null;
@@ -237,17 +268,17 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
     currentInstance,
     isCurrent,
     observeInstance: (hostId, observed) => {
-      const entry = instances.get(hostId);
-      if (entry === undefined) {
-        instances.set(hostId, { instance: { hostId }, observed });
+      const known = instances.get(hostId);
+      if (known === undefined) {
+        instances.set(hostId, new ObservedHostInstance(hostId, observed));
         return;
       }
-      if (entry.observed === null) {
-        entry.observed = observed;
+      if (known.observed === null) {
+        known.adopt(observed);
         return;
       }
-      if (entry.observed === observed) return;
-      instances.set(hostId, { instance: { hostId }, observed });
+      if (known.observed === observed) return;
+      instances.set(hostId, new ObservedHostInstance(hostId, observed));
     },
     opensReleasedWay: (userId, hostId) => {
       if (person !== userId) forgetAll();
@@ -300,6 +331,57 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
     },
     forgetAll,
   };
+}
+
+/** Who a frame carrying the person's sign-in is written for. Each kind names what makes it stale. */
+export type SignInAuthority =
+  /** This dial sequence's own bare refusal showed the released level. */
+  | { readonly kind: "released"; readonly owner: HostInstance }
+  /** The relay's memory that this host admitted this person's sign-in. */
+  | { readonly kind: "remembered"; readonly owner: HostInstance }
+  /** A current host's `owner_sign_in`, as the attempt heard it. */
+  | { readonly kind: "invited"; readonly invitation: InvitationMark };
+
+/** Local, synchronous reads only, asked again at each write. */
+export interface SignInWriteCheck {
+  readonly hosts: Pick<
+    ReleasedHostMemory,
+    "isCurrent" | "namedReason" | "invitationWithdrawn"
+  >;
+  /**
+   * The row rule, read now: whether this host's row may be handed the
+   * sign-in. A surface that can read the row only by an await awaits it
+   * before asking, and writes with no await after.
+   */
+  readonly rowAllows: () => boolean;
+  /** Asked only for an invited OPEN: authn did not answer the mint and no host-only token can be presented. */
+  readonly ownerSignInEligible: (hostId: string) => boolean;
+}
+
+/**
+ * Whether a frame carrying the person's sign-in may be written now: an OPEN,
+ * a credential update or a pooled request frame. Nothing may be awaited
+ * between this answer and the write. `atOpen` is true for the OPEN only. A
+ * definitive mint result that lands before the invited OPEN wins, and after
+ * that OPEN an invited sign-in is not re-checked for eligibility.
+ */
+export function signInMayBeWritten(
+  check: SignInWriteCheck,
+  authority: SignInAuthority,
+  atOpen: boolean,
+): boolean {
+  if (!check.rowAllows()) return false;
+  if (authority.kind === "invited") {
+    const { invitation } = authority;
+    return (
+      !check.hosts.invitationWithdrawn(invitation) &&
+      (!atOpen || check.ownerSignInEligible(invitation.instance.hostId))
+    );
+  }
+  return (
+    check.hosts.isCurrent(authority.owner) &&
+    !check.hosts.namedReason(authority.owner.hostId)
+  );
 }
 
 /** The memory every transport of this process shares. */
@@ -417,7 +499,7 @@ export function releasedSignOnForLocalRow(
   hostId: string,
   userId: string,
   signIn: BearerSourceProvider,
-  recovery: StreamAuthRevalidator | null,
+  recovery: SignInRecovery | null,
   tokens: TrackedHostTokens,
   hosts: ReleasedHostMemory,
 ): ReleasedSignOn {
@@ -456,7 +538,7 @@ export function isReleasedSignInRefusal(refusal: unknown): boolean {
 export interface ReleasedUnarySignOn {
   readonly bearer: OpenFrameBearerSource;
   /** Refreshes a sign-in the released host refused; the call then goes once more. */
-  readonly recovery: StreamAuthRevalidator | null;
+  readonly recovery: SignInRecovery | null;
 }
 
 /**
@@ -476,16 +558,17 @@ export type ReleasedUnaryCause =
 
 /**
  * `WsRpcClientOptions.releasedSignOnFor` for this machine's host, for a caller
- * that holds the rows: the caller's own sign-in lease.
+ * that holds the rows: the caller's own sign-in lease. Synchronous, since the
+ * unary asks it again at each write of a frame carrying the sign-in.
  */
 export function signInForLocalRow(
   resolveRow: (hostId: string) => ReleasedSignOnRow | null,
-  recovery: StreamAuthRevalidator | null,
+  recovery: SignInRecovery | null,
   tokens: TrackedHostTokens,
 ): (
   authority: HostRequestAuthority,
   cause: ReleasedUnaryCause,
-) => Promise<ReleasedUnarySignOn | null> {
+) => ReleasedUnarySignOn | null {
   return (authority, cause) => {
     const hostId = authority.endpoint.hostId;
     const userId = authority.bearer.identity.userId;
@@ -497,8 +580,6 @@ export function signInForLocalRow(
             (cause === "owner-sign-in"
               ? ownerSignInEligible(tokens, userId, hostId)
               : hostTokenUnobtainable(tokens, userId, hostId)));
-    return Promise.resolve(
-      allowed ? { bearer: authority.bearer, recovery } : null,
-    );
+    return allowed ? { bearer: authority.bearer, recovery } : null;
   };
 }

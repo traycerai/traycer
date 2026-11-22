@@ -19,8 +19,10 @@ import type {
   StreamContinuity,
   StreamFrameEnvelope,
 } from "./i-stream-session";
-import { isIncompatibleCloseForMethod } from "./i-stream-session";
-import { dialsNow } from "./ws-stream-client";
+import {
+  isIncompatibleCloseForMethod,
+  signalsBackoff,
+} from "./i-stream-session";
 import type { IHostStreamClient } from "./host-stream-client";
 
 export const WORKTREE_DELETE_BATCH_STREAM_METHOD = "worktree.deleteBatchByPath";
@@ -92,6 +94,12 @@ export interface WorktreeDeleteBatchStreamCallbacks {
   readonly onConnectionStatus: (
     change: WorktreeDeleteBatchConnectionStatus,
   ) => void;
+  /**
+   * The transport put this command's session on a delayed redial or
+   * re-attach: it entered backoff. A `reconnecting` it follows at once with
+   * its next dial does not. `startSent` as on `onConnectionStatus`.
+   */
+  readonly onBackoffEntered: (startSent: boolean) => void;
 }
 
 /** One connection-status transition of a deletion command's stream. */
@@ -107,12 +115,6 @@ export interface WorktreeDeleteBatchConnectionStatus {
    * nothing; after it, the command may be running or finished.
    */
   readonly startSent: boolean;
-  /**
-   * This `reconnecting` is one the stream follows at once by another dial
-   * (`dialsNow`); false on every other change. A `reconnecting` without it is
-   * the stream entering backoff.
-   */
-  readonly dialsNow: boolean;
 }
 
 export interface WorktreeDeleteBatchStreamClientOptions {
@@ -235,6 +237,15 @@ export class WorktreeDeleteBatchStreamClient {
     session.onStatusChange((status, reason, retryCause, continuity) => {
       this.handleStatusChange(session, status, reason, retryCause, continuity);
     });
+    // A transport that does not report backoff never does; its sessions end
+    // with `closed`.
+    if (signalsBackoff(session))
+      session.onBackoffEntered(() => {
+        if (this.closed || this.session !== session) return;
+        this.callbacks.onBackoffEntered(
+          this.mode === "observe" || session.hasSentOpenRequest(),
+        );
+      });
     return session;
   }
 
@@ -273,7 +284,6 @@ export class WorktreeDeleteBatchStreamClient {
     }
     // An `observe` session exists only once the start was sent.
     const startSent = this.mode === "observe" || session.hasSentOpenRequest();
-    const redialsAtOnce = dialsNow(session);
     if (status === "open") {
       this.callbacks.onConnectionStatus({
         status,
@@ -281,7 +291,6 @@ export class WorktreeDeleteBatchStreamClient {
         retryCause,
         continuity,
         startSent,
-        dialsNow: redialsAtOnce,
       });
       return;
     }
@@ -328,7 +337,6 @@ export class WorktreeDeleteBatchStreamClient {
       retryCause,
       continuity,
       startSent,
-      dialsNow: redialsAtOnce,
     });
   }
 

@@ -23,8 +23,6 @@ import {
   signIn,
   USER_A,
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
-import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
-import { dialsNow } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import {
@@ -115,27 +113,16 @@ const refreshAnswering =
     },
   });
 
-/** A change of the delete command's connection as its session reported it, with the flag read in the transition. */
-interface ObservedStatus {
-  readonly status: StreamConnectionStatus;
-  readonly dialsNow: boolean;
-}
-
-/** For each `reconnecting` the stream reported, whether another dial followed it at once. */
-const reconnectsDialedAtOnce = (statuses: readonly ObservedStatus[]) =>
-  statuses
-    .filter((observed) => observed.status === "reconnecting")
-    .map((observed) => observed.dialsNow);
-
 /** One cleanup of `PATH` against a personal host reached over a fake socket. */
 function startCleanup(
   source: HostTokenSource,
   refresh: SignInRefresh | null,
 ): {
   readonly outcome: { current: WorktreeCleanupOutcome | null };
-  readonly statuses: ObservedStatus[];
+  /** How many times a session of the command reported the stream entering backoff. */
+  readonly backoffEntries: () => number;
 } {
-  const statuses: ObservedStatus[] = [];
+  let backoffEntries = 0;
   const provider = newProvider();
   signIn(provider, USER_A, SIGN_IN_TOKEN);
   const target = {
@@ -160,17 +147,13 @@ function startCleanup(
       autoStart: true,
     });
     if (client === null) throw new Error("local stream client did not build");
-    // A session keeps one status handler. The one the command installs is
-    // wrapped, so each status is read where the stream emits it.
+    // Each session of the command is watched for the stream entering backoff,
+    // the one signal the cleanup settles on.
     const subscribe = client.subscribe.bind(client);
     vi.spyOn(client, "subscribe").mockImplementation((method, params) => {
       const session = subscribe(method, params);
-      const install = session.onStatusChange.bind(session);
-      vi.spyOn(session, "onStatusChange").mockImplementation((handler) => {
-        install((status, reason, retryCause, continuity) => {
-          statuses.push({ status, dialsNow: dialsNow(session) });
-          handler(status, reason, retryCause, continuity);
-        });
+      session.onBackoffEntered(() => {
+        backoffEntries += 1;
       });
       return session;
     });
@@ -187,7 +170,7 @@ function startCleanup(
   }).then((settled) => {
     outcome.current = settled;
   });
-  return { outcome, statuses };
+  return { outcome, backoffEntries: () => backoffEntries };
 }
 
 async function socketAt(count: number): Promise<FakeNativeWebSocket> {
@@ -292,7 +275,7 @@ describe("worktree cleanup against a host that takes the person's sign-in", () =
 
 describe("worktree cleanup settles only on the stream's backoff or a terminal end", () => {
   it("removes the worktrees of a released personal host with no held host-only token once the sign-in handed over after the placeholder is admitted", async () => {
-    const { outcome, statuses } = startCleanup(
+    const { outcome, backoffEntries } = startCleanup(
       await tokenSource(false, "unavailable"),
       null,
     );
@@ -309,13 +292,13 @@ describe("worktree cleanup settles only on the stream's backoff or a terminal en
         uncertain: [],
       }),
     );
-    // The first dial's statuses go out before any handler exists, so the only
-    // `reconnecting` the cleanup sees is the handover's, flagged.
-    expect(reconnectsDialedAtOnce(statuses)).toEqual([true]);
+    // The cold dial and the handover each follow at once: the stream never
+    // enters backoff.
+    expect(backoffEntries()).toBe(0);
   });
 
   it("removes the worktrees once the sign-in a released host refused bare was refreshed and the stream redialed at once", async () => {
-    const { outcome, statuses } = startCleanup(
+    const { outcome, backoffEntries } = startCleanup(
       await tokenSource(true, "unavailable"),
       refreshAnswering("rotated"),
     );
@@ -338,13 +321,13 @@ describe("worktree cleanup settles only on the stream's backoff or a terminal en
         uncertain: [],
       }),
     );
-    // The handover and the refresh's redial each report a dial at once, and no
-    // backoff is reported.
-    expect(reconnectsDialedAtOnce(statuses)).toEqual([true, true]);
+    // The refresh's timed redial is the recovery's own: it does not fire the
+    // backoff signal, so the deletion went ahead.
+    expect(backoffEntries()).toBe(0);
   });
 
   it("reports the paths as not reached once the refresh of the sign-in a released host refused bare does not reach authn and the stream goes to backoff", async () => {
-    const { outcome, statuses } = startCleanup(
+    const { outcome, backoffEntries } = startCleanup(
       await tokenSource(true, "unavailable"),
       refreshAnswering("network-error"),
     );
@@ -362,13 +345,12 @@ describe("worktree cleanup settles only on the stream's backoff or a terminal en
         uncertain: [],
       }),
     );
-    // The handover and the refresh's own redial report a dial at once; the
-    // refresh then ends in backoff, which is an extra report with none.
-    expect(reconnectsDialedAtOnce(statuses)).toEqual([true, true, false]);
+    // The refresh ended in backoff: the one signal the cleanup fails on.
+    expect(backoffEntries()).toBe(1);
   });
 
   it("removes the worktrees of a released personal host whose mint never answers: the placeholder is written at once and the sign-in handed over after it is admitted", async () => {
-    const { outcome, statuses } = startCleanup(
+    const { outcome, backoffEntries } = startCleanup(
       await tokenSource(false, "unanswered"),
       null,
     );
@@ -385,9 +367,9 @@ describe("worktree cleanup settles only on the stream's backoff or a terminal en
         uncertain: [],
       }),
     );
-    // The first dial's statuses go out before any handler exists, so the only
-    // `reconnecting` the cleanup sees is the handover's, flagged.
-    expect(reconnectsDialedAtOnce(statuses)).toEqual([true]);
+    // The cold dial and the handover each follow at once: the stream never
+    // enters backoff.
+    expect(backoffEntries()).toBe(0);
   });
 });
 

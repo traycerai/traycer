@@ -25,6 +25,7 @@ const NOOP_CALLBACKS = {
   onCommandFailed: () => undefined,
   onUnsupported: () => undefined,
   onConnectionStatus: () => undefined,
+  onBackoffEntered: () => undefined,
 };
 
 function openBatchClient(
@@ -165,7 +166,6 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
       retryCause: null,
       continuity: null,
       startSent: true,
-      dialsNow: false,
     });
     batch.close();
   });
@@ -267,7 +267,6 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
       retryCause: null,
       continuity: null,
       startSent: true,
-      dialsNow: false,
     });
     batch.close();
   });

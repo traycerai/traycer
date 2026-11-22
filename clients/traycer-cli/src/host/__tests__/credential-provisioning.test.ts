@@ -7,6 +7,10 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import {
+  processReleasedHosts,
+  type HostInstance,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import { nameReason } from "../../internal/__tests__/released-memory-test-support";
 import type {
   IStreamSession,
@@ -60,8 +64,11 @@ interface CapturedStreamClientOptions {
   // The probe reports each admitted open here; tests call it to stand in for
   // one.
   readonly door: {
-    readonly admitted: (hostId: string) => () => void;
-    readonly refused: (details: FatalErrorDetails, hostId: string) => void;
+    readonly admitted: (instance: HostInstance) => () => void;
+    readonly refused: (
+      details: FatalErrorDetails,
+      instance: HostInstance,
+    ) => void;
   };
 }
 
@@ -175,6 +182,7 @@ const mocks = vi.hoisted(() => {
   const createStoreBackedRevalidatorMock = vi.fn(
     (_args: { readonly signal: AbortSignal | null }) => ({
       revalidateCurrentContext: revalidateCurrentContextMock,
+      rotateSignIn: revalidateCurrentContextMock,
     }),
   );
 
@@ -192,8 +200,7 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      | ((session: FakeStreamSession, lapIndex: number) => void)
-      | null,
+      ((session: FakeStreamSession, lapIndex: number) => void) | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
@@ -548,7 +555,10 @@ describe("provisionInstalledHostCredential", () => {
               throw new Error("probe wired no refused-token recovery");
             }
             // As the real stream: the door hears the refusal, then recovery runs.
-            options.door.refused(refusal, "host-1");
+            options.door.refused(
+              refusal,
+              processReleasedHosts.currentInstance("host-1"),
+            );
             void revalidateRefused(refusal).catch(() => undefined);
             session.emitStatus(
               "closed",
@@ -617,7 +627,9 @@ describe("provisionInstalledHostCredential", () => {
           await vi.waitFor(() =>
             expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(2),
           );
-          options.door.admitted("host-named-reason");
+          options.door.admitted(
+            processReleasedHosts.currentInstance("host-named-reason"),
+          );
           mintAnswer.resolve({ kind: "not-admitted" });
           await sleep(0);
           options.onHostCredentialState("host-named-reason", "active");
@@ -656,7 +668,7 @@ describe("provisionInstalledHostCredential", () => {
           // The host admits the sign-in, and authn then says it has no row:
           // for the mint begun before the admission, and for the next ask.
           // Neither ends the run, which the host's own answer settles.
-          options.door.admitted("host-1");
+          options.door.admitted(processReleasedHosts.currentInstance("host-1"));
           mintAnswer.resolve({ kind: "not-admitted" });
           await sleep(0);
           expect(options.bearer("host-1")).toBeNull();
@@ -762,7 +774,7 @@ describe("provisionInstalledHostCredential", () => {
           nameReason(hostB);
           // A socket selected for host A is admitted while the poll reads B,
           // and B's mint then answers that authn has no row for it.
-          options.door.admitted(hostA);
+          options.door.admitted(processReleasedHosts.currentInstance(hostA));
           mintAnswer.resolve({ kind: "not-admitted" });
         })();
       }, 0);
@@ -877,7 +889,10 @@ describe("provisionInstalledHostCredential", () => {
         if (revalidateRefused === undefined) {
           throw new Error("probe wired no refused-token recovery");
         }
-        options.door.refused(refusal, "host-1");
+        options.door.refused(
+          refusal,
+          processReleasedHosts.currentInstance("host-1"),
+        );
         const recovery = revalidateRefused(refusal);
         void recovery.then(
           (result) => {
@@ -924,10 +939,16 @@ describe("provisionInstalledHostCredential", () => {
             throw new Error("probe wired no refused-token recovery");
           }
           const refusedA = { ...TOKEN_EXPIRED_REFUSAL };
-          options.door.refused(refusedA, hostA);
+          options.door.refused(
+            refusedA,
+            processReleasedHosts.currentInstance(hostA),
+          );
           await revalidateRefused(refusedA);
           const refusedB = { ...TOKEN_EXPIRED_REFUSAL };
-          options.door.refused(refusedB, hostB);
+          options.door.refused(
+            refusedB,
+            processReleasedHosts.currentInstance(hostB),
+          );
           await revalidateRefused(refusedB);
           options.onHostCredentialState(hostA, "active");
         })();
@@ -950,8 +971,7 @@ describe("provisionInstalledHostCredential", () => {
 
   it("ends nothing when the poll reads a replacement while a refused token's recovery awaits and the recovery is then refused", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
-    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
-    const answer = createDeferred<{ readonly kind: "sign-in-rejected" }>();
+    const answer = createDeferred<{ readonly kind: "not-admitted" }>();
     mocks.hostTokenMintMock.mockReset();
     mocks.hostTokenMintMock.mockReturnValueOnce(answer.promise);
     mocks.onSessionCreated = (): void => {
@@ -963,7 +983,10 @@ describe("provisionInstalledHostCredential", () => {
             throw new Error("probe wired no refused-token recovery");
           }
           const refusal = { ...TOKEN_EXPIRED_REFUSAL };
-          options.door.refused(refusal, "host-1");
+          options.door.refused(
+            refusal,
+            processReleasedHosts.currentInstance("host-1"),
+          );
           const recovery = revalidateRefused(refusal);
           await vi.waitFor(() =>
             expect(
@@ -982,7 +1005,7 @@ describe("provisionInstalledHostCredential", () => {
             ).toBeGreaterThanOrEqual(readsBefore + 2),
           );
           await sleep(0);
-          answer.resolve({ kind: "sign-in-rejected" });
+          answer.resolve({ kind: "not-admitted" });
           mocks.hostTokenRecoveryResult = await recovery;
           options.onHostCredentialState("host-1", "active");
         })();
@@ -1015,7 +1038,10 @@ describe("provisionInstalledHostCredential", () => {
         if (revalidateRefused === undefined) {
           throw new Error("probe wired no refused-token recovery");
         }
-        options.door.refused(TOKEN_EXPIRED_REFUSAL, "host-1");
+        options.door.refused(
+          TOKEN_EXPIRED_REFUSAL,
+          processReleasedHosts.currentInstance("host-1"),
+        );
         void revalidateRefused(TOKEN_EXPIRED_REFUSAL).catch(() => undefined);
       }, 0);
     };
@@ -1057,10 +1083,19 @@ describe("provisionInstalledHostCredential", () => {
           if (revalidateRefused === undefined) {
             throw new Error("probe wired no refused-token recovery");
           }
-          options.door.refused(TOKEN_EXPIRED_REFUSAL, "host-1");
+          options.door.refused(
+            TOKEN_EXPIRED_REFUSAL,
+            processReleasedHosts.currentInstance("host-1"),
+          );
           results.push(await revalidateRefused(TOKEN_EXPIRED_REFUSAL));
-          if (admit) options.door.admitted("host-1");
-          options.door.refused(TOKEN_EXPIRED_REFUSAL, "host-1");
+          if (admit)
+            options.door.admitted(
+              processReleasedHosts.currentInstance("host-1"),
+            );
+          options.door.refused(
+            TOKEN_EXPIRED_REFUSAL,
+            processReleasedHosts.currentInstance("host-1"),
+          );
           results.push(await revalidateRefused(TOKEN_EXPIRED_REFUSAL));
           options.onHostCredentialState("host-1", "active");
         })();
@@ -1604,7 +1639,9 @@ describe("provisionInstalledHostCredential", () => {
           upgradeGuidance: null,
           doorReason: "not_admitted",
         });
-        capturedClientOptions().door.admitted("host-1");
+        capturedClientOptions().door.admitted(
+          processReleasedHosts.currentInstance("host-1"),
+        );
       }, 0);
     };
 

@@ -163,8 +163,8 @@ import {
 } from "./relay-socket";
 import type {
   AttachGrant,
-  AttachGrantProvider,
   AttachGrantProvision,
+  AttemptGrantProvider,
 } from "./grant";
 import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
 import {
@@ -538,7 +538,7 @@ export interface RemoteSessionOptions<
   /** Host static X25519 public key for the NK handshake (registry-published). */
   readonly hostStaticPublicKey: Uint8Array;
   /** Mints a fresh single-use `role:"client"` attach grant per attach + reauth. */
-  readonly grantProvider: AttachGrantProvider;
+  readonly grantProvider: AttemptGrantProvider;
   /** Supplies the encrypted in-channel identity proof and recovery policy. */
   readonly auth: RemoteSessionAuth;
   /**
@@ -626,7 +626,7 @@ type SessionDial =
       readonly kind: "relay";
       readonly attachBaseUrl: string;
       readonly hostStaticPublicKey: Uint8Array;
-      readonly grantProvider: AttachGrantProvider;
+      readonly grantProvider: AttemptGrantProvider;
       readonly auth: RemoteSessionAuth;
     }
   | {
@@ -2632,8 +2632,13 @@ export class RemoteSession<
       return;
     }
     const grantRequestedAt = Date.now();
-    const provision = await dial.grantProvider();
-    if (generation !== this.connectGeneration || this.isClosed()) {
+    const attachCurrent = (): boolean =>
+      generation === this.connectGeneration && !this.isClosed();
+    const provision = await dial.grantProvider({
+      current: attachCurrent,
+      leg: "dial",
+    });
+    if (!attachCurrent()) {
       return;
     }
     if (provision.kind !== "ok") {
@@ -2698,7 +2703,10 @@ export class RemoteSession<
     // `handleConnectionLost` funnel, which observes the host's own plane.
     this.reportEvidenceOutcome(this.dialAttemptId(generation), "indeterminate");
     this.markStreamsReconnecting(provision.retryCause ?? null);
-    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    const retryInMs = this.scheduleReconnectForFailedGeneration(
+      generation,
+      "backoff",
+    );
     this.dialFailures.recordFailure({
       cause: `could not mint an attach grant: ${provision.detail}`,
       // The per-attempt text goes in the CONTEXT, never the cause: a server
@@ -2724,7 +2732,7 @@ export class RemoteSession<
    */
   private beginClaimDial(
     connection: ActiveConnection,
-    grantProvider: AttachGrantProvider,
+    grantProvider: AttemptGrantProvider,
     attachBaseUrl: string,
   ): void {
     const { generation } = connection;
@@ -2743,7 +2751,10 @@ export class RemoteSession<
     };
     void (async () => {
       const grantRequestedAt = Date.now();
-      const provision = await grantProvider();
+      const provision = await grantProvider({
+        current: ownsSession,
+        leg: "admitted",
+      });
       if (!ownsSession()) {
         return;
       }
@@ -4771,6 +4782,10 @@ export class RemoteSession<
       }
     }
     this.markStreamsReconnecting(null);
+    // A park before ready moves only when something outside changes (the
+    // host attaches, a caller forces a redial, the socket drops): a wait for
+    // the streams. A ready connection's detach is not: its streams are held.
+    if (this.isParkedBeforeReady()) this.notifyBackoffEntered();
     this.takeHostDownEdge();
   }
 
@@ -5285,7 +5300,10 @@ export class RemoteSession<
     cause: string,
     provenance: ConnectionLossProvenance,
   ): void {
-    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    const retryInMs = this.scheduleReconnectForFailedGeneration(
+      generation,
+      "backoff",
+    );
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
     // THE host-plane funnel: every relay-socket close, Noise/handshake
     // rejection, `peer_gone`, and phase timeout arrives here. This is the one
@@ -5779,7 +5797,10 @@ export class RemoteSession<
     }
     if (outcome === "network-error") {
       this.noProgressUnauthorizedReconnects = 0;
-      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+      const retryInMs = this.scheduleReconnectForFailedGeneration(
+      generation,
+      "backoff",
+    );
       this.dialFailures.recordFailure({
         cause:
           "the host rejected the session bearer (UNAUTHORIZED) and revalidating the credential hit a network error",
@@ -5797,10 +5818,14 @@ export class RemoteSession<
     // progress was made (authn validates it but the host keeps rejecting -
     // clock skew / config mismatch). Bound that loop; otherwise reset and
     // redial with the fresh token.
+    // A credential that moved on makes this the recovery's own timed redial;
+    // the same one again is a wait like any other.
+    let redial: "backoff" | "recovery" = "recovery";
     if (
       rejectedBearer !== null &&
       this.options.auth.currentFingerprint() === rejectedBearer
     ) {
+      redial = "backoff";
       // The clock, not the credential. The revalidation that just resolved is
       // itself an authn round trip, so its `Date` header has already reached
       // the tracker - if our clock is running FAST, this streak is measuring a
@@ -5827,7 +5852,10 @@ export class RemoteSession<
     } else {
       this.noProgressUnauthorizedReconnects = 0;
     }
-    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    const retryInMs = this.scheduleReconnectForFailedGeneration(
+      generation,
+      redial,
+    );
     this.dialFailures.recordFailure({
       cause:
         "the host rejected the session bearer (UNAUTHORIZED); redialing after credential revalidation",
@@ -5911,6 +5939,8 @@ export class RemoteSession<
       this.resumeFromClockPark();
     });
     this.reportEvidenceOutcome(this.credentialAttemptId(), "indeterminate");
+    // Nothing redials until the clock is corrected: a wait for the streams.
+    this.notifyBackoffEntered();
     // Through `isClosed()`, not a bare `this.phase === "closed"`. The early
     // return at the top of this method narrows `phase` to exclude `"closed"`,
     // and the checker does not know the call above can re-enter and change it -
@@ -6342,10 +6372,26 @@ export class RemoteSession<
    * UNAUTHORIZED revalidation arms - so whether a recorded demand is honored
    * cannot depend on which lander a failure happens to take.
    */
-  private scheduleReconnectForFailedGeneration(generation: number): number {
+  private scheduleReconnectForFailedGeneration(
+    generation: number,
+    redial: "backoff" | "recovery",
+  ): number {
+    const forced = this.pendingForceGeneration === generation;
     const retryInMs = this.scheduleReconnect();
     this.consumePendingForce(generation);
+    // Classifies the wait for the streams; it changes no delay. A recovery's
+    // own timed redial (a credential that moved on) and a redial pulled to
+    // now are not a wait.
+    if (redial === "backoff" && retryInMs > 0 && !forced)
+      this.notifyBackoffEntered();
     return retryInMs;
+  }
+
+  /** {@link LogicalStream.onBackoffEntered}, for every subscribed stream. */
+  private notifyBackoffEntered(): void {
+    for (const stream of this.subscriptions.values()) {
+      stream.notifyBackoffEntered();
+    }
   }
 
   /**
@@ -6432,7 +6478,10 @@ export class RemoteSession<
       return;
     }
     this.dropConnection("connect-path-threw", null, false);
-    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    const retryInMs = this.scheduleReconnectForFailedGeneration(
+      generation,
+      "backoff",
+    );
     this.dialFailures.recordFailure({
       cause: `the connect path threw before dialing: ${
         cause instanceof Error ? cause.message : String(cause)
@@ -6483,12 +6532,15 @@ export class RemoteSession<
       return;
     }
     const leg = connection.socket;
-    const provision = await dial.grantProvider();
     // The grant was for that leg, and a claim's ack restarts this loop.
-    if (
-      !this.isLegCurrent(connection, leg) ||
-      !(this.phase === "ready" || this.isParkedBeforeReady())
-    ) {
+    const legCurrent = (): boolean =>
+      this.isLegCurrent(connection, leg) &&
+      (this.phase === "ready" || this.isParkedBeforeReady());
+    const provision = await dial.grantProvider({
+      current: legCurrent,
+      leg: "admitted",
+    });
+    if (!legCurrent()) {
       return;
     }
     if (provision.kind === "ok") {
@@ -7405,6 +7457,7 @@ export class RemoteSession<
       this.openSubscription(connection, stream);
     }, delay);
     this.streamReopenTimers.set(streamId, timer);
+    stream.notifyBackoffEntered();
   }
 
   /**

@@ -538,6 +538,8 @@ async function requestWithHostToken<
             refused: () => undefined,
             admitted: localDoor.admitted,
           }),
+          // The CLI holds no row. Eligibility is this process's mint record and
+          // held token, read synchronously as they stand at the ask.
           releasedSignOnFor: (
             authority: HostRequestAuthority,
             cause: ReleasedUnaryCause,
@@ -550,11 +552,9 @@ async function requestWithHostToken<
               (cause === "owner-sign-in"
                 ? releasedSignOn.ownerSignInEligible(hostId)
                 : releasedSignOn.hostTokenUnobtainable(hostId));
-            return Promise.resolve(
-              signIn !== null && eligible
-                ? { bearer: signIn, recovery: releasedSignOn.recovery }
-                : null,
-            );
+            return signIn !== null && eligible
+              ? { bearer: signIn, recovery: releasedSignOn.recovery }
+              : null;
           },
           heldTokenRefusedFor: (_authority, presented, instance) =>
             localDoor.releasedSignOn.heldTokenRefused(instance, presented),

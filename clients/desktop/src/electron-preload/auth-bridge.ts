@@ -769,13 +769,14 @@ export function buildHostTokensBridge(): HostTokensBridgeSurface {
         userId,
         NO_ISSUED_HOST_TOKEN_ERA,
       ),
-    obtain: (userId, hostId, fresh, expectedEra) =>
+    obtain: (userId, hostId, fresh, expectedEra, owner) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.hostTokensObtain,
         userId,
         hostId,
         fresh,
         expectedEra,
+        owner,
       ) as Promise<HostTokenObtainReply>,
     renew: (userId, hostIds, expectedEra) =>
       ipcRenderer.invoke(

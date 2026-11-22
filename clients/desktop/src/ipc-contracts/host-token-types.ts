@@ -20,6 +20,11 @@ export interface HostTokenEraReply {
   readonly era: number;
 }
 
+/** The host process a window's ask is for, as that window observed it. */
+export interface HostTokenObtainOwner {
+  readonly observed: string | null;
+}
+
 export interface HostTokenObtainReply extends HostTokenEraReply {
   readonly outcome: HostTokenMintOutcome;
 }
@@ -53,11 +58,16 @@ export const NO_ISSUED_HOST_TOKEN_ERA = -1;
  */
 export interface HostTokensBridgeSurface {
   era(userId: string): number;
+  /**
+   * `owner` is the host process the window asks for, as the window observes it
+   * (`null`: none): main never joins asks for two different observed processes.
+   */
   obtain(
     userId: string,
     hostId: string,
     fresh: boolean,
     expectedEra: number,
+    owner: HostTokenObtainOwner | null,
   ): Promise<HostTokenObtainReply>;
   renew(
     userId: string,

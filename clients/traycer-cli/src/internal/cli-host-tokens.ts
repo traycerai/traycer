@@ -39,6 +39,7 @@ import {
   CREDENTIALS_LOCK_WAIT_MS,
   createCliCredentialsStore,
   createStoreBackedRevalidator,
+  type SignInRotation,
 } from "../store/credentials-store";
 import type { HostAuth } from "./host-auth";
 
@@ -63,13 +64,14 @@ function processHeldRefusals(instance: HostInstance): Map<string, string> {
 export interface CliSignIn {
   readonly lease: BearerLease;
   /** Refreshes the sign-in under the credentials lock and rotates `lease`. */
-  readonly refresh: () => Promise<RevalidateOutcome>;
+  readonly refresh: () => Promise<SignInRotation>;
   /** Cancels this process's own mints, so an abandoned one cannot hold the CLI open; `null` lives as long as the command. */
   readonly signal: AbortSignal | null;
 }
 
 export interface SignInRevalidator {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
+  rotateSignIn(): Promise<SignInRotation>;
 }
 
 /** Why no host-only token could be had: authn's answer, after any one refresh. */
@@ -170,6 +172,12 @@ export interface CliHostTokens {
   signInRejected(): boolean;
   /** The stored sign-in's refresh ahead of its expiry, judged as above. */
   refreshSignIn(): Promise<RevalidateOutcome>;
+  /**
+   * The same refresh for a transport's sign-in recovery: "adopted" when it
+   * took a sibling's rotation from the store, which authn did not answer for
+   * that transport, so it spends none of its budget.
+   */
+  rotateSignIn(): Promise<SignInRotation>;
   /** `true` when one was minted; its refusal is judged like any other mint's. */
   renewAfterSignInRefresh(hostId: string): Promise<boolean>;
   /** See `hostTokenUnobtainable`. */
@@ -216,6 +224,12 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const admittedSince = (owner: HostInstance, startedAt: number): boolean =>
     (admittedOpen.get(owner) ?? 0) > 0 ||
     (admittedAt.get(owner) ?? 0) > startedAt;
+  // When the newest mint that bought a token for each host process started. A
+  // mint that started before it answers late: its answer is not recorded, so a
+  // late refusal never ends a command after a newer success.
+  const mintedAt = new WeakMap<HostInstance, number>();
+  const outlived = (owner: HostInstance, startedAt: number): boolean =>
+    (mintedAt.get(owner) ?? 0) > startedAt;
   // Asked only while `owner` is current, so the memory's reads by host id
   // answer for it.
   const endsCommand = (
@@ -235,13 +249,18 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     return false;
   };
   // A mint's refusal concerns the host process it started for: once another
-  // is observed, it ends nothing and is deferred for nothing.
+  // is observed, or a mint for it that started later bought a token, it ends
+  // nothing and is deferred for nothing.
   const report = (
     owner: HostInstance,
     failure: CliHostTokenFailure,
     startedAt: number,
   ): void => {
-    if (!hosts.isCurrent(owner) || !endsCommand(owner, failure, startedAt))
+    if (
+      !hosts.isCurrent(owner) ||
+      outlived(owner, startedAt) ||
+      !endsCommand(owner, failure, startedAt)
+    )
       return;
     for (const listener of Array.from(listeners))
       listener(owner.hostId, failure);
@@ -251,19 +270,24 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   );
   // The one judge of a rejected sign-in, for every mint this process makes:
   // a refresh authn refused, or a 401 on the first mint after a refresh it
-  // accepted. A token minted, or a refresh accepted, starts it again.
+  // accepted. A token minted, or a refresh accepted (a sibling's adopted
+  // included), starts it again.
   let refreshRefused = false;
   let refreshedSinceLastMint = false;
   let refusedAfterRefresh = false;
-  const refreshSignIn = async (): Promise<RevalidateOutcome> => {
+  const rotateSignIn = async (): Promise<SignInRotation> => {
     const outcome = await signIn.refresh();
     if (outcome === "rejected") refreshRefused = true;
-    if (outcome === "rotated") {
+    if (outcome === "rotated" || outcome === "adopted") {
       refreshRefused = false;
       refusedAfterRefresh = false;
       refreshedSinceLastMint = true;
     }
     return outcome;
+  };
+  const refreshSignIn = async (): Promise<RevalidateOutcome> => {
+    const outcome = await rotateSignIn();
+    return outcome === "adopted" ? "rotated" : outcome;
   };
   // Every mint passes here, so a refusal for good is reported wherever asked. A token
   // that could not be saved is transient like an unreachable authn, never a rejected
@@ -285,6 +309,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
             kind: "unavailable",
             detail: "host-only token not saved",
           }));
+        if (outlived(owner, startedAt)) return outcome;
+        if (outcome.kind === "ok") mintedAt.set(owner, startedAt);
         if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
           refusedAfterRefresh = true;
         if (outcome.kind === "ok") refusedAfterRefresh = false;
@@ -296,9 +322,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     hosts,
   );
   // The host's refusal of a held token is the process's, not this command's
-  // tokens': see `processHeldRefusals`.
-  // A refusal is kept on the host process that refused; a read asks the one
-  // observed now.
+  // tokens (see `processHeldRefusals`), and is kept on the host process that
+  // refused; a read asks the one observed now.
   const source: TrackedHostTokens = {
     ...tracked,
     noteHeldRefused: (instance, id, presented) => {
@@ -494,6 +519,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     },
     signInRejected,
     refreshSignIn,
+    rotateSignIn,
     hostTokenUnobtainable: (hostId) =>
       hostTokenUnobtainable(source, userId, hostId),
     ownerSignInEligible: (hostId) =>
@@ -510,7 +536,9 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     deferredNotAdmitted: (hostId) => {
       const owner = hosts.currentInstance(hostId);
       const held = deferred.get(owner);
-      return held === undefined || admittedSince(owner, held.startedAt)
+      return held === undefined ||
+        admittedSince(owner, held.startedAt) ||
+        outlived(owner, held.startedAt)
         ? null
         : held.failure;
     },
@@ -561,7 +589,7 @@ export function cliReleasedSignOn(
   lease: BearerLease,
   tokens: Pick<
     CliHostTokens,
-    | "refreshSignIn"
+    | "rotateSignIn"
     | "hostTokenUnobtainable"
     | "ownerSignInEligible"
     | "heldTokenRefused"
@@ -573,7 +601,8 @@ export function cliReleasedSignOn(
     // No row is held, so none refuses it, as `opensReleasedWayOnThisMachine`
     // reads a missing row.
     mayPresentSignIn: () => true,
-    recovery: { revalidateForReconnect: () => tokens.refreshSignIn() },
+    // The transport's own: it reads "adopted" as no refresh spent.
+    recovery: { revalidateForReconnect: () => tokens.rotateSignIn() },
     hostTokenUnobtainable: (hostId) => tokens.hostTokenUnobtainable(hostId),
     ownerSignInEligible: (hostId) => tokens.ownerSignInEligible(hostId),
     heldTokenRefused: (instance, presented) =>
@@ -637,7 +666,7 @@ export async function requireCliHostSession(
   });
   const tokens = createCliHostTokens({
     lease,
-    refresh: () => revalidator.revalidateCurrentContext(),
+    refresh: () => revalidator.rotateSignIn(),
     signal,
   });
   await tokens.whenLoaded();

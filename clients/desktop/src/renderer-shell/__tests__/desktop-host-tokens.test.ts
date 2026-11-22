@@ -5,9 +5,12 @@ import {
   hostTokenBearerFor,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
-import type {
-  HostTokenMintOutcome,
-  HostTokenRenewal,
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenMintOutcome,
+  type HostTokenRenewal,
+  type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import { createReleasedHostMemory } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type {
@@ -212,6 +215,22 @@ describe("desktop host-token source eras", () => {
     answer.resolve({ renewal: { kind: "renewed", delayed: [] }, era: 1 });
 
     await expect(pending).resolves.toEqual({ kind: "superseded" });
+  });
+
+  it("records no failure for a mint ask that main's IPC call rejected", async () => {
+    const { bridge, setEra } = bridgeFixture();
+    setEra(1);
+    Reflect.set(bridge, "obtain", () =>
+      Promise.reject(new Error("main did not answer")),
+    );
+    const tokens = createDesktopHostTokenSource(bridge);
+    const owner = createReleasedHostMemory().currentInstance(HOST_ID);
+
+    await tokens
+      .obtain(USER_ID, HOST_ID, false, { signal: null, owner })
+      .catch(() => undefined);
+
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
   });
 
   it("empties the copy immediately and ignores a pre-forget event", async () => {
@@ -524,57 +543,93 @@ describe("desktop host-token source snapshot", () => {
   });
 });
 
-describe("desktop host-token source across host process instances", () => {
-  it("sends an ask for the replacement process to main only after the earlier process's ask settled", async () => {
-    const hosts = createReleasedHostMemory();
-    hosts.observeInstance(HOST_ID, "process-a");
-    const earlier = hosts.currentInstance(HOST_ID);
-    hosts.observeInstance(HOST_ID, "process-b");
-    const replacement = hosts.currentInstance(HOST_ID);
-    // What main saw and what the test did, in order: main joins asks by
-    // person and host, so a second ask beside the first would share its mint.
-    const events: string[] = [];
-    const answers = [
-      deferred<{ outcome: HostTokenMintOutcome; era: number }>(),
-      deferred<{ outcome: HostTokenMintOutcome; era: number }>(),
-    ];
-    let receivedAsks = 0;
-    const bridge: HostTokensBridgeSurface = {
-      era: () => 0,
-      obtain: () => {
-        receivedAsks += 1;
-        events.push(`main received ask ${receivedAsks}`);
-        return answers[receivedAsks - 1].promise;
+describe("desktop host-token source across windows asking for different host processes", () => {
+  /**
+   * One window's bridge into `main`, as the auth IPC makes it: an ask crosses
+   * with the process its window observed, and main asks its mint with that.
+   */
+  function bridgeInto(main: HostTokenSource): HostTokensBridgeSurface {
+    return {
+      era: (userId) => main.era(userId),
+      obtain: async (userId, hostId, fresh, expectedEra, owner) => {
+        const asked: unknown = owner;
+        const observed =
+          typeof asked === "object" && asked !== null
+            ? Reflect.get(asked, "observed")
+            : undefined;
+        const outcome =
+          main.era(userId) === expectedEra
+            ? await main.obtain(userId, hostId, fresh, {
+                signal: null,
+                owner:
+                  typeof observed === "string" ? { hostId, observed } : null,
+              })
+            : ({ kind: "superseded" } satisfies HostTokenMintOutcome);
+        return { outcome, era: main.era(userId) };
       },
-      renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
-      adopt: async () => ({ era: 0 }),
-      forgetUser: async () => ({ era: 1 }),
+      renew: async (userId, hostIds, expectedEra) => ({
+        renewal:
+          main.era(userId) === expectedEra
+            ? await main.renew(userId, hostIds)
+            : { kind: "superseded" },
+        era: main.era(userId),
+      }),
+      adopt: async (userId, hostId, token, expectedEra) => {
+        await main.adopt(userId, hostId, token, expectedEra);
+        return { era: main.era(userId) };
+      },
+      forgetUser: async (userId) => {
+        await main.forgetUser(userId);
+        return { era: main.era(userId) };
+      },
       snapshot: async () => EMPTY_SNAPSHOT,
       subscribe: (_handler) => ({ dispose: () => undefined }),
     };
-    const tokens = createDesktopHostTokenSource(bridge);
+  }
 
-    const earlierAsk = tokens.obtain(USER_ID, HOST_ID, true, {
-      signal: null,
-      owner: earlier,
+  it("makes main mint for each window's own process, and tells each window its own outcome", async () => {
+    const answers = [
+      deferred<HostTokenMintOutcome>(),
+      deferred<HostTokenMintOutcome>(),
+    ];
+    let mintRequests = 0;
+    const main = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        const own = answers[mintRequests];
+        mintRequests += 1;
+        return own.promise;
+      },
+      signIn: (userId) => (userId === USER_ID ? "sign-in-token" : null),
+      now: () => Date.now(),
     });
-    await vi.waitFor(() => expect(events).toHaveLength(1));
-    const replacementAsk = tokens.obtain(USER_ID, HOST_ID, true, {
+    const hostsA = createReleasedHostMemory();
+    hostsA.observeInstance(HOST_ID, "100");
+    const ownerA = hostsA.currentInstance(HOST_ID);
+    const hostsB = createReleasedHostMemory();
+    hostsB.observeInstance(HOST_ID, "200");
+    const ownerB = hostsB.currentInstance(HOST_ID);
+    const windowA = createDesktopHostTokenSource(bridgeInto(main));
+    const windowB = createDesktopHostTokenSource(bridgeInto(main));
+
+    const askA = windowA.obtain(USER_ID, HOST_ID, true, {
       signal: null,
-      owner: replacement,
+      owner: ownerA,
     });
-    await Promise.resolve();
+    await vi.waitFor(() => expect(mintRequests).toBe(1));
+    const askB = windowB.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: ownerB,
+    });
+    // Window A's ask is still held: window B's ask is not its answer.
+    await vi.waitFor(() => expect(mintRequests).toBe(2));
 
-    events.push("the earlier process's ask answered");
-    answers[0].resolve({ outcome: { kind: "not-admitted" }, era: 0 });
-    await vi.waitFor(() => expect(events).toHaveLength(3));
-    answers[1].resolve({ outcome: { kind: "ok", token: HOST_TOKEN }, era: 0 });
-    await Promise.all([earlierAsk, replacementAsk]);
+    answers[0].resolve({ kind: "not-admitted" });
+    answers[1].resolve({ kind: "ok", token: HOST_TOKEN });
 
-    expect(events).toEqual([
-      "main received ask 1",
-      "the earlier process's ask answered",
-      "main received ask 2",
-    ]);
+    await expect(askA).resolves.toEqual({ kind: "not-admitted" });
+    await expect(askB).resolves.toEqual({ kind: "ok", token: HOST_TOKEN });
+    expect(windowA.lastFailureOf(USER_ID, ownerA)).toBe("not-admitted");
+    expect(windowB.lastFailureOf(USER_ID, ownerB)).toBeNull();
   });
 });

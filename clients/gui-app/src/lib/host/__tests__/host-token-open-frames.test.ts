@@ -536,40 +536,15 @@ describe("local stream host-token open frame", () => {
     await vi.waitFor(() =>
       expect(sentFramesOfKind(recoveredSocket, "open")).toHaveLength(1),
     );
-    const probeOpen = sentFramesOfKind(recoveredSocket, "open")[0];
-    expect(probeOpen.token).toBe(NO_HOST_TOKEN_PROBE);
-    recoveredSocket.fireMessage(
-      JSON.stringify({
-        kind: "fatalError",
-        details: {
-          code: "UNAUTHORIZED",
-          reason: "current-host-refusal",
-          doorReason: "owner_sign_in",
-          retryable: false,
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        },
-      }),
-    );
-    await vi.advanceTimersToNextTimerAsync();
-    await vi.waitFor(() =>
-      expect(FakeNativeWebSocket.instances).toHaveLength(3),
-    );
-    const recoveredAgain = FakeNativeWebSocket.instances[2];
-    recoveredAgain.fireOpen();
-    await vi.waitFor(() =>
-      expect(sentFramesOfKind(recoveredAgain, "open")).toHaveLength(1),
-    );
-    expect(sentFramesOfKind(recoveredAgain, "open")[0]?.token).toBe(
-      "fresh-after-outage",
-    );
-    recoveredAgain.fireMessage(openAckFrame([], null));
+    const redialOpen = sentFramesOfKind(recoveredSocket, "open")[0];
+    expect(redialOpen.token).toBe("fresh-after-outage");
+    recoveredSocket.fireMessage(openAckFrame([], null));
     await vi.waitFor(() => expect(hostDoorStateFor(hostId)).toBeNull());
 
     expect(mintCalls).toBe(4);
     expect(connected).toBe(true);
     vi.setSystemTime(freshAfterOutageExpiresAtMs + 1);
-    recoveredAgain.fireMessage(
+    recoveredSocket.fireMessage(
       JSON.stringify({
         kind: "fatalError",
         details: {
@@ -587,9 +562,9 @@ describe("local stream host-token open frame", () => {
     );
     await vi.advanceTimersToNextTimerAsync();
     await vi.waitFor(() =>
-      expect(FakeNativeWebSocket.instances).toHaveLength(4),
+      expect(FakeNativeWebSocket.instances).toHaveLength(3),
     );
-    const laterOutage = FakeNativeWebSocket.instances[3];
+    const laterOutage = FakeNativeWebSocket.instances[2];
     laterOutage.fireOpen();
     await vi.waitFor(() =>
       expect(sentFramesOfKind(laterOutage, "open")).toHaveLength(1),
@@ -602,7 +577,7 @@ describe("local stream host-token open frame", () => {
     clearHostDoorState(hostId);
   });
 
-  it("refuses the token in force after credentialUpdate, not the earlier open token", async () => {
+  it("marks neither token when the host's expiry fatal follows a credentialUpdate, and presents the token in force on the next dial", async () => {
     const provider = newProvider();
     signIn(provider, USER_A, SIGN_IN_TOKEN);
     const hostId = "local-credential-update-token-refusal";
@@ -700,20 +675,20 @@ describe("local stream host-token open frame", () => {
     await vi.waitFor(() =>
       expect(sentFramesOfKind(retry, "open")).toHaveLength(1),
     );
-    expect(sentFramesOfKind(retry, "open")[0]?.token).toBe(NO_HOST_TOKEN_PROBE);
+    expect(sentFramesOfKind(retry, "open")[0]?.token).toBe(tokenInForce);
     expect(sentFramesOfKind(established, "credentialUpdate")).toContainEqual({
       kind: "credentialUpdate",
       token: tokenInForce,
     });
     expect(sentFramesOfKind(established, "open")).toHaveLength(1);
     expect(sentFramesOfKind(retry, "open").map((frame) => frame.token)).toEqual(
-      [NO_HOST_TOKEN_PROBE],
+      [tokenInForce],
     );
     expect(
       FakeNativeWebSocket.instances.flatMap((socket) =>
         sentFramesOfKind(socket, "open").map((frame) => frame.token),
       ),
-    ).toEqual([tokenInOpen, NO_HOST_TOKEN_PROBE]);
+    ).toEqual([tokenInOpen, tokenInForce]);
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);

@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  processReleasedHosts,
+  type HostInstance,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { existsSync } from "node:fs";
@@ -31,8 +35,7 @@ import {
 // frames. Protocol/transport coverage lives in the shared ws-stream-client tests.
 type FakeSession = {
   statusChange:
-    | ((status: string, reason: unknown, retryCause: unknown) => void)
-    | null;
+    ((status: string, reason: unknown, retryCause: unknown) => void) | null;
   serverFrame: ((envelope: unknown) => void) | null;
   closed: boolean;
 };
@@ -41,8 +44,11 @@ type CapturedStreamClientOptions = {
   readonly endpoint: () => unknown;
   readonly bearer: (hostId: string) => OpenFrameBearerSource | null;
   readonly door: {
-    readonly admitted: (hostId: string) => () => void;
-    readonly refused: (details: FatalErrorDetails, hostId: string) => void;
+    readonly admitted: (instance: HostInstance) => () => void;
+    readonly refused: (
+      details: FatalErrorDetails,
+      instance: HostInstance,
+    ) => void;
   };
   readonly hostCredentialMint: unknown;
 };
@@ -165,6 +171,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: vi.fn(() => ({ dispose: disposeMock })),
     createStoreBackedRevalidator: vi.fn(() => ({
       revalidateCurrentContext: revalidateMock,
+      rotateSignIn: revalidateMock,
     })),
   };
 });
@@ -262,7 +269,10 @@ function refuseOpen(
   const options = streamClientOptions[0];
   if (options === undefined)
     throw new Error("stream options were not captured");
-  options.door.refused(fatal.details, HOST_ID);
+  options.door.refused(
+    fatal.details,
+    processReleasedHosts.currentInstance(HOST_ID),
+  );
   sessions[index]?.statusChange?.("closed", fatal, null);
 }
 
@@ -1223,8 +1233,7 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          | (() => void)
-          | undefined;
+          (() => void) | undefined;
         cb?.();
         return true;
       });
@@ -1272,8 +1281,7 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          | (() => void)
-          | undefined;
+          (() => void) | undefined;
         cb?.();
         return true;
       });
@@ -1320,8 +1328,7 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          | (() => void)
-          | undefined;
+          (() => void) | undefined;
         cb?.();
         return true;
       });
@@ -1386,8 +1393,7 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          | ((error: Error) => void)
-          | undefined;
+          ((error: Error) => void) | undefined;
         cb?.(new Error("EPIPE: broken pipe"));
         return true;
       });

@@ -41,6 +41,7 @@ import type { CredentialsMutationStore } from "@traycer/protocol/config/credenti
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
+  type SignInRotation,
 } from "../store/credentials-store";
 import { errorFromUnknown, type ILogger } from "../logger";
 import type { Environment } from "../runner/environment";
@@ -187,6 +188,7 @@ const SILENT_OPEN_CONFIRMATIONS = 3;
 
 type ProbeRevalidator = {
   revalidateCurrentContext(): Promise<RevalidateOutcome>;
+  rotateSignIn(): Promise<SignInRotation>;
 };
 
 type AckObservation =
@@ -372,7 +374,7 @@ export async function provisionInstalledHostCredential(
     // token, or the sign-in only as `cliReleasedSignOn` allows.
     const tokens = createCliHostTokens({
       lease,
-      refresh: () => revalidator.revalidateCurrentContext(),
+      refresh: () => revalidator.rotateSignIn(),
       signal: probeAbort.signal,
     });
     const releasedSignOn = cliReleasedSignOn(lease, tokens);
@@ -396,11 +398,13 @@ export async function provisionInstalledHostCredential(
     // Recovery of a refused token, as on every other CLI open: one fresh
     // token and one more open, and a second refusal is final. A refusal is
     // read by the recovery of the host process the door named for that very
-    // refusal, never an earlier attempt's, and its verdict stands only while
-    // that process does: once it is replaced the stream reconnects on its
-    // backoff and asks the replacement. A token found expired before its dial
-    // belongs to the host that dial selected, the current endpoint while it
-    // runs.
+    // refusal, never an earlier attempt's. Once that process is replaced, or
+    // the endpoint has moved to another host, its rejection is not the
+    // replacement's: the stream reconnects on its backoff and asks the one
+    // there now. A `rotated` still counts and is paced by the stream as any
+    // other, and a signed-out person ends the run wherever it is. A token
+    // found expired before its dial belongs to the host that dial selected,
+    // the current endpoint while it runs.
     const refusedBy = new WeakMap<FatalErrorDetails, HostInstance>();
     const streamAuth: StreamAuthRevalidator = {
       revalidateForReconnect: () =>
@@ -413,7 +417,11 @@ export async function provisionInstalledHostCredential(
           owner?.hostId ?? null,
           (recovery) => recovery.revalidateRefused(refusal),
         );
-        return owner !== undefined && !processReleasedHosts.isCurrent(owner)
+        const left =
+          owner !== undefined &&
+          (!processReleasedHosts.isCurrent(owner) ||
+            endpoint?.hostId !== owner.hostId);
+        return left && outcome === "rejected" && !tokens.signInRejected()
           ? "network-error"
           : outcome;
       },
@@ -463,13 +471,12 @@ export async function provisionInstalledHostCredential(
       // is earned again after a good open, and fences off a `not-admitted` of
       // a mint begun before it.
       door: {
-        // Fenced: the process current now is the one that refused.
-        refused: (details, hostId) => {
-          refusedBy.set(details, processReleasedHosts.currentInstance(hostId));
+        refused: (details, instance) => {
+          refusedBy.set(details, instance);
         },
-        admitted: (hostId) => {
+        admitted: (instance) => {
           doorRetried = false;
-          return tokens.admitted(hostId);
+          return tokens.admitted(instance.hostId);
         },
       },
       // No tracker wired yet on the CLI side: this is a short-lived

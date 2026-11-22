@@ -105,6 +105,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     createCliCredentialsStore: vi.fn(() => ({ dispose: state.dispose })),
     createStoreBackedRevalidator: vi.fn(() => ({
       revalidateCurrentContext: state.revalidate,
+      rotateSignIn: state.revalidate,
     })),
   };
 });

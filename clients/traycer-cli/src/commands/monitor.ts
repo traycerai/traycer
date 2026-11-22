@@ -276,10 +276,10 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // a refusal hours after a good reconnect earns its one fresh token again.
     // A refusal names the host whose recovery answers it.
     door: {
-      refused: (details, hostId) => {
-        refusedBy.set(details, processReleasedHosts.currentInstance(hostId));
+      refused: (details, instance) => {
+        refusedBy.set(details, instance);
       },
-      admitted: (hostId) => credential.admitted(hostId),
+      admitted: (instance) => credential.admitted(instance.hostId),
     },
     // The refused socket's own host process.
     releasedWayTaken: (instance) => {
@@ -325,10 +325,18 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           ? Promise.resolve<RevalidateOutcome>("rejected")
           : credential.recover(owner.hostId, details);
       },
-      // A refusal no door heard is the current stream's own end.
+      // A refusal no door heard is the current stream's own end. One the door
+      // heard is still the monitor's while its host process is the one
+      // observed and its host is the endpoint the monitor watches.
       (details) => {
         const owner = refusedBy.get(details);
-        return owner === undefined || processReleasedHosts.isCurrent(owner);
+        if (owner === undefined) return null;
+        return {
+          hostId: owner.hostId,
+          current:
+            processReleasedHosts.isCurrent(owner) &&
+            endpoint?.hostId === owner.hostId,
+        };
       },
       credential.signInRejected,
       (listener) =>
@@ -430,7 +438,7 @@ async function signInMonitorCredential(
   });
   const hostTokens = createCliHostTokens({
     lease,
-    refresh: () => revalidator.revalidateCurrentContext(),
+    refresh: () => revalidator.rotateSignIn(),
     signal: null,
   });
   // The tokens on disk, so the first dial presents the held one.
@@ -528,8 +536,13 @@ type InboxTarget = { readonly agentId: string; readonly epicId: string };
 
 type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
 
-/** Whether the host process that refused is still the one observed. */
-type InboxRefusalCurrent = (details: FatalErrorDetails) => boolean;
+/**
+ * The host that refused, and whether it is still the monitor's: the same host
+ * process, at the endpoint it watches. `null` for a refusal no door heard.
+ */
+type InboxRefusalOf = (
+  details: FatalErrorDetails,
+) => { readonly hostId: string; readonly current: boolean } | null;
 
 type InboxMintRefusals = (
   listener: (failure: CliHostTokenFailure, tookReleasedWay: boolean) => void,
@@ -554,8 +567,10 @@ const SESSION_EXPIRED_LINE =
  *   - `rejected`      → terminal, with the door's line: sign-in advice only
  *                       when `signInRejected()` says this machine is signed
  *                       out in fact.
- * None applies once the host process that refused has been replaced: the
- * monitor re-subscribes, and the replacement answers its own open.
+ * Once the host process that refused has been replaced, or the monitor has
+ * moved to another host, only a `rotated` step still counts (per host id) and
+ * a signed-out person still ends it; otherwise the monitor re-subscribes after
+ * the ordinary delay, and the replacement answers its own open.
  * Every other fatal (e.g. `INCOMPATIBLE`) is terminal, with the door's line
  * when it is a door refusal.
  *
@@ -569,7 +584,7 @@ const SESSION_EXPIRED_LINE =
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   recover: InboxRecovery,
-  refusalCurrent: InboxRefusalCurrent,
+  refusalOf: InboxRefusalOf,
   signInRejected: () => boolean,
   mintRefusals: InboxMintRefusals,
   presented: "host-token" | "agent-capability",
@@ -580,7 +595,10 @@ function runInboxSubscription(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let session: IStreamSession | null = null;
+    // Counted per host id, as cli-v1.5.4 counted; a refusal from another host
+    // id starts it again.
     let authRefreshCount = 0;
+    let countedHostId: string | null = null;
     let healthTimer: NodeJS.Timeout | null = null;
     let retryTimer: NodeJS.Timeout | null = null;
     let settled = false;
@@ -744,12 +762,23 @@ function runInboxSubscription(
       if (settled) {
         return;
       }
-      // The host process that refused was replaced while its recovery ran:
-      // that verdict is not the replacement's, which is asked its own open.
-      if (!refusalCurrent(details)) {
-        subscribe();
-        return;
-      }
+      // The refusal arrived from the process the monitor watched. If that
+      // process was replaced, or the monitor moved to another host, while its
+      // recovery ran, the verdict is not the replacement's: only its refresh
+      // step counts, as in cli-v1.5.4, and the next subscription waits the
+      // ordinary delay to ask the replacement its own open. A person signed
+      // out ends the monitor wherever it is.
+      const refusal = refusalOf(details);
+      const left = refusal !== null && !refusal.current;
+      const subscribeAfterDelay = (): void => {
+        logger.debug("Monitor auth verdict outlived its host; retry scheduled", {
+          environment: config.environment,
+          retryDelayMs: AUTH_RETRY_DELAY_MS,
+          agentId: target.agentId,
+          epicId: target.epicId,
+        });
+        retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
+      };
       logger.debug("Monitor auth revalidation completed", {
         environment: config.environment,
         outcome,
@@ -758,6 +787,10 @@ function runInboxSubscription(
         epicId: target.epicId,
       });
       if (outcome === "rotated") {
+        if (refusal !== null && refusal.hostId !== countedHostId) {
+          authRefreshCount = 0;
+          countedHostId = refusal.hostId;
+        }
         authRefreshCount += 1;
         if (authRefreshCount > MAX_CONSECUTIVE_AUTH_REFRESHES) {
           // The bearer genuinely rotated on every attempt yet the host
@@ -773,6 +806,10 @@ function runInboxSubscription(
               `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).`,
             ),
           );
+          return;
+        }
+        if (left) {
+          subscribeAfterDelay();
           return;
         }
         diag("bearer refreshed after auth rejection — re-subscribing");
@@ -797,6 +834,10 @@ function runInboxSubscription(
         return;
       }
       const signedOut = signInRejected();
+      if (left && !signedOut) {
+        subscribeAfterDelay();
+        return;
+      }
       // A released host's refusal of the person's sign-in, in the released
       // monitor's words: the host's reason where its line counted refreshes
       // this monitor no longer counts.

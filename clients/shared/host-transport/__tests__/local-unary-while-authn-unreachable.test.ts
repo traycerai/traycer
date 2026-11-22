@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { UNARY_CAPABILITY_PERSISTENT_SESSION } from "@traycer/protocol/framework/index";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
@@ -16,7 +17,12 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
-import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
+import {
+  defineFallbackMethodDegrade,
+  defineRpcContract,
+  defineVersionedRpcRegistry,
+  type FatalErrorDetails,
+} from "@traycer/protocol/framework/index";
 import type { HostDoorObserver, HostDoorStateKind } from "../host-door-state";
 import type {
   WebSocketCloseEvent,
@@ -38,9 +44,63 @@ import {
   type ReleasedUnaryCause,
   type ReleasedUnarySignOn,
 } from "../released-sign-on";
-import type { HostRequestAuthority } from "../host-messenger";
+import type { HostRequestAuthority, IHostMessenger } from "../host-messenger";
 import { WsRpcClient } from "../ws-rpc-client";
-import { echoRegistry } from "./__fixtures__/echo-registry";
+import { createAuthAwareMessenger } from "../auth-aware-messenger";
+import type { RefusalAwareAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import {
+  getNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "../negotiated-manifest-registry";
+
+const echoV10 = defineRpcContract({
+  method: "host.echo",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const echo2V10 = defineRpcContract({
+  method: "host.echo2",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+/** `host.echo2` degrades to `host.echo` against a host that does not advertise it. */
+const unaryRegistry = defineVersionedRpcRegistry({
+  "host.echo": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: echoV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.echo2": {
+    degrade: defineFallbackMethodDegrade<
+      typeof echo2V10,
+      typeof echoV10,
+      "host.echo"
+    >({
+      kind: "fallback",
+      to: { method: "host.echo", major: 1, minor: 0 },
+      adaptRequest: (request) => request,
+      adaptResponse: (response) => response,
+    }),
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: echo2V10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+});
+
+/** The method the call under test names; `host.echo2` is the one that degrades. */
+let calledMethod: "host.echo" | "host.echo2" = "host.echo";
 
 const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const SIGN_IN = "person-sign-in";
@@ -100,6 +160,19 @@ function readFrame(raw: string): Record<string, unknown> {
     frame[key] = entry;
   }
   return frame;
+}
+
+function readManifest(manifest: unknown): Record<string, unknown> {
+  if (
+    typeof manifest !== "object" ||
+    manifest === null ||
+    Array.isArray(manifest)
+  )
+    throw new Error("the manifest was not an object");
+  const entries: Record<string, unknown> = {};
+  for (const [method, version] of Object.entries(manifest))
+    entries[method] = version;
+  return entries;
 }
 
 function openToken(socket: UnarySocket): unknown {
@@ -191,17 +264,23 @@ function recordingDoor(): {
   readonly door: HostDoorObserver;
   readonly refusals: FatalErrorDetails[];
   readonly states: HostDoorStateKind[];
+  readonly admissions: () => number;
 } {
   const refusals: FatalErrorDetails[] = [];
   const states: HostDoorStateKind[] = [];
+  let admissions = 0;
   return {
     refusals,
     states,
+    admissions: () => admissions,
     door: {
       refused: (details) => {
         refusals.push(details);
       },
-      admitted: () => () => undefined,
+      admitted: () => {
+        admissions += 1;
+        return () => undefined;
+      },
     },
   };
 }
@@ -279,27 +358,29 @@ interface EchoRejection {
 type EchoResult = EchoSettlement | EchoRejection;
 
 interface DrivenCall {
-  readonly client: WsRpcClient<typeof echoRegistry>;
+  readonly client: WsRpcClient<typeof unaryRegistry>;
   readonly sockets: UnarySocket[];
   readonly refusals: FatalErrorDetails[];
   readonly states: HostDoorStateKind[];
+  /** How many connections the door was told the host admitted. */
+  readonly admissions: () => number;
   readonly settled: Promise<EchoResult>;
   finished: boolean;
 }
 
 function requestEcho(
-  client: WsRpcClient<typeof echoRegistry>,
+  client: WsRpcClient<typeof unaryRegistry>,
 ): Promise<EchoResult> {
   return requestEchoUntil(client, new AbortController().signal);
 }
 
 function requestEchoUntil(
-  client: WsRpcClient<typeof echoRegistry>,
+  client: Pick<IHostMessenger<typeof unaryRegistry>, "request">,
   abortSignal: AbortSignal,
 ): Promise<EchoResult> {
   return client
     .request(
-      "host.echo",
+      calledMethod,
       { message: "hi" },
       {
         idempotencyKey: null,
@@ -346,7 +427,7 @@ function driveCallUntil(
 type SignOnFor = (
   authority: HostRequestAuthority,
   cause: ReleasedUnaryCause,
-) => Promise<ReleasedUnarySignOn | null>;
+) => ReleasedUnarySignOn | null;
 
 /** The real client, with the row read live at every decision and the sign-in's refresh and the host memory the test gives it. */
 function driveCallOnRow(input: {
@@ -356,7 +437,11 @@ function driveCallOnRow(input: {
   readonly hosts: ReleasedHostMemory | null;
   readonly abortSignal: AbortSignal;
 }): DrivenCall {
-  return driveCallThroughSignOn(input, (answerFromRow) => answerFromRow);
+  return driveCallThroughSignOn(
+    input,
+    (answerFromRow) => answerFromRow,
+    (client) => client,
+  );
 }
 
 /** As {@link driveCallOnRow}, with the answer from the row passed through `throughSignOn` before the client sees it. */
@@ -369,6 +454,9 @@ function driveCallThroughSignOn(
     readonly abortSignal: AbortSignal;
   },
   throughSignOn: (answerFromRow: SignOnFor) => SignOnFor,
+  messengerOver: (
+    client: WsRpcClient<typeof unaryRegistry>,
+  ) => IHostMessenger<typeof unaryRegistry>,
 ): DrivenCall {
   const { tokens, readRow, recovery, hosts, abortSignal } = input;
   const sockets: UnarySocket[] = [];
@@ -379,11 +467,11 @@ function driveCallThroughSignOn(
       return socket;
     },
   };
-  const { door, refusals, states } = recordingDoor();
+  const { door, refusals, states, admissions } = recordingDoor();
   let nextRequestId = 0;
   const client = new WsRpcClient({
     clientIdentity: TEST_CLIENT_IDENTITY,
-    registry: echoRegistry,
+    registry: unaryRegistry,
     requestId: () => `req-${(nextRequestId += 1)}`,
     webSocketFactory: factory,
     dialTimeoutMs: 1_000,
@@ -416,8 +504,9 @@ function driveCallThroughSignOn(
     sockets,
     refusals,
     states,
+    admissions,
     finished: false,
-    settled: requestEchoUntil(client, abortSignal),
+    settled: requestEchoUntil(messengerOver(client), abortSignal),
   };
   void driven.settled.then(
     () => {
@@ -462,13 +551,14 @@ async function answerEcho(socket: UnarySocket): Promise<void> {
   });
 }
 
-const clients: WsRpcClient<typeof echoRegistry>[] = [];
+const clients: WsRpcClient<typeof unaryRegistry>[] = [];
 
 /** The memory of the host's answers that every client and token source of a case shares. */
 let memory: ReleasedHostMemory = createReleasedHostMemory();
 
 beforeEach(() => {
   memory = createReleasedHostMemory();
+  calledMethod = "host.echo";
 });
 
 afterEach(() => {
@@ -1456,11 +1546,15 @@ describe("a sign-in is written only where its row and its host still allow it", 
     expect(driven.sockets).toHaveLength(1);
   });
 
-  it("applies no decline and plans no sign-in when the probe's answer comes from a host process that was since replaced", async () => {
+  it("applies no decline and plans no sign-in when the probe's answer comes from a host process that was since replaced, and redials the probe once", async () => {
     const hosts = memory;
     hosts.observeInstance(mockLocalHostEntry.hostId, "process-a");
+    const { tokens } = sourceOf([
+      { kind: "not-admitted" },
+      { kind: "not-admitted" },
+    ]);
     const driven = driveCallOnRow({
-      tokens: blackHoledTokens().tokens,
+      tokens,
       readRow: () => PERSONAL_ROW,
       recovery: null,
       hosts,
@@ -1476,16 +1570,29 @@ describe("a sign-in is written only where its row and its host still allow it", 
     expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
     hosts.observeInstance(mockLocalHostEntry.hostId, "process-b");
     probe.fireMessage(namedRefusal("not_admitted"));
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    // The stale answer declined nothing and planned nothing: the call probes again.
+    expect(hosts.probeDeclined(USER_ID, mockLocalHostEntry.hostId)).toBe(false);
+    expect(driven.finished).toBe(false);
+    const redialed = driven.sockets[1];
+    if (redialed === undefined) throw new Error("redial missing");
+    expect((await openAndRead(redialed)).token).toBe(NO_HOST_TOKEN_PROBE);
+    redialed.fireMessage(namedRefusal("not_admitted"));
     await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
     expect(await driven.settled).toMatchObject({
       kind: "rejected",
       error: { message: NO_HOST_TOKEN_MESSAGE },
     });
-    expect(hosts.probeDeclined(USER_ID, mockLocalHostEntry.hostId)).toBe(false);
-    expect(driven.sockets).toHaveLength(1);
+    // The current process's own answer is the one that counts.
+    expect(hosts.probeDeclined(USER_ID, mockLocalHostEntry.hostId)).toBe(true);
+    expect(everythingWritten(driven)).not.toContain(SIGN_IN);
+    expect(driven.sockets).toHaveLength(2);
   });
 
-  it("marks nothing for the current host process and tells the door nothing when a refusal comes from one that was since replaced", async () => {
+  it("marks nothing for the current host process and tells the door nothing when a refusal comes from one that was since replaced, and serves the redial", async () => {
     const hosts = memory;
     hosts.observeInstance(mockLocalHostEntry.hostId, "process-a");
     const { source, tokens } = sourceOf([]);
@@ -1512,10 +1619,26 @@ describe("a sign-in is written only where its row and its host still allow it", 
     expect((await openAndRead(socket)).token).toBe("usable-host-token");
     hosts.observeInstance(mockLocalHostEntry.hostId, "process-b");
     socket.fireMessage(namedRefusal("not_admitted"));
-    await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    expect(hosts.namedReason(mockLocalHostEntry.hostId)).toBe(false);
+    expect(driven.refusals).toEqual([]);
+    const redialed = driven.sockets[1];
+    if (redialed === undefined) throw new Error("redial missing");
+    const open = await openAndRead(redialed);
+    expect(open.token).toBe("usable-host-token");
+    ackAndEcho(redialed, open);
+    await answerEcho(redialed);
+    expect(await driven.settled).toEqual({
+      kind: "fulfilled",
+      value: { echoed: "hi" },
+    });
     expect(hosts.namedReason(mockLocalHostEntry.hostId)).toBe(false);
     expect(driven.refusals).toEqual([]);
     expect(everythingWritten(driven)).not.toContain(SIGN_IN);
+    expect(driven.sockets).toHaveLength(2);
   });
 
   /** A bare refusal by host process "100" plans the sign-in; the replacement socket has not yet written its OPEN. */
@@ -1569,133 +1692,20 @@ describe("a sign-in is written only where its row and its host still allow it", 
     expect(openToken(replacement)).toBe(SIGN_IN);
   });
 
-  interface HeldRowRead {
-    readonly throughSignOn: (answerFromRow: SignOnFor) => SignOnFor;
-    /** Holds the next read, whatever asks. */
-    readonly hold: () => void;
-    /** Holds the `n`th read made for `cause` from now on. */
-    readonly holdNthRead: (cause: ReleasedUnaryCause, n: number) => void;
-    readonly waiting: () => number;
-    readonly release: () => void;
-  }
-
-  /** Holds the answer of a row read until the test lets it through. */
-  function heldRowRead(): HeldRowRead {
-    let held: {
-      readonly open: Promise<void>;
-      readonly let: () => void;
-    } | null = null;
-    let nth: {
-      readonly cause: ReleasedUnaryCause;
-      readonly n: number;
-      seen: number;
-    } | null = null;
-    let waiting = 0;
-    const newGate = (): {
-      readonly open: Promise<void>;
-      readonly let: () => void;
-    } => {
-      let letThrough: () => void = () => undefined;
-      const open = new Promise<void>((resolve) => {
-        letThrough = resolve;
-      });
-      return { open, let: letThrough };
-    };
-    return {
-      throughSignOn: (answerFromRow) => async (authority, cause) => {
-        let gate = held;
-        if (gate === null && nth !== null && nth.cause === cause) {
-          nth.seen += 1;
-          if (nth.seen === nth.n) {
-            gate = newGate();
-            held = gate;
-            nth = null;
-          }
-        }
-        if (gate !== null) {
-          waiting += 1;
-          await gate.open;
-        }
-        return answerFromRow(authority, cause);
-      },
-      hold: () => {
-        held = newGate();
-      },
-      holdNthRead: (cause, n) => {
-        nth = { cause, n, seen: 0 };
-      },
-      waiting: () => waiting,
-      release: () => {
-        held?.let();
-        held = null;
-      },
-    };
-  }
-
-  async function plannedWithHeldRowRead(hosts: ReleasedHostMemory): Promise<{
-    readonly driven: DrivenCall;
-    readonly replacement: UnarySocket;
-    readonly row: HeldRowRead;
-  }> {
-    const row = heldRowRead();
-    const driven = driveCallThroughSignOn(
-      {
-        tokens: await heldExpiredReleasedHost(),
-        readRow: () => PERSONAL_ROW,
-        recovery: null,
-        hosts,
-        abortSignal: new AbortController().signal,
-      },
-      row.throughSignOn,
-    );
-    clients.push(driven.client);
-    await planReleasedSignIn(driven);
-    const replacement = driven.sockets[1];
-    if (replacement === undefined) throw new Error("replacement dial missing");
-    row.hold();
-    replacement.fireOpen();
-    await vi.waitFor(
-      () => expect(row.waiting()).toBeGreaterThanOrEqual(1),
-      WAIT,
-    );
-    return { driven, replacement, row };
-  }
-
-  it("writes no sign-in when another transport hears the host name a reason while the OPEN waits on the row", async () => {
+  it("writes no sign-in when another transport hears the host name a reason before the OPEN is written", async () => {
     const hosts = memory;
-    const { driven, replacement, row } = await plannedWithHeldRowRead(hosts);
+    const { driven, replacement } = await plannedByProcess100(hosts);
     hosts.refusedNamingReason(
       hosts.currentInstance(mockLocalHostEntry.hostId),
       false,
     );
-    row.release();
-    await vi.waitFor(
-      () =>
-        expect(
-          replacement.sent.length > 0 ||
-            driven.finished ||
-            driven.sockets.length >= 3,
-        ).toBe(true),
-      WAIT,
-    );
+    await replacementWritesOrCallEnds(driven, replacement);
     expect(replacement.sent.join("\n")).not.toContain(SIGN_IN);
     expect(signInOpens(driven)).toBe(0);
   });
 
-  it("writes the sign-in once the held row read answers, when the host named no reason meanwhile", async () => {
-    const { driven, replacement, row } = await plannedWithHeldRowRead(memory);
-    row.release();
-    await vi.waitFor(
-      () => expect(replacement.sent.length).toBeGreaterThan(0),
-      WAIT,
-    );
-    expect(openToken(replacement)).toBe(SIGN_IN);
-    expect(driven.sockets).toHaveLength(2);
-  });
-
   it("writes no sign-in on a persistent session once the row moves to a team before the invited call's request, drops the session and dials the call as a first dial", async () => {
     let row: ReleasedSignOnRow = PERSONAL_ROW;
-    const reads = heldRowRead();
     const expired = expiredJwt(Date.now());
     const { source, tokens } = sourceOf([
       { kind: "unavailable", detail: "authn offline" },
@@ -1714,7 +1724,14 @@ describe("a sign-in is written only where its row and its host still allow it", 
         hosts: memory,
         abortSignal: new AbortController().signal,
       },
-      reads.throughSignOn,
+      // The row answers the invitation as a personal computer's, then becomes
+      // a team's: everything that writes the sign-in afterwards reads the team's.
+      (answerFromRow) => (authority, cause) => {
+        const answer = answerFromRow(authority, cause);
+        if (cause === "owner-sign-in") row = TEAM_ROW;
+        return answer;
+      },
+      (client) => client,
     );
     clients.push(driven.client);
     // Call B: its host-only token is presented and the host admits a persistent session on it.
@@ -1741,7 +1758,6 @@ describe("a sign-in is written only where its row and its host still allow it", 
       memory.currentInstance(mockLocalHostEntry.hostId),
       expired.token,
     );
-    reads.holdNthRead("owner-sign-in", 2);
     void requestEcho(driven.client);
     await vi.waitFor(
       () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
@@ -1751,7 +1767,7 @@ describe("a sign-in is written only where its row and its host still allow it", 
     if (probe === undefined) throw new Error("probe dial missing");
     expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
     probe.fireMessage(namedRefusal("owner_sign_in"));
-    // The row is asked again where the invited call is written, and answers once the person's computer is a team's.
+    // The invited call is written once the person's computer is a team's.
     const opened = new Set<UnarySocket>();
     const openWhenDialed = (index: number): void => {
       const dialed = driven.sockets[index];
@@ -1760,12 +1776,6 @@ describe("a sign-in is written only where its row and its host still allow it", 
         dialed.fireOpen();
       }
     };
-    await vi.waitFor(() => {
-      openWhenDialed(2);
-      expect(reads.waiting()).toBeGreaterThanOrEqual(1);
-    }, WAIT);
-    row = TEAM_ROW;
-    reads.release();
     await vi.waitFor(() => {
       openWhenDialed(2);
       expect(driven.sockets[2]?.sent.length ?? 0).toBeGreaterThan(0);
@@ -1790,6 +1800,82 @@ describe("a sign-in is written only where its row and its host still allow it", 
     );
     expect(session.sent).toHaveLength(writtenOnB);
     expect(driven.sockets).toHaveLength(4);
+  });
+
+  it("writes no sign-in in discovery's first request when the row becomes a team's while the openAck is awaited", async () => {
+    let row: ReleasedSignOnRow = PERSONAL_ROW;
+    const driven = driveCallOnRow({
+      tokens: await heldExpiredReleasedHost(),
+      readRow: () => row,
+      recovery: null,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await planReleasedSignIn(driven);
+    const replacement = driven.sockets[1];
+    if (replacement === undefined) throw new Error("replacement dial missing");
+    const open = await openAndRead(replacement);
+    expect(open.token).toBe(SIGN_IN);
+    // The sign-in is on the wire; the row moves while the host's answer is awaited.
+    row = TEAM_ROW;
+    replacement.fireMessage({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: open.optionalManifest,
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    await vi.waitFor(
+      () =>
+        expect(
+          replacement.sent.length > 1 ||
+            driven.finished ||
+            driven.sockets.length >= 3,
+        ).toBe(true),
+      WAIT,
+    );
+    expect(replacement.sent.slice(1).join("\n")).not.toContain(SIGN_IN);
+  });
+
+  it("writes no sign-in in a degraded request when the row becomes a team's while the openAck is awaited", async () => {
+    calledMethod = "host.echo2";
+    let row: ReleasedSignOnRow = PERSONAL_ROW;
+    const driven = driveCallOnRow({
+      tokens: await heldExpiredReleasedHost(),
+      readRow: () => row,
+      recovery: null,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await planReleasedSignIn(driven);
+    const replacement = driven.sockets[1];
+    if (replacement === undefined) throw new Error("replacement dial missing");
+    const open = await openAndRead(replacement);
+    expect(open.token).toBe(SIGN_IN);
+    row = TEAM_ROW;
+    // The host advertises only `host.echo`, so the call to `host.echo2` degrades to it.
+    const advertised = Object.fromEntries(
+      Object.entries(readManifest(open.manifest)).filter(
+        ([method]) => method !== "host.echo2",
+      ),
+    );
+    replacement.fireMessage({
+      kind: "openAck",
+      manifest: advertised,
+      optionalManifest: open.optionalManifest,
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    await vi.waitFor(
+      () =>
+        expect(
+          replacement.sent.length > 1 ||
+            driven.finished ||
+            driven.sockets.length >= 3,
+        ).toBe(true),
+      WAIT,
+    );
+    expect(replacement.sent.slice(1).join("\n")).not.toContain(SIGN_IN);
   });
 });
 
@@ -1850,3 +1936,311 @@ async function admitAfterProbe(driven: DrivenCall): Promise<void> {
   ackAndEcho(second, open);
   await answerEcho(second);
 }
+
+describe("a frame from a host process that was since replaced crosses nothing", () => {
+  const HOST_ID = mockLocalHostEntry.hostId;
+
+  async function usableTokens(): Promise<TrackedHostTokens> {
+    const { source, tokens } = sourceOf([]);
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      { token: "usable-host-token", expiresAtMs: Date.now() + 3_600_000 },
+      source.era(USER_ID),
+    );
+    return tokens;
+  }
+
+  async function firstDialUnderProcess100(): Promise<{
+    readonly driven: DrivenCall;
+    readonly first: UnarySocket;
+    readonly open: Record<string, unknown>;
+  }> {
+    resetNegotiatedManifests();
+    memory.observeInstance(HOST_ID, "100");
+    const driven = driveCallOnRow({
+      tokens: await usableTokens(),
+      readRow: () => PERSONAL_ROW,
+      recovery: null,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const first = driven.sockets[0];
+    if (first === undefined) throw new Error("first dial missing");
+    return { driven, first, open: await openAndRead(first) };
+  }
+
+  /** B has a ready persistent session under process "100", and a second call is written on it. */
+  async function secondCallWrittenOnSession(): Promise<{
+    readonly driven: DrivenCall;
+    readonly session: UnarySocket;
+    readonly second: Promise<EchoResult>;
+    readonly written: Record<string, unknown>;
+  }> {
+    const { driven, first, open } = await firstDialUnderProcess100();
+    first.fireMessage({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: open.optionalManifest,
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    await answerEcho(first);
+    expect(await driven.settled).toMatchObject({ kind: "fulfilled" });
+    const second = requestEcho(driven.client);
+    await vi.waitFor(
+      () => expect(first.sent.length).toBeGreaterThanOrEqual(3),
+      WAIT,
+    );
+    return {
+      driven,
+      session: first,
+      second,
+      written: readFrame(first.sent[2]),
+    };
+  }
+
+  const ackFrame = (
+    open: Record<string, unknown>,
+    capabilities: readonly string[],
+  ): unknown => ({
+    kind: "openAck",
+    manifest: open.manifest,
+    optionalManifest: open.optionalManifest,
+    capabilities,
+  });
+
+  it.each([
+    {
+      name: "an openAck that admits a persistent session",
+      frame: (open: Record<string, unknown>): unknown =>
+        ackFrame(open, [UNARY_CAPABILITY_PERSISTENT_SESSION]),
+    },
+    {
+      name: "an openAck of a host without persistent sessions",
+      frame: (open: Record<string, unknown>): unknown => ackFrame(open, []),
+    },
+    {
+      name: "an openAck that covers none of the call's methods",
+      frame: (open: Record<string, unknown>): unknown => ({
+        kind: "openAck",
+        manifest: {},
+        optionalManifest: open.optionalManifest,
+      }),
+    },
+    {
+      name: "a fatal naming not_admitted",
+      frame: (): unknown => namedRefusal("not_admitted"),
+    },
+  ])(
+    "tells the door nothing, records no manifest and redials once on $name before the request is written",
+    async ({ frame }) => {
+      const { driven, first, open } = await firstDialUnderProcess100();
+      memory.observeInstance(HOST_ID, "200");
+      first.fireMessage(frame(open));
+      await vi.waitFor(
+        () => expect(driven.finished || driven.sockets.length >= 2).toBe(true),
+        WAIT,
+      );
+      expect(driven.admissions()).toBe(0);
+      expect(driven.refusals).toEqual([]);
+      expect(getNegotiatedHostMethods(HOST_ID)).toBeNull();
+      expect(driven.sockets.length).toBeGreaterThanOrEqual(2);
+      expect(driven.finished).toBe(false);
+      expect(first.sent).toHaveLength(1);
+    },
+  );
+
+  it("pools later calls on one session after a stale ack of a host without persistent sessions, never latching the key to one socket per call", async () => {
+    const { driven, first, open } = await firstDialUnderProcess100();
+    memory.observeInstance(HOST_ID, "200");
+    first.fireMessage(ackFrame(open, []));
+    // The next call, before anything is said about a redial of the stale one.
+    let nextSettled = false;
+    void requestEcho(driven.client).then(() => {
+      nextSettled = true;
+    });
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    const session = driven.sockets[1];
+    if (session === undefined) throw new Error("pooled dial missing");
+    const reopen = await openAndRead(session);
+    session.fireMessage(
+      ackFrame(reopen, [UNARY_CAPABILITY_PERSISTENT_SESSION]),
+    );
+    const answered = new Set<unknown>();
+    const answerNewRequests = (): void => {
+      for (const raw of session.sent) {
+        const frame = readFrame(raw);
+        if (frame.kind !== "request" || answered.has(frame.requestId)) continue;
+        answered.add(frame.requestId);
+        session.fireMessage({
+          kind: "response",
+          requestId: frame.requestId,
+          method: frame.method,
+          schemaVersion: frame.schemaVersion,
+          result: { echoed: "hi" },
+          error: null,
+        });
+      }
+    };
+    await vi.waitFor(() => {
+      answerNewRequests();
+      expect(nextSettled).toBe(true);
+    }, WAIT);
+    // A third call rides the same session: one socket does not serve one call.
+    const writtenBefore = session.sent.length;
+    void requestEcho(driven.client);
+    await vi.waitFor(
+      () =>
+        expect(
+          session.sent.length > writtenBefore || driven.sockets.length >= 3,
+        ).toBe(true),
+      WAIT,
+    );
+    expect(driven.sockets).toHaveLength(2);
+    expect(session.sent.length).toBeGreaterThan(writtenBefore);
+  });
+
+  it("starts no refusal recovery in the app wrapper when a stale fatal naming not_admitted arrives", async () => {
+    resetNegotiatedManifests();
+    memory.observeInstance(HOST_ID, "100");
+    const recoveries: Array<FatalErrorDetails | null> = [];
+    const auth: RefusalAwareAuthRevalidator = {
+      revalidateExpectedBearer: () => Promise.resolve("rejected"),
+      revalidateRefusedBearer: (_bearer, _hostId, refusal) => {
+        recoveries.push(refusal);
+        return Promise.resolve("rejected");
+      },
+    };
+    const driven = driveCallThroughSignOn(
+      {
+        tokens: await usableTokens(),
+        readRow: () => PERSONAL_ROW,
+        recovery: null,
+        hosts: null,
+        abortSignal: new AbortController().signal,
+      },
+      (answerFromRow) => answerFromRow,
+      (client) => createAuthAwareMessenger(client, auth, "always"),
+    );
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const first = driven.sockets[0];
+    if (first === undefined) throw new Error("first dial missing");
+    await openAndRead(first);
+    memory.observeInstance(HOST_ID, "200");
+    first.fireMessage(namedRefusal("not_admitted"));
+    await vi.waitFor(
+      () => expect(driven.finished || driven.sockets.length >= 2).toBe(true),
+      WAIT,
+    );
+    expect(recoveries).toEqual([]);
+    expect(driven.sockets.length).toBeGreaterThanOrEqual(2);
+    expect(driven.finished).toBe(false);
+  });
+
+  it("lets the response to a request already written on the session pass", async () => {
+    const { driven, session, second, written } =
+      await secondCallWrittenOnSession();
+    memory.observeInstance(HOST_ID, "200");
+    session.fireMessage({
+      kind: "response",
+      requestId: written.requestId,
+      method: written.method,
+      schemaVersion: written.schemaVersion,
+      result: { echoed: "hi" },
+      error: null,
+    });
+    expect(await second).toMatchObject({ kind: "fulfilled" });
+    expect(driven.sockets).toHaveLength(1);
+  });
+
+  it("lets a method error answering a written request pass, and tells the door nothing", async () => {
+    const { driven, session, second, written } =
+      await secondCallWrittenOnSession();
+    memory.observeInstance(HOST_ID, "200");
+    session.fireMessage({
+      kind: "response",
+      requestId: written.requestId,
+      method: written.method,
+      schemaVersion: written.schemaVersion,
+      result: null,
+      error: { code: "RPC_ERROR", message: "the method failed" },
+    });
+    expect(await second).toMatchObject({
+      kind: "rejected",
+      error: { message: "the method failed" },
+    });
+    expect(driven.refusals).toEqual([]);
+    expect(driven.sockets).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "a per-request door refusal",
+      frame: (written: Record<string, unknown>): unknown => ({
+        kind: "response",
+        requestId: written.requestId,
+        method: written.method,
+        schemaVersion: written.schemaVersion,
+        result: null,
+        error: {
+          code: "UNAUTHORIZED",
+          message: "not admitted",
+          retryable: true,
+          doorReason: "not_admitted",
+        },
+      }),
+    },
+    {
+      name: "a fatal",
+      frame: (): unknown => namedRefusal("not_admitted"),
+    },
+  ])(
+    "redials once and tells the door nothing on $name after the request was written",
+    async ({ frame }) => {
+      const { driven, session, written } = await secondCallWrittenOnSession();
+      memory.observeInstance(HOST_ID, "200");
+      session.fireMessage(frame(written));
+      // The first call finished long ago, so only the redial of the second counts.
+      await vi.waitFor(
+        () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+        WAIT,
+      );
+      expect(driven.refusals).toEqual([]);
+      expect(driven.sockets.length).toBeGreaterThanOrEqual(2);
+    },
+  );
+
+  it("reports a per-request door refusal of the current owner to the door (control)", async () => {
+    const { driven, session, written } = await secondCallWrittenOnSession();
+    session.fireMessage({
+      kind: "response",
+      requestId: written.requestId,
+      method: written.method,
+      schemaVersion: written.schemaVersion,
+      result: null,
+      error: {
+        code: "UNAUTHORIZED",
+        message: "not admitted",
+        retryable: true,
+        doorReason: "not_admitted",
+      },
+    });
+    await vi.waitFor(
+      () => expect(driven.refusals.length).toBeGreaterThan(0),
+      WAIT,
+    );
+    expect(driven.refusals[0]).toMatchObject({ doorReason: "not_admitted" });
+  });
+});

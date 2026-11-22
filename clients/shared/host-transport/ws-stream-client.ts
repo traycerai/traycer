@@ -76,6 +76,7 @@ import type {
   HostCredentialMintOutcome,
 } from "./host-credential-mint-flow";
 import type {
+  BackoffSignalling,
   IStreamSession,
   ServerFrameHandler,
   StatusChangeHandler,
@@ -110,10 +111,13 @@ import {
   isReleasedHostTokenRefusal,
   markReleasedSignInRefusal,
   processReleasedHosts,
+  signInMayBeWritten,
   type HostInstance,
-  type InvitationMark,
   type ReleasedHostMemory,
   type ReleasedSignOn,
+  type SignInAuthority,
+  type SignInRecovery,
+  type SignInWriteCheck,
 } from "./released-sign-on";
 import { NO_MINT_CALLER, type MintCaller } from "../auth/host-token-lease";
 
@@ -314,18 +318,6 @@ export interface WsStreamClientOptions<
  * preceding text envelope whose `hasBinaryPayload` flag is `true`. WS
  * in-order delivery is the correlation; no sequence id is added.
  */
-
-/**
- * Whether the status event `session` is delivering now is a `reconnecting`
- * the stream follows at once with another dial, whatever the cause: the
- * placeholder to a host with no host-only token, the sign-in a host's answer
- * planned, or the refresh of a refused credential whose answer it dials on.
- * A `reconnecting` without it means the stream entered backoff or parked.
- * False for every other transition and every session not this client's.
- */
-export function dialsNow(session: IStreamSession): boolean {
-  return session instanceof StreamSession && session.dialsAtOnce;
-}
 
 /**
  * Builds the inert `IStreamSession` returned when `subscribe()` is called on a
@@ -1882,6 +1874,13 @@ interface DialSequence {
   running: Promise<RevalidateOutcome> | null;
 }
 
+/** The host instance whose answer made `authority`. */
+function authorityOwner(authority: SignInAuthority): HostInstance {
+  return authority.kind === "invited"
+    ? authority.invitation.instance
+    : authority.owner;
+}
+
 /**
  * One open stream. Owns the per-connect socket plus every timer wired to
  * it (dial, open-ack, heartbeat, reconnect backoff). The class is
@@ -1891,17 +1890,16 @@ interface DialSequence {
  */
 class StreamSession<
   Registry extends VersionedStreamRpcRegistry,
-> implements IStreamSession {
+> implements IStreamSession, BackoffSignalling {
   private readonly config: StreamSessionOptions<Registry>;
 
   private status: StreamConnectionStatus = "connecting";
   private negotiatedSchemaVersion: SchemaVersion | null = null;
   /** {@link IStreamSession.hasSentOpenRequest}. */
   private openRequestSent = false;
-  /** {@link dialsNow}: set only while that `reconnecting` is delivered. */
-  dialsAtOnce = false;
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
+  private readonly backoffListeners = new Set<() => void>();
   private reconnectAttempt = 0;
   /**
    * Count of consecutive recoverable drops caused by a host slow-client
@@ -1988,20 +1986,15 @@ class StreamSession<
     | "owner-sign-in-next"
     | "owner-sign-in" = "host-token";
   /**
-   * The host instance whose answer planned the sign-in. A dial to any other
-   * host (the endpoint moved meanwhile), or to another instance of it, starts
-   * on the host-only token, and the sign-in plans are withdrawn at the OPEN
-   * once it is not current: one instance's answer is never spent on another,
-   * and a restarted host is asked its own open first.
+   * Who the sign-in plans are written for: the host instance whose bare
+   * refusal showed the released level, or the invitation (`owner_sign_in`) a
+   * current host's answer made. A dial to any other host (the endpoint moved
+   * meanwhile), or to another instance of it, starts on the host-only token,
+   * and every write of the sign-in asks {@link signInMayBeWritten} again: one
+   * instance's answer is never spent on another, and a restarted host is
+   * asked its own open first.
    */
-  private releasedPlanOwner: HostInstance | null = null;
-  /**
-   * The invitation (`owner_sign_in`) the invited plans follow. The invited
-   * sign-in goes, and an admitted invited stream keeps carrying it, only while
-   * it is not withdrawn: the host has not restarted, and no transport has
-   * heard it refuse naming any other reason since.
-   */
-  private invitation: InvitationMark | null = null;
+  private signInAuthority: SignInAuthority | null = null;
   /**
    * With no host-only token to present, the next dial, or this one, carries
    * `NO_HOST_TOKEN_PROBE`, so that only a host answering it the released way is
@@ -2178,6 +2171,20 @@ class StreamSession<
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
+  }
+
+  /**
+   * Told each time this session waits out a backoff before its next dial: a
+   * socket loss (a stale instance's frame among them), an endpoint with no
+   * host to dial, no credential to present, a refusal whose recovery enters
+   * backoff, or a clock park. Not told for the timed redial a recovery makes
+   * after a `rotated`, nor at a terminal end, which `closed` reports.
+   */
+  onBackoffEntered(listener: () => void): () => void {
+    this.backoffListeners.add(listener);
+    return () => {
+      this.backoffListeners.delete(listener);
+    };
   }
 
   getMethod(): keyof Registry & string {
@@ -2536,7 +2543,7 @@ class StreamSession<
       (boundHostId !== null && selected.hostId !== boundHostId)
     ) {
       this.transitionTo("reconnecting", null, null);
-      this.scheduleReconnect();
+      this.enterBackoff();
       return;
     }
 
@@ -2546,13 +2553,6 @@ class StreamSession<
 
     const released = this.config.releasedSignOn;
     const signInNow = released?.signIn() ?? null;
-    // The row rule gates the sign-in plans only; the probe below asks no row.
-    const signInAllowed = released?.mayPresentSignIn() ?? false;
-    // The sign-in goes only to a host that refused this dial sequence's last
-    // open the released way, and asked again here: another transport may have
-    // heard this host name a reason since.
-    const namedMeanwhile =
-      released !== null && released.hosts.namedReason(selected.hostId);
     this.dialsStarted += 1;
     // Another host's refusals never count toward this host's give-up bound.
     if (this.noProgressHostId !== selected.hostId) {
@@ -2560,40 +2560,35 @@ class StreamSession<
       this.noProgressUnauthorizedReconnects = 0;
     }
     // A plan another instance of this host answered for is dropped here: the
-    // instance now observed answers its own open first.
+    // instance now observed answers its own open first. The sign-in goes only
+    // where it still may be written, asked again here: the row, a reason
+    // another transport heard since, and the invitation's eligibility.
     const dialedOwner = this.config.hosts.currentInstance(selected.hostId);
-    const plannedForThisHost = this.releasedPlanOwner === dialedOwner;
-    this.releasedPlan =
+    const authority = this.signInAuthority;
+    const signInPlanned =
       signInNow !== null &&
-      signInAllowed &&
-      !namedMeanwhile &&
-      plannedForThisHost &&
-      this.releasedPlan === "sign-in-next"
+      released !== null &&
+      authority !== null &&
+      authorityOwner(authority) === dialedOwner &&
+      signInMayBeWritten(this.signInWriteCheck(released), authority, true);
+    this.releasedPlan =
+      signInPlanned && this.releasedPlan === "sign-in-next"
         ? "sign-in"
-        : signInNow !== null &&
-            signInAllowed &&
-            released !== null &&
-            plannedForThisHost &&
-            this.releasedPlan === "owner-sign-in-next" &&
-            this.invitation !== null &&
-            !released.hosts.invitationWithdrawn(this.invitation) &&
-            released.ownerSignInEligible(selected.hostId)
+        : signInPlanned && this.releasedPlan === "owner-sign-in-next"
           ? "owner-sign-in"
           : "host-token";
     this.probing =
       this.probeNextOwner === dialedOwner && this.releasedPlan === "host-token";
     this.probeNextOwner = null;
-    const bearer = this.wireBearer(selected.hostId);
-    this.openFrameBearer = bearer;
+    const bearer = this.wireBearer(selected.hostId);    this.openFrameBearer = bearer;
     this.usesSessionGrant = false;
     let token: string;
     try {
       token = extractBearerForOpenFrame(bearer);
     } catch (cause) {
       if (cause instanceof MissingBearerTokenForOpenFrameError) {
-        // Decided before the status goes out: the `reconnecting` says whether
-        // the probe follows at once or the stream enters backoff.
-        const probeNow =
+        this.transitionTo("reconnecting", null, null);
+        if (
           this.releasedPlan === "host-token" &&
           released !== null &&
           signInNow !== null &&
@@ -2602,15 +2597,14 @@ class StreamSession<
             selected.hostId,
           ) &&
           released.hostTokenUnobtainable(selected.hostId) &&
-          released.signIn() !== null;
-        this.announceReconnecting(null, probeNow);
-        if (probeNow) {
+          released.signIn() !== null
+        ) {
           this.probeWithoutHostToken(dialedOwner);
           return;
         }
         if (this.releasedPlan === "host-token")
           released?.forgetHeldRefusal(selected.hostId);
-        this.scheduleReconnect();
+        this.enterBackoff();
         return;
       }
       throw cause;
@@ -2817,12 +2811,11 @@ class StreamSession<
     // the invitation.
     const owner = this.config.hosts.currentInstance(hostId);
     this.socketOwner = owner;
-    if (this.releasedPlan !== "host-token" && this.signInWithdrawn(hostId))
+    if (this.releasedPlan !== "host-token" && this.signInWithdrawn(true))
       this.releasedPlan = "host-token";
     // A queued dial must still belong to its signed-in user at OPEN. Keep a
     // minted grant as the wire token, but recheck its user's live bearer too.
-    const liveBearer = this.currentUserBearerToken(hostId);
-    const token = this.usesSessionGrant ? this.openFrameToken : liveBearer;
+    const liveBearer = this.currentUserBearerToken(hostId);    const token = this.usesSessionGrant ? this.openFrameToken : liveBearer;
     if (liveBearer === null || token === null) {
       this.teardownSocket(4000, "missing-open-token");
       this.onTransportDrop();
@@ -2875,6 +2868,18 @@ class StreamSession<
   }
 
   private handleMessage(event: StreamWebSocketMessageEvent): void {
+    // Every frame from an instance of the host that is no longer the one
+    // observed ends here, before any dispatch: it marks, plans and spends
+    // nothing, and reaches no door, manifest, announcement, availability edge,
+    // credential report or consumer. Its socket is lost like any other, with
+    // that loss's status and pacing, and the next dial asks the instance now
+    // observed with no plan inherited.
+    const owner = this.socketOwner;
+    if (owner !== null && !this.config.hosts.isCurrent(owner)) {
+      this.teardownSocket(1000, "earlier-host-instance");
+      this.onTransportDrop();
+      return;
+    }
     if (event.type === "binary") {
       this.handleBinaryFrame(event.data);
       return;
@@ -3042,12 +3047,9 @@ class StreamSession<
     }
     this.openAcknowledged = true;
     this.answerInvitedSignIn();
-    // An admission by an instance no longer current credits nothing and starts
-    // no new dial sequence: the door fence and the memory drop its credit and
-    // mark, and the budget stays the sequence's.
+    // `handleMessage` passed this ack only from the instance now observed.
     const owner = this.socketOwner;
-    const ownerCurrent = owner !== null && this.config.hosts.isCurrent(owner);
-    if (ownerCurrent) this.dialSequence = null;
+    this.dialSequence = null;
     if (owner !== null && this.releasedPlan === "host-token" && !this.probing)
       this.config.hosts.hostTokenAdmitted(owner);
     this.supportsCredentialUpdate = ackParse.data.capabilities.includes(
@@ -3069,7 +3071,6 @@ class StreamSession<
       this.admissionRelease = this.config.door.admitted(owner);
     }
     if (
-      ownerCurrent &&
       this.usesSessionGrant &&
       this.openFrameHostId !== null &&
       this.openFrameBearer !== null
@@ -3364,12 +3365,13 @@ class StreamSession<
    * which counts as no progress for a refused sign-in
    * (`revalidateThenReconnect`), so the bound ends the sequence without a
    * report. A refusal while the sequence's refresh runs joins it. Only an
-   * answer from authn spends it, and only for the sequence it started under.
+   * answer from authn spends it, and only for the sequence it started under:
+   * a sibling's rotation adopted from the store is redialed on like a
+   * rotation, and the next refusal may still make one real refresh.
    */
   private refreshSignInWithinBudget(
     refusedBy: HostInstance | null,
-    recovery: StreamAuthRevalidator,
-    details: FatalErrorDetails,
+    recovery: SignInRecovery,
   ): Promise<RevalidateOutcome> {
     const current = this.dialSequence;
     const sequence: DialSequence =
@@ -3380,8 +3382,9 @@ class StreamSession<
     if (sequence.spent) return Promise.resolve("rotated");
     if (sequence.running !== null) return sequence.running;
     const running: Promise<RevalidateOutcome> = Promise.resolve()
-      .then(() => revalidateStream(recovery, details))
-      .then((outcome) => {
+      .then(() => recovery.revalidateForReconnect())
+      .then((outcome): RevalidateOutcome => {
+        if (outcome === "adopted") return "rotated";
         if (outcome !== "network-error") sequence.spent = true;
         return outcome;
       })
@@ -3439,17 +3442,8 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
-    // Any fatal, retryable or not, from an instance of the host that is no
-    // longer the one observed: it marks nothing, plans nothing, spends nothing
-    // and reaches no door, team admission or tombstone. The teardown releases
-    // this socket's credit and answers its invitation. The next dial asks the
-    // instance now observed.
+    // `handleMessage` passed this fatal only from the instance now observed.
     const owner = this.socketOwner;
-    if (owner !== null && !this.config.hosts.isCurrent(owner)) {
-      this.teardownSocket(1000, "earlier-host-instance");
-      this.dropAndReconnect(null);
-      return;
-    }
     this.answerInvitedSignIn();
     // A fatal frame ends this connection: it is no longer admitted when its
     // own refusal is reported.
@@ -3509,7 +3503,6 @@ class StreamSession<
       ) {
         // Planned before the teardown drops the dialed host.
         this.planNext("owner-sign-in-next");
-        this.invitation = this.config.hosts.invitationHeard(owner);
         this.teardownSocket(1000, "owner-sign-in");
         this.redialWithSignInNow();
         return;
@@ -3673,7 +3666,7 @@ class StreamSession<
     }
     this.handleUnauthorizedFatalError(details, {
       revalidateForReconnect: () =>
-        this.refreshSignInWithinBudget(refusedBy, recovery, details),
+        this.refreshSignInWithinBudget(refusedBy, recovery),
     });
   }
 
@@ -3732,7 +3725,7 @@ class StreamSession<
     // Reads the refused plan as a refused sign-in before the plan moves on.
     this.handleUnauthorizedFatalError(details, {
       revalidateForReconnect: () =>
-        this.refreshSignInWithinBudget(refusedBy, recovery, details),
+        this.refreshSignInWithinBudget(refusedBy, recovery),
     });
     this.releasedPlan = "host-token";
   }
@@ -3750,8 +3743,26 @@ class StreamSession<
 
   /** Plans the next dial to the host instance whose answer this dial just heard. */
   private planNext(plan: "sign-in-next" | "owner-sign-in-next"): void {
+    const owner = this.socketOwner;
     this.releasedPlan = plan;
-    this.releasedPlanOwner = this.socketOwner;
+    this.signInAuthority =
+      owner === null
+        ? null
+        : plan === "sign-in-next"
+          ? { kind: "released", owner }
+          : {
+              kind: "invited",
+              invitation: this.config.hosts.invitationHeard(owner),
+            };
+  }
+
+  /** The local reads {@link signInMayBeWritten} asks at each write, all synchronous. */
+  private signInWriteCheck(released: ReleasedSignOn): SignInWriteCheck {
+    return {
+      hosts: this.config.hosts,
+      rowAllows: released.mayPresentSignIn,
+      ownerSignInEligible: released.ownerSignInEligible,
+    };
   }
 
   /**
@@ -3763,7 +3774,7 @@ class StreamSession<
    */
   private wireBearer(hostId: string | null): OpenFrameBearerSource | null {
     const signIn = this.config.releasedSignOn?.signIn() ?? null;
-    if (this.releasedPlan !== "host-token" && !this.signInWithdrawn(hostId))
+    if (this.releasedPlan !== "host-token" && !this.signInWithdrawn(false))
       return signIn;
     if (this.probing && signIn !== null)
       return {
@@ -3774,33 +3785,19 @@ class StreamSession<
   }
 
   /**
-   * Whether the sign-in this socket's plan carries may no longer go to
-   * `hostId`: its row no longer allows it, the instance whose answer planned
-   * it or the one this socket opened to is no longer current, or a transport
-   * of this process has heard that host refuse naming a reason since: any
-   * reason for the released way, any but an invitation since the one this
-   * plan follows for the invited way.
+   * Whether the sign-in this socket's plan carries may no longer be written
+   * ({@link signInMayBeWritten}), asked at every write of it with nothing
+   * awaited before the write. `atOpen` for the OPEN only: an invited sign-in's
+   * eligibility is asked there, and not again once that OPEN is answered.
    */
-  private signInWithdrawn(hostId: string | null): boolean {
+  private signInWithdrawn(atOpen: boolean): boolean {
     const released = this.config.releasedSignOn;
+    const authority = this.signInAuthority;
     if (released === null) return false;
-    if (!released.mayPresentSignIn()) return true;
-    if (hostId === null) return false;
-    const hosts = this.config.hosts;
-    const planOwner = this.releasedPlanOwner;
-    const socketOwner = this.socketOwner;
-    if (
-      planOwner === null ||
-      !hosts.isCurrent(planOwner) ||
-      (socketOwner !== null && !hosts.isCurrent(socketOwner))
-    )
-      return true;
-    if (this.releasedPlan === "sign-in") return hosts.namedReason(hostId);
-    if (this.releasedPlan === "owner-sign-in")
-      return (
-        this.invitation === null || hosts.invitationWithdrawn(this.invitation)
-      );
-    return false;
+    return (
+      authority === null ||
+      !signInMayBeWritten(this.signInWriteCheck(released), authority, atOpen)
+    );
   }
 
   /** The cloud verdict for the live socket's host, or `undefined` from a client with no verdict source. */
@@ -3833,6 +3830,9 @@ class StreamSession<
     // DIFFERENT token (progress) or the same rejected one (no progress).
     const rejectedToken = this.openFrameToken;
     const rejectedHostId = this.openFrameHostId;
+    // The instance whose refusal this is; the lease's recovery reads the same
+    // one synchronously as it starts.
+    const refusedBy = this.socketOwner;
     // Planned by the sign-in's own refusal (`planNext`) before it got here.
     const refusedSignIn = this.releasedPlan !== "host-token";
 
@@ -3843,16 +3843,17 @@ class StreamSession<
     this.slowClientReconnectStreak = 0;
     this.lastCloseWasSlowClient = false;
     // `null`: this close is not a retryable one. Revalidation decides whether
-    // there is a next attempt at all; its answer is dialed on, so this
-    // `reconnecting` is not backoff ({@link dialsNow}). An outcome that enters
-    // backoff says so with a `reconnecting` of its own.
-    this.resetForReconnect(null, true);
+    // there is a next attempt at all. This is the refused attempt's only
+    // `reconnecting`; an outcome that enters backoff tells
+    // {@link onBackoffEntered}.
+    this.resetForReconnect(null);
 
     void this.revalidateThenReconnect(
       auth,
       details,
       rejectedToken,
       rejectedHostId,
+      refusedBy,
       refusedSignIn,
     );
   }
@@ -3862,6 +3863,7 @@ class StreamSession<
     details: FatalErrorDetails,
     rejectedToken: string | null,
     rejectedHostId: string | null,
+    refusedBy: HostInstance | null,
     /**
      * The refused open carried the sign-in. A refresh that rotates it is no
      * progress either: a released host that refuses every sign-in would
@@ -3884,6 +3886,21 @@ class StreamSession<
       )}`,
     );
     if (outcome === "rejected") {
+      // A rejection that left this client's person signed in is an answer
+      // about the instance that refused: once that instance is replaced, the
+      // one now observed is dialed and answers for itself, as after a socket
+      // loss. A rejection that signed the person out ends the stream for any
+      // instance. With no sign-in to read, every rejection ends it.
+      const released = this.config.releasedSignOn;
+      if (
+        refusedBy !== null &&
+        !this.config.hosts.isCurrent(refusedBy) &&
+        released !== null &&
+        released.signIn() !== null
+      ) {
+        this.enterBackoff();
+        return;
+      }
       // The credential was rejected (revoked / dead refresh token); the
       // revalidator has already signed out. Stop retrying.
       this.goTerminal(details);
@@ -4088,6 +4105,8 @@ class StreamSession<
     if (this.disposed) {
       this.clearClockPark();
     }
+    // No dial follows until the clock is corrected.
+    this.signalBackoff();
     return true;
   }
 
@@ -4252,8 +4271,8 @@ class StreamSession<
       this.slowClientReconnectStreak = 0;
     }
     this.lastCloseWasSlowClient = false;
-    this.resetForReconnect(retryCause, false);
-    this.scheduleReconnect();
+    this.resetForReconnect(retryCause);
+    this.enterBackoff();
   }
 
   /**
@@ -4326,39 +4345,31 @@ class StreamSession<
    * WITHOUT scheduling the redial. `onTransportDrop` follows it with
    * `scheduleReconnect`; the `UNAUTHORIZED` path follows it with a revalidation
    * that decides whether to reconnect or go terminal. `retryCause` goes out on
-   * the transition (see {@link dropAndReconnect}), and `atOnce` says whether a
-   * dial follows without backoff ({@link dialsNow}).
+   * the transition (see {@link dropAndReconnect}).
    */
-  private resetForReconnect(
-    retryCause: FatalErrorDetails | null,
-    atOnce: boolean,
-  ): void {
+  private resetForReconnect(retryCause: FatalErrorDetails | null): void {
     this.resetConnection();
-    this.announceReconnecting(retryCause, atOnce);
+    this.transitionTo("reconnecting", null, retryCause);
   }
 
-  /** Emits `reconnecting`, marked {@link dialsNow} only while it is delivered and only when `atOnce`. */
-  private announceReconnecting(
-    retryCause: FatalErrorDetails | null,
-    atOnce: boolean,
-  ): void {
-    this.dialsAtOnce = atOnce;
-    try {
-      this.transitionTo("reconnecting", null, retryCause);
-    } finally {
-      this.dialsAtOnce = false;
-    }
-  }
-
-  /** A refusal's recovery answered in a way that enters backoff: says so, then waits it out. */
+  /**
+   * Waits out a backoff before the next dial and tells
+   * {@link onBackoffEntered}. It emits no status: the `reconnecting` that
+   * precedes it is the attempt's own, as a released app emitted it.
+   */
   private enterBackoff(): void {
-    this.announceReconnecting(null, false);
+    this.signalBackoff();
     this.scheduleReconnect();
+  }
+
+  private signalBackoff(): void {
+    if (this.disposed) return;
+    for (const listener of Array.from(this.backoffListeners)) listener();
   }
 
   /** Redials at once, with no timer, to hand over the sign-in this dial just planned. */
   private redialWithSignInNow(): void {
-    this.resetForReconnect(null, true);
+    this.resetForReconnect(null);
     this.connect();
   }
 

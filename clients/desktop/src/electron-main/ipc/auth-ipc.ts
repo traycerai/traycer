@@ -30,6 +30,7 @@ import {
 import {
   NO_ISSUED_HOST_TOKEN_ERA,
   type HostTokenEraReply,
+  type HostTokenObtainOwner,
   type HostTokenObtainReply,
   type HostTokenRenewReply,
   type HostTokenSnapshotReply,
@@ -156,6 +157,15 @@ function hostIdsOf(value: unknown): readonly string[] {
   });
 }
 
+function obtainOwnerOf(value: unknown): HostTokenObtainOwner | null {
+  if (value === null) return null;
+  if (typeof value !== "object")
+    throw new Error("hostTokensObtain.owner requires an object or null");
+  const observed: unknown = Reflect.get(value, "observed");
+  if (observed !== null) assertString(observed, "hostTokensObtain.owner.observed");
+  return { observed };
+}
+
 function hostTokenOf(value: unknown): HostToken {
   if (typeof value !== "object" || value === null)
     throw new Error("hostTokensAdopt.token requires an object argument");
@@ -221,16 +231,21 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       hostId: unknown,
       fresh: unknown,
       expectedEra: unknown,
+      owner: unknown,
     ): Promise<HostTokenObtainReply> => {
       assertString(userId, "hostTokensObtain.userId");
       assertString(hostId, "hostTokensObtain.hostId");
       assertBoolean(fresh, "hostTokensObtain.fresh");
       assertNumber(expectedEra, "hostTokensObtain.expectedEra");
+      const asked = obtainOwnerOf(owner);
       const outcome: HostTokenMintOutcome =
         tokens.era(userId) === expectedEra
           ? await tokens.obtain(userId, hostId, fresh, {
               signal: null,
-              owner: null,
+              owner:
+                asked === null
+                  ? null
+                  : { hostId, observed: asked.observed },
             })
           : { kind: "superseded" };
       return { outcome, era: tokens.era(userId) };

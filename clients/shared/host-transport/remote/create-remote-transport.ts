@@ -26,6 +26,7 @@ import {
   mintRelayPassWithHostTokenViaHttp,
   type RelayPassMintOutcome,
 } from "./grant-client";
+import type { AttachGrantAttempt } from "@traycer/protocol/host-transport/remote/grant";
 import type { HostDoorObserver } from "../host-door-state";
 import {
   isIssuedHostTokenEra,
@@ -317,24 +318,28 @@ export function createRemoteHostTransport<
         return options.hostTokens.era(options.userId) === era ? outcome : null;
       };
       // authn refused the sign-in: refresh, unless the dial sequence this
-      // attach belongs to has spent its one, and mint again. Any other outcome
-      // keeps the first provision: the relay's backoff, with no state.
+      // attach belongs to has spent its one or the attach is past, and mint
+      // again. Any other outcome keeps the first provision: the relay's
+      // backoff, with no state.
       const mintAfterSignInRefresh = async (
         refused: RelayPassMintOutcome,
         era: number,
         sequence: DialSequence,
+        attempt: AttachGrantAttempt,
       ): Promise<RelayPassMintOutcome | null> => {
         const recovery = options.auth;
-        if (
-          recovery === null ||
-          (await sequence.spend(() => recovery.revalidateForReconnect())) !==
-            "rotated"
-        )
-          return refused;
-        const refreshed = signInNow();
-        return refreshed === null ? null : mintInEra(refreshed, era);
+        if (recovery === null || !attempt.current()) return refused;
+        const refreshed = await sequence.spend(() =>
+          recovery.revalidateForReconnect(),
+        );
+        if (refreshed !== "rotated" && refreshed !== "adopted") return refused;
+        const signIn = signInNow();
+        return signIn === null ? null : mintInEra(signIn, era);
       };
-      const grantProvider: SignInBudgetedGrantProvider = async (sequence) => {
+      const grantProvider: SignInBudgetedGrantProvider = async (
+        sequence,
+        attempt,
+      ) => {
         const signInToken = signInNow();
         if (signInToken === null)
           return {
@@ -354,7 +359,7 @@ export function createRemoteHostTransport<
         const first = await mintInEra(signInToken, era);
         const minted =
           first?.kind === "sign-in-rejected"
-            ? await mintAfterSignInRefresh(first, era, sequence)
+            ? await mintAfterSignInRefresh(first, era, sequence, attempt)
             : first;
         if (minted === null)
           return {
@@ -362,6 +367,12 @@ export function createRemoteHostTransport<
             detail: "signed out while the relay pass was minted",
             context: "",
           };
+        // The session discards an answer for an attach it has moved past, or
+        // for a closed session: that answer stores and reports nothing.
+        if (!attempt.current())
+          return minted.kind === "ok"
+            ? { kind: "ok", grant: minted.grant }
+            : minted.provision;
         if (minted.kind === "ok") {
           await options.hostTokens.adopt(
             options.userId,
