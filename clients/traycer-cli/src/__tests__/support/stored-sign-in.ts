@@ -86,15 +86,15 @@ export function useBoundedFakeClock(): void {
 const STEP_MS = 100;
 
 /**
- * The most turns in a row {@link advanceFakeClockToDeadline} yields, with the
- * deadline ahead and no timer pending, before it fails. No current caller
- * ever idles, so this only has to be finite.
+ * With the deadline ahead and no timer pending, {@link advanceFakeClockToDeadline}
+ * allows up to this many pending turns in a row and throws on the next. The
+ * allowance is for file I/O still running after the timers have cleared.
  */
 const MAX_IDLE_TURNS = 1_000;
 
 /**
- * The most turns {@link advanceFakeClockToDeadline} drains, with the clock
- * stopped at the deadline, before it fails.
+ * With the clock stopped at the deadline, {@link advanceFakeClockToDeadline}
+ * allows up to this many pending turns and throws on the next.
  */
 const MAX_DRAIN_TURNS = 100;
 
@@ -110,11 +110,11 @@ function yieldToRealIo(): Promise<void> {
  * advances the clock by the smaller of {@link STEP_MS} and the time left, so
  * the clock never passes the deadline and no timer set for later than it runs.
  * With the deadline ahead and no timer pending the clock stays put and the
- * yields go on: the call fails the test if `operation` is still pending after
- * {@link MAX_IDLE_TURNS} of them in a row. Once the deadline is reached the
- * clock also stays put: the call fails the test if `operation` is still pending
- * after {@link MAX_DRAIN_TURNS} yields, whether it waits on a timer set for
- * later than the deadline or on nothing. The caller awaits `operation` itself
+ * yields go on: up to {@link MAX_IDLE_TURNS} pending turns in a row are
+ * allowed, and the next one throws. Once the deadline is reached the clock also
+ * stays put: up to {@link MAX_DRAIN_TURNS} pending turns are allowed, and the
+ * next one throws, whether `operation` waits on a timer set for later than the
+ * deadline or on nothing. The caller awaits `operation` itself
  * and asserts its result.
  */
 export async function advanceFakeClockToDeadline(

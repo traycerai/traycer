@@ -17,11 +17,10 @@ import type { HostAuth } from "./host-auth";
  *   is printed, the refresh counts as unavailable, and `first` stands, not sent
  *   again;
  * - spent, and still unsaved after up to three more save attempts a second
- *   apart: the pair is used from memory and the call is sent again on it. The
- *   disk line is printed when the store reported low disk space at any point of
- *   that rotation's attempts, and not otherwise. The spent-base marker it leaves
- *   lets a later command recover the pair only while authn can still replay
- *   that rotation;
+ *   apart: the pair is used from memory and the call is sent again on it. If
+ *   the pair is still unsaved, the warning is printed when the store's final
+ *   result reports low disk space. The spent-base marker it leaves lets a later
+ *   command recover the pair only while authn can still replay that rotation;
  * - spent, and a later save attempt lands it: as an ordinary refresh.
  */
 type StoredSignInAnswer<Answer> =
@@ -46,8 +45,9 @@ export interface StoredSignIn {
   /** True once a refusal has asked for the refresh, whatever it answered. */
   refreshSpent(): boolean;
   /**
-   * Asks authn on the current sign-in. A refusal the caller names (a 401) gets
-   * the one refresh and one more ask on the refreshed sign-in. Every later
+   * Asks authn on the current sign-in. A refusal the caller names (a 401) can
+   * trigger one resend after a usable pair is obtained, by rotating it or by
+   * adopting one another process already saved. Every later
    * refusal, and every refusal while that refresh is in flight, shares it: it
    * never refreshes twice, and an ask already sent on the refreshed sign-in is
    * not sent again.
@@ -101,7 +101,7 @@ export function openStoredSignIn(auth: HostAuth): StoredSignIn {
   };
 }
 
-/** One spend under the credentials lock; a sibling's landed pair is adopted. */
+/** One refresh through the store's locked rotate (`createStoreBackedRevalidator`); a sibling's landed pair is adopted. */
 async function refreshStoredSignIn(
   auth: HostAuth,
   signal: AbortSignal | null,

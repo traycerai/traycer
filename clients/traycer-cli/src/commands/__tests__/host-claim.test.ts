@@ -587,8 +587,10 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
     "Sign in as a member of this team to claim this computer.";
   const OWNERSHIP_PATH = "/api/v3/hosts";
   const RELEASE_PATH = `/api/v3/hosts/${HOST_ID}/team-release`;
-  // Each shared HTTP function bounds its own request at 10 s. The refresh has
-  // the same bound for its request, plus the store's own retry waits.
+  // The ownership read and the release each bound their request at 10 s
+  // (`composeRequestAbort(null, 10_000)`). The refresh cap is a test margin
+  // above the refresh request's own 10 s bound (`AUTH_FETCH_TIMEOUT_MS`), not a
+  // bound the code defines.
   const REQUEST_BOUND_MS = 10_000;
   const REFRESH_BOUND_MS = 20_000;
 
@@ -639,7 +641,7 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
   }
 
   describe("when it reads the computer's ownership", () => {
-    it("refreshes once, reads again on the refreshed sign-in and carries it to every later call", async () => {
+    it("refreshes once, reads again on the refreshed sign-in, and sends it to the two host reads and the release", async () => {
       ownershipRefusedBearers = [STORED_HEADER];
 
       const result = await makeClaimCommand(true)(fakeCtx(false));

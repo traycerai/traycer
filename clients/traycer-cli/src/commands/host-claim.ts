@@ -174,9 +174,9 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
 }
 
 /**
- * authn's row for this computer, read on the stored sign-in and refreshed once
- * on a 401. A refused refresh is a sign-in to make again; any other failure
- * leaves ownership unconfirmed.
+ * authn's row for this computer, read through the claim's `StoredSignIn`. A
+ * refused refresh is a sign-in to make again; any other failure leaves
+ * ownership unconfirmed.
  */
 async function readOwnershipForClaim(
   signIn: StoredSignIn,

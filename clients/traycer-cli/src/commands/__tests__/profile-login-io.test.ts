@@ -139,8 +139,9 @@ describe("PROCESS_PROFILE_LOGIN_IO.openSignInRequests().recordSignInRequest", ()
     sourceSharingGeneration: 1,
     harnessId: "claude-code",
   };
-  // The record's own request bound, and the refresh's: its 10 s request bound
-  // plus the store's retry waits.
+  // The record's request bound (`SIGN_IN_REQUEST_FETCH_TIMEOUT_MS`, 15 s). The
+  // refresh cap is a test margin above the refresh request's own 10 s bound
+  // (`AUTH_FETCH_TIMEOUT_MS`), not a bound the code defines.
   const RECORD_BOUND_MS = 15_000;
   const REFRESH_BOUND_MS = 20_000;
   const RECORD_PATH = `/api/v3/environments/${REQUEST.environmentId}/profile-records/intents`;
@@ -285,7 +286,7 @@ describe("PROCESS_PROFILE_LOGIN_IO.openSignInRequests().recordSignInRequest", ()
     expect(paths()).toEqual([RECORD_PATH]);
   });
 
-  it("answers unauthorized, after one refresh request, once the record's own bound ends a refresh authn never answers", async () => {
+  it("answers unauthorized, after one refresh request, once the refresh request's own bound ends a refresh authn never answers", async () => {
     useBoundedFakeClock();
     recordRefusedBearers = [STORED_HEADER];
     hungPaths = [STORED_SIGN_IN_REFRESH_PATH];

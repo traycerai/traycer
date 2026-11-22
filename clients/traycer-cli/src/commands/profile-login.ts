@@ -101,7 +101,7 @@ export interface ProfileLoginIo {
   /**
    * Called once per wait. The wait sends its records one at a time, awaiting
    * each (`awaitUntilSettled`); the client relies on that. Each record reads
-   * the stored sign-in, and the wait refreshes it at most once.
+   * the stored sign-in, and the wait asks for its refresh at most once.
    */
   readonly openSignInRequests: () => SignInRequestClient;
 }
@@ -158,9 +158,9 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
     // now holds: for example, another sign-in that replaced the stored one
     // during the wait and is refused is not refreshed.
     //
-    // Bounds: each record request has its own 15 s bound; a refresh has its own
-    // (the lock wait, the refresh request and any save attempts) and is cut by
-    // the record's signal.
+    // Bounds: each record request has its own 15 s bound
+    // (`SIGN_IN_REQUEST_FETCH_TIMEOUT_MS`); the refresh is bounded as
+    // `openStoredSignIn` describes, and the record's signal cuts it.
     let refreshSpent = false;
     return {
       recordSignInRequest: async (request, signal) => {
