@@ -226,7 +226,12 @@ async function rejectAfterLocalHostTokenMint(
   );
   const context = mocks.state.activeContext;
   if (context === null) throw new Error("expected the active request context");
-  const bearer = await hostBearerFor(LOCAL_HOST_ID, context.credentials, true);
+  const bearer = await hostBearerFor(
+    LOCAL_HOST_ID,
+    context.credentials,
+    true,
+    new AbortController().signal,
+  );
   if (bearer !== null) throw new Error("expected the local mint to refuse");
 
   // WsRpcClient.withHostBearer's rejection when it cannot supply a token.

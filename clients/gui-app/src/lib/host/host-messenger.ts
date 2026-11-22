@@ -202,6 +202,8 @@ export function buildRawHostMessengerForTarget<
         const row = params.resolveTarget(params.target.hostId);
         return row !== null && opensReleasedWay(row, params.userId);
       },
+      // The renderer's directory is kept current by its own poll.
+      confirmRowBeforeSignIn: null,
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,

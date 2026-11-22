@@ -423,7 +423,7 @@ function doorHarness(): DoorHarness {
           },
         });
       },
-      admitted: () => undefined,
+      admitted: () => () => undefined,
     }),
   });
   const recovery = hostTokenUnaryRevalidator({

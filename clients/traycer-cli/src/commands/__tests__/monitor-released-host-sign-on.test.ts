@@ -7,6 +7,12 @@ import { CLI_ERROR_CODES } from "../../runner/errors";
 
 const USER_ID = "monitor-test-user";
 let hostCount = 0;
+
+/** A computer id no earlier test used: a named reason is remembered per computer for the whole process. */
+function nextHostId(): string {
+  hostCount += 1;
+  return `11111111-1111-4111-8111-${String(hostCount).padStart(12, "0")}`;
+}
 const SIGN_IN = "monitor-test-sign-in";
 const TEAM_REFUSAL = "the host has not admitted this sign-in";
 const WAIT = { timeout: 2_000, interval: 10 };
@@ -53,12 +59,19 @@ const monitorHarness = vi.hoisted(() => {
   return {
     ScriptSocket,
     sockets: [] as InstanceType<typeof ScriptSocket>[],
+    /** Every line the monitor printed, to stdout or stderr. */
+    printed: [] as string[],
     state: {
       hostTokenTable: new Map() as HostTokenTable,
       reader: new AbortController(),
       grants: 0,
       /** The computer this monitor finds running; a named reason is remembered per computer for the whole process. */
       hostId: "",
+      /** The host process the pid file names; a new one is a restarted host. */
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      /** What refreshing the stored sign-in answers. */
+      refresh: "network-error" as "network-error" | "rotated" | "rejected",
       /** What authn answers a host-token mint with. */
       grantResponse: (): Promise<Response> =>
         Promise.resolve(new Response("authn unavailable", { status: 503 })),
@@ -109,11 +122,11 @@ vi.mock("../../host/pid-metadata", async (importOriginal) => {
   return {
     ...actual,
     readHostPidMetadata: async () => ({
-      pid: 1,
+      pid: monitorHarness.state.pid,
       hostId: monitorHarness.state.hostId,
       version: "test",
       websocketUrl: "ws://127.0.0.1:9/rpc",
-      startedAt: "2026-01-01T00:00:00.000Z",
+      startedAt: monitorHarness.state.startedAt,
       processStartIdentity: null,
       processStartIdentityRead: "absent",
       layer0: null,
@@ -129,7 +142,7 @@ vi.mock("../../store/credentials-store", async (importOriginal) => {
     ...actual,
     createCliCredentialsStore: () => ({ dispose: () => undefined }),
     createStoreBackedRevalidator: () => ({
-      revalidateCurrentContext: async () => "network-error" as const,
+      revalidateCurrentContext: async () => monitorHarness.state.refresh,
     }),
   };
 });
@@ -183,8 +196,12 @@ vi.mock("../../runner/std-write", async (importOriginal) => {
   return {
     ...actual,
     stdoutReaderClosed: () => monitorHarness.state.reader.signal,
-    writeStdout: () => undefined,
-    writeStderr: () => undefined,
+    writeStdout: (text: string) => {
+      monitorHarness.printed.push(text);
+    },
+    writeStderr: (text: string) => {
+      monitorHarness.printed.push(text);
+    },
     writeStdoutForAck: () => ({
       confirmation: Promise.resolve(true),
       eventualOutcome: Promise.resolve(true),
@@ -283,17 +300,62 @@ function bareRefusal(): Record<string, unknown> {
   };
 }
 
+const NOT_A_MEMBER_SENTENCE =
+  "traycer: This computer belongs to a team. This account is not a member. Switch accounts to use Traycer here. Run `traycer login` to switch accounts.";
+const OLDER_HOST_SENTENCE =
+  "The host is out of date. Reinstall the latest host with 'traycer host update'.";
+
+/** The reasons a released host gives for refusing a credential. */
+const RELEASED_REASONS = [
+  "Authenticated user does not own this host",
+  "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+  "Token has been revoked",
+] as const;
+
+/** A released host's refusal: bare, with no door reason, naming its own reason. */
+function releasedRefusalWith(reason: string): Record<string, unknown> {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
+/** A team host's refusal of a non-member; with no door reason it is an older host's. */
+function teamRefusal(
+  doorReason: "not_admitted" | "membership_removed" | null,
+): Record<string, unknown> {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      reason: "team admission",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      ...(doorReason === null ? {} : { doorReason }),
+    },
+  };
+}
+
 let monitorRun: Promise<void> | null = null;
 
 beforeEach(() => {
   vi.useFakeTimers();
   monitorRun = null;
   monitorHarness.sockets.splice(0);
+  monitorHarness.printed.splice(0);
   monitorHarness.state.hostTokenTable = new Map();
   monitorHarness.state.reader = new AbortController();
   monitorHarness.state.grants = 0;
-  hostCount += 1;
-  monitorHarness.state.hostId = `11111111-1111-4111-8111-${String(hostCount).padStart(12, "0")}`;
+  monitorHarness.state.refresh = "network-error";
+  monitorHarness.state.pid = 1;
+  monitorHarness.state.startedAt = "2026-01-01T00:00:00.000Z";
+  monitorHarness.state.hostId = nextHostId();
   monitorHarness.state.grantResponse = () =>
     Promise.resolve(new Response("authn unavailable", { status: 503 }));
   processReleasedHosts.forgetAll();
@@ -553,6 +615,380 @@ describe("traycer monitor local released-host sign-in", () => {
       NO_HOST_TOKEN_PROBE,
       SIGN_IN,
     ]);
+  });
+
+  function holdUsableTokens(tokens: ReadonlyMap<string, string>): void {
+    monitorHarness.state.hostTokenTable = new Map([
+      [
+        USER_ID,
+        new Map(
+          Array.from(tokens, ([hostId, token]) => [
+            hostId,
+            { token, expiresAtMs: Date.now() + 60 * 60 * 1000 },
+          ]),
+        ),
+      ],
+    ]);
+  }
+
+  /** A mint authn takes and has not answered: the test answers it when it chooses. */
+  function holdMint(): { readonly answer: (response: Response) => void } {
+    const held: { resolve: (response: Response) => void } = {
+      resolve: () => undefined,
+    };
+    monitorHarness.state.grantResponse = () =>
+      new Promise<Response>((resolve) => {
+        held.resolve = resolve;
+      });
+    return { answer: (response) => held.resolve(response) };
+  }
+
+  async function ackOpen(
+    socket: InstanceType<typeof monitorHarness.ScriptSocket>,
+    open: Record<string, unknown>,
+  ): Promise<void> {
+    socket.fireFrame({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: open.optionalManifest,
+    });
+    await vi.waitFor(
+      () =>
+        expect(
+          socket.sent.some((raw) => raw.includes('"kind":"subscribe"')),
+        ).toBe(true),
+      WAIT,
+    );
+  }
+
+  /** The monitor's endpoint poll runs every two seconds. */
+  async function letPollRead(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(2_100);
+  }
+
+  /**
+   * No token is held and the mint is pending. The probe gets `owner_sign_in`:
+   * resolves with the socket dialed for the invited sign-in, not yet opened.
+   */
+  async function inviteSignIn(): Promise<
+    InstanceType<typeof monitorHarness.ScriptSocket>
+  > {
+    const probe = await socketAt(0);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    await vi.waitFor(
+      () => expect(monitorHarness.state.grants).toBeGreaterThan(0),
+      WAIT,
+    );
+    probe.fireFrame(
+      fatal("owner_sign_in", "current personal host invited sign-in"),
+    );
+    return socketAt(1);
+  }
+
+  describe("a credential is keyed by the host its socket was selected for", () => {
+    it("opens a socket selected for host A with A's token though the endpoint poll has since read host B", async () => {
+      const hostA = monitorHarness.state.hostId;
+      const hostB = nextHostId();
+      holdUsableTokens(
+        new Map([
+          [hostA, "token-for-a"],
+          [hostB, "token-for-b"],
+        ]),
+      );
+      startMonitor();
+      // The dial to host A is waiting; the poll now reads host B's pid file.
+      const first = await socketAt(0);
+      monitorHarness.state.hostId = hostB;
+      await letPollRead();
+
+      const open = await readOpen(first);
+
+      expect(open.token).toBe("token-for-a");
+    });
+
+    it("credits A's acknowledgement to A, so host B's first mint refusal still ends the monitor", async () => {
+      const hostA = nextHostId();
+      const hostB = monitorHarness.state.hostId;
+      holdUsableTokens(new Map([[hostA, "token-for-a"]]));
+      const mint = holdMint();
+      startMonitor();
+      // Host B holds no token: its first dial probes, its mint begins and
+      // stays pending, and it names a reason.
+      const probe = await socketAt(0);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      monitorHarness.state.hostId = hostA;
+      await letPollRead();
+      probe.fireFrame(fatal("not_admitted", TEAM_REFUSAL));
+      await vi.advanceTimersByTimeAsync(1_500);
+      // The redial is selected for host A; the poll then reads host B again.
+      const toA = await socketAt(1);
+      monitorHarness.state.hostId = hostB;
+      await letPollRead();
+
+      const open = await readOpen(toA);
+      expect(open.token).toBe("token-for-a");
+      await ackOpen(toA, open);
+      mint.answer(new Response("no row", { status: 404 }));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+    });
+  });
+
+  describe("a mint's not-admitted against a current personal host's invited sign-in", () => {
+    it("goes on to its subscription when the 404 lands after the invited OPEN and before its ack", async () => {
+      const mint = holdMint();
+      startMonitor();
+      const invited = await inviteSignIn();
+      const open = await readOpen(invited);
+      expect(open.token).toBe(SIGN_IN);
+
+      mint.answer(new Response("no row", { status: 404 }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await outcomeOf()).toBe("running");
+      await ackOpen(invited, open);
+
+      expect(await outcomeOf()).toBe("running");
+      expect(monitorHarness.sockets.map(openToken)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+        SIGN_IN,
+      ]);
+    });
+
+    it("ends with the mint's line when the invited sign-in is refused and then the 404 lands", async () => {
+      const mint = holdMint();
+      startMonitor();
+      const invited = await inviteSignIn();
+      await readOpen(invited);
+
+      invited.fireFrame(fatal("not_admitted", TEAM_REFUSAL));
+      await vi.advanceTimersByTimeAsync(0);
+      mint.answer(new Response("no row", { status: 404 }));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+    });
+
+    // A guard: it passes on c8b3e988 by design. A 404 that lands before the
+    // invited OPEN is written ends the command, and no sign-in is written.
+    it("ends with the mint's line when the 404 lands before the invited OPEN is written, and writes no sign-in", async () => {
+      const mint = holdMint();
+      startMonitor();
+      await inviteSignIn();
+
+      mint.answer(new Response("no row", { status: 404 }));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(
+        monitorHarness.sockets.flatMap((socket) => socket.sent),
+      ).not.toContainEqual(expect.stringContaining(SIGN_IN));
+    });
+  });
+
+  describe("a host's named reason is forgotten when its process instance changes", () => {
+    /** A host that named a reason in this process, then refuses the probe bare: a released host's answer. */
+    async function refuseProbeBare(
+      afterInstanceChange: () => Promise<void>,
+    ): Promise<void> {
+      processReleasedHosts.refusedNamingReason(monitorHarness.state.hostId);
+      startMonitor();
+      const probe = await socketAt(0);
+      await readOpen(probe);
+      await afterInstanceChange();
+      probe.fireFrame(bareRefusal());
+    }
+
+    it("sends the sign-in after a bare refusal once the same host id comes back under a new process", async () => {
+      await refuseProbeBare(async () => {
+        monitorHarness.state.pid = 2;
+        monitorHarness.state.startedAt = "2026-01-01T01:00:00.000Z";
+        await letPollRead();
+      });
+
+      await admitWith(await socketAt(1));
+      expect(monitorHarness.sockets.map(openToken).at(-1)).toBe(SIGN_IN);
+      expect(await outcomeOf()).toBe("running");
+    });
+
+    // A control: it passes on c8b3e988 by design. The same process refusing
+    // bare is not a released host, so no sign-in goes.
+    it("sends no sign-in after a bare refusal from the same process instance", async () => {
+      await refuseProbeBare(async () => {
+        await letPollRead();
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(
+        monitorHarness.sockets.flatMap((socket) => socket.sent),
+      ).not.toContainEqual(expect.stringContaining(SIGN_IN));
+    });
+  });
+
+  describe("a released host that refuses the person's valid sign-in bare", () => {
+    /** Refuses every OPEN the monitor writes, as a released host does, until the monitor ends. */
+    async function refuseEveryOpenBare(reason: string): Promise<void> {
+      const handled = new Set<
+        InstanceType<typeof monitorHarness.ScriptSocket>
+      >();
+      for (let step = 0; step < 40 && ended === null; step += 1) {
+        await vi.advanceTimersByTimeAsync(500);
+        for (const socket of monitorHarness.sockets) {
+          if (handled.has(socket) || socket.onopen === null) continue;
+          handled.add(socket);
+          socket.fireOpen();
+          await vi.advanceTimersByTimeAsync(0);
+          socket.fireFrame(releasedRefusalWith(reason));
+        }
+      }
+    }
+
+    it.each(RELEASED_REASONS)(
+      "ends with the host's reason, as a refused unary call does: %s",
+      async (reason) => {
+        monitorHarness.state.refresh = "rotated";
+        startMonitor();
+
+        await refuseEveryOpenBare(reason);
+
+        await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+        expect(ended?.error).toMatchObject({
+          code: CLI_ERROR_CODES.AUTH_REJECTED,
+          message: reason,
+          exitCode: 1,
+        });
+      },
+    );
+
+    // A guard: a host that named a reason in this process is never handed the sign-in, so
+    // its bare refusal of the host-only token is an older host's.
+    it("still prints the older-host line for a bare token refusal from a host that named a reason in this process", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      processReleasedHosts.refusedNamingReason(monitorHarness.state.hostId);
+      startMonitor();
+      const socket = await socketAt(0);
+      await readOpen(socket);
+
+      socket.fireFrame(releasedRefusalWith("released-host-token-refusal"));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({
+        message: OLDER_HOST_SENTENCE,
+        exitCode: 1,
+      });
+    });
+  });
+
+  describe("a team host that refuses a non-member", () => {
+    // A guard: the monitor's line for this refusal is the one c8b3e988 printed.
+    it("ends at once with the c8b3e988 line when the refusal names membership_removed", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      startMonitor();
+      const socket = await socketAt(0);
+      await readOpen(socket);
+
+      socket.fireFrame(teamRefusal("membership_removed"));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toBeInstanceOf(Error);
+      expect(ended?.error).toMatchObject({
+        message: "traycer monitor: host closed the stream: team admission",
+      });
+      expect(ended?.error).not.toHaveProperty("code");
+    });
+
+    // A guard: a refusal with no reason is an older host's, on c8b3e988 too.
+    it("keeps a reasonless TEAM_MEMBERSHIP_REQUIRED on the older-host route", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      startMonitor();
+      const socket = await socketAt(0);
+      await readOpen(socket);
+
+      socket.fireFrame(teamRefusal(null));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({
+        message: OLDER_HOST_SENTENCE,
+        exitCode: 1,
+      });
+    });
+  });
+
+  describe("a held token the team host refused as not_admitted", () => {
+    /** The held token is refused; the monitor takes its one recovery. Resolves with the refused socket. */
+    async function refuseHeldToken(): Promise<
+      InstanceType<typeof monitorHarness.ScriptSocket>
+    > {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      startMonitor();
+      const socket = await socketAt(0);
+      await readOpen(socket);
+      socket.fireFrame(teamRefusal("not_admitted"));
+      await vi.waitFor(
+        () => expect(monitorHarness.state.grants).toBeGreaterThan(0),
+        WAIT,
+      );
+      return socket;
+    }
+
+    const NO_ANSWER_FROM_AUTHN = [
+      [
+        "authn answers 503",
+        (): Promise<Response> =>
+          Promise.resolve(new Response("authn unavailable", { status: 503 })),
+      ],
+      [
+        "authn is unreachable",
+        (): Promise<Response> => Promise.reject(new TypeError("fetch failed")),
+      ],
+    ] as const;
+
+    it.each(NO_ANSWER_FROM_AUTHN)(
+      "keeps waiting, prints no verdict, and redials on its backoff when the recovery gets no answer: %s",
+      async (_name, grant) => {
+        monitorHarness.state.grantResponse = grant;
+        await refuseHeldToken();
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(await outcomeOf()).toBe("running");
+        await vi.advanceTimersByTimeAsync(5_000);
+
+        await socketAt(1);
+        expect(await outcomeOf()).toBe("running");
+        expect(monitorHarness.printed.join("")).not.toContain("not a member");
+      },
+    );
+
+    it("is admitted by a later answered open, with no restart of the monitor", async () => {
+      monitorHarness.state.grantResponse = NO_ANSWER_FROM_AUTHN[0][1];
+      await refuseHeldToken();
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const retry = await socketAt(1);
+      await admitWith(retry);
+
+      expect(openToken(retry)).toBe("held-token");
+      expect(await outcomeOf()).toBe("running");
+    });
+
+    it("ends with the team-membership line when the mint answers that the person is not a member", async () => {
+      monitorHarness.state.grantResponse = () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ code: "team_membership_required" }), {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      await refuseHeldToken();
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({
+        code: CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
+        message: NOT_A_MEMBER_SENTENCE,
+        exitCode: 1,
+      });
+    });
   });
 });
 

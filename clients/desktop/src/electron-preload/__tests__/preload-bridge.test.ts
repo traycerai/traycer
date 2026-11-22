@@ -1569,7 +1569,7 @@ describe("preload host-token era reads", () => {
 
     expect(knownEra).toBe(0);
     expect(tokens.current("user-a", hostId)?.token).toBe("host-token");
-    expect(bearer()).not.toBeNull();
+    expect(bearer(hostId)).not.toBeNull();
     expect(fakeElectron.syncCalls).toHaveLength(callsBeforeReads);
   });
 

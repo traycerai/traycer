@@ -466,6 +466,7 @@ export function createRegistryHarness(): RegistryHarness {
           directoryEntries.clear();
           directoryEntries.set(LOCAL_HOST_ENTRY.hostId, LOCAL_HOST_ENTRY);
         },
+        confirmRows: () => Promise.resolve(true),
         resolve: async (hostId) => {
           const entry = await harness.resolveHost(hostId);
           if (entry === null) directoryEntries.delete(hostId);

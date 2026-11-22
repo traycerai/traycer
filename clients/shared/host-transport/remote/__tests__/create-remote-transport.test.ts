@@ -39,8 +39,12 @@ import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
   type HostTokenMintOutcome,
+  type HostTokenSource,
 } from "../../../auth/host-token-source";
-import { createRemoteHostTransport } from "../create-remote-transport";
+import {
+  createRemoteHostTransport,
+  type RemoteHostTransport,
+} from "../create-remote-transport";
 import { remoteOpenAuthFor } from "../open-auth";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
 import { hostListItemToDirectoryEntry } from "../../../host-client/remote-fetcher";
@@ -99,6 +103,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
   >({
     clientIdentity: TEST_CLIENT_IDENTITY,
     opensReleasedWay: () => false,
+    confirmRowBeforeSignIn: null,
     hostId: "host-null-bearer-test",
     userId: "user-null-bearer-test",
     relayAttachUrl: "wss://relay.invalid/attach",
@@ -267,6 +272,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
       >({
         clientIdentity: TEST_CLIENT_IDENTITY,
         opensReleasedWay: () => false,
+        confirmRowBeforeSignIn: null,
         hostId: "host-gate-b-test",
         userId: "user-gate-b-test",
         relayAttachUrl: "wss://relay.invalid/attach",
@@ -383,6 +389,7 @@ describe("createRemoteHostTransport cloudAuthorized gate (Option D — mint-only
       >({
         clientIdentity: TEST_CLIENT_IDENTITY,
         opensReleasedWay: () => false,
+        confirmRowBeforeSignIn: null,
         hostId: "host-gate-c-test",
         userId: "user-gate-c-test",
         relayAttachUrl: "wss://relay.invalid/attach",
@@ -718,6 +725,7 @@ describe("createRemoteHostTransport reports a TEAM_MEMBER_REMOVED session close"
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
       opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId,
       userId: bearerSource.identity.userId,
       relayAttachUrl: "wss://relay.invalid/attach",
@@ -855,10 +863,18 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
     vi.restoreAllMocks();
   });
 
-  async function assertLateGrantAnswerIsDropped(
-    hostId: string,
-    response: Response,
-  ): Promise<void> {
+  /** A relay transport whose first grant mint is held at authn until the test answers it. */
+  async function startPendingRelayMint(hostId: string): Promise<{
+    readonly built: RemoteHostTransport<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >;
+    readonly tokens: HostTokenSource;
+    readonly userId: string;
+    readonly states: string[];
+    readonly warnings: string[];
+    readonly answer: (response: Response) => void;
+  }> {
     const answer = deferred<Response>();
     const started = deferred<void>();
     const warnings: string[] = [];
@@ -884,13 +900,13 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       signIn: null,
       now: () => Date.now(),
     });
-    const adopt = vi.spyOn(tokens, "adopt");
     const built = createRemoteHostTransport<
       VersionedRpcRegistry,
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
       opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId,
       userId,
       relayAttachUrl: "wss://relay.invalid/attach",
@@ -911,12 +927,28 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       evidence: NO_TRANSPORT_EVIDENCE,
     });
     if (built === null) throw new Error("expected a built remote transport");
+    built.session.start();
+    await started.promise;
+    return {
+      built,
+      tokens,
+      userId,
+      states,
+      warnings,
+      answer: answer.resolve,
+    };
+  }
 
+  async function assertLateGrantAnswerIsDropped(
+    hostId: string,
+    response: Response,
+  ): Promise<void> {
+    const pending = await startPendingRelayMint(hostId);
+    const { built, tokens, userId, states, warnings } = pending;
+    const adopt = vi.spyOn(tokens, "adopt");
     try {
-      built.session.start();
-      await started.promise;
       await tokens.forgetUser(userId);
-      answer.resolve(response);
+      pending.answer(response);
 
       await vi.waitFor(() => {
         expect(
@@ -934,6 +966,34 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       closeAndRetire(built.session);
     }
   }
+
+  it("reports a not-admitted relay-pass answer to the door while its session is open (guard)", async () => {
+    const pending = await startPendingRelayMint("late-answer-open");
+    try {
+      pending.answer(new Response("", { status: 404 }));
+      await vi.waitFor(() => {
+        expect(pending.states).toEqual(["not-admitted"]);
+      }, WAIT);
+    } finally {
+      closeAndRetire(pending.built.session);
+    }
+  });
+
+  it("reports nothing when a not-admitted relay-pass answer arrives after its session closed", async () => {
+    const pending = await startPendingRelayMint("late-answer-closed");
+    const eraReads = vi.spyOn(pending.tokens, "era");
+    closeAndRetire(pending.built.session);
+    const readsBeforeAnswer = eraReads.mock.calls.length;
+    pending.answer(new Response("", { status: 404 }));
+    // The mint re-reads the era once authn answers: the answer has been taken.
+    await vi.waitFor(() => {
+      expect(eraReads.mock.calls.length).toBeGreaterThan(readsBeforeAnswer);
+    }, WAIT);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(pending.states).toEqual([]);
+  });
 
   it("drops a successful relay-pass answer that arrives after forgetUser", async () => {
     await assertLateGrantAnswerIsDropped(
@@ -992,6 +1052,7 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
       opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId,
       userId,
       relayAttachUrl: "wss://relay.invalid/attach",
@@ -1071,6 +1132,7 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
       opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId,
       userId,
       relayAttachUrl: "wss://relay.invalid/attach",

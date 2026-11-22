@@ -1321,6 +1321,8 @@ export class RemoteSession<
    * transport's no-progress bound).
    */
   private noProgressUnauthorizedReconnects = 0;
+  /** The door's release of the admitted connection, while one is admitted. */
+  private doorAdmission: (() => void) | null = null;
   /**
    * Live subscription to the clock tracker's `skewed → ok` edge while this
    * session is PARKED, or `null` when it is not. Doubles as the parked flag.
@@ -3793,7 +3795,8 @@ export class RemoteSession<
     this.clearPhaseTimer();
     this.phase = "ready";
     this.reattachMarks.openAckAt = Date.now();
-    this.options.auth.door?.admitted();
+    this.releaseDoorAdmission();
+    this.doorAdmission = this.options.auth.door?.admitted() ?? null;
     // The host accepted the `open{bearer}`: any prior UNAUTHORIZED episode is
     // over, so a later one starts its no-progress bound from a clean slate.
     this.noProgressUnauthorizedReconnects = 0;
@@ -5642,6 +5645,9 @@ export class RemoteSession<
     // the expected-outage HOLD above the death streak the loss feeds. Two
     // honest reports beat one that tries to mean both.
     this.reportRestartIntentIfPresent(details);
+    // Every session fatal ends this connection: it is no longer admitted when
+    // its own refusal is reported.
+    if (this.isCurrent(generation)) this.releaseDoorAdmission();
     this.options.auth.door?.refused(details);
     // Classified BEFORE the retryable arm, and that order is the whole point.
     // `retryable` says how to RECOVER; it says nothing about what the failure
@@ -7144,6 +7150,12 @@ export class RemoteSession<
     }
   }
 
+  private releaseDoorAdmission(): void {
+    const release = this.doorAdmission;
+    this.doorAdmission = null;
+    release?.();
+  }
+
   private teardownConnection(reason: string, keepLeg: boolean): void {
     // THE retraction funnel. All three teardown paths pass through here -
     // `dropConnection` (a transport loss), `goTerminalFatal` (a revoked
@@ -7157,6 +7169,7 @@ export class RemoteSession<
     // idempotent, so a redundant retraction costs nothing while a missing one
     // is the defect.
     this.retractSession();
+    this.releaseDoorAdmission();
     const connection = this.connection;
     this.connection = null;
     // A reconnect can attach to a different host incarnation. Once this ack's

@@ -120,10 +120,21 @@ vi.mock(
         },
         probeDeclined: (userId: string, hostId: string): boolean =>
           releasedMemory.read().probeDeclined(userId, hostId),
+        invitedSignInPending: (hostId: string): boolean =>
+          releasedMemory.read().invitedSignInPending(hostId),
+        invitedSignInWritten: (hostId: string): void => {
+          releasedMemory.read().invitedSignInWritten(hostId);
+        },
+        invitedSignInAnswered: (hostId: string): void => {
+          releasedMemory.read().invitedSignInAnswered(hostId);
+        },
+        forgetNamed: (hostId: string): void => {
+          releasedMemory.read().forgetNamed(hostId);
+        },
         forgetAll: (): void => {
           releasedMemory.read().forgetAll();
         },
-      },
+      } satisfies ReleasedHostMemory,
     };
   },
 );

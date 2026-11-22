@@ -11,13 +11,15 @@ import {
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   SESSION_CONTROL_STREAM_ID,
 } from "@traycer/protocol/host-transport/mux";
-import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import type {
   AttachGrantProvider,
   AttachGrantProvision,
 } from "@traycer/protocol/host-transport/remote/grant";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hostDoorStateOfRefusal } from "../../host-door-state";
+import {
+  hostDoorStateOfRefusal,
+  type HostDoorObserver,
+} from "../../host-door-state";
 import { resetNegotiatedManifests } from "../../negotiated-manifest-registry";
 import {
   createReleasedHostMemory,
@@ -48,10 +50,21 @@ const SANDBOX_ROW: ReleasedSignOnRow = {
   sandbox: { id: "box" },
 };
 
+/** What a released host says when its own check refuses a credential. */
+const RELEASED_HOST_REASONS = [
+  "Authenticated user does not own this host",
+  "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+  "Token has been revoked",
+] as const;
+
 function releasedRefusal(): FatalErrorDetails {
+  return releasedRefusalSaying("released-host-token-refusal");
+}
+
+function releasedRefusalSaying(reason: string): FatalErrorDetails {
   return {
     code: "UNAUTHORIZED",
-    reason: "released-host-token-refusal",
+    reason,
     incompatibleMethods: null,
     upgradeGuidance: null,
   };
@@ -76,7 +89,7 @@ function credentialBearers(relay: FakeRelayHost): string[] {
 }
 
 function recordingDoor(): {
-  readonly door: SessionDoorObserver;
+  readonly door: HostDoorObserver;
   readonly refusals: FatalErrorDetails[];
 } {
   const refusals: FatalErrorDetails[] = [];
@@ -86,7 +99,7 @@ function recordingDoor(): {
       refused: (details) => {
         refusals.push(details);
       },
-      admitted: () => undefined,
+      admitted: () => () => undefined,
     },
   };
 }
@@ -145,7 +158,7 @@ function openSession(
   relay: FakeRelayHost,
   signIn: MutableBearerLease,
   releasedSignOn: RemoteReleasedSignOn | null,
-  door: SessionDoorObserver,
+  door: HostDoorObserver,
 ): RemoteSession<typeof emptyRpcRegistry, typeof emptyStreamRegistry> {
   return openSessionWithGrants(relay, releasedSignOn, door, () =>
     Promise.resolve(OK_GRANT),
@@ -155,7 +168,7 @@ function openSession(
 function openSessionWithGrants(
   relay: FakeRelayHost,
   releasedSignOn: RemoteReleasedSignOn | null,
-  door: SessionDoorObserver,
+  door: HostDoorObserver,
   grantProvider: AttachGrantProvider,
 ): RemoteSession<typeof emptyRpcRegistry, typeof emptyStreamRegistry> {
   let nextRequestId = 0;
@@ -200,8 +213,10 @@ function signOnWithLiveRow(
         ownerSignInEligible: () => false,
         heldTokenRefused: () => false,
         forgetHeldRefusal: () => undefined,
+        mayPresentSignIn: rowAllows,
         hosts: createReleasedHostMemory(),
         opensReleasedWay: rowAllows,
+        confirmRow: null,
       }
     : null;
 }
@@ -236,6 +251,33 @@ describe("released personal host, remote door", () => {
       session.notifyBearerRotated();
       await vi.waitFor(
         () => expect(credentialBearers(relay)).toEqual([ROTATED_SIGN_IN]),
+        WAIT,
+      );
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+
+  it("pushes the host-only token, never the sign-in, on the next credential update once another transport has heard the host name a reason", async () => {
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const hosts = createReleasedHostMemory();
+    const { door, refusals } = recordingDoor();
+    scriptHost(relay, { value: true });
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    const session = openSession(relay, signIn, { ...personal, hosts }, door);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+      hosts.refusedNamingReason("host-1");
+      signIn.rotate(ROTATED_SIGN_IN);
+      session.notifyBearerRotated();
+      await vi.waitFor(
+        () => expect(credentialBearers(relay)).toEqual([HOST_TOKEN]),
         WAIT,
       );
       expect(refusals).toEqual([]);
@@ -564,7 +606,68 @@ describe("released personal host, remote door", () => {
     }
   }, 20_000);
 
-  it("reports the refusal once when the personal host refuses the sign-in too", async () => {
+  it.each(["rejected", "local-plane-retained"] as const)(
+    "tells the door nothing when a sign-in refresh that ran past the budget answers %s after the newer attach began and before its open was read",
+    async (late) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
+      const heldGrants: Array<(grant: AttachGrantProvision) => void> = [];
+      let grantsAsked = 0;
+      const { door, refusals } = recordingDoor();
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+      relay.decideOpen = (_grant, openIndex) =>
+        openIndex < 2
+          ? { kind: "fatal", details: releasedRefusal() }
+          : { kind: "ack" };
+      const personal = signOnFor(PERSONAL_ROW, signIn);
+      if (personal === null) throw new Error("personal row must open released");
+      const session = openSessionWithGrants(
+        relay,
+        {
+          ...personal,
+          recovery: {
+            revalidateForReconnect: () =>
+              new Promise<RevalidateOutcome>((resolve) => {
+                refreshes.push(resolve);
+              }),
+          },
+        },
+        door,
+        () => {
+          grantsAsked += 1;
+          return grantsAsked < 3
+            ? Promise.resolve(OK_GRANT)
+            : new Promise<AttachGrantProvision>((resolve) => {
+                heldGrants.push(resolve);
+              });
+        },
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
+        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.waitFor(() => expect(heldGrants).toHaveLength(1), WAIT);
+        expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+        // The newer attach is under way and its open has not been read.
+        refreshes[0](late);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refusals).toEqual([]);
+
+        heldGrants[0](OK_GRANT);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(refusals).toEqual([]);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    20_000,
+  );
+
+  it("ends the session and tells the door nothing when the personal host refuses the sign-in too", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const relay = new FakeRelayHost();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
@@ -581,12 +684,103 @@ describe("released personal host, remote door", () => {
       await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
       expect(relay.openBearers).toEqual(["", SIGN_IN]);
       expect(relay.openAuthz[1]).toBeNull();
-      expect(refusals).toHaveLength(1);
-      expect(hostDoorStateOfRefusal(refusals[0])).toBe("older-host");
+      // A refusal of the sign-in is never the "older host" cover.
+      expect(refusals).toEqual([]);
       const opensAtClose = relay.openBearers.length;
       await vi.advanceTimersByTimeAsync(30_000);
       expect(session.isClosed()).toBe(true);
       expect(relay.openBearers).toHaveLength(opensAtClose);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
+  it.each(
+    RELEASED_HOST_REASONS.flatMap((reason) =>
+      (["absent", "rejected", "local-plane-retained"] as const).map(
+        (recovery) => ({ reason, recovery }),
+      ),
+    ),
+  )(
+    "tells the door nothing when the personal host refuses the sign-in bare with $reason and the recovery is $recovery",
+    async ({ reason, recovery }) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const { door, refusals } = recordingDoor();
+      relay.decideOpen = (bearer) => ({
+        kind: "fatal",
+        details:
+          bearer === "" ? releasedRefusal() : releasedRefusalSaying(reason),
+      });
+      const base = signOnFor(PERSONAL_ROW, signIn);
+      if (base === null) throw new Error("personal row must open released");
+      const session = openSession(
+        relay,
+        signIn,
+        {
+          ...base,
+          recovery:
+            recovery === "absent"
+              ? null
+              : {
+                  revalidateForReconnect: () => Promise.resolve(recovery),
+                  revalidateRefused: () => Promise.resolve(recovery),
+                },
+        },
+        door,
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+        expect(relay.openBearers.slice(0, 2)).toEqual(["", SIGN_IN]);
+        expect(refusals).toEqual([]);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    20_000,
+  );
+
+  it("spends one sign-in refresh in a dial sequence when the host refuses every sign-in bare and each refresh answers rotated with a new bearer", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door, refusals } = recordingDoor();
+    relay.decideOpen = () => ({ kind: "fatal", details: releasedRefusal() });
+    const base = signOnFor(PERSONAL_ROW, signIn);
+    if (base === null) throw new Error("personal row must open released");
+    let refreshes = 0;
+    const rotate = (): Promise<RevalidateOutcome> => {
+      refreshes += 1;
+      signIn.rotate(`sign-in-${refreshes}`);
+      return Promise.resolve("rotated");
+    };
+    const session = openSession(
+      relay,
+      signIn,
+      {
+        ...base,
+        recovery: {
+          revalidateForReconnect: rotate,
+          revalidateRefused: rotate,
+        },
+      },
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      expect(relay.openBearers).toEqual([
+        "",
+        SIGN_IN,
+        "sign-in-1",
+        "sign-in-1",
+      ]);
+      expect(refreshes).toBe(1);
+      expect(refusals).toEqual([]);
     } finally {
       session.close();
       vi.useRealTimers();

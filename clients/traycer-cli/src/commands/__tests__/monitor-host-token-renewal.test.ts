@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import { processReleasedHosts } from "../../../../shared/host-transport/released-sign-on";
 import { runMonitor } from "../monitor";
@@ -12,8 +13,11 @@ type FakeSession = {
 };
 type SchedulerOptions = { readonly revalidate: () => Promise<unknown> };
 type StreamOptions = {
-  readonly bearer: () => { getBearerToken: () => string } | null;
-  readonly door: { admitted: () => void };
+  readonly bearer: (hostId: string) => { getBearerToken: () => string } | null;
+  readonly door: {
+    readonly admitted: (hostId: string) => () => void;
+    readonly refused: (details: FatalErrorDetails, hostId: string) => void;
+  };
 };
 
 const state = vi.hoisted(() => {
@@ -170,6 +174,25 @@ function unauthorizedFatal(doorReason: "token_expired" | "not_admitted") {
   };
 }
 
+/** The host the monitor's endpoint resolves to. */
+const HOST_ID = "host-1";
+
+/**
+ * A host's refusal of an open, as the real stream delivers it: reported to
+ * the door, then the session closes with it.
+ */
+function refuseOpen(
+  index: number,
+  options: StreamOptions,
+  fatal: {
+    readonly kind: "fatalError";
+    readonly details: FatalErrorDetails;
+  },
+): void {
+  options.door.refused(fatal.details, HOST_ID);
+  state.sessions[index]?.statusChange?.("closed", fatal);
+}
+
 async function startMonitor() {
   const result = runMonitor({ agentId: "agent-1", epicId: "epic-1" }).then(
     () => ({ error: null }),
@@ -293,13 +316,10 @@ describe("runMonitor host-token renewal", () => {
   it("retries after a rejected persistence write during reactive token recovery", async () => {
     state.rejectPersistence = true;
     const { result, options } = await startMonitor();
-    options.bearer();
+    options.bearer(HOST_ID);
     await waitForMintCount(1);
     state.rejectPersistence = false;
-    state.sessions[0]?.statusChange?.(
-      "closed",
-      unauthorizedFatal("not_admitted"),
-    );
+    refuseOpen(0, options, unauthorizedFatal("not_admitted"));
     state.rejectPersistence = true;
     await waitForMintCount(2);
 
@@ -330,7 +350,7 @@ describe("runMonitor host-token renewal", () => {
       state.minted.push(failure);
       const { result, options } = await startMonitor();
       if (hostNamedReason) processReleasedHosts.refusedNamingReason("host-1");
-      options.bearer();
+      options.bearer(HOST_ID);
       await waitForMintCount(1);
 
       expect(await result).toMatchObject({
@@ -346,7 +366,7 @@ describe("runMonitor host-token renewal", () => {
     );
     state.revalidate.mockResolvedValue("rotated");
     const { result, options } = await startMonitor();
-    options.bearer();
+    options.bearer(HOST_ID);
     await waitForMintCount(2);
 
     expect(await result).toMatchObject({
@@ -368,14 +388,11 @@ describe("runMonitor host-token renewal", () => {
       { kind: "not-admitted" },
     );
     const { result, options } = await startMonitor();
-    options.bearer();
+    options.bearer(HOST_ID);
     await waitForMintCount(1);
     // The stream records a refusal that names its reason before it reports it.
     processReleasedHosts.refusedNamingReason("host-1");
-    state.sessions[0]?.statusChange?.(
-      "closed",
-      unauthorizedFatal("not_admitted"),
-    );
+    refuseOpen(0, options, unauthorizedFatal("not_admitted"));
     await waitForMintCount(2);
 
     expect(await result).toMatchObject({
@@ -385,20 +402,14 @@ describe("runMonitor host-token renewal", () => {
 
   it("earns another fresh token after an admitted open resets recovery", async () => {
     const { result, options } = await startMonitor();
-    options.bearer();
+    options.bearer(HOST_ID);
     await waitForMintCount(1);
-    state.sessions[0]?.statusChange?.(
-      "closed",
-      unauthorizedFatal("token_expired"),
-    );
+    refuseOpen(0, options, unauthorizedFatal("token_expired"));
     await waitForMintCount(2);
     await vi.waitFor(() => expect(state.sessions).toHaveLength(2));
 
-    options.door.admitted();
-    state.sessions[1]?.statusChange?.(
-      "closed",
-      unauthorizedFatal("token_expired"),
-    );
+    options.door.admitted(HOST_ID);
+    refuseOpen(1, options, unauthorizedFatal("token_expired"));
     await waitForMintCount(3);
     await vi.waitFor(() => expect(state.sessions).toHaveLength(3));
 

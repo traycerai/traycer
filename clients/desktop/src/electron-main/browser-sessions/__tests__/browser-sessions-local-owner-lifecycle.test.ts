@@ -80,6 +80,7 @@ const TRANSPORT_DEPS = {
   cloudAuthorized: () => true,
   endpoint: () => null,
   liveRow: () => null,
+  confirmRow: () => Promise.resolve(true),
   appVersion: "1.5.0",
   hostTokens: HOST_TOKENS,
 };

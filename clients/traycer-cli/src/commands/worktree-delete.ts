@@ -1,4 +1,9 @@
-import { localTeamAdmissionCliError } from "../internal/local-open-auth";
+import { isReleasedSignInRefusal } from "@traycer-clients/shared/host-transport/released-sign-on";
+import {
+  localTeamAdmissionCliError,
+  namedTeamAdmissionCliError,
+  waitedOutBeforeOpen,
+} from "../internal/local-open-auth";
 import {
   requireCliHostSession,
   type CliHostSession,
@@ -178,16 +183,17 @@ async function deleteWithHostToken(
     endpoint: () => endpoint,
     // The held host-only token at once, or the probe with none: the mint
     // runs in the background.
-    bearer: tokens.streamBearer(hostId),
+    bearer: (selectedHostId) => tokens.streamBearer(selectedHostId)(),
     releasedSignOn: session.releasedSignOn,
     userId: session.bearer.identity.userId,
     auth: null,
-    // An admitted open fences off a `not-admitted` of a mint begun before it.
+    // An admitted open fences off a `not-admitted` of a mint begun before it,
+    // or ended while it stays admitted.
     door: {
       refused: () => undefined,
-      admitted: () => {
+      admitted: (admittedHostId) => {
         admitted = true;
-        tokens.admitted(hostId);
+        return tokens.admitted(admittedHostId);
       },
     },
     clock: null,
@@ -257,19 +263,27 @@ async function deleteWithHostToken(
 /**
  * Before a stream's first `open`, a `reconnecting` is the stream finding its
  * credential: a released host's bare refusal before the sign-in, the probe, an
- * owner's invitation, or a host-only token still being minted. Nothing was sent,
- * so nothing can be sent twice, and it is waited out for at most the CLI's
- * response deadline; past it, `expired` ends the command as a drop. After the
- * first `open` nothing is waited out.
+ * owner's invitation, a host-only token still being minted, or a retryable
+ * refusal the stream redials (`waitedOutBeforeOpen`). Nothing was sent, so
+ * nothing can be sent twice, and it is waited out for at most the CLI's
+ * response deadline; past it, `expired` ends the command with the last retry
+ * cause, or as a drop when there was none. After the first `open` nothing is
+ * waited out.
  */
-function preOpenCredentialWait(expired: () => void): {
+function preOpenCredentialWait(
+  expired: (lastRetryCause: FatalErrorDetails | null) => void,
+): {
   /** Every status the stream reports, so the first `open` is seen. */
   readonly saw: (status: StreamConnectionStatus) => void;
   /** Whether this status is waited out rather than ending the command. */
-  readonly waits: (status: StreamConnectionStatus) => boolean;
+  readonly waits: (
+    status: StreamConnectionStatus,
+    retryCause: FatalErrorDetails | null,
+  ) => boolean;
   readonly end: () => void;
 } {
   let opened = false;
+  let lastRetryCause: FatalErrorDetails | null = null;
   let bound: NodeJS.Timeout | null = null;
   const end = (): void => {
     if (bound !== null) clearTimeout(bound);
@@ -281,13 +295,30 @@ function preOpenCredentialWait(expired: () => void): {
       opened = true;
       end();
     },
-    waits: (status) => {
-      if (opened || status !== "reconnecting") return false;
-      bound ??= setTimeout(expired, FRAME_TIMEOUT_MS);
+    waits: (status, retryCause) => {
+      if (
+        opened ||
+        status !== "reconnecting" ||
+        !waitedOutBeforeOpen(retryCause)
+      )
+        return false;
+      if (retryCause !== null) lastRetryCause = retryCause;
+      bound ??= setTimeout(() => expired(lastRetryCause), FRAME_TIMEOUT_MS);
       return true;
     },
     end,
   };
+}
+
+/** The end of a wait before the first open: the last retry cause's line, else a drop. */
+function preOpenWaitExpiredCliError(
+  lastRetryCause: FatalErrorDetails | null,
+): CliError {
+  return (
+    (lastRetryCause === null
+      ? null
+      : localTeamAdmissionCliError(lastRetryCause)) ?? streamDroppedCliError()
+  );
 }
 
 type DeleteAttempt =
@@ -331,12 +362,12 @@ function runDeleteCommand(
       holder.command?.close();
       resolve(attempt);
     };
-    const preOpen = preOpenCredentialWait(() =>
+    const preOpen = preOpenCredentialWait((lastRetryCause) =>
       finish({
         kind: "settled",
         deleted: false,
         declined: null,
-        error: streamDroppedCliError(),
+        error: preOpenWaitExpiredCliError(lastRetryCause),
       }),
     );
     const command = new WorktreeDeleteBatchStreamClient({
@@ -396,6 +427,7 @@ function runDeleteCommand(
         onConnectionStatus: ({ status, reason, retryCause }) => {
           preOpen.saw(status);
           if (status === "connecting" || status === "open") return;
+          if (preOpen.waits(status, retryCause)) return;
           const admissionError = retryCause
             ? localTeamAdmissionCliError(retryCause)
             : null;
@@ -408,7 +440,6 @@ function runDeleteCommand(
             });
             return;
           }
-          if (preOpen.waits(status)) return;
           if (
             status === "closed" &&
             reason !== null &&
@@ -465,8 +496,8 @@ async function runLegacyDeleteStream(
       session.close();
       act();
     };
-    const preOpen = preOpenCredentialWait(() =>
-      finish(() => reject(streamDroppedCliError())),
+    const preOpen = preOpenCredentialWait((lastRetryCause) =>
+      finish(() => reject(preOpenWaitExpiredCliError(lastRetryCause))),
     );
     session.onServerFrame((envelope) => {
       // The CANONICAL v1.3 frame, not a frozen earlier schema. v1.1 added
@@ -531,6 +562,7 @@ async function runLegacyDeleteStream(
         if (status === "connecting" || status === "open") {
           return;
         }
+        if (preOpen.waits(status, retryCause)) return;
         const admissionError = retryCause
           ? localTeamAdmissionCliError(retryCause)
           : null;
@@ -538,7 +570,6 @@ async function runLegacyDeleteStream(
           finish(() => reject(admissionError));
           return;
         }
-        if (preOpen.waits(status)) return;
         if (
           status === "closed" &&
           reason !== null &&
@@ -657,8 +688,11 @@ function streamDroppedCliError(): CliError {
 }
 
 /**
- * Map a fatal stream close to a stable CliError. A refusal by the host's door
- * decides first, by its reason (`hostDoorRefusalCliError`). No sign-in is
+ * Map a fatal stream close to a stable CliError. A released host's refusal of
+ * this person's sign-in keeps the released CLI's line (the `UNAUTHORIZED` arm
+ * below), and a current team host's refusal naming its reason keeps the team
+ * sentence. Then a refusal by the host's door decides, by its reason
+ * (`hostDoorRefusalCliError`). No sign-in is
  * refreshed while this one-shot runs (`auth: null`), so nothing here knows the
  * machine to be signed out, and no arm gives sign-in advice. Then, by code: a
  * credential rejected, a protocol skew (`HOST_INCOMPATIBLE`), and anything
@@ -673,7 +707,9 @@ function streamDroppedCliError(): CliError {
  * through the whole stream harness would test the harness.
  */
 export function fatalCloseToCliError(details: FatalErrorDetails): CliError {
+  if (isReleasedSignInRefusal(details)) return fatalCloseByCode(details);
   return (
+    namedTeamAdmissionCliError(details) ??
     hostDoorRefusalCliError(details, false, () => fatalCloseByCode(details)) ??
     localTeamAdmissionCliError(details) ??
     fatalCloseByCode(details)

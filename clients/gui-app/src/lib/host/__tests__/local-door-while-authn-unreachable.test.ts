@@ -1,6 +1,10 @@
-import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
+import {
+  NO_HOST_TOKEN_PROBE,
+  type HostDoorReason,
+} from "@traycer/protocol/framework/door-reason";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { StreamCloseReason } from "@traycer/protocol/host-transport/stream-session";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
@@ -11,7 +15,6 @@ import {
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
-import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import { DEFAULT_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import {
   FakeNativeWebSocket,
@@ -43,26 +46,27 @@ let streamAuth: StreamAuthRevalidator | null = null;
 let activeClients: Array<() => void> = [];
 let activeHostIds = new Set<string>();
 
-type NamedDoorReason =
-  | "not_admitted"
-  | "owner_sign_in"
-  | "not_provisioned"
-  | "token_expired";
-
 vi.mock("@/lib/host/host-door-observer", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/host/host-door-observer")>();
   return {
     ...actual,
-    appHostDoorObserver: (hostId: string): SessionDoorObserver => {
+    appStreamDoorObserver: {
+      ...actual.appStreamDoorObserver,
+      refused: (
+        ...args: Parameters<typeof actual.appStreamDoorObserver.refused>
+      ) => {
+        heard.push(args[0]);
+        actual.appStreamDoorObserver.refused(...args);
+      },
+    },
+    appHostDoorObserver: (hostId: string) => {
       const door = actual.appHostDoorObserver(hostId);
       return {
-        admitted: () => {
-          door.admitted();
-        },
-        refused: (details) => {
-          heard.push(details);
-          door.refused(details);
+        ...door,
+        refused: (...args: Parameters<typeof door.refused>) => {
+          heard.push(args[0]);
+          door.refused(...args);
         },
       };
     },
@@ -83,12 +87,23 @@ function expiredJwt(nowMs: number): {
   return { token: `${header}.${payload}.`, expiresAtMs };
 }
 
+/** What a released host says when its own check refuses a credential. */
+const RELEASED_HOST_REASONS = [
+  "Authenticated user does not own this host",
+  "Host is not provisioned - run `traycer login` on the host machine to authorize it",
+  "Token has been revoked",
+] as const;
+
 function releasedRefusal(): string {
+  return releasedRefusalSaying("released-host-token-refusal");
+}
+
+function releasedRefusalSaying(reason: string): string {
   return JSON.stringify({
     kind: "fatalError",
     details: {
       code: "UNAUTHORIZED",
-      reason: "released-host-token-refusal",
+      reason,
       incompatibleMethods: null,
       upgradeGuidance: null,
     },
@@ -108,7 +123,7 @@ function retryableProbeFatal(): string {
   });
 }
 
-function namedRefusal(doorReason: NamedDoorReason): string {
+function namedRefusal(doorReason: HostDoorReason): string {
   return JSON.stringify({
     kind: "fatalError",
     details: {
@@ -122,7 +137,7 @@ function namedRefusal(doorReason: NamedDoorReason): string {
   });
 }
 
-function retryableNamedRefusal(doorReason: NamedDoorReason): string {
+function retryableNamedRefusal(doorReason: HostDoorReason): string {
   return JSON.stringify({
     kind: "fatalError",
     details: {
@@ -153,6 +168,36 @@ async function blackHoledTokens(): Promise<{
   });
   await settle();
   return { source, mintCalls: () => mintCalls };
+}
+
+/** A mint authn answers only when the test says so; the answers are kept. */
+function heldMints(): {
+  readonly mint: () => Promise<HostTokenMintOutcome>;
+  readonly answerAll: (outcome: HostTokenMintOutcome) => void;
+  readonly asked: () => number;
+} {
+  const pending: Array<(outcome: HostTokenMintOutcome) => void> = [];
+  return {
+    mint: () =>
+      new Promise<HostTokenMintOutcome>((resolve) => {
+        pending.push(resolve);
+      }),
+    answerAll: (outcome) => {
+      for (const resolve of pending) resolve(outcome);
+    },
+    asked: () => pending.length,
+  };
+}
+
+function sourceWithMint(
+  mint: () => Promise<HostTokenMintOutcome>,
+): HostTokenSource {
+  return createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint,
+    signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
+    now: () => Date.now(),
+  });
 }
 
 function targetFor(
@@ -507,6 +552,94 @@ describe("local stream while authn cannot mint", () => {
     clearHostDoorState(hostId);
   });
 
+  it.each(
+    RELEASED_HOST_REASONS.flatMap((reason) =>
+      (["absent", "rejected", "local-plane-retained"] as const).map(
+        (recovery) => ({ reason, recovery }),
+      ),
+    ),
+  )(
+    "raises no state and closes with the host's reason $reason when the sign-in is refused bare and the recovery is $recovery",
+    async ({ reason, recovery }) => {
+      const hostId = `local-sign-in-refused-${recovery}-${RELEASED_HOST_REASONS.indexOf(reason)}`;
+      clearHostDoorState(hostId);
+      streamAuth =
+        recovery === "absent"
+          ? null
+          : { revalidateForReconnect: () => Promise.resolve(recovery) };
+      const held = expiredJwt(Date.now());
+      const unavailable: HostTokenMintOutcome = {
+        kind: "unavailable",
+        detail: "authn offline",
+      };
+      const { source, mintCalls } = await tokensFor(
+        hostId,
+        [unavailable, unavailable, unavailable],
+        held,
+      );
+      const { session } = openClient(hostId, source, {
+        kind: "user",
+        id: USER_A,
+      });
+      await vi.waitFor(() => expect(mintCalls()).toBeGreaterThanOrEqual(1));
+      const closed: { reason: StreamCloseReason | null } = { reason: null };
+      session.onStatusChange((status, closeReason) => {
+        if (status === "closed") closed.reason = closeReason;
+      });
+      const first = await socketAt(1);
+      expect((await readOpen(first)).token).toBe(held.token);
+      first.fireMessage(releasedRefusal());
+      const second = await socketOnThisTurn(2);
+      expect((await readOpen(second)).token).toBe(SIGN_IN_TOKEN);
+      second.fireMessage(releasedRefusalSaying(reason));
+      // A retained local plane redials, bounded, before it gives up.
+      const isClosed = (): boolean => closed.reason !== null;
+      for (let dials = 3; !isClosed() && dials <= 8; dials += 1) {
+        await settle();
+        if (isClosed()) break;
+        const next = await socketAt(dials);
+        expect((await readOpen(next)).token).toBe(SIGN_IN_TOKEN);
+        next.fireMessage(releasedRefusalSaying(reason));
+      }
+      await settle();
+      expect(closed.reason).toMatchObject({
+        kind: "fatalError",
+        details: { reason },
+      });
+      expect(heard).toEqual([]);
+      expect(hostDoorStateFor(hostId)).toBeNull();
+    },
+  );
+
+  it("raises the older-host state when a team computer's held token is refused bare and no sign-in can follow", async () => {
+    const hostId = "local-team-row-bare-refusal";
+    clearHostDoorState(hostId);
+    const held = expiredJwt(Date.now());
+    const unavailable: HostTokenMintOutcome = {
+      kind: "unavailable",
+      detail: "authn offline",
+    };
+    const { source, mintCalls } = await tokensFor(
+      hostId,
+      [unavailable, unavailable],
+      held,
+    );
+    const { session } = openClient(hostId, source, {
+      kind: "team",
+      id: "team-a",
+      name: "Alpha",
+    });
+    await vi.waitFor(() => expect(mintCalls()).toBeGreaterThanOrEqual(1));
+    const socket = await socketAt(1);
+    expect((await readOpen(socket)).token).toBe(held.token);
+    socket.fireMessage(releasedRefusal());
+    await vi.waitFor(() =>
+      expect(hostDoorStateFor(hostId)?.kind).toBe("older-host"),
+    );
+    expect(sentTokens()).toEqual([held.token]);
+    session.close();
+  });
+
   it("keeps token-expired through an invited sign-in refresh failure until a token is obtained", async () => {
     const hostId = "local-owner-sign-in-token-expired";
     clearHostDoorState(hostId);
@@ -583,9 +716,10 @@ describe("local stream while authn cannot mint", () => {
     const invited = await openAt(2, SIGN_IN_TOKEN);
     invited.fireMessage(namedRefusal("token_expired"));
     await vi.waitFor(() => expect(refreshCalls).toBe(1));
-    await vi.waitFor(() => expect(heard).toHaveLength(2));
+    // The invited sign-in's refresh answered network-error: that is quiet, so
+    // only the host-only token's own refusal was reported.
+    await vi.waitFor(() => expect(heard).toHaveLength(1));
     expect(heard.map((details) => details.doorReason)).toEqual([
-      "token_expired",
       "token_expired",
     ]);
     expect(hostDoorStateFor(hostId)?.kind).toBe("token-expired");
@@ -1043,6 +1177,140 @@ describe("local stream while authn cannot mint", () => {
       SIGN_IN_TOKEN,
     ]);
     expect(heard).toEqual([]);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  describe("a connection admitted to the host keeps a late report off its door", () => {
+    it("raises no state when a second stream's mint answers unavailable after it closed, while the first stream stays admitted", async () => {
+      const hostId = "local-admitted-then-late-mint";
+      clearHostDoorState(hostId);
+      const mints = heldMints();
+      const source = sourceWithMint(mints.mint);
+      const owner = { kind: "user", id: USER_A } as const;
+      const first = openClient(hostId, source, owner);
+      await vi.waitFor(() => expect(mints.asked()).toBeGreaterThanOrEqual(1));
+      const probe = await socketAt(1);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      probe.fireMessage(namedRefusal("owner_sign_in"));
+      const invited = await socketOnThisTurn(2);
+      expect((await readOpen(invited)).token).toBe(SIGN_IN_TOKEN);
+      invited.fireMessage(openAckFrame([], null));
+      await settle();
+
+      // A one-shot stream to the same host starts its own background mint and closes.
+      await vi.advanceTimersByTimeAsync(5);
+      const second = openClient(hostId, source, owner);
+      await settle();
+      second.session.close();
+      second.client.close("one-shot done");
+
+      mints.answerAll({ kind: "unavailable", detail: "authn offline" });
+      await settle();
+      expect(hostDoorStateFor(hostId)).toBeNull();
+      first.session.close();
+      first.client.close("test complete");
+      clearHostDoorState(hostId);
+    });
+
+    it("drops the fatal that ends one admitted stream while another to the host stays admitted, and raises a later one once the other is released", async () => {
+      const hostId = "local-two-streams-one-fatal";
+      clearHostDoorState(hostId);
+      const held = {
+        token: "usable-host-token",
+        expiresAtMs: Date.now() + 3_600_000,
+      };
+      const { source } = await tokensFor(hostId, [], held);
+      const owner = { kind: "user", id: USER_A } as const;
+      const admit = async (
+        count: number,
+      ): Promise<{
+        readonly socket: FakeNativeWebSocket;
+        readonly close: () => void;
+      }> => {
+        const stream = openClient(hostId, source, owner);
+        const socket = await socketOnThisTurn(count);
+        expect((await readOpen(socket)).token).toBe(held.token);
+        socket.fireMessage(openAckFrame([], null));
+        await settle();
+        return {
+          socket,
+          close: () => {
+            stream.session.close();
+            stream.client.close("test complete");
+          },
+        };
+      };
+      const first = await admit(1);
+      const second = await admit(2);
+
+      // The second connection ends on the host's fatal: the first still works.
+      second.socket.fireMessage(namedRefusal("host_claimed"));
+      await settle();
+      expect(hostDoorStateFor(hostId)).toBeNull();
+
+      first.close();
+      await settle();
+      const third = await admit(3);
+      third.socket.fireMessage(namedRefusal("host_claimed"));
+      await vi.waitFor(() =>
+        expect(hostDoorStateFor(hostId)?.kind).toBe("host-claimed"),
+      );
+      third.close();
+      second.close();
+      clearHostDoorState(hostId);
+    });
+
+    it("still raises the state when nothing was admitted for the host and the mint answers unavailable (guard)", async () => {
+      const hostId = "local-nothing-admitted-late-mint";
+      clearHostDoorState(hostId);
+      const mints = heldMints();
+      const source = sourceWithMint(mints.mint);
+      const { client, session } = openClient(hostId, source, {
+        kind: "user",
+        id: USER_A,
+      });
+      await vi.waitFor(() => expect(mints.asked()).toBeGreaterThanOrEqual(1));
+      const probe = await socketAt(1);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+
+      mints.answerAll({ kind: "unavailable", detail: "authn offline" });
+      await settle();
+      expect(hostDoorStateFor(hostId)?.kind).toBe("token-unavailable");
+      session.close();
+      client.close("test complete");
+      clearHostDoorState(hostId);
+    });
+  });
+
+  it("probes a current team computer at once with no host-only token held, and dials the minted token once the slow mint succeeds", async () => {
+    const hostId = "local-team-slow-mint";
+    clearHostDoorState(hostId);
+    const mints = heldMints();
+    const source = sourceWithMint(mints.mint);
+    const minted = "team-host-token-after-slow-mint";
+    const { client, session } = openClient(hostId, source, {
+      kind: "team",
+      id: "team-a",
+      name: "Alpha",
+    });
+    await vi.waitFor(() => expect(mints.asked()).toBeGreaterThanOrEqual(1));
+    // The mint has not answered, and the first dial is already the probe.
+    const probe = await socketOnThisTurn(1);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("not_admitted"));
+    await settle();
+
+    mints.answerAll({
+      kind: "ok",
+      token: { token: minted, expiresAtMs: Date.now() + 60_000 },
+    });
+    await settle();
+    await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS * 4);
+    const next = await socketAt(2);
+    expect((await readOpen(next)).token).toBe(minted);
+    expect(sentTokens()).not.toContain(SIGN_IN_TOKEN);
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);

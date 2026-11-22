@@ -767,6 +767,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
     let nextRequestId = 0;
     const transport = createRemoteHostTransport({
       opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       clientIdentity: TEST_CLIENT_IDENTITY,
       hostId,
       userId: USER_A,

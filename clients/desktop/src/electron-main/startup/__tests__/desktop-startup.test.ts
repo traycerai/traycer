@@ -646,6 +646,7 @@ function openStartupStream(
       ownerSignInEligible: () => hostToken === null,
       heldTokenRefused: () => false,
       forgetHeldRefusal: () => undefined,
+      mayPresentSignIn: () => true,
       hosts: processReleasedHosts,
     },
     auth: null,

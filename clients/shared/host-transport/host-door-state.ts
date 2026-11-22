@@ -29,6 +29,25 @@ export type HostDoorStateKind =
   /** A newer host, never an older one. */
   | "unrecognised-refusal";
 
+/**
+ * Called exactly once, when a connection a host admitted leaves: its socket
+ * closes or is torn down, or its session or client closes. A second call does
+ * nothing.
+ */
+export type DoorAdmissionRelease = () => void;
+
+/** A stream's door: every answer names the host its socket was selected for. */
+export interface StreamDoorObserver {
+  readonly admitted: (hostId: string) => DoorAdmissionRelease;
+  readonly refused: (details: FatalErrorDetails, hostId: string) => void;
+}
+
+/** One host's door: a unary call's (`doorFor`), or a remote session's. */
+export interface HostDoorObserver {
+  readonly admitted: () => DoorAdmissionRelease;
+  readonly refused: (details: FatalErrorDetails) => void;
+}
+
 /** A mint that cannot reach authn never reaches a host. */
 export type HostDoorStateSource = "app" | "host" | "authn";
 

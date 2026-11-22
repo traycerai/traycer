@@ -1,4 +1,10 @@
-import { localTeamAdmissionCliError } from "./local-open-auth";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import { isReleasedSignInRefusal } from "@traycer-clients/shared/host-transport/released-sign-on";
+import {
+  localTeamAdmissionCliError,
+  namedTeamAdmissionCliError,
+  waitedOutBeforeOpen,
+} from "./local-open-auth";
 import { requireCliHostSession } from "./cli-host-tokens";
 import {
   hostDoorRefusalCliError,
@@ -190,19 +196,26 @@ export async function openLocalStreamClient(): Promise<{
   const session = await requireCliHostSession(auth, hostId, null);
   session.dispose();
   const tokens = session.tokens;
+  // Stopped when the client closes: every read on it is over by then.
+  let stopRefusals: () => void = () => undefined;
   const client = new WsStreamClient<HostStreamRpcRegistry>({
+    onClientClosed: (message) => {
+      stopRefusals();
+      console.info(message);
+    },
     registry: hostStreamRpcRegistry,
     hostId,
     endpoint: () => endpoint,
-    bearer: tokens.streamBearer(hostId),
+    bearer: (selectedHostId) => tokens.streamBearer(selectedHostId)(),
     // The session is released, so a sign-in the host refuses ends the read.
     releasedSignOn: { ...session.releasedSignOn, recovery: null },
     userId: session.bearer.identity.userId,
     auth: null,
-    // An admitted open fences off a `not-admitted` of a mint begun before it.
+    // An admitted open fences off a `not-admitted` of a mint begun before it,
+    // or ended while it stays admitted.
     door: {
       refused: () => undefined,
-      admitted: () => tokens.admitted(hostId),
+      admitted: (admittedHostId) => tokens.admitted(admittedHostId),
     },
     clock: null,
     hostCredentialMint: null,
@@ -217,7 +230,7 @@ export async function openLocalStreamClient(): Promise<{
     maxBackoffMs: STREAM_MAX_BACKOFF_MS,
     clientIdentity: CLI_CLIENT_IDENTITY,
   });
-  tokens.onRefusalEndingCommand((refusedHostId, failure) => {
+  stopRefusals = tokens.onRefusalEndingCommand((refusedHostId, failure) => {
     if (refusedHostId !== hostId || refusalEndingReads.has(client)) return;
     refusalEndingReads.set(client, hostTokenFailureCliError(failure));
     client.close("host-token-refused");
@@ -252,9 +265,18 @@ export function readBotSnapshot(
 ): Promise<BotSnapshot | null> {
   return new Promise<BotSnapshot | null>((resolve, reject) => {
     let settled = false;
+    // The last retry cause the stream redialed before the first open: the
+    // read's deadline ends with its line, not as no answer.
+    let lastRetryCause: FatalErrorDetails | null = null;
     const session = client.subscribe("bot.subscribe", { botId });
     const deadline = setTimeout(() => {
-      finish(() => reject(botReadFailedError(" - no answer in time")));
+      const waitedOut =
+        lastRetryCause === null
+          ? null
+          : localTeamAdmissionCliError(lastRetryCause);
+      finish(() =>
+        reject(waitedOut ?? botReadFailedError(" - no answer in time")),
+      );
     }, BOT_SNAPSHOT_DEADLINE_MS);
     const finish = (act: () => void): void => {
       if (settled) return;
@@ -284,11 +306,26 @@ export function readBotSnapshot(
       if (frame.kind === "deleted") finish(() => resolve(null));
     });
     session.onStatusChange((status, reason, retryCause) => {
-      if (status === "open") opened = true;
+      if (status === "open") {
+        opened = true;
+        lastRetryCause = null;
+      }
       if (status === "connecting" || status === "open") return;
       const refused = refusalEndingCommand(client);
       if (refused !== null) {
         finish(() => reject(refused));
+        return;
+      }
+      // Before the first open a reconnect is the stream finding its
+      // credential (a released host's refusal, the probe, the owner's
+      // invitation, a token still being minted) or redialing a retryable
+      // refusal (`waitedOutBeforeOpen`); the read's deadline bounds it.
+      if (
+        status === "reconnecting" &&
+        !opened &&
+        waitedOutBeforeOpen(retryCause)
+      ) {
+        if (retryCause !== null) lastRetryCause = retryCause;
         return;
       }
       if (retryCause) {
@@ -298,10 +335,6 @@ export function readBotSnapshot(
           return;
         }
       }
-      // Before the first open a reconnect is the stream finding its
-      // credential (a released host's refusal, the probe, the owner's
-      // invitation, a token still being minted); the read's deadline bounds it.
-      if (status === "reconnecting" && !opened) return;
       if (
         client.getMethodSupport("bot.subscribe") === "unsupported" ||
         isIncompatibleCloseForMethod(reason, "bot.subscribe")
@@ -314,11 +347,15 @@ export function readBotSnapshot(
         const readFailed = (): CliError =>
           botReadFailedError(` - ${details.reason}`);
         // No sign-in is refreshed while this read runs (`auth: null`), so
-        // nothing here knows the machine to be signed out.
-        const fatalError =
-          hostDoorRefusalCliError(details, false, readFailed) ??
-          localTeamAdmissionCliError(details) ??
-          readFailed();
+        // nothing here knows the machine to be signed out. A released host's
+        // refusal of the sign-in reads as the released CLI printed it; a
+        // current team host's refusal naming its reason, as the team's.
+        const fatalError = isReleasedSignInRefusal(details)
+          ? readFailed()
+          : (namedTeamAdmissionCliError(details) ??
+            hostDoorRefusalCliError(details, false, readFailed) ??
+            localTeamAdmissionCliError(details) ??
+            readFailed());
         finish(() => reject(fatalError));
         return;
       }
