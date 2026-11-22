@@ -664,7 +664,9 @@ function createReleasedSignOnSessionAuth(
   const named = (refusal: FatalErrorDetails): boolean =>
     readDoorReason(refusal.doorReason) !== "absent";
   // Asked at attach start, before the open is read: only an attach whose open
-  // would carry the sign-in waits for the row to be read again.
+  // would carry the sign-in waits for the row to be read again. An attach
+  // begun under a sign-in plan counts: its recovery may still answer before
+  // the open is read, and plan the sign-in for it.
   const confirmRow = releasedSignOn.confirmRow;
   const tracking = trackAttaches(
     grantProvider,
@@ -677,7 +679,9 @@ function createReleasedSignOnSessionAuth(
       const wouldPresentSignIn =
         releasedSignOn.opensReleasedWay() &&
         !hosts.namedReason(hostId) &&
-        (signInPlanned() || remembered() !== null);
+        (plan.kind === "sign-in" ||
+          signInPlanned() ||
+          remembered() !== null);
       if (confirmRow === null || !wouldPresentSignIn) return;
       confirmationsAsked += 1;
       const asked = confirmationsAsked;
