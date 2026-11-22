@@ -71,7 +71,10 @@ export function createDesktopHostTokenSource(
   // token never replaces one this copy holds that was issued later, unless
   // the copy still holds exactly the token it replaces (`replaces`: what
   // main's write replaced, for a change event; what an obtain was sent to
-  // replace, for its reply), as main's store does.
+  // replace, for its reply), as main's store does. It is the only place this
+  // window announces a token, and it announces only when its copy changed: a
+  // change event and a reply carrying the token the copy already holds, in
+  // the same era, announce it once between them.
   const apply = (
     userId: string,
     hostId: string,
@@ -85,6 +88,12 @@ export function createDesktopHostTokenSource(
     if (forgetting.has(userId) || reported.get(userId) !== era) return;
     const key = keyOf(userId, hostId);
     const holding = copy.get(key);
+    if (
+      token === null
+        ? holding === undefined
+        : holding?.era === era && holding.token.token === token.token
+    )
+      return;
     if (
       token !== null &&
       holding !== undefined &&
