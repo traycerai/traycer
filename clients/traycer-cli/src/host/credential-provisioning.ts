@@ -376,7 +376,6 @@ export async function provisionInstalledHostCredential(
       signal: probeAbort.signal,
     });
     const releasedSignOn = cliReleasedSignOn(
-      options.auth.authnBaseUrl,
       () => endpoint?.hostId ?? null,
       lease,
       tokens,
@@ -390,22 +389,13 @@ export async function provisionInstalledHostCredential(
         environment: options.environment,
         failure: failure.kind,
       });
-      const refuse = (): void => {
-        mintRefusal = failure;
-        if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
-      };
       if (failure.kind === "not-admitted" && admittedAfterNotAdmitted) return;
       if (failure.kind !== "not-admitted" || signInAfterNotAdmitted !== null) {
-        refuse();
+        mintRefusal = failure;
+        if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
         return;
       }
       signInAfterNotAdmitted = failure;
-      void releasedSignOn
-        .allowed()
-        .catch(() => false)
-        .then((allowed) => {
-          if (!allowed) refuse();
-        });
     });
     // Recovery of a refused token, as on every other CLI open: one fresh
     // token and one more open, and a second refusal is final.

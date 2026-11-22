@@ -9,7 +9,6 @@ import {
   heldTokenRefused,
   hostTokenUnobtainable,
   ownerSignInEligible,
-  releasedLocalSignOnFromRegistry,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
@@ -455,8 +454,6 @@ export function createLocalHostInventoryStreamClient(deps: {
   readonly localHost: () => LocalHostEndpoint | null;
   readonly bearer: BearerSourceProvider;
   readonly appVersion: string | null;
-  /** Where this host's row is read after a released host refuses the host-only token. */
-  readonly authnBaseUrl: string;
 }): (
   endpoint: LocalHostEndpoint,
   userId: string,
@@ -490,9 +487,9 @@ export function createLocalHostInventoryStreamClient(deps: {
         endpoint.hostId,
       ),
       // Main never refreshes the sign-in, so a refused one ends the stream too.
-      releasedSignOn: releasedLocalSignOnFromRegistry({
-        authnBaseUrl: deps.authnBaseUrl,
-        hostId: () => deps.localHost()?.hostId ?? null,
+      // It holds no row and reads none: the sign-in goes only after this dial
+      // sequence's refusal showed the released level.
+      releasedSignOn: {
         signIn: deps.bearer,
         recovery: null,
         hostTokenUnobtainable: () =>
@@ -504,7 +501,7 @@ export function createLocalHostInventoryStreamClient(deps: {
         forgetHeldRefusal: () =>
           hostTokens.forgetHeldRefused(userId, endpoint.hostId),
         hosts: processReleasedHosts,
-      }),
+      },
       ...hostTokenSessionAuth(
         {
           tokens: hostTokens,

@@ -111,7 +111,9 @@ function namedNotAdmitted(): {
   };
 }
 
-function namedRefusal(doorReason: "owner_sign_in" | "token_expired"): {
+function namedRefusal(
+  doorReason: NonNullable<FatalErrorDetails["doorReason"]>,
+): {
   readonly kind: "fatalError";
   readonly details: FatalErrorDetails;
 } {
@@ -196,6 +198,14 @@ function signOnFor(
   row: ReleasedSignOnRow,
   signIn: MutableBearerLease,
 ): ReleasedSignOn | null {
+  return signOnWithMemory(row, signIn, createReleasedHostMemory());
+}
+
+function signOnWithMemory(
+  row: ReleasedSignOnRow,
+  signIn: MutableBearerLease,
+  hosts: ReleasedHostMemory,
+): ReleasedSignOn | null {
   return releasedSignOnForLocalRow(
     row,
     mockLocalHostEntry.hostId,
@@ -203,7 +213,7 @@ function signOnFor(
     () => signIn,
     null,
     NO_MINTS,
-    createReleasedHostMemory(),
+    hosts,
   );
 }
 
@@ -364,53 +374,45 @@ describe("released personal host, local stream", () => {
     expect(refusals).toEqual([]);
   });
 
-  it("hands the host-only token to a host that names a reason after the released refusal, before the sign-in is presented", async () => {
+  it("hands the host-only token to a host that names a reason while the sign-in's refresh runs", async () => {
     const hosts = createReleasedHostMemory();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
-    const rowAnswers: Array<(allowed: boolean) => void> = [];
+    const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
     const { factory, sockets } = makeStubSocketFactory();
     const { door, refusals } = recordingDoor();
     const client = makeStreamClient(
       factory,
       hostToken,
-      {
-        signIn: () => signIn,
-        recovery: null,
-        allowed: () =>
-          new Promise<boolean>((resolve) => {
-            rowAnswers.push(resolve);
-          }),
-        hostTokenUnobtainable: () => false,
-        ownerSignInEligible: () => false,
-        heldTokenRefused: () => false,
-        forgetHeldRefusal: () => undefined,
+      releasedSignOnForLocalRow(
+        PERSONAL_ROW,
+        mockLocalHostEntry.hostId,
+        USER_ID,
+        () => signIn,
+        {
+          revalidateForReconnect: () =>
+            new Promise<RevalidateOutcome>((resolve) => {
+              refreshes.push(resolve);
+            }),
+        },
+        NO_MINTS,
         hosts,
-      },
+      ),
       door,
     );
-    const { statuses } = subscribe(client);
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-      WAIT,
-    );
+    subscribe(client);
+    await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
     expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
     sockets[0].fireText(releasedRefusal());
-    await vi.waitFor(() => expect(rowAnswers).toHaveLength(1), WAIT);
-    // Another transport hears this host name a reason while the row is asked.
+    await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+    expect((await openFrame(sockets[1])).token).toBe(SIGN_IN);
+    sockets[1].fireText(releasedRefusal());
+    await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
+    // Another transport hears this host name a reason while the refresh runs.
     hosts.refusedNamingReason(mockLocalHostEntry.hostId);
-    rowAnswers[0](true);
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(2),
-      WAIT,
-    );
-    const next = await openFrame(sockets[1]);
-    expect(next.token).toBe(HOST_TOKEN);
-    ack(sockets[1], next, ["credentialUpdate"]);
-    await untilStatus(statuses, "open");
-    expect(sockets.flatMap((socket) => tokensOf(socket))).not.toContain(
-      SIGN_IN,
-    );
+    refreshes[0]("rotated");
+    await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+    expect((await openFrame(sockets[2])).token).toBe(HOST_TOKEN);
     expect(refusals).toEqual([]);
   });
 
@@ -427,7 +429,6 @@ describe("released personal host, local stream", () => {
       {
         signIn: () => signIn,
         recovery: null,
-        allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () => true,
         ownerSignInEligible: () => true,
         heldTokenRefused: () => false,
@@ -459,11 +460,73 @@ describe("released personal host, local stream", () => {
       },
     ]);
     // The restart raises no door state, and it does not decline the probe.
-    expect(
-      refusals.every((details) => hostDoorStateOfRefusal(details) === null),
-    ).toBe(true);
+    expect(refusals).toHaveLength(1);
+    expect(hostDoorStateOfRefusal(refusals[0])).toBeNull();
     expect(hosts.probeDeclined(USER_ID, mockLocalHostEntry.hostId)).toBe(false);
   });
+
+  it.each([
+    { reason: "host_claimed", state: "host-claimed" },
+    { reason: "membership_removed", state: "membership-removed" },
+    { reason: "enrolment_broken", state: "enrolment-broken" },
+    { reason: "clock_skew", state: "clock-skew" },
+    { reason: "keys_unavailable", state: "keys-unavailable" },
+  ] as const)(
+    "keeps reconnecting without a probe or a sign-in when the invited owner sign-in is refused with $reason, and dials the host-only token once it can be had",
+    async ({ reason, state }) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const hosts = createReleasedHostMemory();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      let held: MutableBearerLease | null = null;
+      const { factory, sockets } = makeStubSocketFactory();
+      const { door, refusals } = recordingDoor();
+      const client = makeStreamClientHolding(
+        factory,
+        () => held,
+        USER_ID,
+        {
+          signIn: () => signIn,
+          recovery: null,
+          hostTokenUnobtainable: () => held === null,
+          ownerSignInEligible: () => held === null,
+          heldTokenRefused: () => false,
+          forgetHeldRefusal: () => undefined,
+          hosts,
+        },
+        door,
+        NO_TRANSPORT_EVIDENCE,
+      );
+      const { statuses } = subscribe(client);
+      await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+      expect((await openFrame(sockets[0])).token).toBe(NO_HOST_TOKEN_PROBE);
+      sockets[0].fireText(namedRefusal("owner_sign_in"));
+      await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+      expect((await openFrame(sockets[1])).token).toBe(SIGN_IN);
+      sockets[1].fireText(namedRefusal(reason));
+
+      await vi.waitFor(
+        () => expect(statuses.at(-1)).toBe("reconnecting"),
+        WAIT,
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(sockets).toHaveLength(2);
+      expect(statuses).not.toContain("closed");
+      expect(hosts.probeDeclined(USER_ID, mockLocalHostEntry.hostId)).toBe(
+        true,
+      );
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0].doorReason).toBe(reason);
+      expect(hostDoorStateOfRefusal(refusals[0])).toBe(state);
+
+      held = new MutableBearerLease(HOST_TOKEN, USER_ID);
+      await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+      const back = await openFrame(sockets[2]);
+      expect(back.token).toBe(HOST_TOKEN);
+      ack(sockets[2], back, ["credentialUpdate"]);
+      await untilStatus(statuses, "open");
+      expect(refusals).toHaveLength(1);
+    },
+  );
 
   it("probes again on the next dial when the invited owner sign-in is refused without a door reason", async () => {
     const hosts = createReleasedHostMemory();
@@ -477,7 +540,6 @@ describe("released personal host, local stream", () => {
       {
         signIn: () => signIn,
         recovery: null,
-        allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () => true,
         ownerSignInEligible: () => true,
         heldTokenRefused: () => false,
@@ -500,110 +562,68 @@ describe("released personal host, local stream", () => {
     expect(hosts.probeDeclined(USER_ID, mockLocalHostEntry.hostId)).toBe(false);
   });
 
-  it("keeps the host-only token on a connection a wake dialed while the row was asked after the released refusal", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const hosts = createReleasedHostMemory();
-    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
-    const rowAnswers: Array<(allowed: boolean) => void> = [];
-    const { factory, sockets } = makeStubSocketFactory();
-    const { door, refusals } = recordingDoor();
-    const client = makeStreamClient(
-      factory,
-      hostToken,
-      {
-        signIn: () => signIn,
-        recovery: null,
-        allowed: () =>
-          new Promise<boolean>((resolve) => {
-            rowAnswers.push(resolve);
-          }),
-        hostTokenUnobtainable: () => false,
-        ownerSignInEligible: () => false,
-        heldTokenRefused: () => false,
-        forgetHeldRefusal: () => undefined,
-        hosts,
-      },
-      door,
-    );
-    const { statuses } = subscribe(client);
-    await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
-    expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
-    sockets[0].fireText(releasedRefusal());
-    await vi.waitFor(() => expect(rowAnswers).toHaveLength(1), WAIT);
+  it.each(["rejected", "local-plane-retained"] as const)(
+    "tells the door nothing when the sign-in's refresh that ran past the budget answers %s after the redial was admitted",
+    async (late) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const hosts = createReleasedHostMemory();
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
+      const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
+      const { factory, sockets } = makeStubSocketFactory();
+      const { door, refusals } = recordingDoor();
+      const client = makeStreamClient(
+        factory,
+        hostToken,
+        releasedSignOnForLocalRow(
+          PERSONAL_ROW,
+          mockLocalHostEntry.hostId,
+          USER_ID,
+          () => signIn,
+          {
+            revalidateForReconnect: () =>
+              new Promise<RevalidateOutcome>((resolve) => {
+                refreshes.push(resolve);
+              }),
+          },
+          NO_MINTS,
+          hosts,
+        ),
+        door,
+      );
+      const { statuses } = subscribe(client);
+      await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+      expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
+      sockets[0].fireText(releasedRefusal());
+      await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+      const admitted = await openFrame(sockets[1]);
+      expect(admitted.token).toBe(SIGN_IN);
+      ack(sockets[1], admitted, ["credentialUpdate"]);
+      await untilStatus(statuses, "open");
+      sockets[1].fireText(releasedRefusal());
+      await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
 
-    client.reconnectAll("wake", { probeFirst: false });
-    await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
-    const woken = await openFrame(sockets[1]);
-    expect(woken.token).toBe(HOST_TOKEN);
-    ack(sockets[1], woken, ["credentialUpdate"]);
-    await untilStatus(statuses, "open");
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+      const redialed = await openFrame(sockets[2]);
+      expect(redialed.token).toBe(SIGN_IN);
+      ack(sockets[2], redialed, ["credentialUpdate"]);
+      await vi.waitFor(() => expect(statuses.at(-1)).toBe("open"), WAIT);
 
-    rowAnswers[0](true);
-    await vi.advanceTimersByTimeAsync(0);
-    hostToken.rotate(ROTATED_HOST_TOKEN);
-    client.notifyBearerRotated();
-    expect(credentialUpdateTokens(sockets[1])).toEqual([ROTATED_HOST_TOKEN]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(sockets).toHaveLength(2);
-    expect(refusals).toEqual([]);
-  });
+      refreshes[0](late);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(refusals).toEqual([]);
+      expect(sockets).toHaveLength(3);
+    },
+  );
 
-  it("dials the host-only token that became available while the no-host-token row was asked", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const hosts = createReleasedHostMemory();
-    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    let held: MutableBearerLease | null = null;
-    const rowAnswers: Array<(allowed: boolean) => void> = [];
-    const { factory, sockets } = makeStubSocketFactory();
-    const { door } = recordingDoor();
-    const client = makeStreamClientHolding(
-      factory,
-      () => held,
-      USER_ID,
-      {
-        signIn: () => signIn,
-        recovery: null,
-        allowed: () =>
-          new Promise<boolean>((resolve) => {
-            rowAnswers.push(resolve);
-          }),
-        hostTokenUnobtainable: () => held === null,
-        ownerSignInEligible: () => false,
-        heldTokenRefused: () => false,
-        forgetHeldRefusal: () => undefined,
-        hosts,
-      },
-      door,
-      NO_TRANSPORT_EVIDENCE,
-    );
-    const { statuses } = subscribe(client);
-    await vi.waitFor(() => expect(rowAnswers).toHaveLength(1), WAIT);
-    expect(sockets).toHaveLength(0);
-
-    held = new MutableBearerLease(HOST_TOKEN, USER_ID);
-    client.reconnectAll("wake", { probeFirst: false });
-    await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
-    const live = await openFrame(sockets[0]);
-    expect(live.token).toBe(HOST_TOKEN);
-    ack(sockets[0], live, ["credentialUpdate"]);
-    await untilStatus(statuses, "open");
-
-    rowAnswers[0](true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(sockets).toHaveLength(1);
-    sockets[0].fireClose(1006, "drop");
-    await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
-    expect((await openFrame(sockets[1])).token).toBe(HOST_TOKEN);
-  });
-
-  it("keeps the owner sign-in on a connection that was redialed after its refresh ran past the budget, and the refresh then answers rejected", async () => {
+  it("keeps the owner sign-in and the door untouched when a refresh that ran past the budget answers rejected after the redial was admitted", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const hosts = createReleasedHostMemory();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
     const { factory, sockets } = makeStubSocketFactory();
-    const { door } = recordingDoor();
+    const { door, refusals } = recordingDoor();
     const client = makeStreamClientHolding(
       factory,
       () => null,
@@ -616,7 +636,6 @@ describe("released personal host, local stream", () => {
               refreshes.push(resolve);
             }),
         },
-        allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () => true,
         ownerSignInEligible: () => true,
         heldTokenRefused: () => false,
@@ -647,6 +666,7 @@ describe("released personal host, local stream", () => {
     signIn.rotate(ROTATED_SIGN_IN);
     client.notifyBearerRotated();
     expect(credentialUpdateTokens(sockets[2])).toEqual([ROTATED_SIGN_IN]);
+    expect(refusals).toEqual([]);
   });
 
   it("keeps the sign-in off a team computer and the door hears the refusal", async () => {
@@ -717,7 +737,7 @@ describe("released personal host, local stream", () => {
     expect(refusals).toEqual([]);
   });
 
-  it("redials the sign-in after a drop, then the host-only token once that sign-in is refused by name", async () => {
+  it("returns to the host-only token after a drop once the host admits it", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { factory, sockets } = makeStubSocketFactory();
     const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
@@ -730,58 +750,35 @@ describe("released personal host, local stream", () => {
       door,
     );
     const { statuses } = subscribe(client);
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-      WAIT,
-    );
-    const refused = await openFrame(sockets[0]);
-    expect(refused.token).toBe(HOST_TOKEN);
+    await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+    expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
     sockets[0].fireText(releasedRefusal());
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(2),
-      WAIT,
-    );
+    await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
     const admitted = await openFrame(sockets[1]);
     expect(admitted.token).toBe(SIGN_IN);
     ack(sockets[1], admitted, ["credentialUpdate"]);
     await untilStatus(statuses, "open");
+
+    // The host was updated meanwhile: it admits the host-only token.
     sockets[1].fireClose(1006, "drop");
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(3),
-      WAIT,
-    );
-    const remembered = await openFrame(sockets[2]);
-    expect(remembered.token).toBe(SIGN_IN);
-    sockets[2].fireText(namedNotAdmitted());
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(4),
-      WAIT,
-    );
-    const updated = await openFrame(sockets[3]);
+    await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+    const updated = await openFrame(sockets[2]);
     expect(updated.token).toBe(HOST_TOKEN);
-    ack(sockets[3], updated, ["credentialUpdate"]);
+    ack(sockets[2], updated, ["credentialUpdate"]);
+    hostToken.rotate(ROTATED_HOST_TOKEN);
     signIn.rotate(ROTATED_SIGN_IN);
     client.notifyBearerRotated();
-    expect(tokensOf(sockets[3])).not.toContain(SIGN_IN);
-    expect(tokensOf(sockets[3])).not.toContain(ROTATED_SIGN_IN);
-    sockets[3].fireClose(1006, "drop");
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(5),
-      WAIT,
+    expect(credentialUpdateTokens(sockets[2])).toEqual([ROTATED_HOST_TOKEN]);
+    sockets[2].fireClose(1006, "drop");
+    await vi.waitFor(() => expect(sockets).toHaveLength(4), WAIT);
+    expect((await openFrame(sockets[3])).token).toBe(ROTATED_HOST_TOKEN);
+    expect(sockets.flatMap((socket) => tokensOf(socket))).not.toContain(
+      ROTATED_SIGN_IN,
     );
-    const held = await openFrame(sockets[4]);
-    expect(held.token).toBe(HOST_TOKEN);
-    expect(tokensOf(sockets[4])).not.toContain(SIGN_IN);
-    expect(refusals).toEqual([]);
-    // Answered, so the clock below can only show a redial the host did not ask for.
-    ack(sockets[4], held, ["credentialUpdate"]);
-    const opensAtHold = sockets.length;
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(sockets).toHaveLength(opensAtHold);
     expect(refusals).toEqual([]);
   });
 
-  it("dials the sign-in first when a released connection drops", async () => {
+  it("opens every dial sequence with the host-only token and takes the sign-in only after it is refused", async () => {
     const { factory, sockets } = makeStubSocketFactory();
     const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
@@ -793,30 +790,95 @@ describe("released personal host, local stream", () => {
       door,
     );
     const { statuses } = subscribe(client);
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-      WAIT,
-    );
-    const refused = await openFrame(sockets[0]);
-    expect(refused.token).toBe(HOST_TOKEN);
-    sockets[0].fireText(releasedRefusal());
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(2),
-      WAIT,
-    );
-    const admitted = await openFrame(sockets[1]);
-    expect(admitted.token).toBe(SIGN_IN);
-    ack(sockets[1], admitted, ["credentialUpdate"]);
-    await untilStatus(statuses, "open");
-    sockets[1].fireClose(1006, "drop");
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(3),
-      WAIT,
-    );
-    const redial = await openFrame(sockets[2]);
-    expect(redial.token).toBe(SIGN_IN);
+    for (const first of [0, 2]) {
+      await vi.waitFor(() => expect(sockets).toHaveLength(first + 1), WAIT);
+      expect((await openFrame(sockets[first])).token).toBe(HOST_TOKEN);
+      sockets[first].fireText(releasedRefusal());
+      await vi.waitFor(() => expect(sockets).toHaveLength(first + 2), WAIT);
+      const admitted = await openFrame(sockets[first + 1]);
+      expect(admitted.token).toBe(SIGN_IN);
+      ack(sockets[first + 1], admitted, ["credentialUpdate"]);
+      await vi.waitFor(() => expect(statuses.at(-1)).toBe("open"), WAIT);
+      if (first === 0) sockets[first + 1].fireClose(1006, "drop");
+    }
+    expect(
+      sockets.map((socket) => readFrame(socket.textSent[0]).token),
+    ).toEqual([HOST_TOKEN, SIGN_IN, HOST_TOKEN, SIGN_IN]);
     expect(refusals).toEqual([]);
   });
+
+  it("keeps the sign-in off a host remembered as released that now names a reason", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const hosts = createReleasedHostMemory();
+    hosts.signInAdmitted(USER_ID, mockLocalHostEntry.hostId);
+    const { factory, sockets } = makeStubSocketFactory();
+    const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { door, refusals } = recordingDoor();
+    const client = makeStreamClient(
+      factory,
+      hostToken,
+      signOnWithMemory(PERSONAL_ROW, signIn, hosts),
+      door,
+    );
+    const { statuses } = subscribe(client);
+    await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+    expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
+    sockets[0].fireText(namedNotAdmitted());
+    await untilStatus(statuses, "closed");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sockets.map((socket) => tokensOf(socket))).toEqual([[HOST_TOKEN]]);
+    expect(refusals).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "a current personal host that admits the host-only token",
+      row: PERSONAL_ROW,
+      refuses: false,
+    },
+    {
+      name: "a current team host that refuses it by name",
+      row: TEAM_ROW,
+      refuses: true,
+    },
+  ])(
+    "presents no sign-in from a stale memory to $name",
+    async ({ row, refuses }) => {
+      const hosts = createReleasedHostMemory();
+      hosts.signInAdmitted(USER_ID, mockLocalHostEntry.hostId);
+      const { factory, sockets } = makeStubSocketFactory();
+      const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const { door } = recordingDoor();
+      const client = makeStreamClient(
+        factory,
+        hostToken,
+        signOnWithMemory(row, signIn, hosts),
+        door,
+      );
+      const { statuses } = subscribe(client);
+      await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+      const open = await openFrame(sockets[0]);
+      expect(open.token).toBe(HOST_TOKEN);
+      if (refuses) {
+        sockets[0].fireText(namedNotAdmitted());
+        await untilStatus(statuses, "closed");
+      } else {
+        ack(sockets[0], open, ["credentialUpdate"]);
+        await untilStatus(statuses, "open");
+        signIn.rotate(ROTATED_SIGN_IN);
+        client.notifyBearerRotated();
+      }
+      expect(sockets).toHaveLength(1);
+      expect(sockets.flatMap((socket) => tokensOf(socket))).not.toContain(
+        SIGN_IN,
+      );
+      expect(sockets.flatMap((socket) => tokensOf(socket))).not.toContain(
+        ROTATED_SIGN_IN,
+      );
+    },
+  );
 
   it("reports the refusal once when the personal host refuses the sign-in too", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -1007,198 +1069,6 @@ describe("released personal host, local stream", () => {
     const opensAtClose = sockets.length;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sockets).toHaveLength(opensAtClose);
-  });
-
-  it("dials the host-only token when a remembered host's row no longer allows the sign-in", async () => {
-    const { factory, sockets } = makeStubSocketFactory();
-    const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
-    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const hosts = createReleasedHostMemory();
-    let rowAllows = true;
-    const { door, refusals } = recordingDoor();
-    const client = makeStreamClient(
-      factory,
-      hostToken,
-      {
-        signIn: () => signIn,
-        recovery: null,
-        allowed: () => Promise.resolve(rowAllows),
-        hostTokenUnobtainable: () => false,
-        ownerSignInEligible: () => false,
-        heldTokenRefused: () => false,
-        forgetHeldRefusal: () => undefined,
-        hosts,
-      },
-      door,
-    );
-    const { statuses } = subscribe(client);
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-      WAIT,
-    );
-    const refused = await openFrame(sockets[0]);
-    expect(refused.token).toBe(HOST_TOKEN);
-    sockets[0].fireText(releasedRefusal());
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(2),
-      WAIT,
-    );
-    const admitted = await openFrame(sockets[1]);
-    expect(admitted.token).toBe(SIGN_IN);
-    ack(sockets[1], admitted, ["credentialUpdate"]);
-    await untilStatus(statuses, "open");
-    rowAllows = false;
-    sockets[1].fireClose(1006, "drop");
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(3),
-      WAIT,
-    );
-    const redial = await openFrame(sockets[2]);
-    expect(redial.token).toBe(HOST_TOKEN);
-    expect(tokensOf(sockets[2])).not.toContain(SIGN_IN);
-    expect(refusals).toEqual([]);
-  });
-
-  it("does not present one person's remembered sign-in on another person's dial", async () => {
-    const hosts = createReleasedHostMemory();
-    const first = makeStubSocketFactory();
-    const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
-    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const { door } = recordingDoor();
-    const client = makeStreamClient(
-      first.factory,
-      hostToken,
-      {
-        signIn: () => signIn,
-        recovery: null,
-        allowed: () => Promise.resolve(true),
-        hostTokenUnobtainable: () => false,
-        ownerSignInEligible: () => false,
-        heldTokenRefused: () => false,
-        forgetHeldRefusal: () => undefined,
-        hosts,
-      },
-      door,
-    );
-    const { statuses } = subscribe(client);
-    await vi.waitFor(
-      () => expect(first.sockets.length).toBeGreaterThanOrEqual(1),
-      WAIT,
-    );
-    const refused = await openFrame(first.sockets[0]);
-    first.sockets[0].fireText(releasedRefusal());
-    await vi.waitFor(
-      () => expect(first.sockets.length).toBeGreaterThanOrEqual(2),
-      WAIT,
-    );
-    const admitted = await openFrame(first.sockets[1]);
-    expect(admitted.token).toBe(SIGN_IN);
-    ack(first.sockets[1], admitted, ["credentialUpdate"]);
-    await untilStatus(statuses, "open");
-    const otherSignIn = "other-person-sign-in";
-    const second = makeStubSocketFactory();
-    const other = new MutableBearerLease(otherSignIn, "user-b");
-    const otherDoor = recordingDoor();
-    const otherClient = makeStreamClient(
-      second.factory,
-      new MutableBearerLease(HOST_TOKEN, "user-b"),
-      {
-        signIn: () => other,
-        recovery: null,
-        allowed: () => Promise.resolve(true),
-        hostTokenUnobtainable: () => false,
-        ownerSignInEligible: () => false,
-        heldTokenRefused: () => false,
-        forgetHeldRefusal: () => undefined,
-        hosts,
-      },
-      otherDoor.door,
-    );
-    subscribe(otherClient);
-    await vi.waitFor(
-      () => expect(second.sockets.length).toBeGreaterThanOrEqual(1),
-      WAIT,
-    );
-    const opened = await openFrame(second.sockets[0]);
-    expect(opened.token).toBe(HOST_TOKEN);
-    expect(tokensOf(second.sockets[0])).not.toContain(otherSignIn);
-    expect(tokensOf(second.sockets[0])).not.toContain(SIGN_IN);
-  });
-
-  it("asks the row again when the endpoint changes while the first answer is in flight", async () => {
-    const hosts = createReleasedHostMemory();
-    const h1 = "remembered-host-1";
-    const h2 = "remembered-host-2";
-    hosts.signInAdmitted(USER_ID, h1);
-    hosts.signInAdmitted(USER_ID, h2);
-    let currentHost = h1;
-    const gates: Array<(allowed: boolean) => void> = [];
-    let calls = 0;
-    const { factory, sockets } = makeStubSocketFactory();
-    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const { door } = recordingDoor();
-    const client = new WsStreamClient({
-      clientIdentity: TEST_CLIENT_IDENTITY,
-      registry: hostStreamRpcRegistry,
-      endpoint: () => ({
-        hostId: currentHost,
-        websocketUrl: "ws://127.0.0.1:9/rpc",
-      }),
-      hostId: h1,
-      bearer: () => new MutableBearerLease(HOST_TOKEN, USER_ID),
-      userId: USER_ID,
-      releasedSignOn: {
-        signIn: () => signIn,
-        recovery: null,
-        allowed: () => {
-          calls += 1;
-          return new Promise<boolean>((resolve) => {
-            gates.push(resolve);
-          });
-        },
-        hostTokenUnobtainable: () => false,
-        ownerSignInEligible: () => false,
-        heldTokenRefused: () => false,
-        forgetHeldRefusal: () => undefined,
-        hosts,
-      },
-      auth: null,
-      clock: null,
-      hostCredentialMint: null,
-      onHostCredentialState: null,
-      evidence: NO_TRANSPORT_EVIDENCE,
-      webSocketFactory: factory,
-      dialTimeoutMs: 1_000,
-      openAckTimeoutMs: 1_000,
-      pingIntervalMs: 25_000,
-      pongTimeoutMs: 50_000,
-      initialBackoffMs: 10,
-      maxBackoffMs: 1_000,
-      door,
-    });
-    clients.push(client);
-    subscribe(client);
-    await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(1), WAIT);
-    expect(sockets).toHaveLength(0);
-    currentHost = h2;
-    const firstAnswer = gates[0];
-    if (firstAnswer === undefined) throw new Error("row ask missing");
-    firstAnswer(true);
-    await vi.waitFor(
-      () => expect(calls >= 2 || sockets.length > 0).toBe(true),
-      WAIT,
-    );
-    expect(calls).toBe(2);
-    expect(sockets).toHaveLength(0);
-    const secondAnswer = gates[1];
-    if (secondAnswer === undefined) throw new Error("second row ask missing");
-    secondAnswer(true);
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-      WAIT,
-    );
-    const opened = await openFrame(sockets[0]);
-    expect(opened.token).toBe(SIGN_IN);
   });
 });
 
@@ -1409,120 +1279,115 @@ describe("released personal host, local unary", () => {
     }
   });
 
-  it("sends the sign-in on the first socket of a later call", async () => {
+  it("opens every call with the host-only token and sends the sign-in only after it is refused", async () => {
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const driven = startUnary(signIn, createReleasedHostMemory());
     try {
       await admitReleasedUnary(driven);
       driven.client.releaseIdleLocalSessions();
-      const before = driven.sockets.length;
-      const again = requestEcho(driven.client, signIn);
-      await vi.waitFor(
-        () => expect(driven.sockets.length).toBeGreaterThan(before),
-        WAIT,
-      );
-      const socket = driven.sockets[before];
-      if (socket === undefined) throw new Error("remembered dial missing");
-      socket.fireOpen();
-      await vi.waitFor(
-        () => expect(socket.sent.length).toBeGreaterThan(0),
-        WAIT,
-      );
-      expect(readFrame(socket.sent[0]).token).toBe(SIGN_IN);
+      await admitReleasedUnary(driven);
+      expect(openTokensOf(driven.sockets)).toEqual([
+        HOST_TOKEN,
+        SIGN_IN,
+        HOST_TOKEN,
+        SIGN_IN,
+      ]);
       expect(driven.refusals).toEqual([]);
-      await answerEcho(socket);
-      expect(await again).toEqual({
-        kind: "fulfilled",
-        value: { echoed: "hi" },
-      });
     } finally {
       driven.client.releaseIdleLocalSessions();
     }
   });
 
-  it("dials the host-only token after a remembered sign-in is refused by name", async () => {
+  it("keeps the sign-in off a call to a host remembered as released that now names a reason", async () => {
+    const hosts = createReleasedHostMemory();
+    hosts.signInAdmitted(USER_ID, mockLocalHostEntry.hostId);
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
-    const driven = startUnary(signIn, createReleasedHostMemory());
+    const driven = startUnary(signIn, hosts);
     try {
-      await admitReleasedUnary(driven);
-      driven.client.releaseIdleLocalSessions();
-      const before = driven.sockets.length;
-      const again = requestEcho(driven.client, signIn);
-      await vi.waitFor(
-        () => expect(driven.sockets.length).toBeGreaterThan(before),
-        WAIT,
-      );
-      const remembered = driven.sockets[before];
-      if (remembered === undefined) throw new Error("remembered dial missing");
-      remembered.fireOpen();
-      await vi.waitFor(
-        () => expect(remembered.sent.length).toBeGreaterThan(0),
-        WAIT,
-      );
-      expect(readFrame(remembered.sent[0]).token).toBe(SIGN_IN);
-      remembered.fireMessage(namedNotAdmitted());
-      await vi.waitFor(
-        () => expect(driven.sockets.length).toBeGreaterThan(before + 1),
-        WAIT,
-      );
-      const updated = driven.sockets[before + 1];
-      if (updated === undefined) throw new Error("token redial missing");
-      updated.fireOpen();
-      await vi.waitFor(
-        () => expect(updated.sent.length).toBeGreaterThan(0),
-        WAIT,
-      );
-      expect(readFrame(updated.sent[0]).token).toBe(HOST_TOKEN);
-      expect(driven.refusals).toEqual([]);
-      const open = readFrame(updated.sent[0]);
-      updated.fireMessage({
-        kind: "openAck",
-        manifest: open.manifest,
-        optionalManifest: open.optionalManifest,
+      let settled = false;
+      const call = requestEcho(driven.client, signIn);
+      void call.then(() => {
+        settled = true;
       });
       await vi.waitFor(
-        () => expect(updated.sent.length).toBeGreaterThanOrEqual(2),
+        () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
         WAIT,
       );
-      const request = readFrame(updated.sent[1]);
-      updated.fireMessage({
-        kind: "response",
-        requestId: request.requestId,
-        method: request.method,
-        schemaVersion: request.schemaVersion,
-        result: { echoed: "hi" },
-        error: null,
-      });
-      expect(await again).toEqual({
-        kind: "fulfilled",
-        value: { echoed: "hi" },
-      });
-      driven.client.releaseIdleLocalSessions();
-      const heldAt = driven.sockets.length;
-      const held = requestEcho(driven.client, signIn);
+      driven.sockets[0].fireOpen();
       await vi.waitFor(
-        () => expect(driven.sockets.length).toBeGreaterThan(heldAt),
+        () => expect(driven.sockets[0].sent.length).toBeGreaterThan(0),
         WAIT,
       );
-      const tokenDial = driven.sockets[heldAt];
-      if (tokenDial === undefined) throw new Error("held dial missing");
-      tokenDial.fireOpen();
+      driven.sockets[0].fireMessage(namedNotAdmitted());
       await vi.waitFor(
-        () => expect(tokenDial.sent.length).toBeGreaterThan(0),
+        () => expect(settled || driven.sockets.length >= 2).toBe(true),
         WAIT,
       );
-      expect(readFrame(tokenDial.sent[0]).token).toBe(HOST_TOKEN);
-      expect(openTokensOf(driven.sockets.slice(heldAt))).not.toContain(SIGN_IN);
-      expect(driven.refusals).toEqual([]);
-      await answerEcho(tokenDial);
-      expect(await held).toEqual({
-        kind: "fulfilled",
-        value: { echoed: "hi" },
-      });
+      expect(await call).toMatchObject({ kind: "rejected" });
+      expect(openTokensOf(driven.sockets)).toEqual([HOST_TOKEN]);
+      expect(driven.refusals).toHaveLength(1);
     } finally {
       driven.client.releaseIdleLocalSessions();
     }
   });
+
+  it.each([
+    {
+      name: "a current personal host that admits the host-only token",
+      row: PERSONAL_ROW,
+      refuses: false,
+    },
+    {
+      name: "a current team host that refuses it by name",
+      row: TEAM_ROW,
+      refuses: true,
+    },
+  ])(
+    "sends no sign-in from a stale memory to $name",
+    async ({ row, refuses }) => {
+      const hosts = createReleasedHostMemory();
+      hosts.signInAdmitted(USER_ID, mockLocalHostEntry.hostId);
+      const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+      const driven = startUnaryOnRow(row, () => Promise.resolve(HOST_LEASE), {
+        recovery: null,
+        tokens: NO_MINTS,
+        hosts,
+      });
+      try {
+        let settled = false;
+        const call = requestEcho(driven.client, signIn);
+        void call.then(() => {
+          settled = true;
+        });
+        await vi.waitFor(
+          () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+          WAIT,
+        );
+        driven.sockets[0].fireOpen();
+        await vi.waitFor(
+          () => expect(driven.sockets[0].sent.length).toBeGreaterThan(0),
+          WAIT,
+        );
+        if (refuses) {
+          driven.sockets[0].fireMessage(namedNotAdmitted());
+          await vi.waitFor(
+            () => expect(settled || driven.sockets.length >= 2).toBe(true),
+            WAIT,
+          );
+          expect(await call).toMatchObject({ kind: "rejected" });
+        } else {
+          await answerEcho(driven.sockets[0]);
+          expect(await call).toEqual({
+            kind: "fulfilled",
+            value: { echoed: "hi" },
+          });
+        }
+        expect(openTokensOf(driven.sockets)).toEqual([HOST_TOKEN]);
+      } finally {
+        driven.client.releaseIdleLocalSessions();
+      }
+    },
+  );
 
   it("keeps the sign-in off a team computer's unary call when a released host refuses its host-only token, and the door hears it once", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -1533,6 +1398,7 @@ describe("released personal host, local unary", () => {
       {
         recovery: null,
         tokens: NO_MINTS,
+        hosts: createReleasedHostMemory(),
       },
     );
     try {
@@ -1597,6 +1463,7 @@ describe("released personal host, local unary", () => {
     const driven = startUnaryOnRow(TEAM_ROW, () => Promise.resolve(null), {
       recovery: null,
       tokens: NO_MINTS,
+      hosts: createReleasedHostMemory(),
     });
     try {
       const outcome = await requestEcho(driven.client, signIn);
@@ -1624,6 +1491,7 @@ describe("released personal host, local unary", () => {
     const driven = startUnaryOnRow(PERSONAL_ROW, () => Promise.resolve(null), {
       recovery: null,
       tokens: unobtainable,
+      hosts: createReleasedHostMemory(),
     });
     try {
       const call = requestEcho(driven.client, signIn);
@@ -1674,7 +1542,11 @@ describe("released personal host, local unary", () => {
         await unobtainable.obtain(USER_ID, hostId, false, null);
         return null;
       },
-      { recovery: null, tokens: unobtainable },
+      {
+        recovery: null,
+        tokens: unobtainable,
+        hosts: createReleasedHostMemory(),
+      },
     );
     try {
       const first = requestEcho(driven.client, signIn);
@@ -1738,7 +1610,7 @@ describe("released personal host, local unary", () => {
     }
   });
 
-  it("shares one memory between a stream and a unary call", async () => {
+  it("shares a named reason between a stream and a unary call", async () => {
     const hosts = createReleasedHostMemory();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const hostToken = new MutableBearerLease(HOST_TOKEN, USER_ID);
@@ -1747,77 +1619,39 @@ describe("released personal host, local unary", () => {
     const client = makeStreamClient(
       factory,
       hostToken,
-      {
-        signIn: () => signIn,
-        recovery: null,
-        allowed: () => Promise.resolve(true),
-        hostTokenUnobtainable: () => false,
-        ownerSignInEligible: () => false,
-        heldTokenRefused: () => false,
-        forgetHeldRefusal: () => undefined,
-        hosts,
-      },
+      signOnWithMemory(PERSONAL_ROW, signIn, hosts),
       streamDoor.door,
     );
     const { statuses } = subscribe(client);
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-      WAIT,
-    );
-    const refused = await openFrame(sockets[0]);
-    expect(refused.token).toBe(HOST_TOKEN);
-    sockets[0].fireText(releasedRefusal());
-    await vi.waitFor(
-      () => expect(sockets.length).toBeGreaterThanOrEqual(2),
-      WAIT,
-    );
-    const admitted = await openFrame(sockets[1]);
-    expect(admitted.token).toBe(SIGN_IN);
-    ack(sockets[1], admitted, ["credentialUpdate"]);
-    await untilStatus(statuses, "open");
+    await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+    expect((await openFrame(sockets[0])).token).toBe(HOST_TOKEN);
+    sockets[0].fireText(namedNotAdmitted());
+    await untilStatus(statuses, "closed");
+
     const driven = startUnary(signIn, hosts);
-    const pending = requestEcho(driven.client, signIn);
     try {
+      let settled = false;
+      const call = requestEcho(driven.client, signIn);
+      void call.then(() => {
+        settled = true;
+      });
       await vi.waitFor(
         () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
         WAIT,
       );
-      const remembered = driven.sockets[0];
-      if (remembered === undefined) throw new Error("shared dial missing");
-      remembered.fireOpen();
+      driven.sockets[0].fireOpen();
       await vi.waitFor(
-        () => expect(remembered.sent.length).toBeGreaterThan(0),
+        () => expect(driven.sockets[0].sent.length).toBeGreaterThan(0),
         WAIT,
       );
-      expect(readFrame(remembered.sent[0]).token).toBe(SIGN_IN);
-      remembered.fireMessage(namedNotAdmitted());
+      driven.sockets[0].fireMessage(releasedRefusal());
       await vi.waitFor(
-        () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+        () => expect(settled || driven.sockets.length >= 2).toBe(true),
         WAIT,
       );
-      const tokenDial = driven.sockets[1];
-      if (tokenDial === undefined) throw new Error("token redial missing");
-      tokenDial.fireOpen();
-      await vi.waitFor(
-        () => expect(tokenDial.sent.length).toBeGreaterThan(0),
-        WAIT,
-      );
-      expect(readFrame(tokenDial.sent[0]).token).toBe(HOST_TOKEN);
-      expect(driven.refusals).toEqual([]);
-      await answerEcho(tokenDial);
-      expect(await pending).toEqual({
-        kind: "fulfilled",
-        value: { echoed: "hi" },
-      });
-      const before = sockets.length;
-      sockets[1].fireClose(1006, "drop");
-      await vi.waitFor(
-        () => expect(sockets.length).toBeGreaterThan(before),
-        WAIT,
-      );
-      const redial = await openFrame(sockets[before]);
-      expect(redial.token).toBe(HOST_TOKEN);
-      expect(streamDoor.refusals).toEqual([]);
+      expect(await call).toMatchObject({ kind: "rejected" });
+      expect(openTokensOf(driven.sockets)).toEqual([HOST_TOKEN]);
+      expect(driven.refusals).toHaveLength(1);
     } finally {
       driven.client.releaseIdleLocalSessions();
     }
@@ -1955,6 +1789,7 @@ function startUnaryOnRow(
   deps: {
     readonly recovery: StreamAuthRevalidator | null;
     readonly tokens: TrackedHostTokens;
+    readonly hosts: ReleasedHostMemory;
   },
 ): {
   readonly client: WsRpcClient<typeof echoRegistry>;
@@ -1982,6 +1817,7 @@ function startUnaryOnRow(
     evidence: NO_TRANSPORT_EVIDENCE,
     hostBearerFor,
     releasedSignOnFor: signInForLocalRow(() => row, deps.recovery, deps.tokens),
+    releasedHosts: deps.hosts,
     doorFor: () => door,
   });
   return { client, sockets, refusals };
@@ -2023,25 +1859,26 @@ async function admitReleasedUnary(driven: {
   readonly client: WsRpcClient<typeof echoRegistry>;
   readonly sockets: readonly UnarySocket[];
 }): Promise<void> {
+  const base = driven.sockets.length;
   const pending = requestEcho(
     driven.client,
     new MutableBearerLease(SIGN_IN, USER_ID),
   );
   await vi.waitFor(
-    () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+    () => expect(driven.sockets.length).toBeGreaterThanOrEqual(base + 1),
     WAIT,
   );
-  const first = driven.sockets[0];
+  const first = driven.sockets[base];
   if (first === undefined) throw new Error("host-token dial missing");
   first.fireOpen();
   await vi.waitFor(() => expect(first.sent.length).toBeGreaterThan(0), WAIT);
   expect(readFrame(first.sent[0]).token).toBe(HOST_TOKEN);
   first.fireMessage(releasedRefusal());
   await vi.waitFor(
-    () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+    () => expect(driven.sockets.length).toBeGreaterThanOrEqual(base + 2),
     WAIT,
   );
-  const second = driven.sockets[1];
+  const second = driven.sockets[base + 1];
   if (second === undefined) throw new Error("sign-in dial missing");
   second.fireOpen();
   await vi.waitFor(() => expect(second.sent.length).toBeGreaterThan(0), WAIT);

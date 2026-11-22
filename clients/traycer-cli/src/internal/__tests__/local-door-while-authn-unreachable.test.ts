@@ -40,13 +40,7 @@ const UNARY_ENDPOINT = { ...ENDPOINT, hostId: UNARY_HOST_ID };
 const WAIT = { timeout: 2_000, interval: 10 };
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000;
 
-type DoorMode =
-  | "unavailable"
-  | "unavailable-once"
-  | "not-admitted"
-  | "team"
-  | "team-unavailable"
-  | "other-user";
+type DoorMode = "unavailable" | "unavailable-once" | "not-admitted";
 
 const harness = vi.hoisted(() => {
   class ScriptSocket implements StreamWebSocketLike {
@@ -78,11 +72,13 @@ const harness = vi.hoisted(() => {
     table: HostTokenTable;
     grants: number;
     hung: number;
+    hostRowReads: string[];
   } = {
     mode: "unavailable",
     table: new Map(),
     grants: 0,
     hung: 0,
+    hostRowReads: [],
   };
   return { ScriptSocket, sockets, state };
 });
@@ -205,34 +201,6 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
-function ownershipBody(): unknown {
-  if (
-    harness.state.mode === "team" ||
-    harness.state.mode === "team-unavailable"
-  ) {
-    return {
-      hosts: [
-        {
-          hostId: HOST_ID,
-          owner: { kind: "team", id: "team-1", name: "Team" },
-          kind: "machine",
-          remoteAccess: false,
-        },
-      ],
-    };
-  }
-  return {
-    hosts: [
-      {
-        hostId: HOST_ID,
-        owner: { kind: "user", id: "someone-else" },
-        kind: "personal",
-        remoteAccess: false,
-      },
-    ],
-  };
-}
-
 function installFetch(): void {
   vi.stubGlobal(
     "fetch",
@@ -243,14 +211,10 @@ function installFetch(): void {
       const url = new URL(requestUrl(input));
       const method = init?.method ?? "GET";
       if (url.pathname === "/api/v3/hosts" && method === "GET") {
-        if (
-          harness.state.mode === "team" ||
-          harness.state.mode === "team-unavailable" ||
-          harness.state.mode === "other-user"
-        ) {
-          return jsonResponse(ownershipBody(), 200);
-        }
-        return jsonResponse({ message: "missing" }, 404);
+        // The host's row is read by nothing on this machine's doors. A read
+        // that happened would never be answered, as when authn is silent.
+        harness.state.hostRowReads.push(url.pathname);
+        return new Promise<Response>(() => undefined);
       }
       if (method === "POST" && url.pathname.endsWith("/session-grant")) {
         harness.state.grants += 1;
@@ -262,9 +226,6 @@ function installFetch(): void {
           return new Promise<Response>(() => undefined);
         }
         if (harness.state.mode === "unavailable") {
-          return jsonResponse({ message: "offline" }, 503);
-        }
-        if (harness.state.mode === "team-unavailable") {
           return jsonResponse({ message: "offline" }, 503);
         }
         return jsonResponse({ message: "missing" }, 404);
@@ -539,6 +500,7 @@ beforeEach(() => {
   harness.state.table = new Map();
   harness.state.grants = 0;
   harness.state.hung = 0;
+  harness.state.hostRowReads = [];
   installFetch();
 });
 
@@ -547,6 +509,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   resetNegotiatedStreamVersions();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("CLI local doors while authn cannot mint", () => {
@@ -707,41 +670,100 @@ describe("CLI local doors while authn cannot mint", () => {
     expect(harness.sockets).toHaveLength(1);
   });
 
-  it("re-presents the held expired token on a team row after the host refuses it", async () => {
-    harness.state.mode = "team-unavailable";
+  it("opens the sign-in at once after a released host refuses the held token while authn answers nothing", async () => {
+    vi.useFakeTimers();
+    harness.state.mode = "unavailable-once";
+    const expired = expiredJwt(Date.now());
+    hold(expired);
+    const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const refused = await socketAt(0);
+    expect((await readOpen(refused)).token).toBe(expired.token);
+    refused.fireFrame(releasedRefusal());
+    const invited = await socketAt(1);
+    const open = await readOpen(invited);
+    expect(open.token).toBe(SIGN_IN);
+    await admitStatus(invited, open);
+    await expect(pending).resolves.toMatchObject({ ready: true });
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      expired.token,
+      SIGN_IN,
+    ]);
+    expect(harness.state.hostRowReads).toEqual([]);
+  });
+
+  it("opens the stream's sign-in at once after a released host refuses the probe, and again after a drop, while authn answers nothing", async () => {
+    vi.useFakeTimers();
+    harness.state.mode = "unavailable";
+    const opened = await openCliHostSession(auth(), HOST_ID, false, null);
+    expect(opened.kind).toBe("ok");
+    if (opened.kind !== "ok") throw new Error("session did not open");
+    await openStream(opened.session);
+    for (const first of [0, 2]) {
+      const probe = await socketAt(first);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      probe.fireFrame(releasedRefusal());
+      const invited = await socketAt(first + 1);
+      const open = await readOpen(invited);
+      expect(open.token).toBe(SIGN_IN);
+      invited.fireFrame({
+        kind: "openAck",
+        manifest: open.manifest,
+        optionalManifest: open.optionalManifest,
+      });
+      if (first === 0)
+        invited.onclose?.({ code: 1006, reason: "drop", wasClean: false });
+    }
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+    ]);
+    expect(harness.state.hostRowReads).toEqual([]);
+    opened.session.dispose();
+  });
+
+  it("re-presents the held expired token after a current host names the probe's refusal", async () => {
+    harness.state.mode = "unavailable";
     const expired = expiredJwt(Date.now());
     hold(expired);
     const firstCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
     const first = await socketAt(0);
     expect((await readOpen(first)).token).toBe(expired.token);
     first.fireFrame(expiredTokenRefusal());
-    await expect(firstCall).rejects.toThrow("host token expired");
+    const probe = await socketAt(1);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireFrame(namedProbeRefusal());
+    await expect(toAgentCliError(firstCall)).rejects.toMatchObject({
+      exitCode: 1,
+    });
 
     const nextCall = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
-    const second = await socketAt(1);
+    const second = await socketAt(2);
     const open = await readOpen(second);
     expect(open.token).toBe(expired.token);
     await admitStatus(second, open);
     await expect(nextCall).resolves.toMatchObject({ ready: true });
-    expect(harness.state.grants).toBeGreaterThan(0);
     expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
       expired.token,
+      NO_HOST_TOKEN_PROBE,
       expired.token,
     ]);
+    expect(harness.state.hostRowReads).toEqual([]);
   });
 
-  it.each([
-    { name: "a team row", mode: "team" as const },
-    { name: "another person's row", mode: "other-user" as const },
-  ])("never sends the sign-in for $name", async ({ mode }) => {
-    harness.state.mode = mode;
-    await expect(
-      toAgentCliError(callHostRpcAtEndpoint("host.status", {}, ENDPOINT)),
-    ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.FORBIDDEN,
+  it("never sends the sign-in when a current host names the probe's refusal after authn has no row for this computer", async () => {
+    harness.state.mode = "not-admitted";
+    const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const probe = await socketAt(0);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireFrame(namedProbeRefusal());
+    await expect(toAgentCliError(pending)).rejects.toMatchObject({
       exitCode: 1,
-      message: UNWORDED_MINT_REFUSAL_MESSAGE,
     });
-    expect(harness.sockets).toHaveLength(0);
+    expect(harness.sockets.map((socket) => openToken(socket))).toEqual([
+      NO_HOST_TOKEN_PROBE,
+    ]);
+    expect(harness.state.hostRowReads).toEqual([]);
   });
 });

@@ -373,7 +373,6 @@ export function createRemoteHostTransport<
           ? {
               signIn: bearer,
               recovery: options.auth,
-              allowed: () => Promise.resolve(true),
               hostTokenUnobtainable: () => false,
               ownerSignInEligible: () => false,
               heldTokenRefused: () => false,

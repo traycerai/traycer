@@ -20,26 +20,10 @@ import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream
 
 const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const HOST_ID = "gui-sign-out-released-host";
-const HOST_TOKEN = "gui-host-token";
 const SIGN_IN = "gui-person-sign-in";
 const WAIT = { timeout: 2_000, interval: 10 };
 
 const clients: WsStreamClient<typeof hostStreamRpcRegistry>[] = [];
-
-function releasedRefusal(): {
-  readonly kind: "fatalError";
-  readonly details: FatalErrorDetails;
-} {
-  return {
-    kind: "fatalError",
-    details: {
-      code: "UNAUTHORIZED",
-      reason: "released-host-token-refusal",
-      incompatibleMethods: null,
-      upgradeGuidance: null,
-    },
-  };
-}
 
 function notAdmittedProbeRefusal(): {
   readonly kind: "fatalError";
@@ -89,7 +73,6 @@ function openStream(hostToken: string | null): {
     releasedSignOn: {
       signIn: () => new MutableBearerLease(SIGN_IN, USER_ID),
       recovery: null,
-      allowed: () => Promise.resolve(true),
       hostTokenUnobtainable: () => hostToken === null,
       ownerSignInEligible: () => hostToken === null,
       heldTokenRefused: () => false,
@@ -128,45 +111,6 @@ async function openFrame(
     WAIT,
   );
   return readFrame(socket.textSent[0]);
-}
-
-async function admitSignIn(): Promise<void> {
-  const { sockets } = openStream(HOST_TOKEN);
-  await vi.waitFor(
-    () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-    WAIT,
-  );
-  const refused = await openFrame(sockets[0]);
-  expect(refused.token).toBe(HOST_TOKEN);
-  sockets[0].fireText(releasedRefusal());
-  await vi.waitFor(
-    () => expect(sockets.length).toBeGreaterThanOrEqual(2),
-    WAIT,
-  );
-  const admitted = await openFrame(sockets[1]);
-  expect(admitted.token).toBe(SIGN_IN);
-  sockets[1].fireText({
-    kind: "openAck",
-    manifest: admitted.manifest,
-    capabilities: ["credentialUpdate"],
-  });
-  await vi.waitFor(
-    () =>
-      expect(processReleasedHosts.opensReleasedWay(USER_ID, HOST_ID)).toBe(
-        true,
-      ),
-    WAIT,
-  );
-}
-
-async function firstOpenToken(): Promise<unknown> {
-  const { sockets } = openStream(HOST_TOKEN);
-  await vi.waitFor(
-    () => expect(sockets.length).toBeGreaterThanOrEqual(1),
-    WAIT,
-  );
-  const opened = await openFrame(sockets[0]);
-  return opened.token;
 }
 
 function setSignedIn(): void {
@@ -208,21 +152,19 @@ describe("released host memory across a gui sign-out", () => {
     vi.useRealTimers();
   });
 
-  it("starts the next dial with the host-only token after signing out and back in", async () => {
-    await admitSignIn();
+  it("forgets a host remembered as released when the person signs out", () => {
     setSignedIn();
     render(
       <EpicSessionLifecycleBridge>
         <div />
       </EpicSessionLifecycleBridge>,
     );
-    act(() => {
-      setSignedOut();
-    });
-    act(() => {
-      setSignedIn();
-    });
-    expect(await firstOpenToken()).toBe(HOST_TOKEN);
+    processReleasedHosts.signInAdmitted(USER_ID, HOST_ID);
+    expect(processReleasedHosts.opensReleasedWay(USER_ID, HOST_ID)).toBe(true);
+
+    act(() => setSignedOut());
+
+    expect(processReleasedHosts.opensReleasedWay(USER_ID, HOST_ID)).toBe(false);
   });
 
   it("probes again after sign-out clears a declined probe", async () => {

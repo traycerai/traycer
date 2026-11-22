@@ -10,7 +10,6 @@ import {
   heldWhileAuthnUnreachable,
   type TrackedHostTokens,
 } from "../auth/host-token-lease";
-import { readHostOwnershipViaHttp } from "../host-client/host-ownership";
 import { hostDoorStateOfRefusal } from "./host-door-state";
 import type { HostRequestAuthority } from "./host-messenger";
 
@@ -25,12 +24,6 @@ export interface ReleasedSignOn {
   readonly signIn: BearerSourceProvider;
   /** Recovers a sign-in the released host refused, as a released app did. */
   readonly recovery: StreamAuthRevalidator | null;
-  /**
-   * Whether the host's row allows the sign-in, asked only after a released
-   * host refused the host-only token or none could be presented. `false` (or a
-   * failed read) keeps the refusal as it is.
-   */
-  readonly allowed: () => Promise<boolean>;
   /**
    * This machine's host only: no host-only token can be presented
    * ({@link hostTokenUnobtainable}). A released client then opened its host
@@ -57,10 +50,12 @@ export interface ReleasedSignOn {
 
 /**
  * Process memory only, per signed-in person and host id, never on disk and never
- * keyed on a version. A host that refused the host-only token the released way
- * and then admitted that person's sign-in skips the refused token dial on that
- * person's later dials; the row check (`ReleasedSignOn.allowed`) is still asked
- * every time. It holds one person: a dial by anyone else forgets it, and so does
+ * keyed on a version. A remote host that refused the host-only token the
+ * released way and then admitted that person's sign-in skips the refused token
+ * dial on that person's later remote dials, whose row is read live from the
+ * directory. This machine's doors never skip it: there the sign-in goes only
+ * after this dial sequence's own refusal showed the released level. It holds
+ * one person: a dial by anyone else forgets it, and so does
  * sign-out (`forgetAll`). It is forgotten for everyone the moment the host admits
  * a host-only token or refuses anything naming its reason (it was updated). A
  * host that has named a reason in this process is never handed the sign-in again.
@@ -231,7 +226,6 @@ export function releasedSignOnForLocalRow(
     ? {
         signIn,
         recovery,
-        allowed: () => Promise.resolve(true),
         hostTokenUnobtainable: () =>
           hostTokenUnobtainable(tokens, userId, hostId),
         ownerSignInEligible: () => ownerSignInEligible(tokens, userId, hostId),
@@ -280,59 +274,5 @@ export function signInForLocalRow(
     return Promise.resolve(
       allowed ? { bearer: authority.bearer, recovery } : null,
     );
-  };
-}
-
-/**
- * For this machine's host when the caller holds no row: the row is read from
- * authn only when it is needed, and kept once authn answers it. With no answer
- * (authn unreachable, or refusing the sign-in) the host counts as the person's
- * own, as a released client counted it. `hostId` is the host dialed now.
- */
-export function releasedLocalSignOnFromRegistry(deps: {
-  readonly authnBaseUrl: string;
-  readonly hostId: () => string | null;
-  readonly signIn: BearerSourceProvider;
-  readonly recovery: StreamAuthRevalidator | null;
-  readonly hostTokenUnobtainable: () => boolean;
-  readonly ownerSignInEligible: () => boolean;
-  readonly heldTokenRefused: (presented: string) => boolean;
-  readonly forgetHeldRefusal: () => void;
-  readonly hosts: ReleasedHostMemory;
-}): ReleasedSignOn {
-  const answered = new Map<string, boolean>();
-  return {
-    signIn: deps.signIn,
-    recovery: deps.recovery,
-    hostTokenUnobtainable: deps.hostTokenUnobtainable,
-    ownerSignInEligible: deps.ownerSignInEligible,
-    heldTokenRefused: deps.heldTokenRefused,
-    forgetHeldRefusal: deps.forgetHeldRefusal,
-    hosts: deps.hosts,
-    allowed: async () => {
-      const id = deps.hostId();
-      const lease = deps.signIn();
-      if (id === null || lease === null) return false;
-      const known = answered.get(id);
-      if (known !== undefined) return known;
-      const row = await readHostOwnershipViaHttp(
-        deps.authnBaseUrl,
-        lease.getBearerToken(),
-        id,
-      );
-      if (row.kind === "network-error" || row.kind === "unauthorized")
-        return true;
-      const allowed =
-        row.kind === "not-found" ||
-        opensReleasedWayOnThisMachine(
-          {
-            owner: row.host.owner,
-            sandbox: row.host.kind === "sandbox" ? {} : null,
-          },
-          lease.identity.userId,
-        );
-      answered.set(id, allowed);
-      return allowed;
-    },
   };
 }
