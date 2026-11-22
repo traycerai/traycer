@@ -752,6 +752,19 @@ export class WsRpcClient<
         options.authority.bearer.identity.userId,
         websocketUrl,
       ) + (this.localOpenAuth === undefined ? "" : `\u0000${revision}`);
+    // The probe is answered at open, so it dials its own socket: a session
+    // another call opened would dispatch it, and the probe catch would take
+    // that dispatched call's error for the host's answer to the probe.
+    if (this.probeAuthorities.has(options.authority))
+      return this.requestOnFreshSocket(
+        method,
+        params,
+        responseTimeoutMs,
+        options,
+        requestId,
+        null,
+        sessionKey,
+      );
     let handoff: SessionHandoff | null = null;
     for (;;) {
       const admission = this.sessions.claim(sessionKey, handoff);

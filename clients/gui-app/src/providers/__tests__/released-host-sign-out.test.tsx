@@ -3,6 +3,7 @@ import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/tr
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
+import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
@@ -40,6 +41,23 @@ function releasedRefusal(): {
   };
 }
 
+function notAdmittedProbeRefusal(): {
+  readonly kind: "fatalError";
+  readonly details: FatalErrorDetails;
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "Session grant verification failed: ERR_JWS_INVALID",
+      doorReason: "not_admitted",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
 function readFrame(raw: string): Record<string, unknown> {
   const value: unknown = JSON.parse(raw);
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -52,7 +70,7 @@ function readFrame(raw: string): Record<string, unknown> {
   return frame;
 }
 
-function openStream(): {
+function openStream(hostToken: string | null): {
   readonly sockets: StubStreamWebSocket[];
   readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
 } {
@@ -65,14 +83,15 @@ function openStream(): {
       websocketUrl: "ws://127.0.0.1:9/rpc",
     }),
     hostId: HOST_ID,
-    bearer: () => new MutableBearerLease(HOST_TOKEN, USER_ID),
+    bearer: () =>
+      hostToken === null ? null : new MutableBearerLease(hostToken, USER_ID),
     userId: USER_ID,
     releasedSignOn: {
       signIn: () => new MutableBearerLease(SIGN_IN, USER_ID),
       recovery: null,
       allowed: () => Promise.resolve(true),
-      hostTokenUnobtainable: () => false,
-      ownerSignInEligible: () => false,
+      hostTokenUnobtainable: () => hostToken === null,
+      ownerSignInEligible: () => hostToken === null,
       heldTokenRefused: () => false,
       forgetHeldRefusal: () => undefined,
       hosts: processReleasedHosts,
@@ -112,7 +131,7 @@ async function openFrame(
 }
 
 async function admitSignIn(): Promise<void> {
-  const { sockets } = openStream();
+  const { sockets } = openStream(HOST_TOKEN);
   await vi.waitFor(
     () => expect(sockets.length).toBeGreaterThanOrEqual(1),
     WAIT,
@@ -138,7 +157,7 @@ async function admitSignIn(): Promise<void> {
 }
 
 async function firstOpenToken(): Promise<unknown> {
-  const { sockets } = openStream();
+  const { sockets } = openStream(HOST_TOKEN);
   await vi.waitFor(
     () => expect(sockets.length).toBeGreaterThanOrEqual(1),
     WAIT,
@@ -195,5 +214,32 @@ describe("released host memory across a gui sign-out", () => {
       setSignedIn();
     });
     expect(await firstOpenToken()).toBe(HOST_TOKEN);
+  });
+
+  it("probes again after sign-out clears a declined probe", async () => {
+    setSignedIn();
+    render(
+      <EpicSessionLifecycleBridge>
+        <div />
+      </EpicSessionLifecycleBridge>,
+    );
+
+    const first = openStream(null);
+    await vi.waitFor(() => expect(first.sockets).toHaveLength(1), WAIT);
+    const probe = await openFrame(first.sockets[0]);
+    expect(probe.token).toBe(NO_HOST_TOKEN_PROBE);
+    first.sockets[0]?.fireText(notAdmittedProbeRefusal());
+    await vi.waitFor(() =>
+      expect(processReleasedHosts.probeDeclined(USER_ID, HOST_ID)).toBe(true),
+    );
+    first.client.close("probe declined");
+
+    act(() => setSignedOut());
+    expect(processReleasedHosts.probeDeclined(USER_ID, HOST_ID)).toBe(false);
+    act(() => setSignedIn());
+
+    const next = openStream(null);
+    await vi.waitFor(() => expect(next.sockets).toHaveLength(1), WAIT);
+    expect((await openFrame(next.sockets[0])).token).toBe(NO_HOST_TOKEN_PROBE);
   });
 });

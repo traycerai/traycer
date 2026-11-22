@@ -1096,11 +1096,15 @@ function remoteTransportKey(entry: HostDirectoryEntry): string | null {
   // `status` is deliberately excluded: it doesn't feed `createRemoteHostTransport`,
   // so folding it into the identity key would rotate the session (tearing down a
   // healthy Noise/relay transport) on every availability/busy poll update.
+  // The owner is part of it: the binding's session decides at build whether
+  // the sign-in may go to this host (`opensReleasedWay`), so an owner change
+  // must rebuild it, as the stream key does.
   return [
     entry.hostId,
     entry.websocketUrl,
     entry.version ?? "",
     entry.publicKey,
+    entry.owner === null ? "" : `${entry.owner.kind}:${entry.owner.id}`,
   ].join(TRANSPORT_KEY_SEPARATOR);
 }
 
