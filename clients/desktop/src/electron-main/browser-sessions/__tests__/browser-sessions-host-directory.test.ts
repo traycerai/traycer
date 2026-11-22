@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  confirmRowWithin,
+  ROW_CONFIRM_CEILING_MS,
+} from "@traycer-clients/shared/host-transport/row-confirmation";
 import { createBrowserSessionsHostDirectory } from "../browser-sessions-transport";
 import { hostListResultForOwner } from "./browser-sessions-stream-fixture";
 
@@ -441,10 +445,12 @@ describe("main resolves the browser.sessions host itself", () => {
       directory.reset();
     });
     let answer: boolean | null = null;
-    const confirming = directory.confirmRows().then((confirmed) => {
-      answer = confirmed;
-      return confirmed;
-    });
+    const confirming = directory
+      .confirmRows(() => true)
+      .then((confirmed) => {
+        answer = confirmed;
+        return confirmed;
+      });
     await vi.waitFor(() => expect(reads).toHaveLength(1));
 
     reads[0](remoteResponse("host-1"));
@@ -456,6 +462,81 @@ describe("main resolves the browser.sessions host itself", () => {
     await expect(confirming).resolves.toBe(true);
     expect(reads).toHaveLength(2);
     expect(directory.peek("host-2")).not.toBeNull();
+  });
+
+  describe("a row confirmation that has ended", () => {
+    /** The first read is held; any later read answers at once, so a read started after the end shows in `gets()`. */
+    function directoryWithFirstReadHeld() {
+      const first: { resolve: (result: HostListFetchResult) => void } = {
+        resolve: () => undefined,
+      };
+      const listRegisteredHosts = vi.fn(
+        (_authnBaseUrl: string, _bearer: string) =>
+          listRegisteredHosts.mock.calls.length === 1
+            ? new Promise<HostListFetchResult>((resolve) => {
+                first.resolve = resolve;
+              })
+            : Promise.resolve(remoteResponse("host-2")),
+      );
+      const directory = createBrowserSessionsHostDirectory({
+        authnBaseUrl: () => "https://authn.test",
+        relayBaseUrl: "wss://relay.test/attach",
+        localHost: () => null,
+        bearerToken: () => "bearer",
+        listRegisteredHosts,
+        now: () => now,
+      });
+      return {
+        directory,
+        firstRead: first,
+        gets: () => listRegisteredHosts.mock.calls.length,
+      };
+    }
+
+    it("starts no read when the account resets after the ceiling released its caller and before its read settled", async () => {
+      vi.useFakeTimers();
+      try {
+        const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+        const confirmation: { running: Promise<boolean> | null } = {
+          running: null,
+        };
+        const released = confirmRowWithin(
+          (stillWaiting) => {
+            confirmation.running = directory.confirmRows(stillWaiting);
+            return confirmation.running;
+          },
+          { current: () => true },
+        );
+        await vi.waitFor(() => expect(gets()).toBe(1));
+
+        await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS);
+        await released;
+        directory.reset();
+        firstRead.resolve(remoteResponse("host-1"));
+        // The confirmation's own end: nothing of it is left to run.
+        await confirmation.running;
+
+        expect(gets()).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("starts no read when its attach ended before the ceiling and the account resets before its read settled", async () => {
+      const { directory, firstRead, gets } = directoryWithFirstReadHeld();
+      let attached = true;
+      const settled = confirmRowWithin(directory.confirmRows, {
+        current: () => attached,
+      });
+      await vi.waitFor(() => expect(gets()).toBe(1));
+
+      attached = false;
+      directory.reset();
+      firstRead.resolve(remoteResponse("host-1"));
+      await settled;
+
+      expect(gets()).toBe(1);
+    });
   });
 
   it("answers a looped unknown id from cache instead of amplifying it to authn", async () => {
