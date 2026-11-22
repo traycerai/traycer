@@ -191,23 +191,22 @@ export async function openLocalStreamClient(): Promise<{
   if (auth === null) throw signedOutCliError();
   const endpoint = await resolveEndpoint();
   const hostId = endpoint.hostId;
-  // The token is all these short reads need: nothing here refreshes the
-  // sign-in once the client is built, so the session is released at once.
+  // Released when the client closes: its mints are the client's reads', and
+  // every read on it is over by then.
   const session = await requireCliHostSession(auth, hostId, null);
-  session.dispose();
   const tokens = session.tokens;
-  // Stopped when the client closes: every read on it is over by then.
   let stopRefusals: () => void = () => undefined;
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     onClientClosed: (message) => {
       stopRefusals();
+      session.dispose();
       console.info(message);
     },
     registry: hostStreamRpcRegistry,
     hostId,
     endpoint: () => endpoint,
     bearer: (selectedHostId) => tokens.streamBearer(selectedHostId)(),
-    // The session is released, so a sign-in the host refuses ends the read.
+    // These short reads refresh no sign-in, so one the host refuses ends the read.
     releasedSignOn: { ...session.releasedSignOn, recovery: null },
     userId: session.bearer.identity.userId,
     auth: null,
