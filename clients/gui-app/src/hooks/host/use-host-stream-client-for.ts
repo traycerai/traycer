@@ -68,6 +68,7 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import { getHostBindingSnapshot, useHostBinding } from "@/lib/host/runtime";
+import { confirmRowWhenHidden } from "@/lib/host/hidden-window-row-confirm";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
@@ -388,8 +389,11 @@ export function buildHostStreamClient(params: {
         params.target.hostId,
         params.userId,
       ),
-      // The renderer's directory is kept current by its own poll.
-      confirmRowBeforeSignIn: null,
+      // The same confirmation the runtime messenger passes: whichever consumer
+      // builds this `(hostId, userId)` session first sets it for all.
+      confirmRowBeforeSignIn: confirmRowWhenHidden(
+        () => getHostBindingSnapshot()?.directory ?? null,
+      ),
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,

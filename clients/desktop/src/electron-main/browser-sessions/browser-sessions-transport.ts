@@ -42,6 +42,10 @@ import {
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
+  answeredWithin,
+  ROW_CONFIRM_CEILING_MS,
+} from "@traycer-clients/shared/host-transport/row-confirmation";
+import {
   DEFAULT_DIAL_TIMEOUT_MS,
   DEFAULT_INITIAL_BACKOFF_MS,
   DEFAULT_MAX_BACKOFF_MS,
@@ -403,6 +407,7 @@ export function openBrowserSessionsTransport(
         const row = deps.liveRow();
         return row !== null && opensReleasedWay(row, userId);
       },
+      // At the ceiling the attach goes without the sign-in.
       confirmRowBeforeSignIn: () =>
         answeredWithin(deps.confirmRow(), ROW_CONFIRM_CEILING_MS),
       door: null,
@@ -491,29 +496,6 @@ export function openBrowserSessionsTransport(
 
 /** Main draws no state of a host; the renderer's own connections raise it. */
 function ignoreHostTokenState(): void {}
-
-/**
- * How long a remote attach that would carry the sign-in waits for the row to
- * be read again. At the ceiling it goes without the sign-in.
- */
-const ROW_CONFIRM_CEILING_MS = 5_000;
-
-/** `confirmed`, or `false` once `ceilingMs` passes first. */
-async function answeredWithin(
-  confirmed: Promise<boolean>,
-  ceilingMs: number,
-): Promise<boolean> {
-  let clearCeiling = (): void => undefined;
-  const ceiling = new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(false), ceilingMs);
-    clearCeiling = () => clearTimeout(timer);
-  });
-  try {
-    return await Promise.race([confirmed, ceiling]);
-  } finally {
-    clearCeiling();
-  }
-}
 
 /**
  * Which jar transport `target` may have, or `null` for none. The two lanes

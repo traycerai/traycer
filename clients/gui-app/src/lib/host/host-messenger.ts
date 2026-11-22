@@ -107,6 +107,12 @@ export interface BuildRawHostMessengerForTargetParams<
    * redials on its own after the row has moved on.
    */
   readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
+  /**
+   * Asked before a remote attach whose open would carry the sign-in
+   * (`confirmRowWhenHidden`): `resolveTarget`'s row is current only while the
+   * window applies registry changes.
+   */
+  readonly confirmRowBeforeSignIn: () => Promise<boolean>;
   readonly registry: Registry;
   /**
    * Reads the bearer the CURRENT request is authorized under. The remote
@@ -202,8 +208,7 @@ export function buildRawHostMessengerForTarget<
         const row = params.resolveTarget(params.target.hostId);
         return row !== null && opensReleasedWay(row, params.userId);
       },
-      // The renderer's directory is kept current by its own poll.
-      confirmRowBeforeSignIn: null,
+      confirmRowBeforeSignIn: params.confirmRowBeforeSignIn,
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -293,6 +298,8 @@ export interface BuildRuntimeHostMessengerParams<
    * looked up here rather than threaded through the transport contract.
    */
   readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
+  /** See `BuildRawHostMessengerForTargetParams.confirmRowBeforeSignIn`. */
+  readonly confirmRowBeforeSignIn: () => Promise<boolean>;
   /**
    * Auth recovery the remote transport uses when the host FATALs the shared
    * session `UNAUTHORIZED` (see `BuildRawHostMessengerForTargetParams.auth`).
@@ -365,6 +372,7 @@ class RuntimeHostMessenger<
 > implements IHostMessenger<Registry> {
   private readonly registry: Registry;
   private readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
+  private readonly confirmRowBeforeSignIn: () => Promise<boolean>;
   private readonly auth: StreamAuthRevalidator | null;
   private readonly authnBaseUrl: string;
   private readonly hostTokens: HostTokenSource;
@@ -453,6 +461,7 @@ class RuntimeHostMessenger<
   constructor(params: BuildRuntimeHostMessengerParams<Registry>) {
     this.registry = params.registry;
     this.resolveTarget = params.resolveTarget;
+    this.confirmRowBeforeSignIn = params.confirmRowBeforeSignIn;
     this.auth = params.auth;
     this.authnBaseUrl = params.authnBaseUrl;
     this.hostTokens = params.hostTokens;
@@ -683,6 +692,7 @@ class RuntimeHostMessenger<
     const built = buildRawHostMessengerForTarget({
       target,
       resolveTarget: this.resolveTarget,
+      confirmRowBeforeSignIn: this.confirmRowBeforeSignIn,
       userId,
       registry: this.registry,
       bearer: () => this.currentBearer,

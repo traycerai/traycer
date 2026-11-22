@@ -39,6 +39,7 @@ import { AuthService } from "@/lib/auth/auth-service";
 import { createStreamAuthRevalidator } from "@/lib/auth/stream-auth-revalidator";
 import { createAuthBoundHostDirectory } from "@/lib/host/auth-bound-host-directory";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { confirmRowWhenHidden } from "@/lib/host/hidden-window-row-confirm";
 import {
   buildRuntimeHostMessenger,
   defaultHostRpcRequestId,
@@ -309,6 +310,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           : (runtimeMessenger = buildRuntimeHostMessenger({
               registry,
               resolveTarget,
+              confirmRowBeforeSignIn: confirmRowWhenHidden(() => directory),
               // UNAUTHORIZED session-fatal recovery for the shared remote
               // session: revalidate + redial with the fresh bearer instead of
               // terminally closing (the same recovery the stream transports
