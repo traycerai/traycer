@@ -1125,9 +1125,9 @@ describe("traycer monitor local released-host sign-in", () => {
         writeErr: () => undefined,
         writeOut: () => undefined,
       });
-      const running = program.parseAsync(["monitor", "--agent-id", "agent-a"], {
-        from: "user",
-      });
+      const running = program
+        .parseAsync(["monitor", "--agent-id", "agent-a"], { from: "user" })
+        .then((): void => undefined);
       monitorRun = running;
       running.then(
         () => {

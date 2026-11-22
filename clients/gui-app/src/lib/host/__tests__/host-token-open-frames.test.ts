@@ -232,7 +232,10 @@ describe("local stream host-token open frame", () => {
     await settle();
     await vi.waitFor(() => expect(verifiedSignInReads).toBeGreaterThan(0));
     await expect(
-      hostTokens.obtain(USER_A, mockLocalHostEntry.hostId, false, null),
+      hostTokens.obtain(USER_A, mockLocalHostEntry.hostId, false, {
+        signal: null,
+        owner: null,
+      }),
     ).resolves.toEqual({ kind: "no-sign-in" });
 
     expect(mints).toBe(0);

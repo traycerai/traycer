@@ -724,7 +724,9 @@ describe("HostStreamProvider", () => {
 
       await settle();
       const first = FakeNativeWebSocket.instances[0];
-      const ownAddress = new URL(mockLocalHostEntry.websocketUrl).host;
+      const ownUrl = mockLocalHostEntry.websocketUrl;
+      if (ownUrl === null) throw new Error("the local row has no address");
+      const ownAddress = new URL(ownUrl).host;
       expect(new URL(first.url).host).toBe(ownAddress);
       first.fireOpen();
       await vi.waitFor(() =>
