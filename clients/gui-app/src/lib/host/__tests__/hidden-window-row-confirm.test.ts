@@ -90,8 +90,6 @@ vi.mock(
 const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const SIGN_IN = "person-sign-in";
 const WAIT = { timeout: 10_000, interval: 20 };
-/** Captured before any test fakes the clock. */
-const realSetTimeout = globalThis.setTimeout;
 
 const echoV10 = defineRpcContract({
   method: "host.echo",
@@ -238,6 +236,8 @@ describe("a window's remote sign-in with the real host directory", () => {
       owner: RemoteHostDirectoryEntry["owner"],
     ) => RemoteHostDirectoryEntry;
     readonly call: (confirm: () => Promise<unknown>) => void;
+    /** The confirmation the attach asked for: how often, and how many of those answered. */
+    readonly confirmation: { asked: number; answered: number };
   }> {
     hostCounter += 1;
     const hostId = `hidden-row-confirm-directory-${hostCounter}`;
@@ -264,6 +264,7 @@ describe("a window's remote sign-in with the real host directory", () => {
         return { dispose: () => handlers.delete(handler) };
       };
     const pending: Array<(outcome: RemoteHostFetchOutcome) => void> = [];
+    const confirmation = { asked: 0, answered: 0 };
     let reads = 0;
     const directory = new HostDirectoryService({
       authContextId: () => USER_ID,
@@ -301,11 +302,17 @@ describe("a window's remote sign-in with the real host directory", () => {
         answer(outcome);
       },
       rowOwnedBy,
+      confirmation,
       call: (confirm) => {
         callThroughMessenger({
           hostId,
           resolveTarget: (id) => directory.findById(id),
-          confirm,
+          confirm: () => {
+            confirmation.asked += 1;
+            return confirm().finally(() => {
+              confirmation.answered += 1;
+            });
+          },
           disposers,
         });
       },
@@ -319,16 +326,20 @@ describe("a window's remote sign-in with the real host directory", () => {
   }
 
   /**
-   * Past the redial's backoff on the fake clock, then a moment of real time for
-   * the relay's asynchronous crypto, so an attach that did not wait has
-   * written its open by the time a test looks. The fake clock alone does not
-   * move a handshake. It stays under the confirmation's ceiling.
+   * The redial's attach has asked for the row confirmation and is parked on
+   * it: it reads its open only once that answers, so nothing past the host-only
+   * token's open can have been written while it is pending.
    */
-  async function letRelayRun(): Promise<void> {
-    await vi.advanceTimersByTimeAsync(2_000);
-    await new Promise<void>((resolve) => {
-      realSetTimeout(resolve, 300);
-    });
+  async function attachParkedOnConfirmation(run: {
+    readonly relay: FakeRelayHost;
+    readonly confirmation: {
+      readonly asked: number;
+      readonly answered: number;
+    };
+  }): Promise<void> {
+    await vi.waitFor(() => expect(run.confirmation.asked).toBe(1), WAIT);
+    expect(run.confirmation.answered).toBe(0);
+    expect(run.relay.openBearers).toEqual([""]);
   }
 
   /** The window is visible, and `visibilitychange` has not reached the directory's listener yet. */
@@ -352,9 +363,8 @@ describe("a window's remote sign-in with the real host directory", () => {
     await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
     run.call(confirmRowWhenHidden(() => run.directory));
     await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
-    await letRelayRun();
+    await attachParkedOnConfirmation(run);
 
-    expect(run.relay.openBearers).toEqual([""]);
     expect(run.reads()).toBe(2);
     run.answerRead({ kind: "hosts", entries: [run.rowOwnedBy(TEAM)] });
     await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
@@ -368,9 +378,8 @@ describe("a window's remote sign-in with the real host directory", () => {
     showWithoutNotifying();
     run.call(confirmRowWhenHidden(() => run.directory));
     await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
-    await letRelayRun();
+    await attachParkedOnConfirmation(run);
 
-    expect(run.relay.openBearers).toEqual([""]);
     run.answerRead({ kind: "hosts", entries: [run.rowOwnedBy(TEAM)] });
     await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
     expect(run.relay.openBearers).toEqual(["", ""]);
@@ -383,9 +392,8 @@ describe("a window's remote sign-in with the real host directory", () => {
     await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
     run.call(confirmRowWhenHidden(() => run.directory));
     await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
-    await letRelayRun();
+    await attachParkedOnConfirmation(run);
 
-    expect(run.relay.openBearers).toEqual([""]);
     expect(run.reads()).toBe(2);
     run.answerRead({
       kind: "hosts",
@@ -415,9 +423,8 @@ describe("a window's remote sign-in with the real host directory", () => {
     await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
     run.call(confirmRowWhenHidden(() => run.directory));
     await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
-    await letRelayRun();
+    await attachParkedOnConfirmation(run);
 
-    expect(run.relay.openBearers).toEqual([""]);
     expect(run.reads()).toBe(2);
     run.answerRead({ kind: "hosts", entries: [run.rowOwnedBy(TEAM)] });
     await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
