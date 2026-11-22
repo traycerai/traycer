@@ -767,8 +767,6 @@ export async function provisionInstalledHostCredential(
           // incompatible ack settles the lap as `state` first, and lands in
           // `unsupported` through the withheld-mint path instead.)
           const reason = observation.reason;
-          if (signInAfterNotAdmitted !== null && !admittedAfterNotAdmitted)
-            return await settleAfterRecovery();
           if (reason !== null && reason.kind === "fatalError") {
             const admissionError = localTeamAdmissionCliError(reason.details);
             if (admissionError !== null)
