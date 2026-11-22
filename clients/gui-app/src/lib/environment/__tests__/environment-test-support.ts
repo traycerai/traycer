@@ -117,9 +117,9 @@ export function pendingUploadFixture(
   };
 }
 
-/** The attempt `status.move` names once authn's acceptance exists; `needs_person` is the one the person must act on. */
+/** The attempt `status.move` names once authn's acceptance exists; `needs_person` is the one the person must act on, `done` the one that finished. */
 export function moveAttemptFixture(
-  state: "running" | "retry" | "needs_person",
+  state: "running" | "retry" | "needs_person" | "done",
 ): NonNullable<EnvironmentStatusResponseV13["move"]> {
   const ids = { attemptId: "attempt-1", acceptanceId: "acceptance-1" };
   switch (state) {
@@ -129,6 +129,8 @@ export function moveAttemptFixture(
       return { ...ids, state, cause: "unavailable" };
     case "needs_person":
       return { ...ids, state, reason: "plan_changed" };
+    case "done":
+      return { ...ids, state };
   }
 }
 

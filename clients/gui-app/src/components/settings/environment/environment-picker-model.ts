@@ -2,12 +2,19 @@ import {
   SETUP_STEPS,
   setupView,
 } from "@/components/settings/host-scope/host-access-model";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   localRowCohort,
   type LocalRowVerb,
 } from "@/components/settings/environment/local-row-cohort";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import {
+  moveAcceptanceOpen,
+  moveHasStopped,
+} from "@/lib/environment/move-in-progress";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   PERSONAL_PICK,
@@ -189,21 +196,37 @@ export function personalSubtitle(names: readonly string[]): string {
     : `your settings · on ${first}, ${second} and ${rest} more`;
 }
 
+/**
+ * The verb is `Finish moving` while an accepted Move has stopped, so the row
+ * opens the computer's Overview, where the stopped Move has its Retry,
+ * instead of the move sheet. The subtitle stays the planes' own: nothing has
+ * reached Personal yet.
+ */
+function withStoppedMove(
+  row: LocalPickerRow,
+  status: EnvironmentStatusResponseV13 | null,
+): LocalPickerRow {
+  if (row.kind !== "local" || status === null) return row;
+  if (!moveAcceptanceOpen(status) || !moveHasStopped(status)) return row;
+  return { ...row, verb: "finish_moving" };
+}
+
 export function environmentPickerModel(input: {
   readonly hosts: readonly EnvironmentPickerHost[];
-  readonly statuses: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>;
+  readonly statuses: ReadonlyMap<string, EnvironmentStatusResponseV13 | null>;
   readonly versions: ReadonlyMap<string, NegotiatedMethodVersion>;
   /** This window's own host, whose Local row is the default pick. */
   readonly windowHostId: string | null;
 }): EnvironmentPickerModel {
   const localRows: LocalPickerRow[] = [];
   for (const host of input.hosts) {
+    const status = input.statuses.get(host.hostId) ?? null;
     const row = localPickerRow(
       host,
-      input.statuses.get(host.hostId) ?? null,
+      status,
       input.versions.get(host.hostId) ?? null,
     );
-    if (row !== null) localRows.push(row);
+    if (row !== null) localRows.push(withStoppedMove(row, status));
   }
   const windowRow =
     localRows.find((row) => row.hostId === input.windowHostId) ?? null;

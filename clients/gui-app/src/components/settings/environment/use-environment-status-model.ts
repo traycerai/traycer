@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import {
   environmentPickerModel,
   isEnvironmentComputer,
@@ -15,7 +15,7 @@ import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiate
  */
 export function useEnvironmentStatusModel(scope: HostScope): {
   readonly picker: EnvironmentPickerModel;
-  readonly statuses: ReadonlyMap<string, EnvironmentStatusResponseV11 | null>;
+  readonly statuses: ReadonlyMap<string, EnvironmentStatusResponseV13 | null>;
 } {
   const hosts = useMemo(
     () => scope.hosts.filter(isEnvironmentComputer),

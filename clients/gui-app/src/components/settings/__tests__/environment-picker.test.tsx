@@ -20,7 +20,11 @@ import {
   hostScopeFixture,
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
-import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  environmentStatusFixture,
+  moveAttemptFixture,
+  unboundMoveStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
@@ -419,6 +423,53 @@ describe("<EnvironmentPicker />", () => {
     expect(surface.openSettings).toHaveBeenCalledWith(
       expect.objectContaining({ section: "host" }),
     );
+  });
+
+  it("says Finish moving, and opens the Overview, for an accepted move that stopped before authn bound this computer", () => {
+    answer(
+      "old",
+      unboundMoveStatusFixture(
+        { stage: "registering", state: "stalled" },
+        moveAttemptFixture("retry"),
+      ),
+      V11,
+    );
+    renderPicker("mac");
+    openMenu();
+
+    const row = screen.getByTestId("environment-picker-local-old");
+    expect(row.textContent).toContain("its own settings, not in Personal yet");
+    expect(screen.queryByTestId("environment-picker-move-old")).toBeNull();
+    const verb = screen.getByRole("menuitem", { name: "Finish moving" });
+    expect(verb).toBe(screen.getByTestId("environment-picker-finish-old"));
+    expect(verb.textContent).toBe("· Finish moving");
+
+    fireEvent.click(verb);
+    expect(useSettingsHostScopeStore.getState().pendingHostId).toBe("old");
+    expect(surface.openSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ section: "host" }),
+    );
+    expect(useMoveSheetStore.getState().target).toBeNull();
+  });
+
+  it("keeps Move to Personal, which opens the move sheet, for an accepted move that is still running", () => {
+    answer(
+      "old",
+      unboundMoveStatusFixture(
+        { stage: "registering", state: "running" },
+        moveAttemptFixture("running"),
+      ),
+      V11,
+    );
+    renderPicker("mac");
+    openMenu();
+
+    expect(screen.queryByTestId("environment-picker-finish-old")).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to Personal" }));
+    expect(useMoveSheetStore.getState().target).toEqual({
+      hostId: "old",
+      hostName: "Old laptop",
+    });
   });
 
   it("greys a host that cannot show its settings, and gives an applied 1.0 host no row", () => {
