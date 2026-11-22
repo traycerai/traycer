@@ -375,16 +375,24 @@ export class HostDirectoryService implements IHostDirectoryService {
   private stopPollVisibility: (() => void) | null = null;
   private hiddenTickMarks: number | null = null;
   /**
-   * POSSIBLY STALE FROM BEING HIDDEN, as an ordered mark. Every hide, every
-   * push skipped while hidden and, in poll mode, every tick a hidden span
-   * skips advances `marks`; `staleThrough` is the latest mark still
-   * outstanding, and `null` when there is none. It ends only when a read that
-   * STARTED after that mark settles, committed or failed, while it is still
-   * the current read of the current era ({@link catchUpAfterHidden}). A show
-   * does not end it, and neither does an abandoned or superseded read.
+   * One ordered clock for {@link catchUpAfterHidden}. Each mark, each read's
+   * start and each confirmation begun while hidden takes the next number.
    */
-  private marks = 0;
-  private staleThrough: number | null = null;
+  private order = 0;
+  /**
+   * POSSIBLY STALE FROM BEING HIDDEN: the latest mark. Every hide, every push
+   * skipped while hidden and, in poll mode, every tick a hidden span skips is
+   * a mark. A show ends nothing.
+   */
+  private latestMark = 0;
+  /**
+   * The latest start among reads that settled, committed or failed, while
+   * still the current read of the current era. A read a rotation abandoned or
+   * an identity change superseded never counts.
+   */
+  private settledOwnedStart = 0;
+  /** Woken by every read that settles and by every retirement of one. */
+  private readEventWaiters: Array<() => void> = [];
 
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
@@ -650,11 +658,12 @@ export class HostDirectoryService implements IHostDirectoryService {
     ) {
       return inFlight.request;
     }
-    const marksAtStart = this.marks;
+    this.order += 1;
+    const startedAt = this.order;
     const request = this.performRefresh(era).finally(() => {
       // Owned only while still the current read of the current era: a read a
       // rotation abandoned, or an identity change superseded, settles nothing
-      // of the state the current read answers for.
+      // of what the current read answers for.
       const owned =
         this.refreshInFlight?.request === request && this.isCurrentEra(era);
       // Only clear OUR slot: a request superseded by an identity change must
@@ -662,13 +671,10 @@ export class HostDirectoryService implements IHostDirectoryService {
       if (this.refreshInFlight?.request === request) {
         this.refreshInFlight = null;
       }
-      if (
-        owned &&
-        this.staleThrough !== null &&
-        marksAtStart >= this.staleThrough
-      )
-        this.staleThrough = null;
+      if (owned && startedAt > this.settledOwnedStart)
+        this.settledOwnedStart = startedAt;
       this.emitRefreshState();
+      this.wakeReadEventWaiters();
     });
     this.refreshInFlight = { era, request };
     // After the assignment, so `isRefreshing()` already answers true for a
@@ -694,28 +700,53 @@ export class HostDirectoryService implements IHostDirectoryService {
   invalidateInFlightRefresh(): void {
     this.refreshInFlight = null;
     this.emitRefreshState();
+    // A waiter on the retired read moves to the current one.
+    this.wakeReadEventWaiters();
   }
 
   /**
-   * Waits until a read that started after the latest mark has settled as the
-   * current read of the current era: it joins the read in flight, or starts
-   * one, and never starts a second beside a running one. A read that started
-   * before the latest mark, or was abandoned or superseded, settles nothing,
-   * and another read follows. Stops starting reads once `stillWaiting` says
-   * no one waits. Resolves at once when nothing is outstanding. Never rejects.
+   * Waits until a read has settled, as the current read of the current era,
+   * that STARTED at or after the later of the latest mark and, when the
+   * window is hidden as this is asked, this call's own start. So a hidden
+   * window reads for every call, and calls that overlap share a read that
+   * started after each began. It waits on that condition, never on one
+   * read's promise: a retired read holds no waiter. When no read of the
+   * current era is running it starts one; it never starts one beside a
+   * running read. It stops starting reads once `stillWaiting` says no one
+   * waits, or the directory stops. Resolves at once in a shown window with no
+   * mark outstanding. Never rejects.
    */
   async catchUpAfterHidden(stillWaiting: () => boolean): Promise<void> {
-    while (this.staleThrough !== null && stillWaiting()) {
-      await this.refresh().then(
-        () => undefined,
-        () => undefined,
-      );
+    let ownStart = 0;
+    if (!isDocumentVisible()) {
+      this.order += 1;
+      ownStart = this.order;
+    }
+    const satisfied = (): boolean =>
+      this.settledOwnedStart >= Math.max(this.latestMark, ownStart);
+    while (!satisfied() && stillWaiting() && this.started) {
+      const event = new Promise<void>((resolve) => {
+        this.readEventWaiters.push(resolve);
+      });
+      const running = this.refreshInFlight;
+      if (running === null || !this.isCurrentEra(running.era))
+        void this.refresh().then(
+          () => undefined,
+          () => undefined,
+        );
+      await event;
     }
   }
 
+  private wakeReadEventWaiters(): void {
+    const waiters = this.readEventWaiters;
+    this.readEventWaiters = [];
+    for (const wake of waiters) wake();
+  }
+
   private markMissedWhileHidden(): void {
-    this.marks += 1;
-    this.staleThrough = this.marks;
+    this.order += 1;
+    this.latestMark = this.order;
   }
 
   private stopHiddenTickMarks(): void {
@@ -1001,7 +1032,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       // acted on when the window next becomes visible.
       if (!isDocumentVisible()) {
         this.markMissedWhileHidden();
-        this.pushSkippedThrough = this.marks;
+        this.pushSkippedThrough = this.latestMark;
         return;
       }
       this.applyRegistryPush();
@@ -1081,8 +1112,11 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.stopPollVisibility?.();
     this.stopPollVisibility = null;
     this.stopHiddenTickMarks();
-    this.staleThrough = null;
+    // No mark is outstanding once nothing skips changes any more.
+    if (this.latestMark > this.settledOwnedStart)
+      this.settledOwnedStart = this.latestMark;
     this.pushSkippedThrough = null;
+    this.wakeReadEventWaiters();
   }
 
   /**
