@@ -532,7 +532,11 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       return answer(hostId, first);
     }
     const startedAt = nextEvent();
-    const second = await source.obtain(userId, hostId, true, { signal, owner });
+    const second = await source.obtain(userId, hostId, true, {
+      signal,
+      owner,
+      observedNow: () => hosts.currentInstance(hostId).observed,
+    });
     if (second.kind !== "sign-in-rejected") return answer(hostId, second);
     if (refreshed === "adopted")
       return recoverRefusedSignIn(owner, second, startedAt, signal);
@@ -549,6 +553,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     const first = await source.obtain(userId, owner.hostId, fresh, {
       signal,
       owner,
+      observedNow: () => hosts.currentInstance(owner.hostId).observed,
     });
     if (first.kind === "no-sign-in") report(owner, first, startedAt);
     if (first.kind !== "sign-in-rejected") return answer(owner.hostId, first);
@@ -664,6 +669,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       const renewed = await source.obtain(userId, hostId, true, {
         signal: signIn.signal,
         owner,
+        observedNow: () => hosts.currentInstance(hostId).observed,
       });
       if (renewed.kind === "no-sign-in") report(owner, renewed, startedAt);
       if (renewed.kind !== "sign-in-rejected") return renewed.kind === "ok";
@@ -820,5 +826,6 @@ export async function openCliHostSession(
 }
 
 export async function forgetCliHostTokens(userId: string): Promise<void> {
-  await createSource(null).forgetUser(userId);
+  // Forgetting mints nothing, so no call's end is ever signalled.
+  await createSource(null, new AbortController().signal).forgetUser(userId);
 }
