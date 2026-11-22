@@ -45,12 +45,10 @@ export interface StoredSignIn {
   /** True once a refusal has asked for the refresh, whatever it answered. */
   refreshSpent(): boolean;
   /**
-   * Asks authn on the current sign-in. A refusal the caller names (a 401) can
-   * trigger one resend after a usable pair is obtained, by rotating it or by
-   * adopting one another process already saved. Every later
-   * refusal, and every refusal while that refresh is in flight, shares it: it
-   * never refreshes twice, and an ask already sent on the refreshed sign-in is
-   * not sent again.
+   * Asks authn on the current sign-in. A response the caller classifies as a
+   * refusal can trigger one resend after the store rotates the sign-in or adopts
+   * a newer pair. Refusals on the original generation share one refresh attempt.
+   * A refusal on the replacement generation is final.
    */
   ask<Answer>(
     ask: (token: string) => Promise<Answer>,
@@ -101,7 +99,10 @@ export function openStoredSignIn(auth: HostAuth): StoredSignIn {
   };
 }
 
-/** One refresh through the store's locked rotate (`createStoreBackedRevalidator`); a sibling's landed pair is adopted. */
+/**
+ * Uses locked rotation. If the store finds a different access token for the
+ * same account, it can adopt that pair without sending a refresh request.
+ */
 async function refreshStoredSignIn(
   auth: HostAuth,
   signal: AbortSignal | null,
