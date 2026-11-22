@@ -219,11 +219,12 @@ export interface RemoteReleasedSignOn extends ReleasedSignOn {
   /**
    * Where the row {@link opensReleasedWay} reads is a cache that nothing keeps
    * current, a fresh read of it: asked before an attach whose open would carry
-   * the sign-in, and `false` (that attach goes without the sign-in) when the
-   * read failed or did not answer within its caller's ceiling. `null` where
-   * the row is kept current already.
+   * the sign-in. `false` when the read committed and the row may not be handed
+   * the sign-in; `null` when there was no answer (the read failed, or did not
+   * answer within its caller's ceiling), which keeps the last answer. `null`
+   * in place of the function where the row is kept current already.
    */
-  readonly confirmRow: (() => Promise<boolean>) | null;
+  readonly confirmRow: (() => Promise<boolean | null>) | null;
 }
 
 /**
@@ -600,8 +601,8 @@ function createReleasedSignOnSessionAuth(
   );
   /**
    * The last answered confirmation of the row (`confirmRow`): a confirmation
-   * still pending changes nothing until it answers. Before any, the live row
-   * alone decides, as in c8b3e988.
+   * still pending, failed or unanswered changes nothing. Before any, the live
+   * row alone decides, as in c8b3e988.
    */
   let rowConfirmed = true;
   /** Confirmations asked; only the latest one's answer is kept. */
@@ -683,8 +684,9 @@ function createReleasedSignOnSessionAuth(
       if (confirmRow === null || !wouldPresentSignIn) return;
       confirmationsAsked += 1;
       const asked = confirmationsAsked;
-      const confirmed = await confirmRow().catch(() => false);
-      if (asked === confirmationsAsked) rowConfirmed = confirmed;
+      const confirmed = await confirmRow().catch(() => null);
+      if (asked === confirmationsAsked && confirmed !== null)
+        rowConfirmed = confirmed;
     },
   );
   // Only a refusal of this dial's open switches to the sign-in: a current host

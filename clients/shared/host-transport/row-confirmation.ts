@@ -4,14 +4,14 @@
  */
 export const ROW_CONFIRM_CEILING_MS = 5_000;
 
-/** `confirmed`, or `false` once `ceilingMs` passes first. */
+/** `confirmed`, or `null` (no answer) once `ceilingMs` passes first. */
 export async function answeredWithin(
-  confirmed: Promise<boolean>,
+  confirmed: Promise<boolean | null>,
   ceilingMs: number,
-): Promise<boolean> {
+): Promise<boolean | null> {
   let clearCeiling = (): void => undefined;
-  const ceiling = new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(false), ceilingMs);
+  const ceiling = new Promise<null>((resolve) => {
+    const timer = setTimeout(() => resolve(null), ceilingMs);
     clearCeiling = () => clearTimeout(timer);
   });
   try {

@@ -94,7 +94,7 @@ export interface CreateRemoteTransportOptions<
    */
   readonly opensReleasedWay: () => boolean;
   /** See `RemoteReleasedSignOn.confirmRow`: `null` where {@link opensReleasedWay} reads a row kept current. */
-  readonly confirmRowBeforeSignIn: (() => Promise<boolean>) | null;
+  readonly confirmRowBeforeSignIn: (() => Promise<boolean | null>) | null;
   readonly door: HostDoorObserver | null;
   readonly onState: HostTokenStateSink;
   /**
