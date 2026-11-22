@@ -102,9 +102,11 @@ export interface BrowserSessionsHostDirectory {
   invalidate(hostId: string): void;
   /**
    * Reads the registry again now, keeping the cached rows while it runs, and
-   * answers whether a read that STARTED after this call completed: `false` on
-   * a failed read, or with no bearer to read with. One already running may
-   * predate the question, so it is waited out first. Never throttled.
+   * answers whether a read that STARTED after this call, and after the latest
+   * `reset`, completed: `false` on a failed read, or with no bearer to read
+   * with. One already running may predate the question, so it is waited out
+   * first, and a `reset` during the read is followed by another. Never
+   * throttled.
    */
   confirmRows(): Promise<boolean>;
   /**
@@ -266,12 +268,18 @@ export function createBrowserSessionsHostDirectory(
       forced = true;
     },
     confirmRows: async () => {
-      const running = inFlight;
-      if (running !== null) await running;
-      const before = readsAdopted;
-      forced = true;
-      await refreshOnce();
-      return readsAdopted > before;
+      // A `reset` is a mark: a read started before one answers for the
+      // identity before it, so another read follows, checked against the
+      // generation as it stands once the read has settled.
+      for (;;) {
+        const running = inFlight;
+        if (running !== null) await running;
+        const before = readsAdopted;
+        const startedIn = generation;
+        forced = true;
+        await refreshOnce();
+        if (generation === startedIn) return readsAdopted > before;
+      }
     },
     reset: () => {
       generation += 1;

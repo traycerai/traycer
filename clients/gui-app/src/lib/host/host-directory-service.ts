@@ -380,11 +380,13 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private order = 0;
   /**
-   * POSSIBLY STALE FROM BEING HIDDEN: the latest mark. Every hide, every push
-   * skipped while hidden and, in poll mode, every tick a hidden span skips is
-   * a mark. A show ends nothing.
+   * The latest mark. Every hide, every push skipped while hidden and, in poll
+   * mode, every tick a hidden span skips is a mark, and so is every era change
+   * (a rotation or an identity change). A show ends nothing.
    */
   private latestMark = 0;
+  /** The era the latest era mark was taken for; see {@link noteEra}. */
+  private markedEra: AuthEra;
   /**
    * The latest start among reads that settled, committed or failed, while
    * still the current read of the current era. A read a rotation abandoned or
@@ -414,6 +416,10 @@ export class HostDirectoryService implements IHostDirectoryService {
       options.credentialGeneration === null
         ? () => 0
         : options.credentialGeneration;
+    this.markedEra = {
+      identity: this.authContextId(),
+      credentialGeneration: this.credentialGeneration(),
+    };
   }
 
   /**
@@ -647,6 +653,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * previously four reads that could disagree.
    */
   refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]> {
+    this.noteEra();
     const inFlight = this.refreshInFlight;
     // Keyed by the WHOLE era, not just the identity: a request issued before a
     // same-user rotation is answering for a credential this caller no longer
@@ -661,9 +668,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.order += 1;
     const startedAt = this.order;
     const request = this.performRefresh(era).finally(() => {
-      // Owned only while still the current read of the current era: a read a
-      // rotation abandoned, or an identity change superseded, settles nothing
-      // of what the current read answers for.
+      // Drops a retired read's answer: one a rotation abandoned, or an
+      // identity change superseded, records nothing. Whether a recorded read
+      // satisfies a confirmation is decided by the clock alone.
       const owned =
         this.refreshInFlight?.request === request && this.isCurrentEra(era);
       // Only clear OUR slot: a request superseded by an identity change must
@@ -698,6 +705,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * happens to settle.
    */
   invalidateInFlightRefresh(): void {
+    this.noteEra();
     this.refreshInFlight = null;
     this.emitRefreshState();
     // A waiter on the retired read moves to the current one.
@@ -722,8 +730,10 @@ export class HostDirectoryService implements IHostDirectoryService {
       this.order += 1;
       ownStart = this.order;
     }
-    const satisfied = (): boolean =>
-      this.settledOwnedStart >= Math.max(this.latestMark, ownStart);
+    const satisfied = (): boolean => {
+      this.noteEra();
+      return this.settledOwnedStart >= Math.max(this.latestMark, ownStart);
+    };
     while (!satisfied() && stillWaiting() && this.started) {
       const event = new Promise<void>((resolve) => {
         this.readEventWaiters.push(resolve);
@@ -749,6 +759,27 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.latestMark = this.order;
   }
 
+  /**
+   * An era change is a mark, taken before the directory does anything else in
+   * the new era: every entry that reads the era (a read's start, its settle,
+   * a retirement, a confirmation's check) notes it first. So no read started
+   * before a rotation or an identity change satisfies a check made after it,
+   * whatever order a settle, a retirement and a wake run in.
+   */
+  private noteEra(): void {
+    const identity = this.authContextId();
+    const credentialGeneration = this.credentialGeneration();
+    if (
+      identity === this.markedEra.identity &&
+      credentialGeneration === this.markedEra.credentialGeneration
+    ) {
+      return;
+    }
+    this.markedEra = { identity, credentialGeneration };
+    this.order += 1;
+    this.latestMark = this.order;
+  }
+
   private stopHiddenTickMarks(): void {
     if (this.hiddenTickMarks === null) return;
     window.clearInterval(this.hiddenTickMarks);
@@ -756,6 +787,7 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   private isCurrentEra(era: AuthEra): boolean {
+    this.noteEra();
     return (
       era.identity === this.authContextId() &&
       era.credentialGeneration === this.credentialGeneration()
