@@ -6,6 +6,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import type { DialPriority } from "@traycer-clients/shared/host-transport/dial-priority";
+import type { IStreamWebSocketFactory } from "@traycer/protocol/host-transport/stream-websocket";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
   createHostTokenSource,
@@ -40,15 +42,15 @@ import {
 // except the one that crosses the ceiling.
 
 const relayHolder = vi.hoisted(() => ({
-  factory: null as null | { create: () => unknown },
+  factory: null as null | IStreamWebSocketFactory,
 }));
 vi.mock(
   "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory",
   () => ({
     createWhatwgStreamWebSocketFactory: () => ({
-      create: () => {
+      create: (url: string, priority: DialPriority) => {
         if (relayHolder.factory === null) throw new Error("no relay host");
-        return relayHolder.factory.create();
+        return relayHolder.factory.create(url, priority);
       },
     }),
   }),
@@ -133,7 +135,7 @@ interface Scenario {
 
 /** One `host.echo` call to a remote row owned by the signed-in person, through the real runtime messenger. */
 function startCall(
-  confirm: () => Promise<boolean>,
+  confirm: () => Promise<unknown>,
   disposers: Array<() => void>,
 ): Scenario {
   hostCounter += 1;

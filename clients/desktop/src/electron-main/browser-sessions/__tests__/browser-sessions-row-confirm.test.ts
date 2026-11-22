@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { IStreamWebSocketFactory } from "@traycer/protocol/host-transport/stream-websocket";
+import type { DialPriority } from "@traycer-clients/shared/host-transport/dial-priority";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
 import { SESSION_CAPABILITY_CREDENTIAL_UPDATE } from "@traycer/protocol/host-transport/mux";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
@@ -32,15 +34,15 @@ vi.mock("../../app/logger", () => ({
 }));
 
 const relayHolder = vi.hoisted(() => ({
-  factory: null as null | { create: () => unknown },
+  factory: null as null | IStreamWebSocketFactory,
 }));
 vi.mock(
   "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory",
   () => ({
     createWhatwgStreamWebSocketFactory: () => ({
-      create: () => {
+      create: (url: string, priority: DialPriority) => {
         if (relayHolder.factory === null) throw new Error("no relay host");
-        return relayHolder.factory.create();
+        return relayHolder.factory.create(url, priority);
       },
     }),
   }),
