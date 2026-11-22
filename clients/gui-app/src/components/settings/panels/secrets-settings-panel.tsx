@@ -30,9 +30,13 @@ import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-ho
  *
  * - on a host that serves `environment.secrets.list`, the page itself: the
  *   list, Add a secret, Verify (`SecretsPage`);
- * - on a team's host, the team line, and no value is shown here;
- * - on a host whose version predates the page, "Update this host to use
- *   your secrets here."
+ * - on a team's host, the team line, and no value is shown here.
+ *
+ * Settings does not offer the page on a host that does not serve
+ * `environment.secrets.list` (`environmentSectionShown`). A path that reaches
+ * it there anyway (a remembered tab, a deep link, a pick moved while it was
+ * open) shows the title and nothing under it, as it does while that host's
+ * answer is unknown.
  */
 export function SecretsSettingsPanel(): ReactNode {
   const source = useConfigurationSource();
@@ -132,25 +136,13 @@ function HostSecretsSettingsPanel(): ReactNode {
       </SecretsListPanelShell>
     );
   }
-  let body: ReactNode = null;
-  if (teamName !== null) body = <TeamSecretsView teamName={teamName} />;
-  else if (supported === false) {
-    body = (
-      <p
-        className="text-ui-sm text-muted-foreground"
-        data-testid="secrets-update-host"
-      >
-        Update this host to use your secrets here.
-      </p>
-    );
-  }
   return (
     <SettingsPanelShell
       title={SECRETS.page.label}
       description={SECRETS.page.description}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      {body}
+      {teamName !== null ? <TeamSecretsView teamName={teamName} /> : null}
     </SettingsPanelShell>
   );
 }

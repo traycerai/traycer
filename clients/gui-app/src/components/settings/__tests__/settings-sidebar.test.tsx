@@ -9,6 +9,16 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { setMobileApp } from "@/lib/mobile-app";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  resetEnvironmentSectionReads,
+  windowHostRunsPersonal,
+} from "@/components/settings/__tests__/environment-section-reads-fixture";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -71,49 +81,69 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-// The Environment dropdown reads each registered computer's
-// `environment.status` and negotiated version, and the footer's Sandboxes link
-// reads the environment list: all `useQuery`s, and this suite mounts no query
-// client. "No host has answered" is the honest empty answer; the picker's own
-// rows are covered by environment-picker.test.tsx.
-vi.mock("@/hooks/environment/use-registered-host-environment-statuses", () => ({
-  useRegisteredHostEnvironmentStatuses: () => new Map(),
-}));
-vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
-  useHostNegotiatedMethodVersions: () => new Map(),
-}));
-// The picker's Personal row reads the hosts running Personal from one hook;
-// these suites are about the sidebar around it.
+// Reads this suite mounts no host runtime or query client for answer the
+// honest "nothing has answered" from the shared fixture; the rows and pickers
+// have their own suites.
 vi.mock(
-  "@/components/settings/environment/use-hosts-running-configuration",
-  () => ({
-    useHostsRunningPersonal: () => ({
-      hosts: [],
-      state: "ready",
-      collisions: [],
-      retry: () => undefined,
-    }),
+  "@/hooks/environment/use-registered-host-environment-statuses",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).registeredHostEnvironmentStatusesModule,
+);
+vi.mock(
+  "@/hooks/host/use-host-negotiated-method-version",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/host/use-host-negotiated-method-version")
+    >()),
+    ...(
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).negotiatedMethodVersionModule,
   }),
 );
-vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: undefined }),
-}));
-vi.mock("@/components/settings/move-sheet", () => ({
-  MoveSheet: () => null,
-}));
-// The Team rows and the trigger's team label read the environment list
-// through the window's host client, and this suite mounts no host runtime.
-// The rows have their own suite; a Personal pick names no team.
-vi.mock("@/components/settings/environment/team-pick-label", () => ({
-  usePickedTeamLabel: () => null,
-  useInvitedTeamName: () => null,
-}));
-vi.mock("@/components/settings/environment/team-rows", () => ({
-  TeamRows: () => null,
-}));
-vi.mock("@/components/settings/members/invite-accept-dialog", () => ({
-  InviteAcceptDialog: () => null,
-}));
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).hostsRunningConfigurationModule,
+);
+vi.mock(
+  "@/hooks/bots/use-environment-list-query",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).environmentListQueryModule,
+);
+vi.mock(
+  "@/components/settings/move-sheet",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).moveSheetModule,
+);
+vi.mock(
+  "@/components/settings/environment/team-pick-label",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).teamPickLabelModule,
+);
+vi.mock(
+  "@/components/settings/environment/team-rows",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).teamRowsModule,
+);
+vi.mock(
+  "@/components/settings/members/invite-accept-dialog",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).inviteAcceptDialogModule,
+);
 // The Guide group leaves the rail once every Getting started step is done;
 // the real answer reads several `useQuery`s and this suite mounts no query
 // client. Not done by default, as for a new account.
@@ -122,56 +152,44 @@ vi.mock("@/components/onboarding/getting-started-checklist", () => ({
   useGettingStartedGuideIsComplete: () => guideComplete.current,
 }));
 
-vi.mock("@/components/settings/host-scope/add-host-dialog", () => ({
-  AddHostDialog: () => null,
-}));
-
-// The sidebar now opts into the liveness poll directly (see
-// `useRegisteredHostsPollLiveness` in `settings-sidebar.tsx`). This suite
-// mocks `useHostScope` wholesale and renders no `QueryClientProvider`, so the
-// real hook — which calls `useQuery` unconditionally — would throw for want
-// of a query client. It is also irrelevant to navigation, which is what this
-// suite is about.
-vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
-  useRegisteredHostsPollLiveness: () => undefined,
-}));
-
-// Same reasoning, one hook later: the picker now resolves each row's update
-// badge through `useFleetUpdateViews`, which owns a `useQuery` for the fleet
-// sweep and therefore needs a query client this navigation suite deliberately
-// does not mount. Stubbed to the "nothing observed" answer — which is also the
-// honest production answer for a fleet with no borrowable sessions, so the
-// rows this suite asserts on render exactly as they would there.
-//
-// The badge's OWN behaviour is covered where it belongs (the host-option row
-// and per-host isolation suites); stubbing it here keeps a navigation test from
-// silently becoming a fleet-polling test.
-// Returns the SHARED constant rather than a literal spelled out here. A mock
-// factory is not type-checked against the module it replaces, so a hand-written
-// view silently loses any field added later — and `undefined` is not `null`, so
-// the row's badge would have read "last seen undefined" on every host while
-// this navigation suite went on passing. The whole point of exporting
-// `UNKNOWN_FLEET_UPDATE_VIEW` is that no caller, test or otherwise, writes one
-// of these by hand.
-// The environment label resolver is a per-host query hook (Tracy Bots);
-// mocked here for the same reason the fleet views are: this suite mounts no
-// QueryClient and the label is not what it tests.
-vi.mock("@/hooks/bots/use-host-environment-labels", () => ({
-  useHostEnvironmentLabelResolver: () => () => null,
-}));
-vi.mock("@/hooks/host/use-fleet-update-views", async () => {
-  const { UNKNOWN_FLEET_UPDATE_VIEW } =
-    await import("@/lib/host/fleet-update/fleet-update-view");
-  return { useFleetUpdateViews: () => () => UNKNOWN_FLEET_UPDATE_VIEW };
-});
-
-// The host picker's balance banner reads the sandbox list through a
-// `useQuery`, which needs a query client this navigation suite deliberately
-// does not mount. It is irrelevant to navigation (it renders nothing for an
-// account with no sandboxes), and has its own suite.
-vi.mock("@/components/hosts/sandbox-balance-banner", () => ({
-  SandboxBalanceBanner: () => null,
-}));
+// The shared fixture answers "nothing observed" for the liveness poll, the
+// picker rows' labels and update badges, and the balance banner: each reads a
+// `useQuery` this navigation suite mounts no client for.
+vi.mock(
+  "@/components/settings/host-scope/add-host-dialog",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).addHostDialogModule,
+);
+vi.mock(
+  "@/hooks/auth/use-registered-hosts-query",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).registeredHostsLivenessModule,
+);
+vi.mock(
+  "@/hooks/bots/use-host-environment-labels",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).hostEnvironmentLabelsModule,
+);
+vi.mock(
+  "@/hooks/host/use-fleet-update-views",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).fleetUpdateViewsModule,
+);
+vi.mock(
+  "@/components/hosts/sandbox-balance-banner",
+  async () =>
+    (
+      await import("@/components/settings/__tests__/settings-sidebar-rail-mocks-fixture")
+    ).sandboxBalanceBannerModule,
+);
 
 // The deployment offers Automations and no row exists yet: the one state the
 // sidebar once drew an Automations / Start entry for.
@@ -190,6 +208,43 @@ const sandboxControl = vi.hoisted(() => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => sandboxControl.reason,
 }));
+
+// The cloud road by default: a Personal pick offers the cloud's pages. A case
+// that is about what the window's host scope says sets `realWindowHostRuns`
+// to run the real hook over that scope.
+const realWindowHostRuns = vi.hoisted(() => ({ current: false }));
+vi.mock(
+  "@/components/settings/personal/use-window-host-runs-personal",
+  async (importOriginal) => {
+    const real =
+      await importOriginal<
+        typeof import("@/components/settings/personal/use-window-host-runs-personal")
+      >();
+    const { windowHostRunsPersonalModule } =
+      await import("@/components/settings/__tests__/environment-section-reads-fixture");
+    return {
+      useWindowHostRunsPersonal: (scope: HostScope) =>
+        realWindowHostRuns.current
+          ? real.useWindowHostRunsPersonal(scope)
+          : windowHostRunsPersonalModule.useWindowHostRunsPersonal(),
+    };
+  },
+);
+// The real hook reads the window host's status through a `useQuery`; none is
+// mounted, and the case that runs it answers on the scope's status alone.
+vi.mock(
+  "@/hooks/environment/use-environment-reads",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/environment/use-environment-reads")
+    >()),
+    useEnvironmentStatusRead: () => ({
+      supported: null,
+      data: null,
+      isError: false,
+    }),
+  }),
+);
 
 // The Secrets and GitHub entry renders only with a runner host (it needs the
 // platform origin), and the existing cases in this suite have none. The
@@ -228,6 +283,44 @@ function buildRouter(initialPath: string) {
   return createRouter({
     routeTree,
     history: createMemoryHistory({ initialEntries: [initialPath] }),
+  });
+}
+
+function buildVariantRouter(
+  initialEntries: Array<string>,
+  variant: SettingsSidebarVariant,
+) {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <>
+        <SettingsSidebar mode={{ kind: "route" }} variant={variant} />
+        <Outlet />
+      </>
+    ),
+  });
+  const taskRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/task-stub",
+    component: () => <div data-testid="task-stub" />,
+  });
+  const settingsIndexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings",
+    component: () => <div data-testid="settings-list" />,
+  });
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/$section",
+    component: () => <div data-testid="settings-body" />,
+  });
+  const routeTree = rootRoute.addChildren([
+    taskRoute,
+    settingsIndexRoute,
+    settingsRoute,
+  ]);
+  return createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries }),
   });
 }
 
@@ -554,44 +647,6 @@ describe("<SettingsSidebar /> leader hints", () => {
 // the user-observable anchor is where back() lands - rather than through the
 // Link's props.
 describe("<SettingsSidebar /> section navigation history", () => {
-  function buildVariantRouter(
-    initialEntries: Array<string>,
-    variant: SettingsSidebarVariant,
-  ) {
-    const rootRoute = createRootRoute({
-      component: () => (
-        <>
-          <SettingsSidebar mode={{ kind: "route" }} variant={variant} />
-          <Outlet />
-        </>
-      ),
-    });
-    const taskRoute = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/task-stub",
-      component: () => <div data-testid="task-stub" />,
-    });
-    const settingsIndexRoute = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/settings",
-      component: () => <div data-testid="settings-list" />,
-    });
-    const settingsRoute = createRoute({
-      getParentRoute: () => rootRoute,
-      path: "/settings/$section",
-      component: () => <div data-testid="settings-body" />,
-    });
-    const routeTree = rootRoute.addChildren([
-      taskRoute,
-      settingsIndexRoute,
-      settingsRoute,
-    ]);
-    return createRouter({
-      routeTree,
-      history: createMemoryHistory({ initialEntries }),
-    });
-  }
-
   it("mobile list pushes a section, so back returns to the list", async () => {
     const router = buildVariantRouter(
       ["/task-stub", "/settings"],
@@ -815,10 +870,13 @@ describe("<SettingsSidebar /> scope groups", () => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setMobileApp(false);
+    // A resolved pick: Secrets is offered once the pick is known to serve it.
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
   });
 
   afterEach(() => {
     cleanup();
+    useSettingsEnvironmentPickStore.setState({ pick: null });
     scopeOverrides.current = { client: null };
     globalScopeOverrides.current = { client: null };
     setMobileApp(false);
@@ -1065,6 +1123,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setMobileApp(false);
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
   });
 
   afterEach(() => {
@@ -1074,6 +1133,12 @@ describe("<SettingsSidebar /> Environment pick", () => {
       defaultPick: PERSONAL_PICK,
     });
     scopeOverrides.current = { client: null };
+    resetNegotiatedManifests();
+    resetEnvironmentSectionReads();
+    realWindowHostRuns.current = false;
+    globalScopeOverrides.current = { client: null };
+    useSettingsSearchStore.setState({ query: "" });
+    setMobileApp(false);
   });
 
   async function renderRail(): Promise<void> {
@@ -1117,6 +1182,25 @@ describe("<SettingsSidebar /> Environment pick", () => {
       .map((row) => row.textContent);
   }
 
+  const LOCAL_PICK = {
+    kind: "local",
+    hostId: "host-old",
+    hostName: "Old laptop",
+  } as const;
+  const SECRETS_LIST = "environment.secrets.list";
+  /** The window's host list names the picked computer, as a listed one is. */
+  function listLocalPickHost(): void {
+    globalScopeOverrides.current = {
+      client: null,
+      hosts: [
+        hostScopeOptionFixture({ hostId: "host-a" }),
+        hostScopeOptionFixture({ hostId: LOCAL_PICK.hostId }),
+      ],
+    };
+  }
+  const secretsHit = (): Element | null =>
+    document.querySelector("[data-testid^='settings-search-result-secrets:']");
+
   const PERSONAL_ROWS = [
     "Providers",
     "MCP servers",
@@ -1142,9 +1226,9 @@ describe("<SettingsSidebar /> Environment pick", () => {
   });
 
   it("keeps MCP servers, Skills, Sandboxes and Storage visible under a Local pick, and hides Members", async () => {
-    useSettingsEnvironmentPickStore.setState({
-      pick: { kind: "local", hostId: "host-old", hostName: "Old laptop" },
-    });
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
+    recordNegotiatedHostMethods(LOCAL_PICK.hostId, [SECRETS_LIST]);
 
     await renderRail();
 
@@ -1159,5 +1243,141 @@ describe("<SettingsSidebar /> Environment pick", () => {
     await renderRail();
 
     expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
+  });
+
+  it("offers no Secrets row under a Local pick until its host serves the list, then offers it and keeps it", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
+    await renderRail();
+
+    expect(present("secrets")).toBe(false);
+    expect(present("providers")).toBe(true);
+
+    act(() => {
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, [SECRETS_LIST]);
+    });
+
+    expect(present("secrets")).toBe(true);
+  });
+
+  it("offers no Secrets row under a Local pick whose host answered without the list", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
+    recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
+
+    await renderRail();
+
+    expect(environmentRows()).toEqual(
+      PERSONAL_ROWS.filter((label) => label !== "Secrets"),
+    );
+  });
+
+  it.each([
+    {
+      name: "unknown",
+      runs: null,
+      served: false,
+      offered: false,
+    },
+    {
+      name: "a host that runs Personal and serves the list",
+      runs: true,
+      served: true,
+      offered: true,
+    },
+    {
+      name: "a host that runs Personal and does not serve the list",
+      runs: true,
+      served: false,
+      offered: false,
+    },
+    {
+      name: "a host that does not run Personal",
+      runs: false,
+      served: false,
+      offered: true,
+    },
+  ])(
+    "Personal's Secrets row, with the window's host being $name: offered is $offered",
+    async ({ runs, served, offered }) => {
+      windowHostRunsPersonal.current = runs;
+      recordNegotiatedHostMethods(
+        "host-a",
+        served ? [SECRETS_LIST] : ["environment.status"],
+      );
+
+      await renderRail();
+
+      expect(present("secrets")).toBe(offered);
+    },
+  );
+
+  it("offers a team's Secrets row whatever its window's host serves", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-team" },
+    });
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+
+    await renderRail();
+
+    expect(present("secrets")).toBe(true);
+  });
+
+  it("offers Personal's Secrets row while the window's host is unreachable, since the page reads the cloud", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    realWindowHostRuns.current = true;
+    globalScopeOverrides.current = { status: "unreachable" };
+    recordNegotiatedHostMethods("host-a", ["environment.status"]);
+
+    await renderRail();
+
+    expect(present("secrets")).toBe(true);
+  });
+
+  it("offers a Secrets search result only where the pick's source serves the page", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
+    recordNegotiatedHostMethods(LOCAL_PICK.hostId, ["environment.status"]);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+    const input = await screen.findByRole("combobox", {
+      name: "Search settings",
+    });
+
+    fireEvent.change(input, { target: { value: "secrets" } });
+
+    expect(screen.getAllByRole("option").length).toBeGreaterThan(0);
+    expect(secretsHit()).toBeNull();
+
+    act(() => {
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, [SECRETS_LIST]);
+    });
+
+    expect(secretsHit()).not.toBeNull();
+  });
+
+  it("offers the phone's settings list no Secrets row under a Local pick whose host does not serve the list", async () => {
+    setMobileApp(true);
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    listLocalPickHost();
+    const router = buildVariantRouter(["/settings"], "mobile-list");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+    await screen.findByTestId("settings-sidebar-item-providers");
+
+    expect(present("secrets")).toBe(false);
+
+    act(() => {
+      recordNegotiatedHostMethods(LOCAL_PICK.hostId, [SECRETS_LIST]);
+    });
+
+    expect(present("secrets")).toBe(true);
   });
 });

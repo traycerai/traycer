@@ -7,6 +7,7 @@ import {
   searchSettings,
   settingsSearchResultKey,
 } from "@/lib/settings-search/settings-search";
+import { everySectionShown } from "@/lib/settings-search/__tests__/every-section-shown";
 
 const CONTEXT: SettingsAvailabilityContext = {
   runnerHost: null,
@@ -56,15 +57,17 @@ describe("Layout launch entries", () => {
 
 describe("searching for a region by its keywords", () => {
   it("offers a launch result naming the region", () => {
-    const results = searchSettings("microphone", CONTEXT);
+    const results = searchSettings("microphone", CONTEXT, everySectionShown);
 
     expect(results.some((result) => result.entry.launch === "mic")).toBe(true);
   });
 
   it("wears the Layout breadcrumb and the surface the region lives on", () => {
-    const [result] = searchSettings("microphone", CONTEXT).filter(
-      (candidate) => candidate.entry.launch === "mic",
-    );
+    const [result] = searchSettings(
+      "microphone",
+      CONTEXT,
+      everySectionShown,
+    ).filter((candidate) => candidate.entry.launch === "mic");
 
     expect(result.sectionLabel).toBe("Layout");
     expect(result.entry.group).toBe("Composer");

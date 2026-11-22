@@ -20,6 +20,7 @@ import {
   searchSettings,
   settingsSearchResultKey,
 } from "@/lib/settings-search/settings-search";
+import { everySectionShown } from "@/lib/settings-search/__tests__/every-section-shown";
 import {
   DEV_ONLY_SETTINGS_SECTION_IDS,
   SETTINGS_SECTIONS,
@@ -80,7 +81,11 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
 
 describe("settings search index", () => {
   it("routes the former Data & migration wording to the Data tab", () => {
-    const [first] = searchSettings("data & migration", NO_BRIDGES);
+    const [first] = searchSettings(
+      "data & migration",
+      NO_BRIDGES,
+      everySectionShown,
+    );
 
     expect(first.entry).toMatchObject({
       section: "host",
