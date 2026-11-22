@@ -1,6 +1,9 @@
 import { unresolvedSetupText } from "@/components/settings/environment/environment-picker-model";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import { planesOfferStopSharing } from "@/components/settings/move/status-planes";
 import {
   localRowCohort,
@@ -73,7 +76,7 @@ export function moveItemCounts(status: EnvironmentStatusResponseV11): {
 }
 
 export function hostSettingsCardState(
-  status: EnvironmentStatusResponseV11,
+  status: EnvironmentStatusResponseV13,
 ): HostSettingsCardState {
   const setup = status.setup;
   if (setup !== null && moveIsPastTheAccept(status)) {
@@ -151,7 +154,7 @@ export type HostSettingsRowModel =
  * for it (`useEnvironmentHostReadQuery`), so its row does not wait for one.
  */
 export function hostSettingsRowModel(
-  status: EnvironmentStatusResponseV11 | null,
+  status: EnvironmentStatusResponseV13 | null,
   binding: EnvironmentHostBinding | null,
   hostName: string,
 ): HostSettingsRowModel {

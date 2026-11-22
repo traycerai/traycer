@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
+import type {
+  EnvironmentStatusResponseV11,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
@@ -90,7 +93,7 @@ const BINDING: EnvironmentHostBinding = {
   canUnbind: false,
 };
 
-function mount(status: EnvironmentStatusResponseV11): void {
+function mount(status: EnvironmentStatusResponseV13): void {
   reads.statuses.set("old", status);
   recordNegotiatedHostManifest("old", {
     "environment.status": { major: 1, minor: 1 },

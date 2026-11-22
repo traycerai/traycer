@@ -20,7 +20,9 @@ import {
 const previewRegistry = hostRpcRegistry["environment.move.stopPreview"];
 const stopRegistry = hostRpcRegistry["environment.move.stop"];
 const previewV12 = { major: 1, minor: 2 } as const;
+const previewV13 = { major: 1, minor: 3 } as const;
 const stopV11 = { major: 1, minor: 1 } as const;
+const stopV12 = { major: 1, minor: 2 } as const;
 
 type PreviewMinor = 0 | 1;
 
@@ -567,5 +569,245 @@ describe("environment.move personal leave compatibility", () => {
     expect(stopRegistry[1].versions[0].contract.responseSchema).toBe(
       environmentMoveStopResponseSchema,
     );
+  });
+});
+
+const sharedRows = [
+  {
+    providerId: "claude-code",
+    profileId: "shared-row",
+    label: "Shared account",
+    signIn: "offered",
+    shared: true,
+  },
+  {
+    providerId: "claude-code",
+    profileId: "own-row",
+    label: "Own account",
+    signIn: "offered",
+    shared: false,
+  },
+  {
+    providerId: "claude-code",
+    profileId: "api-key-row",
+    label: "API key",
+    signIn: "not-needed",
+    shared: true,
+  },
+] as const;
+
+const withoutShared = sharedRows.map(({ shared: _shared, ...row }) => row);
+
+const mixedSignIns = [
+  { providerId: "claude-code", profileId: "pressed", signIn: { kind: "skip" } },
+  {
+    providerId: "claude-code",
+    profileId: "answered",
+    signIn: { kind: "signed-in", admissionId: "held-admission-fixture" },
+  },
+  {
+    providerId: "claude-code",
+    profileId: "left-alone",
+    signIn: { kind: "untouched" },
+  },
+] as const;
+
+describe("environment.move stopPreview@1.3 marks a shared folder", () => {
+  it("names 1.3 the latest preview and 1.2 the one before it", () => {
+    expect(previewRegistry[1].latestMinor).toBe(3);
+    expect(previewRegistry[1].versions[3].contract.schemaVersion).toEqual(
+      previewV13,
+    );
+  });
+
+  it("carries shared on every personal profile row, and requires it", () => {
+    const schema = previewRegistry[1].versions[3].contract.responseSchema;
+    expect(
+      schema.parse({
+        managed: [],
+        needsChoice: [],
+        personalProfiles: sharedRows,
+      }).personalProfiles,
+    ).toEqual(sharedRows);
+    expect(
+      schema.safeParse({
+        managed: [],
+        needsChoice: [],
+        personalProfiles: withoutShared,
+      }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({
+        managed: [],
+        needsChoice: [],
+        personalProfiles: [{ ...sharedRows[0], shared: "yes" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("answers shared: false on every row of a 1.2 host's preview, so no row is ever offered as removable", () => {
+    const decoded = decodeResponsePayload<{
+      readonly personalProfiles?: readonly object[] | null;
+    }>(
+      previewRegistry,
+      previewV13,
+      previewV12,
+      { managed: [], needsChoice: [], personalProfiles: withoutShared },
+      "preview-response-fixture",
+      "environment.move.stopPreview",
+    );
+    expect(decoded.personalProfiles).toEqual(
+      withoutShared.map((row) => ({ ...row, shared: false })),
+    );
+  });
+
+  it.each([
+    ["null", null],
+    ["omitted", undefined],
+    ["empty", []],
+  ])(
+    "keeps a 1.2 host's %s personal profiles as they were",
+    (_name, personalProfiles) => {
+      const decoded = decodeResponsePayload<{
+        readonly personalProfiles?: readonly object[] | null;
+      }>(
+        previewRegistry,
+        previewV13,
+        previewV12,
+        {
+          managed: [],
+          needsChoice: [],
+          ...(personalProfiles === undefined ? {} : { personalProfiles }),
+        },
+        "preview-response-fixture",
+        "environment.move.stopPreview",
+      );
+      expect(decoded.personalProfiles).toEqual(personalProfiles);
+    },
+  );
+
+  it("answers a 1.1 host's preview with no personal profiles at all", () => {
+    const decoded = decodeResponsePayload<{
+      readonly personalProfiles?: readonly object[] | null;
+    }>(
+      previewRegistry,
+      previewV13,
+      { major: 1, minor: 1 },
+      previewV11Response,
+      "preview-response-fixture",
+      "environment.move.stopPreview",
+    );
+    expect(decoded.personalProfiles).toBeNull();
+  });
+
+  it("serves a 1.2 client the same rows without shared", () => {
+    expect(
+      previewRegistry[1].versions[2].contract.responseSchema.parse({
+        managed: [],
+        needsChoice: [],
+        personalProfiles: sharedRows,
+      }).personalProfiles,
+    ).toEqual(withoutShared);
+  });
+});
+
+describe("environment.move stop@1.2 tells a pressed Skip from an untouched row", () => {
+  it("names 1.2 the latest stop", () => {
+    expect(stopRegistry[1].latestMinor).toBe(2);
+    expect(stopRegistry[1].versions[2].contract.schemaVersion).toEqual(stopV12);
+  });
+
+  it("accepts skip, untouched and signed-in in one request", () => {
+    const parsed = stopRegistry[1].versions[2].contract.requestSchema.parse({
+      choices: legacyStopChoices,
+      profileMode: "keep-personal",
+      profileSignIns: mixedSignIns,
+    });
+    expect(parsed.profileSignIns).toEqual(mixedSignIns);
+  });
+
+  it("refuses a choice kind it does not know", () => {
+    expect(
+      stopRegistry[1].versions[2].contract.requestSchema.safeParse({
+        choices: [],
+        profileMode: "keep-personal",
+        profileSignIns: [
+          {
+            providerId: "claude-code",
+            profileId: "p",
+            signIn: { kind: "remove" },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("does not let a 1.1 request carry untouched", () => {
+    expect(
+      stopRegistry[1].versions[1].contract.requestSchema.safeParse({
+        choices: [],
+        profileMode: "keep-personal",
+        profileSignIns: [
+          {
+            providerId: "claude-code",
+            profileId: "p",
+            signIn: { kind: "untouched" },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("reads every skip a 1.1 client sent as untouched, so an older client never causes a removal", () => {
+    const request = stopRegistry[1].versions[1].contract.requestSchema.parse({
+      choices: legacyStopChoices,
+      profileMode: "keep-personal",
+      profileSignIns: [mixedSignIns[0], mixedSignIns[1]],
+    });
+    expect(
+      upgradeRequestToVersion(stopRegistry, stopV11, stopV12, request),
+    ).toEqual({
+      choices: legacyStopChoices,
+      profileMode: "keep-personal",
+      profileSignIns: [
+        {
+          providerId: "claude-code",
+          profileId: "pressed",
+          signIn: { kind: "untouched" },
+        },
+        mixedSignIns[1],
+      ],
+    });
+  });
+
+  it("reads a 1.0 client's stop as one with no choice at all", () => {
+    const request = stopRegistry[1].versions[0].contract.requestSchema.parse({
+      choices: legacyStopChoices,
+    });
+    expect(
+      upgradeRequestToVersion(
+        stopRegistry,
+        { major: 1, minor: 0 },
+        stopV12,
+        request,
+      ),
+    ).toEqual({
+      choices: legacyStopChoices,
+      profileMode: null,
+      profileSignIns: [],
+    });
+  });
+
+  it("answers a 1.1 host's stop like a 1.2 host's", () => {
+    expect(
+      decodeResponsePayload<EnvironmentMoveStopResponseV11>(
+        stopRegistry,
+        stopV12,
+        stopV11,
+        { outcome: "stopped", profileResults },
+        "stop-response-fixture",
+        "environment.move.stop",
+      ),
+    ).toEqual({ outcome: "stopped", profileResults });
   });
 });

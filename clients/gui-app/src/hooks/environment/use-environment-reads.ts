@@ -11,6 +11,7 @@ import type {
   EnvironmentReviewResponse,
   EnvironmentReviewResponseV11,
   EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
 } from "@traycer/protocol/host/environment-schemas";
 import {
   readNotices,
@@ -66,7 +67,7 @@ export function useEnvironmentStatusRead(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
   enabled: boolean,
-): EnvironmentRead<EnvironmentStatusResponseV12> {
+): EnvironmentRead<EnvironmentStatusResponseV13> {
   const supported = useHostMethodSupport(hostId, "environment.status");
   const query = useHostQuery<HostRpcRegistry, "environment.status">({
     cacheKeyIdentity: undefined,
