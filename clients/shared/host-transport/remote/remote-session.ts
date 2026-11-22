@@ -679,9 +679,7 @@ function createReleasedSignOnSessionAuth(
       const wouldPresentSignIn =
         releasedSignOn.opensReleasedWay() &&
         !hosts.namedReason(hostId) &&
-        (plan.kind === "sign-in" ||
-          signInPlanned() ||
-          remembered() !== null);
+        (plan.kind === "sign-in" || signInPlanned() || remembered() !== null);
       if (confirmRow === null || !wouldPresentSignIn) return;
       confirmationsAsked += 1;
       const asked = confirmationsAsked;

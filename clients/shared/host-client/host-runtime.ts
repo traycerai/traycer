@@ -324,7 +324,8 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     this.renewalsStarted += 1;
     const started = this.renewalsStarted;
     const keyOf = (hostId: string): string => `${userId}\u0000${hostId}`;
-    for (const hostId of hostIds) this.latestRenewal.set(keyOf(hostId), started);
+    for (const hostId of hostIds)
+      this.latestRenewal.set(keyOf(hostId), started);
     void tokens.renew(userId, hostIds).then(
       (renewal) => {
         // A renewal answered after this person left raises nothing for the

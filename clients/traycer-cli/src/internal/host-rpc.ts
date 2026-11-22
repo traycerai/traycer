@@ -433,11 +433,14 @@ export async function callHostRpcAtEndpoint<
   // The same check as `resolveEndpoint`: no token or sign-in goes to a URL
   // that is not this machine's host.
   if (!isValidLocalHostWebsocketUrl(endpoint.websocketUrl)) {
-    logger.warn("Host RPC explicit-endpoint call blocked; websocket URL invalid", {
-      environment: config.environment,
-      method,
-      hostId: endpoint.hostId,
-    });
+    logger.warn(
+      "Host RPC explicit-endpoint call blocked; websocket URL invalid",
+      {
+        environment: config.environment,
+        method,
+        hostId: endpoint.hostId,
+      },
+    );
     throw hostNotRunningCliError();
   }
   return requestAtEndpoint(

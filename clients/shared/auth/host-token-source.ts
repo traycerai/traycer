@@ -431,9 +431,11 @@ export function createHostTokenSource(deps: {
     era: number,
     { signal, asker, replaces }: MintAsk,
   ): Promise<MintResult> => {
-    if (eraOf(userId) !== era) return Promise.resolve(unwritten({ kind: "superseded" }));
+    if (eraOf(userId) !== era)
+      return Promise.resolve(unwritten({ kind: "superseded" }));
     const signInToken = signIn?.(userId) ?? null;
-    if (signInToken === null) return Promise.resolve(unwritten({ kind: "no-sign-in" }));
+    if (signInToken === null)
+      return Promise.resolve(unwritten({ kind: "no-sign-in" }));
     const key = keyOf(userId, hostId);
     const mark = readAccessTokenExpiryMs(signInToken);
     // Keyed by refresh and era too: a mint begun before a refresh or a sign-out must

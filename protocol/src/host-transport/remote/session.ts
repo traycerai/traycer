@@ -6719,7 +6719,8 @@ export class RemoteSession<
       }
       written = write.frame;
       sealedBearer = write.bearer;
-      if (frame.chunked) rememberChunkBearer(connection, frame.seq, write.bearer);
+      if (frame.chunked)
+        rememberChunkBearer(connection, frame.seq, write.bearer);
     }
     const plaintext = encodeMuxFrame(written);
     // Appended before the seal, in pull order: the scheduler runs one write at
