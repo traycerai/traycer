@@ -96,6 +96,7 @@ import {
   NO_ISSUED_HOST_TOKEN_ERA,
   type HostTokenBridgeChange,
   type HostTokenEraReply,
+  type HostTokenAdoptReply,
   type HostTokenObtainReply,
   type HostTokenRenewReply,
   type HostTokenSnapshotReply,
@@ -793,7 +794,7 @@ export function buildHostTokensBridge(): HostTokensBridgeSurface {
         token,
         expectedEra,
         owner,
-      ) as Promise<HostTokenEraReply>,
+      ) as Promise<HostTokenAdoptReply>,
     forgetUser: (userId) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.hostTokensForgetUser,

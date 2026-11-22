@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { HostToken } from "../host-token-store";
 import type { RevalidateOutcome } from "../bearer-revalidator";
 import type { BearerSourceProvider } from "../bearer-source";
 import {
@@ -56,6 +57,17 @@ function signInToken(expiration: number): string {
     "base64url",
   );
   return `header.${payload}.signature`;
+}
+
+/** A host-only token shaped as authn issues it: a JWT whose `iat` says when. */
+function hostTokenIssuedAt(label: string, issuedAtSeconds: number): HostToken {
+  const payload = Buffer.from(
+    JSON.stringify({ iat: issuedAtSeconds, jti: label }),
+  ).toString("base64url");
+  return {
+    token: `header.${payload}.signature`,
+    expiresAtMs: 10_000_000_000,
+  };
 }
 
 function jsonResponse(value: unknown): Response {
@@ -731,7 +743,8 @@ describe("a late refusal of an older mint", () => {
     });
     await source.whenLoaded();
     const hosts = createReleasedHostMemory();
-    const ask = { signal: null, owner: hosts.currentInstance(HOST_ID) };
+    const owner = hosts.currentInstance(HOST_ID);
+    const ask = { signal: null, owner, observedNow: () => owner.observed };
 
     const older = source.obtain(USER_ID, HOST_ID, true, ask);
     await olderAsked.promise;
@@ -768,9 +781,11 @@ describe("how a pair's last mint ended, across host process instances", () => {
     await source.whenLoaded();
     const tokens = trackHostTokenMints(source, hosts);
 
+    const owner = hosts.currentInstance(HOST_ID);
     await tokens.obtain(USER_ID, HOST_ID, true, {
       signal: null,
-      owner: hosts.currentInstance(HOST_ID),
+      owner,
+      observedNow: () => owner.observed,
     });
     expect(tokens.lastFailure(USER_ID, HOST_ID)).toBe("not-a-member");
 
@@ -992,6 +1007,7 @@ describe("an owned ask while a renewal's mint is running", () => {
     const ask = source.obtain(USER_ID, HOST_ID, true, {
       signal: null,
       owner: { hostId: HOST_ID, observed: "100" },
+      observedNow: () => "100",
     });
     renewalMint.resolve({ kind: "ok", token: RENEWED_TOKEN });
 
@@ -1034,11 +1050,13 @@ describe("asks for an observed and an unobserved host process", () => {
     const unknownAsk = source.obtain(USER_ID, HOST_ID, true, {
       signal: null,
       owner: unobserved,
+      observedNow: () => null,
     });
     await vi.waitFor(() => expect(requests).toHaveLength(1));
     const knownAsk = source.obtain(USER_ID, HOST_ID, true, {
       signal: null,
       owner: observed,
+      observedNow: () => "200",
     });
     await vi.waitFor(() => expect(requests).toHaveLength(2));
 
@@ -1055,11 +1073,13 @@ describe("asks for an observed and an unobserved host process", () => {
     const knownAsk = source.obtain(USER_ID, HOST_ID, true, {
       signal: null,
       owner: observed,
+      observedNow: () => "200",
     });
     await vi.waitFor(() => expect(requests).toHaveLength(1));
     const unknownAsk = source.obtain(USER_ID, HOST_ID, true, {
       signal: null,
       owner: unobserved,
+      observedNow: () => null,
     });
     await vi.waitFor(() => expect(requests).toHaveLength(2));
 
@@ -1122,12 +1142,12 @@ describe("an adopted token whose caller stopped wanting it before the write", ()
   });
 });
 
-describe("two adopted tokens for one pair, the older one's write landing last", () => {
+describe("two adopted tokens for one pair, the earlier-issued one's write landing last", () => {
   const HOST_ID = "computer-adopt-write-order";
-  const OLDER = { token: "older-adopted-token", expiresAtMs: 10_000_000 };
-  const NEWER = { token: "newer-adopted-token", expiresAtMs: 10_000_000 };
+  const OLDER = hostTokenIssuedAt("older", 1_000);
+  const NEWER = hostTokenIssuedAt("newer", 1_001);
 
-  it("drops the older adopt's write and keeps the table at the newer token", async () => {
+  it("drops the earlier-issued token's write and keeps the table at the later-issued one", async () => {
     const inner = createMemoryHostTokenPersistence();
     let writes = 0;
     let releaseFirstWrite: () => void = () => undefined;
@@ -1158,5 +1178,243 @@ describe("two adopted tokens for one pair, the older one's write landing last", 
     await olderAdopt;
 
     expect(source.current(USER_ID, HOST_ID)).toEqual(NEWER);
+  });
+});
+
+describe("a minted token's write, ordered by the second authn issued it", () => {
+  const HOST_ID = "computer-write-order";
+  const EARLIER = hostTokenIssuedAt("earlier", 1_000);
+  const LATER = hostTokenIssuedAt("later", 2_000);
+  const LATEST = hostTokenIssuedAt("latest", 3_000);
+
+  interface Rig {
+    readonly source: HostTokenSource;
+    readonly mints: Array<{
+      readonly answer: (outcome: HostTokenMintOutcome) => void;
+    }>;
+  }
+
+  /** A source whose every mint waits for the test, over a file the test may also write. */
+  function sourceOverSharedFile(file: {
+    readonly onWrite: () => Promise<void> | null;
+  }): Rig {
+    const inner = createMemoryHostTokenPersistence();
+    const mints: Rig["mints"] = [];
+    const source = createHostTokenSource({
+      persistence: {
+        load: () => inner.load(),
+        update: async (change) => {
+          await file.onWrite();
+          return inner.update(change);
+        },
+      },
+      mint: () =>
+        new Promise<HostTokenMintOutcome>((resolve) => {
+          mints.push({ answer: resolve });
+        }),
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => 1_000,
+    });
+    return { source, mints };
+  }
+
+  const NO_FILE_WRITER = { onWrite: () => null };
+
+  it("stores nothing for a host process that was replaced while its mint ran, and keeps the token stored for the replacement", async () => {
+    const { source, mints } = sourceOverSharedFile(NO_FILE_WRITER);
+    let observedNow = "process-a";
+    const ownerA = { hostId: HOST_ID, observed: "process-a" };
+    const askA = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: ownerA,
+      observedNow: () => observedNow,
+    });
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    observedNow = "process-b";
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      LATER,
+      source.era(USER_ID),
+      () => true,
+    );
+
+    // A's mint answers last, with a token issued later than the one stored.
+    mints[0].answer({ kind: "ok", token: LATEST });
+    await askA;
+
+    expect(source.current(USER_ID, HOST_ID)).toEqual(LATER);
+  });
+
+  it("does not overwrite a later-issued token another process wrote to the file between the mint and its write, and answers with the one held", async () => {
+    let writeForeignToken: () => Promise<void> | null = () => null;
+    const rig = sourceOverSharedFile({ onWrite: () => writeForeignToken() });
+    const asking = rig.source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: null,
+    });
+    await vi.waitFor(() => expect(rig.mints).toHaveLength(1));
+    // Another process wrote a later-issued token to the shared file.
+    writeForeignToken = () => {
+      writeForeignToken = () => null;
+      return rig.source
+        .adopt(USER_ID, HOST_ID, LATER, rig.source.era(USER_ID), () => true)
+        .then(() => undefined);
+    };
+    rig.mints[0].answer({ kind: "ok", token: EARLIER });
+
+    await expect(asking).resolves.toEqual({ kind: "ok", token: LATER });
+    expect(rig.source.current(USER_ID, HOST_ID)).toEqual(LATER);
+  });
+
+  it("replaces the held token with a fresh mint's token issued a second earlier, once the ask was sent to replace it", async () => {
+    const { source, mints } = sourceOverSharedFile(NO_FILE_WRITER);
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      LATER,
+      source.era(USER_ID),
+      () => true,
+    );
+    const refused = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: null,
+    });
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+
+    mints[0].answer({ kind: "ok", token: EARLIER });
+
+    await expect(refused).resolves.toEqual({ kind: "ok", token: EARLIER });
+    expect(source.current(USER_ID, HOST_ID)).toEqual(EARLIER);
+  });
+
+  it("starts no mint for a host process that is no longer the one observed", async () => {
+    const { source, mints } = sourceOverSharedFile(NO_FILE_WRITER);
+
+    await expect(
+      source.obtain(USER_ID, HOST_ID, true, {
+        signal: null,
+        owner: { hostId: HOST_ID, observed: "process-a" },
+        observedNow: () => "process-b",
+      }),
+    ).resolves.toEqual({ kind: "process-replaced" });
+
+    expect(mints).toHaveLength(0);
+  });
+
+  it("marks a renewal's host delayed when it joined an owned mint declined because that process was replaced, and mints again on the next renewal", async () => {
+    const { source, mints } = sourceOverSharedFile(NO_FILE_WRITER);
+    let observedNow = "process-a";
+    const owned = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: { hostId: HOST_ID, observed: "process-a" },
+      observedNow: () => observedNow,
+    });
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+    const renewing = source.renew(USER_ID, [HOST_ID]);
+    observedNow = "process-b";
+
+    mints[0].answer({ kind: "ok", token: LATER });
+    await owned;
+
+    await expect(renewing).resolves.toEqual({
+      kind: "renewed",
+      delayed: [HOST_ID],
+    });
+    const next = source.renew(USER_ID, [HOST_ID]);
+    await vi.waitFor(() => expect(mints).toHaveLength(2));
+    mints[1].answer({ kind: "ok", token: LATER });
+    await expect(next).resolves.toEqual({ kind: "renewed", delayed: [] });
+  });
+
+  it("leaves the previous token readable, marks nothing and mints again on the next renewal when the table write fails", async () => {
+    const inner = createMemoryHostTokenPersistence();
+    let failNextWrite = false;
+    let mints = 0;
+    const source = createHostTokenSource({
+      persistence: {
+        load: () => inner.load(),
+        update: (change) => {
+          if (failNextWrite) {
+            failNextWrite = false;
+            return Promise.reject(new Error("the table could not be written"));
+          }
+          return inner.update(change);
+        },
+      },
+      mint: () => {
+        mints += 1;
+        const outcome: HostTokenMintOutcome = { kind: "ok", token: LATER };
+        return Promise.resolve(outcome);
+      },
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => 1_000,
+    });
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      EARLIER,
+      source.era(USER_ID),
+      () => true,
+    );
+    failNextWrite = true;
+
+    await expect(source.renew(USER_ID, [HOST_ID])).rejects.toThrow(
+      "the table could not be written",
+    );
+    expect(source.current(USER_ID, HOST_ID)).toEqual(EARLIER);
+
+    await expect(source.renew(USER_ID, [HOST_ID])).resolves.toEqual({
+      kind: "renewed",
+      delayed: [],
+    });
+    expect(mints).toBe(2);
+    expect(source.current(USER_ID, HOST_ID)).toEqual(LATER);
+  });
+
+  it("answers the caller superseded, not the token, when a store listener signs the person out inside the announce", async () => {
+    const { source, mints } = sourceOverSharedFile(NO_FILE_WRITER);
+    source.subscribe(() => {
+      void source.forgetUser(USER_ID);
+    });
+    const asking = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: null,
+    });
+    await vi.waitFor(() => expect(mints).toHaveLength(1));
+
+    mints[0].answer({ kind: "ok", token: LATER });
+
+    await expect(asking).resolves.toEqual({ kind: "superseded" });
+  });
+
+  it("keeps the newer refresh's mark when the older refresh's mint answers last, so the next renewal under the newer sign-in mints nothing", async () => {
+    const issuedTogether = hostTokenIssuedAt("together", 1_000);
+    let signIn = signInToken(2_000_000);
+    const requests: Array<(outcome: HostTokenMintOutcome) => void> = [];
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        new Promise<HostTokenMintOutcome>((resolve) => {
+          requests.push(resolve);
+        }),
+      signIn: (userId) => (userId === USER_ID ? signIn : null),
+      now: () => 1_000,
+    });
+    const older = source.renew(USER_ID, [HOST_ID]);
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    signIn = signInToken(2_100_000);
+    const newer = source.renew(USER_ID, [HOST_ID]);
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+
+    requests[1]({ kind: "ok", token: issuedTogether });
+    await newer;
+    requests[0]({ kind: "ok", token: issuedTogether });
+    await older;
+
+    await expect(source.renew(USER_ID, [HOST_ID])).resolves.toEqual({
+      kind: "already-current",
+    });
+    expect(requests).toHaveLength(2);
   });
 });

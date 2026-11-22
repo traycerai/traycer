@@ -254,7 +254,11 @@ function mintInBackground(
     userId,
     hostId,
     tokens.heldRefused(userId, hostId),
-    { signal: null, owner },
+    {
+      signal: null,
+      owner,
+      observedNow: () => tokens.hosts.currentInstance(hostId).observed,
+    },
   );
   void minted.then(
     (outcome) => {
@@ -350,6 +354,7 @@ export function hostTokenBearerFor(
       return heldWhileAuthnUnreachable(tokens, userId, hostId) === null
         ? null
         : lease;
+    // The lease carries no minted token: it reads the one held when it presents.
     return (await minted).kind === "ok" ? lease : null;
   };
 }
@@ -557,9 +562,12 @@ function revalidatorWithBounds(
     const outcome = await deps.tokens.obtain(userId, deps.hostId, true, {
       signal: null,
       owner,
+      observedNow: () => deps.hosts.currentInstance(deps.hostId).observed,
     });
     if (outcome.kind === "ok") return "rotated";
-    if (outcome.kind === "no-sign-in") return "network-error";
+    // No mint started for a replaced process: the redial reads the current one.
+    if (outcome.kind === "no-sign-in" || outcome.kind === "process-replaced")
+      return "network-error";
     // The era ended: only the same person, signed in again, gets one more ask.
     if (outcome.kind === "superseded")
       return !eraRetried && deps.currentUserId() === userId

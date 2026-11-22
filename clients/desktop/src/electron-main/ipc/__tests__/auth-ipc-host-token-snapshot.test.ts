@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createHostTokenSource,
   createMemoryHostTokenPersistence,
+  type HostTokenMintOutcome,
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { HostToken } from "@traycer-clients/shared/auth/host-token-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
 import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/create-remote-transport";
@@ -15,6 +17,7 @@ import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/clie
 import { createDesktopHostTokenSource } from "../../../renderer-shell/desktop-host-tokens";
 import {
   NO_ISSUED_HOST_TOKEN_ERA,
+  type HostTokenBridgeChange,
   type HostTokensBridgeSurface,
 } from "../../../ipc-contracts/host-token-types";
 import { RunnerHostInvoke } from "../../../ipc-contracts/ipc-channels";
@@ -198,16 +201,20 @@ describe("the hostTokensSnapshot handler", () => {
   });
 });
 
-/** A source whose table writes can be held, as a slow disk would: the first `writes()` count is the held one. */
+/** A source whose table writes can be held, as a slow disk would. */
 function sourceWithHoldableWrites(): {
   readonly source: HostTokenSource;
   readonly writes: () => number;
+  /** Holds every write from now on, until `release`. */
   readonly hold: () => void;
+  /** Holds only the next write; later writes pass, until `release`. */
+  readonly holdNextWrite: () => void;
   readonly release: () => void;
 } {
   const inner = createMemoryHostTokenPersistence();
   let writes = 0;
   let holding = false;
+  let holdingNext = false;
   let release: () => void = () => undefined;
   let gate = Promise.resolve();
   const source = createHostTokenSource({
@@ -215,7 +222,10 @@ function sourceWithHoldableWrites(): {
       load: () => inner.load(),
       update: async (change) => {
         writes += 1;
-        if (holding) await gate;
+        if (holding || holdingNext) {
+          holdingNext = false;
+          await gate;
+        }
         return inner.update(change);
       },
     },
@@ -223,14 +233,21 @@ function sourceWithHoldableWrites(): {
     signIn: null,
     now: () => Date.now(),
   });
+  const newGate = (): void => {
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  };
   return {
     source,
     writes: () => writes,
     hold: () => {
       holding = true;
-      gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      newGate();
+    },
+    holdNextWrite: () => {
+      holdingNext = true;
+      newGate();
     },
     release: () => {
       holding = false;
@@ -388,5 +405,233 @@ describe("the hostTokensAdopt handler", () => {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
     }
+  });
+});
+
+function invokeHandler(channel: string): InvokeHandler {
+  const handler = handlers.get(channel);
+  if (handler === undefined) throw new Error(`${channel} not registered`);
+  return handler;
+}
+
+/**
+ * One window's source over `main`, through main's real handlers: what the
+ * window asks and adopts crosses as the IPC carries it, and every change main
+ * announces reaches the window as the bridge's change event.
+ */
+function windowOverMain(main: HostTokenSource): HostTokenSource {
+  let onChange: ((change: HostTokenBridgeChange) => void) | null = null;
+  main.subscribe(({ userId, hostId }) => {
+    onChange?.({
+      userId,
+      hostId,
+      token: main.current(userId, hostId),
+      era: main.era(userId),
+    });
+  });
+  const bridge: HostTokensBridgeSurface = {
+    era: (userId) => main.era(userId),
+    obtain: async (userId, hostId, fresh, expectedEra, owner) => {
+      const reply: unknown = await invokeHandler(
+        RunnerHostInvoke.hostTokensObtain,
+      )(RENDERER, userId, hostId, fresh, expectedEra, owner);
+      return {
+        outcome: Reflect.get(Object(reply), "outcome"),
+        held: Reflect.get(Object(reply), "held") === true,
+        era: Reflect.get(Object(reply), "era"),
+      };
+    },
+    renew: async (userId) => ({
+      renewal: { kind: "already-current" },
+      era: main.era(userId),
+    }),
+    adopt: async (userId, hostId, token, expectedEra, owner) => {
+      const reply: unknown = await invokeHandler(
+        RunnerHostInvoke.hostTokensAdopt,
+      )(RENDERER, userId, hostId, token, expectedEra, owner);
+      return {
+        kept: Reflect.get(Object(reply), "kept") === true,
+        era: Reflect.get(Object(reply), "era"),
+      };
+    },
+    forgetUser: async (userId) => {
+      await main.forgetUser(userId);
+      return { era: main.era(userId) };
+    },
+    snapshot: async () => ({
+      userId: null,
+      era: NO_ISSUED_HOST_TOKEN_ERA,
+      tokens: [],
+    }),
+    subscribe: (next) => {
+      onChange = next;
+      return { dispose: () => undefined };
+    },
+  };
+  return createDesktopHostTokenSource(bridge);
+}
+
+/** A host-only token shaped as authn issues it: a JWT whose `iat` says when. */
+function issuedAt(label: string, issuedAtSeconds: number): HostToken {
+  const payload = Buffer.from(
+    JSON.stringify({ iat: issuedAtSeconds, jti: label }),
+  ).toString("base64url");
+  return { token: `header.${payload}.signature`, expiresAtMs: 9_000_000_000 };
+}
+
+describe("a window's copy of what main wrote", () => {
+  const OLDER = issuedAt("older", 1_000);
+  const NEWER = issuedAt("newer", 2_000);
+
+  it("does not install an adopted token main declined because the host process was replaced before the write", async () => {
+    const hostId = "host-window-declined-adopt";
+    const rig = sourceWithHoldableWrites();
+    processReleasedHosts.observeInstance(hostId, "100");
+    registerFor(rig.source, "user-a");
+    const window = windowOverMain(rig.source);
+    await window.whenLoaded();
+    rig.hold();
+
+    const adopting = window.adopt(
+      "user-a",
+      hostId,
+      NEWER,
+      window.era("user-a"),
+      () => true,
+    );
+    await vi.waitFor(() => expect(rig.writes()).toBe(1));
+    processReleasedHosts.observeInstance(hostId, "200");
+    rig.release();
+
+    await expect(adopting).resolves.toBe(false);
+    expect(window.current("user-a", hostId)).toBeNull();
+    expect(rig.source.current("user-a", hostId)).toBeNull();
+  });
+
+  it("does not install a minted token main declined for a host process replaced while its mint ran", async () => {
+    const hostId = "host-window-declined-mint";
+    const requests: Array<(outcome: HostTokenMintOutcome) => void> = [];
+    const main = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        new Promise<HostTokenMintOutcome>((resolve) => {
+          requests.push(resolve);
+        }),
+      signIn: (userId) => (userId === "user-a" ? "sign-in-token" : null),
+      now: () => Date.now(),
+    });
+    processReleasedHosts.observeInstance(hostId, "100");
+    registerFor(main, "user-a");
+    const window = windowOverMain(main);
+    await window.whenLoaded();
+
+    const asking = window.obtain("user-a", hostId, true, {
+      signal: null,
+      owner: { hostId, observed: "100" },
+      observedNow: () => "100",
+    });
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    processReleasedHosts.observeInstance(hostId, "200");
+    requests[0]({ kind: "ok", token: NEWER });
+    await asking;
+
+    expect(main.current("user-a", hostId)).toBeNull();
+    expect(window.current("user-a", hostId)).toBeNull();
+  });
+
+  it("leaves both windows and main at the later-issued token when the earlier-issued one's adopt reaches main last, for a host only the relay reaches", async () => {
+    const hostId = "host-relay-only-two-windows";
+    const rig = sourceWithHoldableWrites();
+    registerFor(rig.source, "user-a");
+    const windowA = windowOverMain(rig.source);
+    const windowB = windowOverMain(rig.source);
+    await Promise.all([windowA.whenLoaded(), windowB.whenLoaded()]);
+    rig.holdNextWrite();
+
+    const earlier = windowA.adopt(
+      "user-a",
+      hostId,
+      OLDER,
+      windowA.era("user-a"),
+      () => true,
+    );
+    await vi.waitFor(() => expect(rig.writes()).toBe(1));
+    await windowB.adopt(
+      "user-a",
+      hostId,
+      NEWER,
+      windowB.era("user-a"),
+      () => true,
+    );
+    rig.release();
+    await earlier;
+
+    expect(rig.source.current("user-a", hostId)).toEqual(NEWER);
+    expect(windowA.current("user-a", hostId)).toEqual(NEWER);
+    expect(windowB.current("user-a", hostId)).toEqual(NEWER);
+  });
+
+  it("answers process-replaced and records nothing when the window asks for a host process main no longer observes, and mints for the process the window observes next", async () => {
+    const hostId = "host-window-out-of-sync";
+    let mints = 0;
+    const main = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mints += 1;
+        return Promise.resolve({ kind: "ok", token: OLDER });
+      },
+      signIn: (userId) => (userId === "user-a" ? "sign-in-token" : null),
+      now: () => Date.now(),
+    });
+    // Main observes the replacement before the window does.
+    processReleasedHosts.observeInstance(hostId, "process-b");
+    registerFor(main, "user-a");
+    const window = windowOverMain(main);
+    await window.whenLoaded();
+    const staleOwner = { hostId, observed: "process-a" };
+
+    await expect(
+      window.obtain("user-a", hostId, true, {
+        signal: null,
+        owner: staleOwner,
+        observedNow: () => "process-a",
+      }),
+    ).resolves.toEqual({ kind: "process-replaced" });
+    expect(mints).toBe(0);
+    expect(window.lastFailureOf("user-a", staleOwner)).toBeNull();
+
+    const nextOwner = { hostId, observed: "process-b" };
+    await expect(
+      window.obtain("user-a", hostId, true, {
+        signal: null,
+        owner: nextOwner,
+        observedNow: () => "process-b",
+      }),
+    ).resolves.toEqual({ kind: "ok", token: OLDER });
+    expect(mints).toBe(1);
+  });
+
+  it("installs the token main held for a single window's obtain and adopt, as before", async () => {
+    const hostId = "host-single-window-guard";
+    const main = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "ok", token: OLDER }),
+      signIn: (userId) => (userId === "user-a" ? "sign-in-token" : null),
+      now: () => Date.now(),
+    });
+    registerFor(main, "user-a");
+    const window = windowOverMain(main);
+    await window.whenLoaded();
+
+    await expect(
+      window.obtain("user-a", hostId, true, { signal: null, owner: null }),
+    ).resolves.toEqual({ kind: "ok", token: OLDER });
+    expect(window.current("user-a", hostId)).toEqual(OLDER);
+
+    await expect(
+      window.adopt("user-a", hostId, NEWER, window.era("user-a"), () => true),
+    ).resolves.toBe(true);
+    expect(window.current("user-a", hostId)).toEqual(NEWER);
+    expect(main.current("user-a", hostId)).toEqual(NEWER);
   });
 });

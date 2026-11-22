@@ -27,6 +27,13 @@ export interface HostTokenObtainOwner {
 
 export interface HostTokenObtainReply extends HostTokenEraReply {
   readonly outcome: HostTokenMintOutcome;
+  /** The outcome's token is the one main holds for the pair as it replies. */
+  readonly held: boolean;
+}
+
+export interface HostTokenAdoptReply extends HostTokenEraReply {
+  /** Main wrote the adopted token. */
+  readonly kept: boolean;
 }
 
 export interface HostTokenRenewReply extends HostTokenEraReply {
@@ -84,7 +91,7 @@ export interface HostTokensBridgeSurface {
     token: HostToken,
     expectedEra: number,
     owner: HostTokenObtainOwner,
-  ): Promise<HostTokenEraReply>;
+  ): Promise<HostTokenAdoptReply>;
   forgetUser(userId: string): Promise<HostTokenEraReply>;
   snapshot(): Promise<HostTokenSnapshotReply>;
   subscribe(handler: (change: HostTokenBridgeChange) => void): {

@@ -296,14 +296,31 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       whenLoaded: () => stored.whenLoaded(),
       lastFailureOf: (id, owner) => stored.lastFailureOf(id, owner),
       obtain: async (id, hostId, fresh, { signal, owner: mintOwner }) => {
-        const owner = mintOwner ?? hosts.currentInstance(hostId);
+        const askFor = (asker: HostInstance): Promise<HostTokenMintOutcome> =>
+          stored
+            .obtain(id, hostId, fresh, {
+              signal: signal ?? signIn.signal,
+              owner: asker,
+              observedNow: () => hosts.currentInstance(hostId).observed,
+            })
+            .catch((): HostTokenMintOutcome => ({
+              kind: "unavailable",
+              detail: "host-only token not saved",
+            }));
+        let owner = mintOwner ?? hosts.currentInstance(hostId);
         const startedAt = nextEvent();
-        const outcome: HostTokenMintOutcome = await stored
-          .obtain(id, hostId, fresh, { signal: signal ?? signIn.signal, owner })
-          .catch((): HostTokenMintOutcome => ({
-            kind: "unavailable",
-            detail: "host-only token not saved",
-          }));
+        let outcome = await askFor(owner);
+        // The process was replaced before the mint could start: once more, for the
+        // process observed now.
+        if (outcome.kind === "process-replaced") {
+          owner = hosts.currentInstance(hostId);
+          outcome = await askFor(owner);
+          if (outcome.kind === "process-replaced")
+            outcome = {
+              kind: "unavailable",
+              detail: "the host process was replaced",
+            };
+        }
         if (outlived(owner, startedAt)) return outcome;
         if (outcome.kind === "ok") mintedAt.set(owner, startedAt);
         if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
@@ -354,6 +371,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     hostId: string,
     outcome: HostTokenMintOutcome,
   ): CliHostBearer =>
+    // The bearer carries no minted token: bearerOf reads the one held when it presents.
     outcome.kind === "ok"
       ? { kind: "ok", bearer: bearerOf(hostId) }
       : { kind: "failed", failure: outcome };

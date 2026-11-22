@@ -146,6 +146,7 @@ export function hostTokenFailureCliError(
         details: null,
         exitCode: 1,
       });
+    case "process-replaced":
     case "unavailable":
       return cliError({
         code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,

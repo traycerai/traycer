@@ -29,6 +29,7 @@ import {
 } from "../../ipc-contracts/ipc-channels";
 import {
   NO_ISSUED_HOST_TOKEN_ERA,
+  type HostTokenAdoptReply,
   type HostTokenEraReply,
   type HostTokenObtainOwner,
   type HostTokenObtainReply,
@@ -244,13 +245,26 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       const asked = obtainOwnerOf(owner);
       const outcome: HostTokenMintOutcome =
         tokens.era(userId) === expectedEra
-          ? await tokens.obtain(userId, hostId, fresh, {
-              signal: null,
-              owner:
-                asked === null ? null : { hostId, observed: asked.observed },
-            })
+          ? await tokens.obtain(
+              userId,
+              hostId,
+              fresh,
+              asked === null
+                ? { signal: null, owner: null }
+                : {
+                    signal: null,
+                    owner: { hostId, observed: asked.observed },
+                    // Main's own observation, read at the write.
+                    observedNow: () =>
+                      processReleasedHosts.currentInstance(hostId).observed,
+                  },
+            )
           : { kind: "superseded" };
-      return { outcome, era: tokens.era(userId) };
+      // The window installs a token only if it is the one main holds now.
+      const held =
+        outcome.kind === "ok" &&
+        tokens.current(userId, hostId)?.token === outcome.token.token;
+      return { outcome, held, era: tokens.era(userId) };
     },
   );
   bridge.handleInvoke(
@@ -285,7 +299,7 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       token: unknown,
       expectedEra: unknown,
       owner: unknown,
-    ): Promise<HostTokenEraReply> => {
+    ): Promise<HostTokenAdoptReply> => {
       assertString(userId, "hostTokensAdopt.userId");
       assertString(hostId, "hostTokensAdopt.hostId");
       assertNumber(expectedEra, "hostTokensAdopt.expectedEra");
@@ -296,7 +310,7 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       // `null` on both sides for life, so there only the era and the order
       // apply. Whether the window retired the attempt for another reason main
       // cannot see; the token is still this person's for this process and era.
-      await tokens.adopt(
+      const kept = await tokens.adopt(
         userId,
         hostId,
         hostTokenOf(token),
@@ -304,7 +318,7 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
         () =>
           processReleasedHosts.currentInstance(hostId).observed === observed,
       );
-      return { era: tokens.era(userId) };
+      return { kept, era: tokens.era(userId) };
     },
   );
   bridge.handleInvoke(

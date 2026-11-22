@@ -11,6 +11,7 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
 import { createCliHostTokens } from "../cli-host-tokens";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 
 const state = vi.hoisted(() => {
@@ -266,5 +267,29 @@ describe("createCliHostTokens refusals that end a command", () => {
     } finally {
       now.mockRestore();
     }
+  });
+
+  it("asks once more for the host process observed now when the process was replaced before the mint started, and the command goes on", async () => {
+    const hostId = "host-replaced-before-mint";
+    processReleasedHosts.observeInstance(hostId, "process-a");
+    const ending: string[] = [];
+    const tokens = createCliHostTokens({
+      lease: new MutableBearerLease("signin", "user-1"),
+      refresh: async () => "network-error",
+      signal: null,
+    });
+    await tokens.whenLoaded();
+    tokens.onRefusalEndingCommand((id, failure) => {
+      ending.push(`${id}:${failure.kind}`);
+    });
+
+    // The host is replaced after the wrapper read the process it asks for and
+    // before the mint starts.
+    const minting = tokens.mintFresh(hostId, null);
+    processReleasedHosts.observeInstance(hostId, "process-b");
+
+    await expect(minting).resolves.toMatchObject({ kind: "ok" });
+    expect(state.mint).toHaveBeenCalledTimes(1);
+    expect(ending).toEqual([]);
   });
 });
