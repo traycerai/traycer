@@ -6761,8 +6761,8 @@ export class RemoteSession<
       : writtenCredentialBearer(frame);
     const write =
       carried === null
-          ? null
-          : this.credentialWriteNow(connection, frame, carried);
+        ? null
+        : this.credentialWriteNow(connection, frame, carried);
     if (write === null) {
       this.dropUnwritableCredential(generation);
       return;
