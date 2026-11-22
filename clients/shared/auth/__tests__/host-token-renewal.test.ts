@@ -117,7 +117,7 @@ describe("host-token renewal", () => {
       tokens.renew(USER_ID, HOST_IDS),
       tokens.renew(USER_ID, HOST_IDS),
     ]);
-    const bearerBeforeRotation = streamBearer(HOST_IDS[0]);
+    const bearerBeforeRotation = streamBearer(HOST_IDS[0], () => true);
     if (bearerBeforeRotation === null)
       throw new Error("host token is unavailable");
     expect(bearerBeforeRotation.getBearerToken()).toBe("host-token-1");

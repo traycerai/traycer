@@ -20,6 +20,7 @@ import {
   type SignedInWatch,
 } from "../host-token-sign-out";
 import { hostTokenBearer, trackHostTokenMints } from "../host-token-lease";
+import { createReleasedHostMemory } from "../../host-transport/released-sign-on";
 
 const USER_A = "user-a";
 
@@ -250,7 +251,10 @@ describe("host-token source per-person eras", () => {
       announced.push(`${userId}:${hostId}`);
     });
 
-    const pending = tokens.obtain(USER_A, "computer-a", false, null);
+    const pending = tokens.obtain(USER_A, "computer-a", false, {
+      signal: null,
+      owner: null,
+    });
     await started.promise;
     await tokens.forgetUser(USER_A);
     announced.length = 0;
@@ -283,7 +287,10 @@ describe("host-token source per-person eras", () => {
       announced.push(`${userId}:${hostId}`);
     });
 
-    const pending = tokens.obtain(USER_A, "computer-a", false, null);
+    const pending = tokens.obtain(USER_A, "computer-a", false, {
+      signal: null,
+      owner: null,
+    });
     await started.promise;
     await tokens.forgetUser(USER_A);
     announced.length = 0;
@@ -352,10 +359,16 @@ describe("host-token source per-person eras", () => {
       now: () => 0,
     });
 
-    const first = tokens.obtain(USER_A, "computer-a", false, null);
+    const first = tokens.obtain(USER_A, "computer-a", false, {
+      signal: null,
+      owner: null,
+    });
     await firstStarted.promise;
     await tokens.forgetUser(USER_A);
-    const second = tokens.obtain(USER_A, "computer-a", false, null);
+    const second = tokens.obtain(USER_A, "computer-a", false, {
+      signal: null,
+      owner: null,
+    });
     await secondStarted.promise;
     secondAnswer.resolve({
       kind: "ok",
@@ -435,7 +448,10 @@ describe("host-token source per-person eras", () => {
       announced.push(`${userId}:${hostId}`);
     });
 
-    const pending = tokens.obtain(USER_A, "computer-a", false, null);
+    const pending = tokens.obtain(USER_A, "computer-a", false, {
+      signal: null,
+      owner: null,
+    });
     await mintStarted.promise;
     answer.resolve({
       kind: "ok",
@@ -485,10 +501,13 @@ describe("host-token source per-person eras", () => {
       signIn: null,
       now: () => Date.now(),
     });
-    const held = await tokens.obtain(USER_A, "computer-a", false, null);
+    const held = await tokens.obtain(USER_A, "computer-a", false, {
+      signal: null,
+      owner: null,
+    });
     expect(held.kind).toBe("ok");
     const bearer = hostTokenBearer(
-      trackHostTokenMints(tokens),
+      trackHostTokenMints(tokens, createReleasedHostMemory()),
       () => ({
         identity: { userId: USER_A },
         getBearerToken: () => "sign-in-token",
@@ -496,15 +515,18 @@ describe("host-token source per-person eras", () => {
       "computer-a",
       () => undefined,
     );
-    expect(bearer("computer-a")).not.toBeNull();
+    expect(bearer("computer-a", () => true)).not.toBeNull();
 
     const forgetting = tokens.forgetUser(USER_A);
     await updateStarted.promise;
 
     expect(tokens.current(USER_A, "computer-a")).toBeNull();
-    const obtain = tokens.obtain(USER_A, "computer-a", false, null);
+    const obtain = tokens.obtain(USER_A, "computer-a", false, {
+      signal: null,
+      owner: null,
+    });
     await expect(obtain).resolves.toEqual({ kind: "no-sign-in" });
-    expect(bearer("computer-a")).toBeNull();
+    expect(bearer("computer-a", () => true)).toBeNull();
     expect(mintCalls).toBe(0);
 
     releaseUpdate.resolve();
@@ -540,7 +562,10 @@ describe("host-token source per-person eras", () => {
       now: () => 0,
     });
 
-    const pending = tokens.obtain(USER_A, "computer-a", false, null);
+    const pending = tokens.obtain(USER_A, "computer-a", false, {
+      signal: null,
+      owner: null,
+    });
     const forgetting = tokens.forgetUser(USER_A);
     load.resolve(initialTable);
     const outcome = await pending;

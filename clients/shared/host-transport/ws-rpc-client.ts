@@ -896,7 +896,8 @@ export class WsRpcClient<
     session: LocalUnarySession<Registry>,
   ): HostInstance | null {
     const owner = this.sessionOwners.get(session);
-    if (owner !== undefined && this.releasedHosts.isCurrent(owner)) return owner;
+    if (owner !== undefined && this.releasedHosts.isCurrent(owner))
+      return owner;
     this.sessions.fail(sessionKey, session);
     session.releaseIfIdle();
     return null;
@@ -1293,7 +1294,11 @@ export class WsRpcClient<
         const live = this.releasedHosts.isCurrent(instance);
         const releasedWay =
           live &&
-          this.answersReleasedWay(authority, usesSessionGrant, ackFrame.details);
+          this.answersReleasedWay(
+            authority,
+            usesSessionGrant,
+            ackFrame.details,
+          );
         // Spent or not: only the recovery's branch decides whether it is reported.
         const signInRefused =
           live &&

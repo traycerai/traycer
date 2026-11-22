@@ -1755,7 +1755,8 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly endpoint: HostEndpointProvider;
   /** `WsStreamClientOptions.hostId`: when set, the only host this session dials. */
   readonly boundHostId: string | null;
-  readonly bearer: HostBearerSourceProvider;
+  /** The client's bearer with this session already bound as the caller of any mint a read starts. */
+  readonly bearer: (hostId: string) => OpenFrameBearerSource | null;
   readonly localOpenAuth: LocalOpenAuth | undefined;
   /** The only door a session reaches, fenced by host instance. */
   readonly door: InstanceDoor | undefined;
@@ -4128,7 +4129,6 @@ class StreamSession<
     this.clockParkUnsubscribe = null;
     unsubscribe();
   }
-
 
   /** The bearer the next open frame to `hostId` would carry, or null if none is available. */
   private currentBearerToken(hostId: string | null): string | null {

@@ -58,7 +58,10 @@ export interface InstanceDoor {
   /** A stale instance is credited nothing; its release does nothing. */
   readonly admitted: (instance: HostInstance) => DoorAdmissionRelease;
   /** A stale instance's refusal raises no cover and is not reported. */
-  readonly refused: (details: FatalErrorDetails, instance: HostInstance) => void;
+  readonly refused: (
+    details: FatalErrorDetails,
+    instance: HostInstance,
+  ) => void;
 }
 
 const NO_ADMISSION: DoorAdmissionRelease = () => {};
@@ -75,7 +78,9 @@ export function instanceDoor(
 ): InstanceDoor {
   return {
     admitted: (instance) =>
-      memory.isCurrent(instance) ? door.admitted(instance.hostId) : NO_ADMISSION,
+      memory.isCurrent(instance)
+        ? door.admitted(instance.hostId)
+        : NO_ADMISSION,
     refused: (details, instance) => {
       if (memory.isCurrent(instance)) door.refused(details, instance.hostId);
     },

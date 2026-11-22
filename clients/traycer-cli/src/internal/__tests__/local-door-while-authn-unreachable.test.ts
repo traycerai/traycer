@@ -43,7 +43,10 @@ const WAIT = { timeout: 2_000, interval: 10 };
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000;
 
 type DoorMode =
-  "unavailable" | "unavailable-once" | "not-admitted" | "black-hole";
+  | "unavailable"
+  | "unavailable-once"
+  | "not-admitted"
+  | "black-hole";
 
 const harness = vi.hoisted(() => {
   class ScriptSocket implements StreamWebSocketLike {

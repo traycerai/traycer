@@ -53,8 +53,10 @@ export type HostInstanceOwners = Pick<
  * instance: how its last mint ended, and which held token it refused as
  * expired. Both belong to the instance, so a replaced one starts with neither.
  */
-export interface TrackedHostTokens
-  extends Pick<HostTokenAccess, "current" | "obtain" | "loaded" | "whenLoaded"> {
+export interface TrackedHostTokens extends Pick<
+  HostTokenAccess,
+  "current" | "obtain" | "loaded" | "whenLoaded"
+> {
   readonly hosts: HostInstanceOwners;
   /** `lastFailureOf` for the host's current instance. */
   readonly lastFailure: (
@@ -113,7 +115,8 @@ export function trackHostTokenMints(
         .get(hosts.currentInstance(hostId))
         ?.get(userId);
       return (
-        refused !== undefined && tokens.current(userId, hostId)?.token === refused
+        refused !== undefined &&
+        tokens.current(userId, hostId)?.token === refused
       );
     },
   };
@@ -281,7 +284,10 @@ export function hostTokenBearer(
   signIn: BearerSourceProvider,
   hostId: string,
   onState: HostTokenStateSink,
-): (selectedHostId: string, caller: MintCaller) => OpenFrameBearerSource | null {
+): (
+  selectedHostId: string,
+  caller: MintCaller,
+) => OpenFrameBearerSource | null {
   const leases = new WeakMap<OpenFrameBearerSource, OpenFrameBearerSource>();
   return (selectedHostId, caller) => {
     if (selectedHostId !== hostId) return null;
@@ -507,8 +513,7 @@ function boundedRecovery(deps: HostTokenRevalidatorDeps): {
 } {
   let sequence = recoverySequence();
   return {
-    forCaller: (caller) =>
-      revalidatorWithBounds(deps, () => sequence, caller),
+    forCaller: (caller) => revalidatorWithBounds(deps, () => sequence, caller),
     admitted: () => {
       sequence = recoverySequence();
     },
@@ -532,12 +537,10 @@ function revalidatorWithBounds(
     report: HostTokenStateSink,
   ): Promise<RevalidateOutcome> => {
     const held = deps.tokens.current(userId, deps.hostId);
-    const outcome = await deps.tokens.obtain(
-      userId,
-      deps.hostId,
-      true,
-      { signal: null, owner },
-    );
+    const outcome = await deps.tokens.obtain(userId, deps.hostId, true, {
+      signal: null,
+      owner,
+    });
     if (outcome.kind === "ok") return "rotated";
     if (outcome.kind === "no-sign-in") return "network-error";
     // The era ended: only the same person, signed in again, gets one more ask.

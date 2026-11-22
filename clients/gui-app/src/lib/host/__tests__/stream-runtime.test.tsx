@@ -210,7 +210,10 @@ vi.mock(
 
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
 import { retryHostDoor } from "@/lib/host/host-door-retry";
-import { heldHostTokenSource, inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
+import {
+  heldHostTokenSource,
+  inertHostTokenSource,
+} from "../../../../__tests__/create-fake-runner-host";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   useStreamHostId,

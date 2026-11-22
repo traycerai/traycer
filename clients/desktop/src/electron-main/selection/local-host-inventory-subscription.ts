@@ -460,7 +460,10 @@ export function createLocalHostInventoryStreamClient(deps: {
   return (endpoint, userId) => {
     if (hostVersionNeedsUpdate(endpoint.version, MINIMUM_HOST_VERSION))
       return null;
-    const hostTokens = trackHostTokenMints(deps.hostTokens, processReleasedHosts);
+    const hostTokens = trackHostTokenMints(
+      deps.hostTokens,
+      processReleasedHosts,
+    );
     const client = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,

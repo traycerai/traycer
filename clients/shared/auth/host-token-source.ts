@@ -155,7 +155,10 @@ export interface HostTokenSource {
    * (see {@link HostMintRecords}): `null` until one failed, and again once one
    * started later succeeds or the person's era moves.
    */
-  lastFailureOf(userId: string, owner: HostInstance): HostTokenMintFailure | null;
+  lastFailureOf(
+    userId: string,
+    owner: HostInstance,
+  ): HostTokenMintFailure | null;
   /** One refresh buys at most one token per host, however many windows ask. */
   renew(userId: string, hostIds: readonly string[]): Promise<HostTokenRenewal>;
   /** Dropped if the person signed out or was replaced since `era`. */

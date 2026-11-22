@@ -20,6 +20,7 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { createRemoteHostTransport } from "../remote/create-remote-transport";
+import { createReleasedHostMemory } from "../released-sign-on";
 import { retireAllRemoteSessions } from "../remote/active-remote-sessions";
 import { RemoteMuxTestPeer } from "./remote-mux-test-peer";
 import {
@@ -94,6 +95,7 @@ async function harness(
   const session = hostTokenSessionAuth(
     {
       tokens,
+      hosts: createReleasedHostMemory(),
       currentUserId: () => USER_ID,
       hostId: HOST_ID,
       signInRecovery: recovery,

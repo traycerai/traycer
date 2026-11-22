@@ -330,6 +330,7 @@ describe("relay door sign-in refusal", () => {
     }
   });
 
+  // Measured 2.0 s under parallel load (load average 5).
   it("refreshes the sign-in once across a dial sequence, then backs off through every later 401 with no refresh, no state and no end", async () => {
     const test = signInRelayHarness(
       () => new Response("", { status: 401 }),
@@ -357,8 +358,9 @@ describe("relay door sign-in refusal", () => {
       test.transport.session.close();
       retireAllRemoteSessions();
     }
-  });
+  }, 10_000);
 
+  // Measured 4.6-6.4 s under parallel load (load average 5): waits out the relay's own backoff.
   it("never refreshes the sign-in a second time when the attach grant is refused after a released sign-in open's recovery rotated it", async () => {
     // The host refuses the host-token open, then the sign-in open, both bare.
     // The sign-in's refusal rotates the sign-in; the attach that follows asks

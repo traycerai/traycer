@@ -496,7 +496,12 @@ function deleteOneWorktree(input: {
                 }
                 finish({ kind: "uncertain" });
               },
-              onConnectionStatus: (status, _reason, _retryCause, continuity) => {
+              onConnectionStatus: (
+                status,
+                _reason,
+                _retryCause,
+                continuity,
+              ) => {
                 if (continuity === "held") return;
                 // A drop or close after the request was sent arrives as
                 // `onDroppedAfterStart`, so one here came before it: nothing
@@ -505,7 +510,10 @@ function deleteOneWorktree(input: {
                 // waited out; the stream entering backoff, or a close, fails
                 // it, so the summary toast and the cache invalidation still
                 // fire. `connecting`/`open` are the normal startup.
-                if (status === "reconnecting" && deleteClient?.dialsNow() === true)
+                if (
+                  status === "reconnecting" &&
+                  deleteClient?.dialsNow() === true
+                )
                   return;
                 if (status !== "reconnecting" && status !== "closed") return;
                 finish({ kind: "failed", reason: NEVER_REACHED_HOST_REASON });

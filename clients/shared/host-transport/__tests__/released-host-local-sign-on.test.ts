@@ -2514,14 +2514,16 @@ describe("released personal host, local stream", () => {
         const created = makeStubSocketFactory();
         const createdAt: number[] = [];
         const factory: IStreamWebSocketFactory = {
-          create: () => {
+          create: (url, priority) => {
             createdAt.push(Date.now());
-            return created.factory.create();
+            return created.factory.create(url, priority);
           },
         };
         const { sockets } = created;
         const { statuses } = subscribe(noProgressStream(hosts, factory));
-        const settle = (): Promise<void> => vi.advanceTimersByTimeAsync(0);
+        const settle = async (): Promise<void> => {
+          await vi.advanceTimersByTimeAsync(0);
+        };
         const refusedAt: number[] = [];
 
         await settle();
@@ -3259,7 +3261,10 @@ describe("released personal host, local unary", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
     const unobtainable = unobtainableTokens();
-    await unobtainable.obtain(USER_ID, mockLocalHostEntry.hostId, false, null);
+    await unobtainable.obtain(USER_ID, mockLocalHostEntry.hostId, false, {
+      signal: null,
+      owner: null,
+    });
     const driven = startUnaryOnRow(PERSONAL_ROW, () => Promise.resolve(null), {
       recovery: null,
       tokens: unobtainable,
@@ -3307,7 +3312,10 @@ describe("released personal host, local unary", () => {
       PERSONAL_ROW,
       async (hostId) => {
         if (hostTokenHeld) return HOST_LEASE;
-        await unobtainable.obtain(USER_ID, hostId, false, null);
+        await unobtainable.obtain(USER_ID, hostId, false, {
+          signal: null,
+          owner: null,
+        });
         return null;
       },
       {

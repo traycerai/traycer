@@ -4295,9 +4295,9 @@ describe("RemoteSession wake", () => {
     const dialStartedAt: number[] = [];
     const session = new RemoteSession({
       ...options,
-      grantProvider: () => {
+      grantProvider: (sequence) => {
         dialStartedAt.push(Date.now());
-        return options.grantProvider();
+        return options.grantProvider(sequence);
       },
       rpcRegistry: statusRpcRegistry(),
     });
@@ -10996,9 +10996,9 @@ describe("RemoteSession refused attach grant", () => {
     const lease = new MutableBearerLease("user-bearer", "user-1");
     const session = new RemoteSession({
       ...buildSessionOptions(relay, lease, null),
-      grantProvider: () => {
+      grantProvider: (sequence) => {
         counts.provider += 1;
-        return provider();
+        return provider(sequence);
       },
       webSocketFactory: {
         create: (url, priority) => {
