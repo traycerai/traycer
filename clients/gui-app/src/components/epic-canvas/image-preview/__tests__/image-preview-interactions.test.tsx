@@ -507,7 +507,7 @@ describe("image preview interactions", () => {
     expect(zoomedPercent).toBeGreaterThan(fittedPercent);
   });
 
-  it("zooms to a typed level about the middle of the stage", () => {
+  it("applies a typed level through the viewer zoom API", () => {
     renderPreview(false);
     const zoomLevel = screen.getByLabelText<HTMLInputElement>("Zoom level");
     const instance = state.instances[0];
@@ -518,13 +518,10 @@ describe("image preview interactions", () => {
 
     const after = instance.ref.state;
     expect(zoomLevel.value).toBe("150%");
-    // The content point under the stage's middle (800 x 600) has not moved.
-    expect((400 - after.positionX) / after.scale).toBeCloseTo(
-      (400 - before.positionX) / before.scale,
-    );
-    expect((300 - after.positionY) / after.scale).toBeCloseTo(
-      (300 - before.positionY) / before.scale,
-    );
+    expect(after.scale).toBe(1.5);
+    // This mock uses additive steps; real-library anchoring and bounds are
+    // covered by zoom-instance-to.test.tsx.
+    expect(instance.zoomInCalls).toContainEqual([1.5 - before.scale, 200]);
   });
 
   it.each([
