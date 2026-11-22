@@ -5637,7 +5637,9 @@ describe("WsStreamClient host credential provisioning", () => {
     // credential that was already pending when a re-arm transition (the
     // "burn" below) delivered it keeps the marker clear: that transition's
     // own top-of-function flush runs and returns before the attempt-marker
-    // code could set it again.
+    // code could set it again. Call B is a first enrolment (`missing`): a
+    // `needs-reauth` credential is never held for a later connection, so only
+    // a `missing` one can wait for the burn.
     const deferredB: { resolve: ((outcome: Provisioned) => void) | null } = {
       resolve: null,
     };
@@ -5666,15 +5668,11 @@ describe("WsStreamClient host credential provisioning", () => {
     await flush();
     expect(mint).toHaveBeenCalledTimes(1);
 
-    // Call B: same state, no transition - only the marker being clear lets
-    // this ask again. Left deferred so it can resolve with nothing
-    // subscribed to receive it.
+    // Call B: the host now reports `missing`. Left deferred so it can resolve
+    // with nothing subscribed to receive it.
     sockets[0].socket.fireClose(1000, "drop", false);
     await wait(30);
-    completeProvisionHandshake(
-      sockets[sockets.length - 1].socket,
-      "needs-reauth",
-    );
+    completeProvisionHandshake(sockets[sockets.length - 1].socket, "missing");
     await flush();
     expect(mint).toHaveBeenCalledTimes(2);
 
@@ -5697,11 +5695,14 @@ describe("WsStreamClient host credential provisioning", () => {
     // than being delivered here.
     expect(pendingMap(client).has(HOST_A.hostId)).toBe(true);
 
-    // The burn: a transition ack. It clears the (already-clear) attempt
-    // marker and `handedOffHostIds`, then its own top-of-function flush
-    // delivers call B's pending credential before the attempt gate can run
-    // again - so the handoff lands with the marker still clear.
-    completeProvisionHandshake(sockets[sockets.length - 1].socket, "missing");
+    // The burn: a transition ack. It clears the attempt marker and
+    // `handedOffHostIds`, then its own top-of-function flush delivers call B's
+    // pending credential before the attempt gate can run again - so the
+    // handoff lands with the marker still clear.
+    completeProvisionHandshake(
+      sockets[sockets.length - 1].socket,
+      "needs-reauth",
+    );
     await flush();
     expect(mint).toHaveBeenCalledTimes(2);
     expect(provisionFrames(sockets[sockets.length - 1].socket)).toHaveLength(1);
