@@ -153,6 +153,9 @@ function CanvasAnnotationCard(
   const label =
     quote ?? element?.accessibleName ?? element?.textPreview ?? record.comment;
   const board = source.boardPath.split("/").at(-1) ?? source.boardPath;
+  const title =
+    record.comment.trim() ||
+    [board, element?.tagName].filter(Boolean).join(" · ");
   return (
     <div
       data-testid="browser-annotation-card"
@@ -168,10 +171,9 @@ function CanvasAnnotationCard(
         )}
       </div>
       <div className="flex min-w-0 flex-col">
-        <span className="truncate text-ui-sm font-medium">
-          {board}
-          {element === undefined ? "" : ` · ${element.tagName}`}
-        </span>
+        <TooltipWrapper label={title} side="top" sideOffset={6} align="start">
+          <span className="truncate text-ui-sm font-medium">{title}</span>
+        </TooltipWrapper>
         <TooltipWrapper label={label} side="top" sideOffset={6} align="start">
           <span className="max-w-64 truncate text-ui-xs text-muted-foreground">
             {label}
