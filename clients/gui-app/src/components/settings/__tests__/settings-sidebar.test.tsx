@@ -19,6 +19,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -58,12 +59,33 @@ const globalScopeOverrides = vi.hoisted(
     current: { client: null },
   }),
 );
+const poolServes = vi.hoisted(() => ({ current: false }));
 const soundtrackOfferedMock = vi.hoisted(() => ({ value: false }));
 
 vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
   soundtrackOffered: () => soundtrackOfferedMock.value,
 }));
+
+// The process tier plan settles once per process; a case that needs a server
+// pool sets it here so the others keep the no-pool plan.
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    const { poolEntry } =
+      await import("@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures");
+    const poolPlan = original.createHostRpcTierPlan(poolEntry);
+    return {
+      ...original,
+      readProcessHostRpcTierPlan: () =>
+        poolServes.current ? poolPlan : original.readProcessHostRpcTierPlan(),
+    };
+  },
+);
 
 vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   const { hostScopeFixture } =
@@ -1135,6 +1157,7 @@ describe("<SettingsSidebar /> Environment pick", () => {
     scopeOverrides.current = { client: null };
     resetNegotiatedManifests();
     resetEnvironmentSectionReads();
+    poolServes.current = false;
     realWindowHostRuns.current = false;
     globalScopeOverrides.current = { client: null };
     useSettingsSearchStore.setState({ query: "" });
@@ -1258,6 +1281,21 @@ describe("<SettingsSidebar /> Environment pick", () => {
     });
 
     expect(present("secrets")).toBe(true);
+  });
+
+  it("offers no Secrets row under a Local pick whose computer the host list does not name, though the pool serves the list", async () => {
+    poolServes.current = true;
+    useSettingsEnvironmentPickStore.setState({ pick: LOCAL_PICK });
+    globalScopeOverrides.current = {
+      client: null,
+      hosts: [hostScopeOptionFixture({ hostId: "host-a" })],
+    };
+    recordNegotiatedHostMethods(POOL_HOST_ID, [SECRETS_LIST]);
+
+    await renderRail();
+
+    expect(present("providers")).toBe(true);
+    expect(present("secrets")).toBe(false);
   });
 
   it("offers no Secrets row under a Local pick whose host answered without the list", async () => {

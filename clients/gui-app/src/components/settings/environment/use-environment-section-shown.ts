@@ -20,7 +20,8 @@ import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-
  * for it. While the window's host is out, Personal reads the cloud, as its
  * page does. A Local row reads its computer only while the window's host list
  * names it, as `usePersonalHostScope` resolves it for the page: a computer
- * the list has dropped, or not yet listed, draws nothing there.
+ * the list has dropped, or not yet listed, draws nothing there, whatever the
+ * pool answers.
  */
 function secretsServedOn(
   pick: EnvironmentPick,
@@ -46,12 +47,18 @@ export function useEnvironmentSectionShown(
 ): (section: SettingsSectionId) => boolean {
   const pick = useEnvironmentPick();
   const windowHostRuns = useWindowHostRunsPersonal(windowScope);
-  const secretsSupported = useHostMethodSupport(
+  const secretsHostId =
     pick.kind === "local"
       ? (findHostOption(windowScope.hosts, pick.hostId)?.hostId ?? null)
-      : windowScope.hostId,
+      : windowScope.hostId;
+  const support = useHostMethodSupport(
+    secretsHostId,
     "environment.secrets.list",
   );
+  // A `null` host still reads the pool's answer, which an unlisted Local
+  // computer must not inherit.
+  const secretsSupported =
+    pick.kind === "local" && secretsHostId === null ? false : support;
   const secretsServed = secretsServedOn(pick, windowHostRuns, secretsSupported);
   const facts = useMemo(
     (): EnvironmentPageFacts => ({ secretsServed }),
