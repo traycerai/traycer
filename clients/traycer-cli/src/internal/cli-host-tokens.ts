@@ -65,8 +65,11 @@ function processHeldRefusals(instance: HostInstance): Map<string, string> {
  * One mint request per host and sign-in at a time for this process: every
  * unary call builds its own tokens, so without it each call that found no
  * usable token sent its own. The request ends when its last asker stops
- * waiting, or on its own timeout; each asker stops on its own signal, as when
- * the request was its own, and is not cut short by another call's.
+ * waiting, or on its own timeout. Each asker stops on its own signal, as when
+ * the request was its own, or, with none, when the call that asked ends; it is
+ * not cut short by another call's. A signal outlives its call only where the
+ * command means it to (a give's budget, which its next try joins); no request
+ * outlives every asker that wants it.
  */
 interface MintFlight {
   readonly answer: Promise<HostTokenMintOutcome>;
@@ -87,8 +90,11 @@ function sharedMint(
   hostId: string,
   signInToken: string,
   signal: AbortSignal | null,
+  callEnded: AbortSignal,
 ): Promise<HostTokenMintOutcome> {
-  if (signal?.aborted === true) return Promise.resolve(abandonedMint(signal));
+  const exits = [signal ?? callEnded];
+  const gone = exits.find((exit) => exit.aborted);
+  if (gone !== undefined) return Promise.resolve(abandonedMint(gone));
   const key = `${hostId}\u0000${signInToken}`;
   let flight = mintFlights.get(key);
   if (flight === undefined) {
@@ -112,24 +118,32 @@ function sharedMint(
   }
   const joined = flight;
   joined.askers += 1;
-  if (signal === null) return joined.answer;
   return new Promise<HostTokenMintOutcome>((resolve, reject) => {
-    const leave = (): void => {
-      joined.askers -= 1;
-      if (joined.askers === 0) {
-        if (mintFlights.get(key) === joined) mintFlights.delete(key);
-        joined.controller.abort(signal.reason);
-      }
-      resolve(abandonedMint(signal));
+    const listeners = new Map<AbortSignal, () => void>();
+    const detach = (): void => {
+      for (const [exit, listener] of listeners)
+        exit.removeEventListener("abort", listener);
     };
-    signal.addEventListener("abort", leave, { once: true });
+    for (const exit of exits) {
+      const leave = (): void => {
+        detach();
+        joined.askers -= 1;
+        if (joined.askers === 0) {
+          if (mintFlights.get(key) === joined) mintFlights.delete(key);
+          joined.controller.abort(exit.reason);
+        }
+        resolve(abandonedMint(exit));
+      };
+      listeners.set(exit, leave);
+      exit.addEventListener("abort", leave, { once: true });
+    }
     joined.answer.then(
       (outcome) => {
-        signal.removeEventListener("abort", leave);
+        detach();
         resolve(outcome);
       },
       (cause: unknown) => {
-        signal.removeEventListener("abort", leave);
+        detach();
         reject(cause);
       },
     );
@@ -261,16 +275,22 @@ export interface CliHostTokens {
   heldTokenRefused(instance: HostInstance, presented: string): boolean;
   /** See `ReleasedSignOn.forgetHeldRefusal`. */
   forgetHeldRefusal(hostId: string): void;
+  /** The call these tokens were built for ended: every mint it asked for stops waiting. */
+  dispose(): void;
 }
 
-function createSource(signIn: VerifiedSignIn | null): HostTokenSource {
+function createSource(
+  signIn: VerifiedSignIn | null,
+  callEnded: AbortSignal,
+): HostTokenSource {
   return createHostTokenSource({
     persistence: createHostTokenFilePersistence({
       environment: config.environment,
       lockWaitMs: CREDENTIALS_LOCK_WAIT_MS,
       lockPollIntervalMs: LOCK_POLL_INTERVAL_MS,
     }),
-    mint: sharedMint,
+    mint: (hostId, signInToken, signal) =>
+      sharedMint(hostId, signInToken, signal, callEnded),
     signIn,
     now: Date.now,
   });
@@ -337,8 +357,10 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     for (const listener of Array.from(listeners))
       listener(owner.hostId, failure);
   };
-  const stored = createSource((id) =>
-    id === userId ? readLeaseBearer(signIn.lease) : null,
+  const callEnded = new AbortController();
+  const stored = createSource(
+    (id) => (id === userId ? readLeaseBearer(signIn.lease) : null),
+    callEnded.signal,
   );
   // The one judge of a rejected sign-in, for every mint this process makes:
   // a refresh authn refused, or a 401 on the first mint after a refresh it
@@ -618,6 +640,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     heldTokenRefused: (instance, presented) =>
       heldTokenRefused(source, userId, instance, presented),
     forgetHeldRefusal: (hostId) => source.forgetHeldRefused(userId, hostId),
+    dispose: () => callEnded.abort(),
     onRefusalEndingCommand: (listener) => {
       listeners.add(listener);
       return () => {
@@ -766,7 +789,10 @@ export async function requireCliHostSession(
     signInLease: lease,
     tokens,
     releasedSignOn: cliReleasedSignOn(lease, tokens),
-    dispose: () => store.dispose(),
+    dispose: () => {
+      tokens.dispose();
+      store.dispose();
+    },
   };
 }
 

@@ -506,6 +506,7 @@ async function signInMonitorCredential(
     },
     stopUpkeep: () => {
       refreshScheduler?.stop();
+      hostTokens.dispose();
       store.dispose();
     },
   };
