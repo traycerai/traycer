@@ -153,15 +153,11 @@ function mayWriteFor(asker: MintAsker): () => boolean {
   return () => asker.observedNow() === asker.observed;
 }
 
-// A mint's answer, and whether its write was declined because the host
-// process it was started for was replaced (no token written for anyone).
-interface MintResult {
+// What a flight's mint came to: authn's answer, and the write it made under
+// the checks of the asker that started it (`null`: nothing was written).
+interface MintFlight {
   readonly outcome: HostTokenMintOutcome;
-  readonly declinedForProcess: boolean;
-}
-
-function unwritten(outcome: HostTokenMintOutcome): MintResult {
-  return { outcome, declinedForProcess: false };
+  readonly written: TableWriteResult | null;
 }
 
 // What a mint is asked with, beyond the pair and era.
@@ -324,10 +320,10 @@ export function createHostTokenSource(deps: {
   // mint an owner not yet observed started, which only such owners join; and
   // each observed process's own, under `ownerKey`. An observed owner never
   // joins a mint started for an owner not yet observed, nor the reverse.
-  const latestFlight = new Map<string, Promise<MintResult>>();
-  const renewFlights = new Map<string, Promise<MintResult>>();
-  const unknownFlights = new Map<string, Promise<MintResult>>();
-  const observedFlights = new Map<string, Promise<MintResult>>();
+  const latestFlight = new Map<string, Promise<MintFlight>>();
+  const renewFlights = new Map<string, Promise<MintFlight>>();
+  const unknownFlights = new Map<string, Promise<MintFlight>>();
+  const observedFlights = new Map<string, Promise<MintFlight>>();
   // Each pair's minting refresh (its end, never the token), so a refresh mints once per
   // host. Process memory only: a restart mints once more at most.
   const mintedWith = new Map<string, number>();
@@ -430,12 +426,10 @@ export function createHostTokenSource(deps: {
     hostId: string,
     era: number,
     { signal, asker, replaces }: MintAsk,
-  ): Promise<MintResult> => {
-    if (eraOf(userId) !== era)
-      return Promise.resolve(unwritten({ kind: "superseded" }));
+  ): Promise<HostTokenMintOutcome> => {
+    if (eraOf(userId) !== era) return Promise.resolve({ kind: "superseded" });
     const signInToken = signIn?.(userId) ?? null;
-    if (signInToken === null)
-      return Promise.resolve(unwritten({ kind: "no-sign-in" }));
+    if (signInToken === null) return Promise.resolve({ kind: "no-sign-in" });
     const key = keyOf(userId, hostId);
     const mark = readAccessTokenExpiryMs(signInToken);
     // Keyed by refresh and era too: a mint begun before a refresh or a sign-out must
@@ -448,30 +442,48 @@ export function createHostTokenSource(deps: {
           ? (unknownFlights.get(flightKey) ?? renewFlights.get(flightKey))
           : (observedFlights.get(ownerKey(flightKey, asker.observed)) ??
             renewFlights.get(flightKey));
-    if (running !== undefined) return running;
-    // Its write passes the checks of the asker that started it; every joiner
-    // is told the same answer.
-    const attempt = (async (): Promise<MintResult> => {
+    // Only a kept write moves the pair's refresh, and never back to an
+    // earlier one: a late older flight leaves the newer refresh standing.
+    const refreshMoved = (written: TableWriteResult): void => {
+      if (written.kind !== "kept") return;
+      const before = mintedWith.get(key);
+      if (mark === null) mintedWith.delete(key);
+      else if (before === undefined || before < mark) mintedWith.set(key, mark);
+    };
+    // Every asker is told the mint's answer, and its write is judged by its
+    // own rule. The starter's write was judged by the starter's. A joiner
+    // whose rule is not the starter's process check (a renewal, an ask with no
+    // owner or with one not yet observed) writes the minted token itself when
+    // that check declined it, under its own rule: era and order only.
+    const answerFor = async (
+      flight: MintFlight,
+    ): Promise<HostTokenMintOutcome> => {
+      const { outcome } = flight;
+      if (flight.written === null || outcome.kind !== "ok") return outcome;
+      let written = flight.written;
+      if (written.kind === "not-wanted" && asker.kind !== "known") {
+        written = await store(userId, hostId, outcome.token, {
+          era,
+          mayWrite: mayWriteFor(asker),
+          replaces,
+        });
+        refreshMoved(written);
+      }
+      return answerAfter(userId, hostId, era, written, outcome.token);
+    };
+    if (running !== undefined) return running.then(answerFor);
+    const attempt = (async (): Promise<MintFlight> => {
       const outcome = await deps.mint(hostId, signInToken, signal);
-      if (eraOf(userId) !== era) return unwritten({ kind: "superseded" });
-      if (outcome.kind !== "ok") return unwritten(outcome);
+      if (eraOf(userId) !== era)
+        return { outcome: { kind: "superseded" }, written: null };
+      if (outcome.kind !== "ok") return { outcome, written: null };
       const written = await store(userId, hostId, outcome.token, {
         era,
         mayWrite: mayWriteFor(asker),
         replaces,
       });
-      // Only a kept write moves the pair's refresh, and never back to an
-      // earlier one: a late older flight leaves the newer refresh standing.
-      if (written.kind === "kept") {
-        const before = mintedWith.get(key);
-        if (mark === null) mintedWith.delete(key);
-        else if (before === undefined || before < mark)
-          mintedWith.set(key, mark);
-      }
-      return {
-        outcome: answerAfter(userId, hostId, era, written, outcome.token),
-        declinedForProcess: written.kind === "not-wanted",
-      };
+      refreshMoved(written);
+      return { outcome, written };
     })().finally(() => {
       if (asker.kind === "none") {
         if (renewFlights.get(flightKey) === attempt)
@@ -490,7 +502,7 @@ export function createHostTokenSource(deps: {
     else if (asker.kind === "unknown") unknownFlights.set(flightKey, attempt);
     else observedFlights.set(ownerKey(flightKey, asker.observed), attempt);
     latestFlight.set(flightKey, attempt);
-    return attempt;
+    return attempt.then(answerFor);
   };
 
   return {
@@ -537,13 +549,11 @@ export function createHostTokenSource(deps: {
       try {
         // The token this ask was sent to replace, refused or unusable: a
         // mint for it replaces it whatever its issue second.
-        outcome = (
-          await mintOnce(userId, hostId, era, {
-            signal,
-            asker,
-            replaces: token?.token ?? null,
-          })
-        ).outcome;
+        outcome = await mintOnce(userId, hostId, era, {
+          signal,
+          asker,
+          replaces: token?.token ?? null,
+        });
       } catch (cause) {
         // A token that could not be saved leaves none to present, like an
         // unreachable authn: an earlier refusal no longer stands.
@@ -583,17 +593,12 @@ export function createHostTokenSource(deps: {
       if (eraOf(userId) !== era) return { kind: "superseded" };
       return {
         kind: "renewed",
-        // A renewal that joined a mint written for no one, its process
-        // replaced, is not renewed for that host either.
-        delayed: due.filter((_, index) => {
-          const result = outcomes[index];
-          return (
-            result === undefined ||
-            result.outcome.kind === "unavailable" ||
-            result.outcome.kind === "process-replaced" ||
-            result.declinedForProcess
-          );
-        }),
+        // Delayed only where authn could not be reached. A renewal never
+        // meets `process-replaced`: that answer comes only from an owned
+        // obtain, before any mint starts.
+        delayed: due.filter(
+          (_, index) => outcomes[index]?.kind === "unavailable",
+        ),
       };
     },
 
