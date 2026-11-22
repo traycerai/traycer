@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ROW_CONFIRM_CEILING_MS } from "@traycer-clients/shared/host-transport/row-confirmation";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type {
   HostListItem,
@@ -601,6 +602,30 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
   };
   const PERSONAL_OWNER = { kind: "user", id: USER_A } as const;
   const TEAM_OWNER = { kind: "team", id: "team-a", name: "Alpha" } as const;
+  // The attach asks for the row confirmation before it reads its open, so
+  // while the read is held nothing past the bare refusal can have been written.
+  const REDIAL_WAIT = { timeout: 10_000, interval: 50 } as const;
+
+  /**
+   * The redial is parked on the row read: the read was asked, and after
+   * `parkedForMs` of the fake clock the attach has asked authn for no second
+   * relay pass (an attach that did not wait asks for it as soon as it starts)
+   * and only the host-only token's open is written.
+   */
+  async function expectParkedOnRowRead(
+    remote: {
+      readonly peer: RemoteMuxTestPeer;
+      readonly reads: () => number;
+      readonly mints: () => number;
+    },
+    parkedForMs: number,
+  ): Promise<void> {
+    await vi.waitFor(() => expect(remote.reads()).toBe(2), REDIAL_WAIT);
+    await vi.advanceTimersByTimeAsync(parkedForMs);
+    expect(remote.mints()).toBe(1);
+    expect(remote.peer.openCount).toBe(1);
+    expect(bearersOf(remote.peer)).toEqual([""]);
+  }
 
   beforeEach(() => {
     remoteSocketFactoryHarness.delegate = null;
@@ -623,13 +648,18 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
   type Registry =
     | { readonly kind: "owner"; readonly owner: HostOwnerPrincipal }
     | { readonly kind: "fails" }
-    | { readonly kind: "silent" };
+    | { readonly kind: "silent" }
+    | { readonly kind: "held" };
 
   /** A remote personal host whose first open the host refuses the released way; returns once that open is sent. */
   async function startRemote(initial: Registry): Promise<{
     readonly peer: RemoteMuxTestPeer;
     readonly registry: { current: Registry };
     readonly reads: () => number;
+    /** Relay-pass mints asked of authn: one per attach that reached its grant. */
+    readonly mints: () => number;
+    /** Answers the oldest read the `held` registry is holding, listing the host under `owner`. */
+    readonly answerHeld: (owner: HostOwnerPrincipal) => void;
     readonly close: () => void;
   }> {
     const peer = new RemoteMuxTestPeer();
@@ -650,24 +680,34 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
       hostTokens.era(USER_A),
       () => true,
     );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(
-        async () =>
-          new Response(
-            JSON.stringify({
-              grant: "relay-pass",
-              role: "client",
-              expires_in: 300,
-              session_grant: "relay-session-grant",
-              session_grant_expires_in: 300,
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-      ),
+    const mintMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            grant: "relay-pass",
+            role: "client",
+            expires_in: 300,
+            session_grant: "relay-session-grant",
+            session_grant_expires_in: 300,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
     );
+    vi.stubGlobal("fetch", mintMock);
     const registry = { current: initial };
     let reads = 0;
+    const heldReads: Array<(owner: HostOwnerPrincipal) => void> = [];
+    const listing = (owner: HostOwnerPrincipal): HostListFetchResult => ({
+      kind: "ok",
+      response: {
+        hosts: [
+          {
+            ...remoteHostItem(MINIMUM_HOST_VERSION, peer.hostPublicKey),
+            owner,
+          },
+        ],
+      },
+    });
     const directory = createBrowserSessionsHostDirectory({
       authnBaseUrl: () => "https://authn.test",
       relayBaseUrl: "wss://relay.test/attach",
@@ -679,17 +719,11 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
         if (answer.kind === "silent") return new Promise(() => undefined);
         if (answer.kind === "fails")
           return Promise.resolve({ kind: "network-error" });
-        return Promise.resolve({
-          kind: "ok",
-          response: {
-            hosts: [
-              {
-                ...remoteHostItem(MINIMUM_HOST_VERSION, peer.hostPublicKey),
-                owner: answer.owner,
-              },
-            ],
-          },
-        });
+        if (answer.kind === "held")
+          return new Promise((resolve) => {
+            heldReads.push((owner) => resolve(listing(owner)));
+          });
+        return Promise.resolve(listing(answer.owner));
       },
       now: () => Date.now(),
     });
@@ -722,6 +756,12 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
       peer,
       registry,
       reads: () => reads,
+      mints: () => mintMock.mock.calls.length,
+      answerHeld: (owner) => {
+        const answer = heldReads.shift();
+        if (answer === undefined) throw new Error("no registry read is held");
+        answer(owner);
+      },
       close: () => {
         sessions.close();
         transport.close();
@@ -746,11 +786,12 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
   it("sends no sign-in when the row moved from the person's to a team's between the dials", async () => {
     const remote = await startRemote({ kind: "owner", owner: PERSONAL_OWNER });
     try {
-      remote.registry.current = { kind: "owner", owner: TEAM_OWNER };
-      await vi.advanceTimersByTimeAsync(2_000);
+      remote.registry.current = { kind: "held" };
+      await expectParkedOnRowRead(remote, 1_000);
+
+      remote.answerHeld(TEAM_OWNER);
       await vi.waitFor(() => expect(remote.peer.openCount).toBeGreaterThan(1));
       expect(bearersOf(remote.peer)).not.toContain(SIGN_IN_TOKEN);
-      expect(remote.reads()).toBeGreaterThan(1);
     } finally {
       remote.close();
     }
@@ -779,6 +820,35 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
       }
     },
   );
+
+  it("writes no sign-in until the row read it waits on settles, then sends it", async () => {
+    const remote = await startRemote({ kind: "owner", owner: PERSONAL_OWNER });
+    try {
+      remote.registry.current = { kind: "held" };
+      await expectParkedOnRowRead(remote, 1_000);
+
+      remote.answerHeld(PERSONAL_OWNER);
+      await vi.waitFor(() => expect(remote.peer.openCount).toBe(2));
+      expect(bearersOf(remote.peer)).toEqual(["", SIGN_IN_TOKEN]);
+    } finally {
+      remote.close();
+    }
+  });
+
+  it("writes no sign-in before the row read's ceiling passes, then sends it", async () => {
+    const remote = await startRemote({ kind: "owner", owner: PERSONAL_OWNER });
+    try {
+      remote.registry.current = { kind: "silent" };
+      // The wait began within one poll of the read being asked.
+      await expectParkedOnRowRead(remote, ROW_CONFIRM_CEILING_MS - 100);
+
+      await vi.advanceTimersByTimeAsync(200);
+      await vi.waitFor(() => expect(remote.peer.openCount).toBe(2));
+      expect(bearersOf(remote.peer)).toEqual(["", SIGN_IN_TOKEN]);
+    } finally {
+      remote.close();
+    }
+  });
 
   it("never awaits the row confirmation on a local door", async () => {
     const confirmRow = vi.fn(() => Promise.resolve(true));
