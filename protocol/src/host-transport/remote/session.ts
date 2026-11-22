@@ -7671,13 +7671,6 @@ export class RemoteSession<
 // -----------------------------------------------------------------------------
 
 /**
- * Cap on consecutive `UNAUTHORIZED` session-fatal recoveries where the
- * revalidation keeps returning a current credential the host keeps rejecting
- * (no token rotation making progress). After this many no-progress cycles the
- * session goes terminal instead of looping forever - mirrors the local stream
- * transport's identically-named bound.
- */
-/**
  * The most chunks of credential updates the resume ledger can hold at once:
  * every chunk but a message's last is a full chunk, and the ledger keeps no
  * more than {@link RESUME_RING_BYTES}; the oldest message kept may be down to
@@ -7706,6 +7699,13 @@ function writtenCredentialBearer(frame: MuxFrame): string | null {
   return typeof bearer === "string" ? bearer : null;
 }
 
+/**
+ * Cap on consecutive `UNAUTHORIZED` session-fatal recoveries where the
+ * revalidation keeps returning a current credential the host keeps rejecting
+ * (no token rotation making progress). After this many no-progress cycles the
+ * session goes terminal instead of looping forever - mirrors the local stream
+ * transport's identically-named bound.
+ */
 const MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS = 3;
 
 /**
