@@ -56,7 +56,7 @@ interface TransportSettings {
   readonly hostId: string;
   /** Read live, as the row is: whether the person's own computer may be handed the sign-in. */
   readonly releasedWay: () => boolean;
-  readonly confirmRow: (() => Promise<boolean>) | null;
+  readonly confirmRow: (() => Promise<void>) | null;
   readonly signIn: () => string;
 }
 
@@ -410,7 +410,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
   function releasedSession(
     hostId: string,
     releasedWay: () => boolean,
-    confirmRow: () => Promise<boolean>,
+    confirmRow: () => Promise<void>,
     signIn: () => string,
   ): RemoteHostTransport<
     VersionedRpcRegistry,
@@ -430,17 +430,17 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     return session;
   }
 
-  it("writes the rotated sign-in in a credential update while the row's confirmation for the re-auth attach is pending, when the last answer was true", async () => {
+  it("writes the rotated sign-in in a credential update while the row's read for the re-auth attach is pending", async () => {
     let signIn = SIGN_IN;
-    let confirmations = 0;
-    let answerConfirmation: (confirmed: boolean) => void = () => undefined;
-    const pending = new Promise<boolean>((resolve) => {
-      answerConfirmation = resolve;
+    let reads = 0;
+    let finishRead: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => {
+      finishRead = resolve;
     });
-    // The second confirmation is the re-auth's: the redial's was the first, and answered true.
-    const confirmRow = (): Promise<boolean> => {
-      confirmations += 1;
-      return confirmations === 2 ? pending : Promise.resolve(true);
+    // The second read is the re-auth's: the redial's was the first, and settled at once.
+    const confirmRow = (): Promise<void> => {
+      reads += 1;
+      return reads === 2 ? pending : Promise.resolve();
     };
     const session = releasedSession(
       RELEASED_HOST_ID,
@@ -451,41 +451,37 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     session.start();
     await advanceUntil(() => session.isReady(), 15_000);
     expect(relay.openBearers).toEqual(["", SIGN_IN]);
-    await advanceFeedingHost(() => confirmations === 2);
+    await advanceFeedingHost(() => reads === 2);
 
     signIn = ROTATED_SIGN_IN;
     session.notifyBearerRotated();
     await advance(0);
 
     expect(sentCredentialBearers()).toContain(ROTATED_SIGN_IN);
-    answerConfirmation(true);
+    finishRead();
   });
 
-  it("keeps the host-only token in a credential update while a periodic refresh's confirmation is pending after the last answer was false, and writes the sign-in once it answers true", async () => {
+  it("keeps the host-only token in a credential update once a read has moved the row off the released way, and writes the sign-in when the row opens the released way again", async () => {
     let signIn = SIGN_IN;
-    let confirmations = 0;
-    let answerThird: (confirmed: boolean) => void = () => undefined;
-    const third = new Promise<boolean>((resolve) => {
-      answerThird = resolve;
-    });
-    // The redial's confirmation (1) is true; the re-auth's (2) is false, and
-    // the leg stays; the next periodic refresh's (3) is pending.
-    const confirmRow = (): Promise<boolean> => {
-      confirmations += 1;
-      if (confirmations === 2) return Promise.resolve(false);
-      return confirmations === 3 ? third : Promise.resolve(true);
+    let released = true;
+    let reads = 0;
+    // The redial's read (1) leaves the row released; the re-auth's (2) commits
+    // a row that no longer opens the released way.
+    const confirmRow = (): Promise<void> => {
+      reads += 1;
+      if (reads === 2) released = false;
+      return Promise.resolve();
     };
     const session = releasedSession(
-      `${RELEASED_HOST_ID}-last-answer-false`,
-      () => true,
+      `${RELEASED_HOST_ID}-row-moved-off`,
+      () => released,
       confirmRow,
       () => signIn,
     );
     session.start();
     await advanceUntil(() => session.isReady(), 15_000);
     expect(relay.openBearers).toEqual(["", SIGN_IN]);
-    await advanceFeedingHost(() => confirmations === 2);
-    await advanceFeedingHost(() => confirmations === 3);
+    await advanceFeedingHost(() => reads === 2);
     expect(session.isReady()).toBe(true);
 
     signIn = ROTATED_SIGN_IN;
@@ -493,12 +489,12 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     session.notifyBearerRotated();
     await advance(0);
 
-    // Nothing the last false answer withdrew goes while the next one is pending.
+    // The row the read committed no longer opens the released way: the sign-in
+    // goes nowhere on this leg.
     expect(sentCredentialBearers()).not.toContain(ROTATED_SIGN_IN);
     expect(sentCredentialBearers().slice(sentBefore)).not.toContain(SIGN_IN);
 
-    answerThird(true);
-    await advance(0);
+    released = true;
     signIn = SECOND_ROTATED_SIGN_IN;
     session.notifyBearerRotated();
     await advance(0);
