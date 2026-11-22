@@ -20,13 +20,8 @@ const HOST_TOKEN = "host-only-token";
 const SIGN_IN = "person-sign-in";
 const HOST_CREDENTIAL = "provisioned-host-credential";
 
-type Ownership =
-  | "personal"
-  | "team"
-  | "network"
-  | "missing"
-  | "current"
-  | "team-missing";
+/** What authn mints and what the host answers; neither reads the host's row. */
+type Scenario = "personal" | "missing" | "current-probe" | "current-token";
 
 const harness = vi.hoisted(() => {
   class ScriptSocket {
@@ -63,9 +58,14 @@ const harness = vi.hoisted(() => {
 
   const sockets: ScriptSocket[] = [];
   const listeners = new Set<() => void>();
-  const state: { ownership: Ownership; table: HostTokenTable } = {
+  const state: {
+    ownership: Scenario;
+    table: HostTokenTable;
+    hostRowReads: string[];
+  } = {
     ownership: "personal",
     table: new Map(),
+    hostRowReads: [],
   };
 
   function wake(): void {
@@ -274,34 +274,6 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
-function ownershipBody(): unknown {
-  if (
-    harness.state.ownership === "team" ||
-    harness.state.ownership === "team-missing"
-  ) {
-    return {
-      hosts: [
-        {
-          hostId: HOST_ID,
-          owner: { kind: "team", id: "team-1", name: "Team" },
-          kind: "machine",
-          remoteAccess: false,
-        },
-      ],
-    };
-  }
-  return {
-    hosts: [
-      {
-        hostId: HOST_ID,
-        owner: { kind: "user", id: USER_ID },
-        kind: "personal",
-        remoteAccess: false,
-      },
-    ],
-  };
-}
-
 function namedRefusal(): {
   readonly kind: "fatalError";
   readonly details: {
@@ -336,22 +308,15 @@ function installFetch(): void {
       const url = new URL(requestUrl(input));
       const method = init?.method ?? "GET";
       if (url.pathname === "/api/v3/hosts" && method === "GET") {
-        if (harness.state.ownership === "network") {
-          throw new TypeError("authn unreachable");
-        }
-        if (
-          harness.state.ownership === "missing" ||
-          harness.state.ownership === "current"
-        ) {
-          return jsonResponse({ message: "missing" }, 404);
-        }
-        return jsonResponse(ownershipBody(), 200);
+        // Nothing on this machine's doors reads the host's row. A read that
+        // happened would never be answered, as when authn is silent.
+        harness.state.hostRowReads.push(url.pathname);
+        return new Promise<Response>(() => undefined);
       }
       if (method === "POST" && url.pathname.endsWith("/session-grant")) {
         if (
           harness.state.ownership === "missing" ||
-          harness.state.ownership === "current" ||
-          harness.state.ownership === "team-missing"
+          harness.state.ownership === "current-probe"
         ) {
           return jsonResponse({ message: "missing" }, 404);
         }
@@ -393,9 +358,9 @@ function waitForWork(stop: { current: boolean }): Promise<void> {
   });
 }
 
-/** Answers each dial the probe opens. A sign-in is admitted only for a personal row. */
+/** Answers each dial the probe opens. The sign-in is admitted only by a released host. */
 async function answerReleasedHost(
-  ownership: Ownership,
+  ownership: Scenario,
   stop: { current: boolean },
 ): Promise<void> {
   const answered = new Set<InstanceType<typeof harness.ScriptSocket>>();
@@ -415,10 +380,7 @@ async function answerReleasedHost(
         continue;
       }
       answered.add(socket);
-      const admitsSignIn =
-        ownership === "personal" ||
-        ownership === "network" ||
-        ownership === "missing";
+      const admitsSignIn = ownership === "personal" || ownership === "missing";
       if (open.token === SIGN_IN && admitsSignIn) {
         signInAcks += 1;
         socket.fireText({
@@ -431,7 +393,7 @@ async function answerReleasedHost(
       }
       // A current host names its refusal of whatever it is handed, the
       // probe's placeholder included, so it never reaches the sign-in.
-      if (ownership === "current") {
+      if (ownership === "current-probe" || ownership === "current-token") {
         socket.fireText(namedRefusal());
         continue;
       }
@@ -442,7 +404,7 @@ async function answerReleasedHost(
 }
 
 async function probe(
-  ownership: Ownership,
+  ownership: Scenario,
   deadlineMs: number,
 ): Promise<HostCredentialProvisionOutcome> {
   harness.state.ownership = ownership;
@@ -473,6 +435,7 @@ beforeEach(() => {
   harness.listeners.clear();
   harness.state.table = new Map();
   harness.state.ownership = "personal";
+  harness.state.hostRowReads = [];
   installFetch();
 });
 
@@ -481,18 +444,16 @@ afterEach(() => {
 });
 
 describe("CLI credential probe against a released host", () => {
-  it("opens a personal computer with the sign-in and sends hostCredentialProvision", async () => {
+  it("opens every dial sequence with the host-only token, then the sign-in after its bare refusal, and sends hostCredentialProvision while authn answers nothing for the host's row", async () => {
     const outcome = await probe("personal", 20_000);
     const tokens = openTokens();
-    const firstSignIn = tokens.indexOf(SIGN_IN);
     expect(outcome).toEqual({ kind: "active", minted: true });
-    expect(tokens[0]).toBe(HOST_TOKEN);
-    expect(firstSignIn).toBeGreaterThan(0);
-    expect(tokens[firstSignIn + 1]).toBe(SIGN_IN);
-    expect(tokens[tokens.length - 1]).toBe(SIGN_IN);
-    expect(
-      tokens.every((token) => token === HOST_TOKEN || token === SIGN_IN),
-    ).toBe(true);
+    expect(tokens.length).toBeGreaterThanOrEqual(2);
+    expect(tokens.length % 2).toBe(0);
+    tokens.forEach((token, index) => {
+      expect(token).toBe(index % 2 === 0 ? HOST_TOKEN : SIGN_IN);
+    });
+    expect(harness.state.hostRowReads).toEqual([]);
     expect(provisionFrames()).toEqual([
       {
         kind: "hostCredentialProvision",
@@ -504,57 +465,39 @@ describe("CLI credential probe against a released host", () => {
     ]);
   }, 30_000);
 
-  it("never sends the sign-in when authn says the computer is a team's", async () => {
-    const outcome = await probe("team", 8_000);
-    expect(openTokens()).toEqual([HOST_TOKEN]);
+  it("opens with the probe, then the sign-in after its bare refusal, when authn has no row, and still sends hostCredentialProvision", async () => {
+    const outcome = await probe("missing", 20_000);
+    const tokens = openTokens();
+    expect(outcome).toEqual({ kind: "active", minted: true });
+    expect(tokens.length).toBeGreaterThanOrEqual(2);
+    expect(tokens.length % 2).toBe(0);
+    tokens.forEach((token, index) => {
+      expect(token).toBe(index % 2 === 0 ? NO_HOST_TOKEN_PROBE : SIGN_IN);
+    });
+    expect(harness.state.hostRowReads).toEqual([]);
+    expect(provisionFrames()).toHaveLength(1);
+  }, 30_000);
+
+  it("never sends the sign-in when a current host names its refusal of the host-only token", async () => {
+    const outcome = await probe("current-token", 8_000);
+    // The one fresh-token recovery opens again with a host-only token.
+    expect(openTokens()).toEqual([HOST_TOKEN, HOST_TOKEN]);
     expect(outcome).toEqual({
       kind: "error",
       message:
         "the host closed the connection before authorization was confirmed",
     });
+    expect(harness.state.hostRowReads).toEqual([]);
     expect(provisionFrames()).toEqual([]);
   }, 15_000);
 
-  it("opens with the sign-in when authn cannot be reached for that refusal", async () => {
-    const outcome = await probe("network", 20_000);
-    const tokens = openTokens();
-    const firstSignIn = tokens.indexOf(SIGN_IN);
-    expect(outcome).toEqual({ kind: "active", minted: true });
-    expect(tokens[0]).toBe(HOST_TOKEN);
-    expect(firstSignIn).toBeGreaterThan(0);
-    expect(tokens[firstSignIn + 1]).toBe(SIGN_IN);
-    expect(tokens[tokens.length - 1]).toBe(SIGN_IN);
-    expect(provisionFrames()).toHaveLength(1);
-  }, 30_000);
-
-  it("opens with the sign-in when authn has no row, and still sends hostCredentialProvision", async () => {
-    const outcome = await probe("missing", 20_000);
-    const tokens = openTokens();
-    expect(outcome).toEqual({ kind: "active", minted: true });
-    expect(tokens[0]).toBe(NO_HOST_TOKEN_PROBE);
-    const signInAt = tokens.indexOf(SIGN_IN);
-    expect(signInAt).toBeGreaterThan(0);
-    expect(
-      tokens.every(
-        (token) => token === NO_HOST_TOKEN_PROBE || token === SIGN_IN,
-      ),
-    ).toBe(true);
-    expect(provisionFrames()).toHaveLength(1);
-  }, 30_000);
-
   it("never opens with the sign-in when a current host names its refusal of the probe, and ends on the 404", async () => {
-    const outcome = await probe("current", 20_000);
+    const outcome = await probe("current-probe", 20_000);
     const tokens = openTokens();
     expect(outcome).toEqual({ kind: "mint-unavailable" });
     expect(tokens.length).toBeGreaterThan(0);
     expect(tokens.every((token) => token === NO_HOST_TOKEN_PROBE)).toBe(true);
+    expect(harness.state.hostRowReads).toEqual([]);
     expect(provisionFrames()).toEqual([]);
   }, 30_000);
-
-  it("ends on the first 404 when authn says the computer is a team's", async () => {
-    const outcome = await probe("team-missing", 8_000);
-    expect(outcome).toEqual({ kind: "mint-unavailable" });
-    expect(openTokens()).not.toContain(SIGN_IN);
-    expect(provisionFrames()).toEqual([]);
-  }, 15_000);
 });
