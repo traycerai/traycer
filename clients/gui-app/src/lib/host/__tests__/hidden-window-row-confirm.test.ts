@@ -1,8 +1,9 @@
 /**
- * A hidden window re-reads the registry before its remote attach carries the
- * person's sign-in (`confirmRowWhenHidden`), through the app's real runtime
- * messenger against a fake released relay host: the host refuses the
- * host-only token the released way and admits the sign-in.
+ * A window whose registry view may be stale from being hidden reads the
+ * registry again before its remote attach carries the person's sign-in
+ * (`confirmRowWhenHidden`), through the real host directory service and the
+ * app's real runtime messenger, against a fake released relay host: the host
+ * refuses the host-only token the released way and admits the sign-in.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -14,7 +15,12 @@ import {
   createMemoryHostTokenPersistence,
 } from "@traycer-clients/shared/auth/host-token-source";
 import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  RemoteHostDirectoryEntry,
+  RemoteHostFetchOutcome,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { RegisteredHostsChange } from "@traycer-clients/shared/platform/runner-host";
 import { ROW_CONFIRM_CEILING_MS } from "@traycer-clients/shared/host-transport/row-confirmation";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { retireAllRemoteSessions } from "@traycer-clients/shared/host-transport/remote/active-remote-sessions";
@@ -28,6 +34,7 @@ import {
 import { SESSION_CAPABILITY_CREDENTIAL_UPDATE } from "@traycer/protocol/host-transport/mux";
 import { buildRuntimeHostMessenger } from "@/lib/host/host-messenger";
 import { confirmRowWhenHidden } from "@/lib/host/hidden-window-row-confirm";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import {
   __resetDocumentVisibilitySubscribersForTests,
   __setBrowserDocumentHiddenForTests,
@@ -82,6 +89,8 @@ vi.mock(
 const USER_ID = AUTHENTICATED_USER_FIXTURE_ID;
 const SIGN_IN = "person-sign-in";
 const WAIT = { timeout: 10_000, interval: 20 };
+/** Captured before any test fakes the clock. */
+const realSetTimeout = globalThis.setTimeout;
 
 const echoV10 = defineRpcContract({
   method: "host.echo",
@@ -127,35 +136,34 @@ function hex(bytes: Uint8Array): string {
 
 let hostCounter = 0;
 
-interface Scenario {
-  readonly relay: FakeRelayHost;
-  readonly hostId: string;
-  readonly setRow: (owner: RemoteHostDirectoryEntry["owner"]) => void;
-}
-
-/** One `host.echo` call to a remote row owned by the signed-in person, through the real runtime messenger. */
-function startCall(
-  confirm: () => Promise<unknown>,
-  disposers: Array<() => void>,
-): Scenario {
-  hostCounter += 1;
-  const hostId = `hidden-row-confirm-${hostCounter}`;
-  const relay = new FakeRelayHost();
-  releasedHost(relay);
-  relayHolder.factory = relay.factory;
-  let row: RemoteHostDirectoryEntry = {
+function personalRow(
+  hostId: string,
+  relay: FakeRelayHost,
+  owner: RemoteHostDirectoryEntry["owner"],
+): RemoteHostDirectoryEntry {
+  return {
     ...remoteEntry(hostId, null),
     version: "9.9.9",
     publicKey: hex(relay.hostStaticPublicKey),
-    owner: { kind: "user", id: USER_ID },
+    owner,
     remoteStatus: {
       ...remoteEntry(hostId, null).remoteStatus,
       appVersion: "9.9.9",
     },
   };
+}
+
+/** One `host.echo` call to `hostId`, through the real runtime messenger, reading its row from `resolveTarget`. */
+function callThroughMessenger(input: {
+  readonly hostId: string;
+  readonly resolveTarget: (hostId: string) => RemoteHostDirectoryEntry | null;
+  readonly confirm: () => Promise<unknown>;
+  readonly disposers: Array<() => void>;
+}): void {
+  const { hostId, resolveTarget, confirm, disposers } = input;
   const binding = buildRuntimeHostMessenger({
     registry,
-    resolveTarget: (id) => (id === hostId ? row : null),
+    resolveTarget,
     confirmRowBeforeSignIn: confirm,
     auth: null,
     authnBaseUrl: "https://authn.test",
@@ -182,139 +190,264 @@ function startCall(
         replayMustBeKeyed: false,
         requiredHostMethodVersion: null,
         authority: {
-          endpoint: { hostId, websocketUrl: row.websocketUrl ?? "" },
+          endpoint: {
+            hostId,
+            websocketUrl: resolveTarget(hostId)?.websocketUrl ?? "",
+          },
           bearer: new MutableBearerLease(SIGN_IN, USER_ID),
           abortSignal: new AbortController().signal,
         },
       },
     )
     .catch(() => undefined);
-  return {
-    relay,
-    hostId,
-    setRow: (owner) => {
-      row = { ...row, owner };
-    },
-  };
 }
 
-describe("a hidden window's remote sign-in", () => {
+describe("a window's remote sign-in with the real host directory", () => {
   const disposers: Array<() => void> = [];
+  const TEAM = { kind: "team", id: "team-1", name: "Team" } as const;
 
   beforeEach(() => {
     processReleasedHosts.forgetAll();
     useAuthStore.setState({ status: "signed-in" });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     for (const dispose of disposers.splice(0)) dispose();
+    vi.useRealTimers();
     retireAllRemoteSessions();
     __setBrowserDocumentHiddenForTests(false);
     __resetDocumentVisibilitySubscribersForTests();
     relayHolder.factory = null;
   });
 
-  /** What a visible window's call opens with: the open this window had before the confirmation existed. */
-  async function visibleBaseline(): Promise<{
-    readonly bearers: readonly string[];
-    readonly authz: readonly unknown[];
+  /**
+   * The real directory service riding the shell's registry pushes, with the
+   * registry read the test controls: the first read (at start) lists the
+   * person's own computer; each later read waits for `answerRead`.
+   */
+  async function startWithDirectory(mode: "push" | "poll"): Promise<{
+    readonly relay: FakeRelayHost;
+    readonly hostId: string;
+    readonly directory: HostDirectoryService;
+    readonly push: () => void;
+    readonly reads: () => number;
+    readonly answerRead: (outcome: RemoteHostFetchOutcome) => void;
+    readonly rowOwnedBy: (
+      owner: RemoteHostDirectoryEntry["owner"],
+    ) => RemoteHostDirectoryEntry;
+    readonly call: (confirm: () => Promise<unknown>) => void;
   }> {
-    __setBrowserDocumentHiddenForTests(false);
-    const refresh = vi.fn(() => Promise.resolve());
-    const run = startCall(
-      confirmRowWhenHidden(() => ({ refresh })),
-      disposers,
-    );
-    await vi.waitFor(
-      () => expect(run.relay.openBearers).toContain(SIGN_IN),
-      WAIT,
-    );
-    const baseline = {
-      bearers: [...run.relay.openBearers],
-      authz: [...run.relay.openAuthz],
+    hostCounter += 1;
+    const hostId = `hidden-row-confirm-directory-${hostCounter}`;
+    const relay = new FakeRelayHost();
+    releasedHost(relay);
+    relayHolder.factory = relay.factory;
+    const rowOwnedBy = (owner: RemoteHostDirectoryEntry["owner"]) =>
+      personalRow(hostId, relay, owner);
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
+    const handlers = new Set<(change: RegisteredHostsChange) => void>();
+    // Without this override the mock shell has no registry push, and the
+    // directory polls on its own interval instead.
+    if (mode === "push")
+      host.onRegisteredHostsChange = (handler) => {
+        handlers.add(handler);
+        return { dispose: () => handlers.delete(handler) };
+      };
+    const pending: Array<(outcome: RemoteHostFetchOutcome) => void> = [];
+    let reads = 0;
+    const directory = new HostDirectoryService({
+      authContextId: () => USER_ID,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      onRegistryPollTick: null,
+      remoteFetcher: () => {
+        reads += 1;
+        if (reads === 1)
+          return Promise.resolve({
+            kind: "hosts",
+            entries: [rowOwnedBy({ kind: "user", id: USER_ID })],
+          });
+        return new Promise<RemoteHostFetchOutcome>((resolve) => {
+          pending.push(resolve);
+        });
+      },
+    });
+    disposers.push(() => directory.dispose());
+    await directory.start();
+    expect(reads).toBe(1);
+    return {
+      relay,
+      hostId,
+      directory,
+      push: () => {
+        for (const handler of handlers)
+          handler({ identityKey: USER_ID, response: { hosts: [] } });
+      },
+      reads: () => reads,
+      answerRead: (outcome) => {
+        const answer = pending.shift();
+        if (answer === undefined) throw new Error("no registry read pending");
+        answer(outcome);
+      },
+      rowOwnedBy,
+      call: (confirm) => {
+        callThroughMessenger({
+          hostId,
+          resolveTarget: (id) => {
+            const row = directory.findById(id);
+            return row === null || row.kind !== "remote" ? null : row;
+          },
+          confirm,
+          disposers,
+        });
+      },
     };
-    disposers.splice(0).forEach((dispose) => dispose());
-    retireAllRemoteSessions();
-    processReleasedHosts.forgetAll();
-    return baseline;
   }
 
-  it("opens with no sign-in when the computer moved to a team and the registry read committed", async () => {
+  /** The window was hidden when a push arrived: the directory skipped it. */
+  function skipPushWhileHidden(setup: { readonly push: () => void }): void {
     __setBrowserDocumentHiddenForTests(true);
-    let scenario: Scenario | null = null;
-    const refresh = vi.fn(() => {
-      scenario?.setRow({ kind: "team", id: "team-1", name: "Team" });
-      return Promise.resolve();
-    });
-    scenario = startCall(
-      confirmRowWhenHidden(() => ({ refresh })),
-      disposers,
-    );
-    const run = scenario;
+    setup.push();
+  }
 
-    // The second open is the one the sign-in would ride: the host-only token
-    // is written again, with the grant, once the read has moved the row.
+  /**
+   * Past the redial's backoff on the fake clock, then a moment of real time for
+   * the relay's asynchronous crypto, so an attach that did not wait has
+   * written its open by the time a test looks. The fake clock alone does not
+   * move a handshake. It stays under the confirmation's ceiling.
+   */
+  async function letRelayRun(): Promise<void> {
+    await vi.advanceTimersByTimeAsync(2_000);
+    await new Promise<void>((resolve) => {
+      realSetTimeout(resolve, 300);
+    });
+  }
+
+  /** The window is visible, and `visibilitychange` has not reached the directory's listener yet. */
+  function showWithoutNotifying(): void {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => false,
+    });
+  }
+
+  it("waits for the read the listener started, and sends no sign-in once it commits a team row, though the window is visible again", async () => {
+    const run = await startWithDirectory("push");
+    skipPushWhileHidden(run);
+    // The window shows: the listener acts on the skipped push, and its read is
+    // still in flight when the attach begins.
+    __setBrowserDocumentHiddenForTests(false);
+    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    run.call(confirmRowWhenHidden(() => run.directory));
+    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
+    await letRelayRun();
+
+    expect(run.relay.openBearers).toEqual([""]);
+    expect(run.reads()).toBe(2);
+    run.answerRead({ kind: "hosts", entries: [run.rowOwnedBy(TEAM)] });
     await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
-    expect(refresh).toHaveBeenCalledTimes(1);
     expect(run.relay.openBearers).toEqual(["", ""]);
-    expect(run.relay.openAuthz.every((authz) => authz !== null)).toBe(true);
-  });
+  }, 20_000);
+
+  it("starts the one read itself when the window is visible but the listener has not yet run, and waits for it", async () => {
+    const run = await startWithDirectory("push");
+    skipPushWhileHidden(run);
+    // Visible, with the push still skipped and no read: the listener has not run.
+    showWithoutNotifying();
+    run.call(confirmRowWhenHidden(() => run.directory));
+    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    await letRelayRun();
+
+    expect(run.relay.openBearers).toEqual([""]);
+    run.answerRead({ kind: "hosts", entries: [run.rowOwnedBy(TEAM)] });
+    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    expect(run.relay.openBearers).toEqual(["", ""]);
+  }, 20_000);
+
+  it("joins a read already running and starts no second one beside it", async () => {
+    const run = await startWithDirectory("push");
+    skipPushWhileHidden(run);
+    const running = run.directory.refresh();
+    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    run.call(confirmRowWhenHidden(() => run.directory));
+    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
+    await letRelayRun();
+
+    expect(run.relay.openBearers).toEqual([""]);
+    expect(run.reads()).toBe(2);
+    run.answerRead({
+      kind: "hosts",
+      entries: [run.rowOwnedBy({ kind: "user", id: USER_ID })],
+    });
+    await running;
+    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    expect(run.relay.openBearers).toEqual(["", SIGN_IN]);
+    expect(run.reads()).toBe(2);
+  }, 20_000);
+
+  it("returns at once, reading nothing, in a visible window with no push skipped", async () => {
+    const run = await startWithDirectory("push");
+    run.call(confirmRowWhenHidden(() => run.directory));
+
+    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    expect(run.relay.openBearers).toEqual(["", SIGN_IN]);
+    expect(run.reads()).toBe(1);
+  }, 20_000);
+
+  it("waits for the show tick's read, in a window with no shell push, and sends no sign-in once it commits a team row", async () => {
+    const run = await startWithDirectory("poll");
+    // The hidden span skipped the poll ticks; showing the window fires one tick,
+    // whose read is in flight when the attach begins.
+    __setBrowserDocumentHiddenForTests(true);
+    __setBrowserDocumentHiddenForTests(false);
+    await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
+    run.call(confirmRowWhenHidden(() => run.directory));
+    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(1), WAIT);
+    await letRelayRun();
+
+    expect(run.relay.openBearers).toEqual([""]);
+    expect(run.reads()).toBe(2);
+    run.answerRead({ kind: "hosts", entries: [run.rowOwnedBy(TEAM)] });
+    await vi.waitFor(() => expect(run.relay.openBearers).toHaveLength(2), WAIT);
+    expect(run.relay.openBearers).toEqual(["", ""]);
+  }, 20_000);
 
   it.each([
-    {
-      name: "fails",
-      refresh: () => Promise.reject(new Error("registry unreachable")),
-      pastCeiling: false,
-    },
-    {
-      name: "passes the ceiling",
-      refresh: () => new Promise<void>(() => undefined),
-      pastCeiling: true,
-    },
+    { name: "fails", pastCeiling: false },
+    { name: "does not answer within its ceiling", pastCeiling: true },
   ])(
-    "opens exactly as a visible window does when the registry read $name, and tells the door nothing",
-    async ({ refresh: read, pastCeiling }) => {
-      const baseline = await visibleBaseline();
-      __setBrowserDocumentHiddenForTests(true);
-      if (pastCeiling) vi.useFakeTimers({ shouldAdvanceTime: true });
-      const refresh = vi.fn(read);
-      const run = startCall(
-        confirmRowWhenHidden(() => ({ refresh })),
-        disposers,
-      );
-
-      await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1), WAIT);
+    "keeps the row last confirmed, and sends the sign-in, when the read $name",
+    async ({ pastCeiling }) => {
+      const run = await startWithDirectory("push");
+      skipPushWhileHidden(run);
+      run.call(confirmRowWhenHidden(() => run.directory));
+      await vi.waitFor(() => expect(run.reads()).toBe(2), WAIT);
       if (pastCeiling) {
-        // The attach is still waiting on the read: only the host-only token's
-        // open has been written.
-        expect(run.relay.openBearers).toEqual([""]);
         await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS);
+      } else {
+        run.answerRead({ kind: "failed" });
       }
+
       await vi.waitFor(
-        () => expect(run.relay.openBearers).toContain(SIGN_IN),
+        () => expect(run.relay.openBearers).toEqual(["", SIGN_IN]),
         WAIT,
       );
-
-      expect([...run.relay.openBearers]).toEqual([...baseline.bearers]);
-      expect([...run.relay.openAuthz]).toEqual([...baseline.authz]);
       expect(hostDoorStateFor(run.hostId)).toBeNull();
     },
     20_000,
   );
-
-  it("does not read the registry in a visible window", async () => {
-    __setBrowserDocumentHiddenForTests(false);
-    const refresh = vi.fn(() => Promise.resolve());
-    const run = startCall(
-      confirmRowWhenHidden(() => ({ refresh })),
-      disposers,
-    );
-
-    await vi.waitFor(
-      () => expect(run.relay.openBearers).toContain(SIGN_IN),
-      WAIT,
-    );
-    expect(refresh).not.toHaveBeenCalled();
-  });
 });
