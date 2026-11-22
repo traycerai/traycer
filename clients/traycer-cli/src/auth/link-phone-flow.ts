@@ -17,6 +17,10 @@ import { config } from "../config";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandContext } from "../runner/runner";
+import {
+  openStoredSignIn,
+  type StoredSignIn,
+} from "../internal/stored-sign-in-ask";
 import { validateStoredCredentials } from "./validate";
 
 /**
@@ -232,11 +236,12 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Resolves the bearer this flow mints under. Mirrors `whoami`'s vocabulary so
+ * Resolves the sign-in this flow runs on: its mint, status reads and answer all
+ * share it, and its one refresh after a 401. Mirrors `whoami`'s vocabulary so
  * "not signed in" and "the service is unreachable" stay distinguishable in a
  * script's exit code.
  */
-async function requireBearerToken(): Promise<string> {
+async function requireSignIn(): Promise<StoredSignIn> {
   const validation = await validateStoredCredentials();
   if (validation.kind === "network-error") {
     throw cliError({
@@ -263,7 +268,11 @@ async function requireBearerToken(): Promise<string> {
       exitCode: 1,
     });
   }
-  return validation.credentials.token;
+  return openStoredSignIn({
+    token: validation.credentials.token,
+    authnBaseUrl: config.authnBaseUrl,
+    userId: validation.credentials.user.id,
+  });
 }
 
 function mintFailure(outcome: MintLinkLoginCodeFetchResult): never {
@@ -350,7 +359,7 @@ interface WatchedCode {
  */
 async function watchUntilClaimed(
   ctx: CommandContext,
-  bearerToken: string,
+  signIn: StoredSignIn,
   showQr: boolean,
   quiet: boolean,
 ): Promise<{
@@ -365,11 +374,12 @@ async function watchUntilClaimed(
   // has no such code to fall back on, so the caller below still treats it as
   // terminal there.
   const mintAndPrint = async (): Promise<WatchedCode | "claim-pending"> => {
-    const outcome = await mintLinkLoginCodeViaHttp(
-      authnBaseUrl,
-      bearerToken,
+    const minted = await signIn.ask(
+      (token) => mintLinkLoginCodeViaHttp(authnBaseUrl, token, null),
+      (answer) => answer.kind === "unauthorized" && answer.status === 401,
       null,
     );
+    const outcome = minted.kind === "answered" ? minted.answer : minted.first;
     if (outcome.kind === "claim-pending") {
       return "claim-pending";
     }
@@ -415,12 +425,13 @@ async function watchUntilClaimed(
           : startCodeFooter(ctx, watched.rotateAtMs);
       }
 
-      const status = await linkLoginStatusViaHttp(
-        authnBaseUrl,
-        bearerToken,
-        watched.minted.code,
+      const { code } = watched.minted;
+      const read = await signIn.ask(
+        (token) => linkLoginStatusViaHttp(authnBaseUrl, token, code, null),
+        (answer) => answer.kind === "unauthorized" && answer.status === 401,
         null,
       );
+      const status = read.kind === "answered" ? read.answer : read.first;
 
       if (status.kind === "unauthorized") {
         throw cliError({
@@ -569,10 +580,10 @@ export async function runLinkPhoneFlow(
     });
   }
 
-  const bearerToken = await requireBearerToken();
+  const signIn = await requireSignIn();
   const claim = await watchUntilClaimed(
     ctx,
-    bearerToken,
+    signIn,
     options.showQr,
     ctx.runtime.quiet,
   );
@@ -590,12 +601,15 @@ export async function runLinkPhoneFlow(
     claimExpiresAt === undefined ? null : { expiresAtMs: claimExpiresAt },
   );
 
-  const responded = await respondLinkLoginViaHttp(
-    config.authnBaseUrl,
-    bearerToken,
-    claim.code,
-    approve,
+  // A refused refresh leaves authn's own refusal as the answer.
+  const response = await signIn.ask(
+    (token) =>
+      respondLinkLoginViaHttp(config.authnBaseUrl, token, claim.code, approve),
+    (answer) => answer.kind === "unauthorized" && answer.status === 401,
+    null,
   );
+  const responded =
+    response.kind === "answered" ? response.answer : response.first;
   switch (responded.kind) {
     case "ok":
       break;

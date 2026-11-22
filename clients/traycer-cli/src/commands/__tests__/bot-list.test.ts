@@ -749,7 +749,10 @@ describe("bot list", () => {
 
     it("reports the stored credential rejected when authn refuses the directory read", async () => {
       stageThreeEnvironments();
-      hoisted.readHostOwnership.mockResolvedValue({ kind: "unauthorized" });
+      hoisted.readHostOwnership.mockResolvedValue({
+        kind: "unauthorized",
+        status: 401,
+      });
 
       await expect(runList()).rejects.toMatchObject({
         code: CLI_ERROR_CODES.AUTH_REJECTED,

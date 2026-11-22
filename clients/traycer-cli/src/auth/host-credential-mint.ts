@@ -34,6 +34,12 @@ export interface CliHostCredentialMintOptions {
    * callers with no such follow-up pass null.
    */
   readonly onUnauthorized: (() => void) | null;
+  /**
+   * Refreshes the sign-in `bearer` reads, true when it holds a new token. A 401
+   * spends it once for the life of this flow, then the mint is sent once more;
+   * null where the caller judges a refused mint itself.
+   */
+  readonly renewSignIn: (() => Promise<boolean>) | null;
 }
 
 /**
@@ -51,18 +57,31 @@ export interface CliHostCredentialMintOptions {
 export function createCliHostCredentialMintFlow(
   options: CliHostCredentialMintOptions,
 ): HostCredentialMintFlow {
+  let renewSpent = false;
   return async (request): Promise<HostCredentialMintOutcome> => {
     const bearer = options.bearer();
     if (bearer === null || bearer.length === 0) {
       return { kind: "unavailable" };
     }
 
-    const result = await mintHostCredentialViaHttp(
-      options.authnBaseUrl,
-      bearer,
-      { hostId: request.hostId, hostLabel: hostLabel(), platform: null },
-      options.signal,
-    );
+    const mint = (token: string) =>
+      mintHostCredentialViaHttp(
+        options.authnBaseUrl,
+        token,
+        { hostId: request.hostId, hostLabel: hostLabel(), platform: null },
+        options.signal,
+      );
+    let result = await mint(bearer);
+    if (
+      result.kind === "unauthorized" &&
+      result.status === 401 &&
+      options.renewSignIn !== null &&
+      !renewSpent
+    ) {
+      renewSpent = true;
+      const renewed = (await options.renewSignIn()) ? options.bearer() : null;
+      if (renewed !== null && renewed.length > 0) result = await mint(renewed);
+    }
     if (result.kind === "ok") {
       return provisionedFrom(result.response);
     }

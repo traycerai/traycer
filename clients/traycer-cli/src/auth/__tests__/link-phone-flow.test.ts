@@ -3,7 +3,7 @@ import {
   linkLoginStatusViaHttp,
   mintLinkLoginCodeViaHttp,
   respondLinkLoginViaHttp,
-  type MintLinkLoginCodeFetchResult,
+  type MintLinkLoginCodeHttpResult,
 } from "../../../../shared/auth/link-login";
 import { runLinkPhoneFlow, type LinkPhoneResult } from "../link-phone-flow";
 import { validateStoredCredentials } from "../validate";
@@ -136,7 +136,7 @@ function printed(ctx: CommandContext): string {
   return vi.mocked(ctx.output.humanRequired).mock.calls.join("\n");
 }
 
-function mintedCode(code: string): MintLinkLoginCodeFetchResult {
+function mintedCode(code: string): MintLinkLoginCodeHttpResult {
   return {
     kind: "ok",
     response: {
@@ -816,7 +816,7 @@ describe("runLinkPhoneFlow", () => {
     // An `unauthorized` status is the credential dying mid-watch. Continuing
     // would leave a QR on screen whose claim this terminal can no longer see,
     // so the phone waits on an approval that can never be asked for.
-    statusMock.mockResolvedValue({ kind: "unauthorized" });
+    statusMock.mockResolvedValue({ kind: "unauthorized", status: 401 });
 
     const result = await runWithPolls(interactiveCtx(), 1);
 
@@ -864,7 +864,7 @@ describe("runLinkPhoneFlow", () => {
     // The bearer died between the mint and the answer; nothing was decided,
     // and the phone is still waiting. Saying so beats exiting silently.
     statusMock.mockResolvedValue(CLAIMED);
-    respondMock.mockResolvedValue({ kind: "unauthorized" });
+    respondMock.mockResolvedValue({ kind: "unauthorized", status: 401 });
     answer.current = "y";
 
     const result = await runWithPolls(interactiveCtx(), 1);

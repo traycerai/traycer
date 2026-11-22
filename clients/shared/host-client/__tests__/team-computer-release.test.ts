@@ -118,13 +118,16 @@ describe("team computer release results", () => {
   it("maps a 403 whose body is not JSON to unauthorized", async () => {
     stubFetch(async () => new Response("private", { status: 403 }));
 
-    await expect(release()).resolves.toEqual({ kind: "unauthorized" });
+    await expect(release()).resolves.toEqual({
+      kind: "unauthorized",
+      status: 403,
+    });
   });
 
   it.each([401, 403])("maps HTTP %i to unauthorized", async (status) => {
     stubFetch(async () => jsonResponse(status, { message: "private" }));
 
-    await expect(release()).resolves.toEqual({ kind: "unauthorized" });
+    await expect(release()).resolves.toEqual({ kind: "unauthorized", status });
   });
 
   it.each([

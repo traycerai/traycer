@@ -22,6 +22,13 @@ export interface CliEnvironmentCloud {
   readonly cloud: EnvironmentCloud;
   /** It refused the one refresh, or the one resend after an accepted one; an unreachable refresh judges nothing. */
   readonly signInRejected: () => boolean;
+  /**
+   * After a 401 on a call outside the transport: the command's one refresh, if
+   * unspent and still this sign-in, and the token to resend on. Null otherwise.
+   */
+  readonly renewAfterRefusal: (
+    signal: AbortSignal | null,
+  ) => Promise<string | null>;
 }
 
 /** `not-own`: no longer the sign-in this command holds (a sign-out, another sign-in, another process's refresh). */
@@ -67,7 +74,7 @@ export function createCliEnvironmentCloud(auth: HostAuth): CliEnvironmentCloud {
   // The store's own rotate, not the shared revalidator: the revalidator adopts
   // a `superseded` pair as a refresh, which here is another sign-in. Only a
   // pair this command committed under the lock continues its sign-in.
-  const refresh = async (signal: AbortSignal): Promise<OwnRefresh> => {
+  const refresh = async (signal: AbortSignal | null): Promise<OwnRefresh> => {
     const held = readLeaseBearer(lease);
     if (held === null) return "not-own";
     const store = createCliCredentialsStore();
@@ -112,15 +119,23 @@ export function createCliEnvironmentCloud(auth: HostAuth): CliEnvironmentCloud {
     }
   };
 
+  // The command's one refresh, whichever call's 401 asks for it first.
+  const renewAfterRefusal = async (
+    signal: AbortSignal | null,
+  ): Promise<string | null> => {
+    if (refreshSpent) return null;
+    refreshSpent = true;
+    if (!onOriginSignIn()) return null;
+    const outcome = await refresh(signal);
+    if (outcome === "rejected") rejected = true;
+    if (outcome !== "refreshed" || !onOriginSignIn()) return null;
+    return readLeaseBearer(lease);
+  };
+
   const transport: EnvironmentTransport = async (request) => {
     const answer = await fetchEnvironmentTransport(request);
-    if (answer.status !== 401 || refreshSpent) return answer;
-    refreshSpent = true;
-    if (!onOriginSignIn()) return answer;
-    const outcome = await refresh(request.signal);
-    if (outcome === "rejected") rejected = true;
-    if (outcome !== "refreshed" || !onOriginSignIn()) return answer;
-    const token = readLeaseBearer(lease);
+    if (answer.status !== 401) return answer;
+    const token = await renewAfterRefusal(request.signal);
     if (token === null) return answer;
     const again = await fetchEnvironmentTransport({
       ...request,
@@ -138,5 +153,6 @@ export function createCliEnvironmentCloud(auth: HostAuth): CliEnvironmentCloud {
       onOriginSignIn,
     },
     signInRejected: () => rejected,
+    renewAfterRefusal,
   };
 }

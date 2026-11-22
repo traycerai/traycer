@@ -36,6 +36,7 @@ describe("createCliHostCredentialMintFlow", () => {
       signal: null,
       unavailableNote: "continuing without a host credential.",
       onUnauthorized: null,
+      renewSignIn: null,
     });
 
     await expect(
@@ -65,6 +66,7 @@ describe("createCliHostCredentialMintFlow", () => {
       signal: null,
       unavailableNote: "continuing without a host credential.",
       onUnauthorized: null,
+      renewSignIn: null,
     });
 
     await expect(
@@ -81,6 +83,7 @@ describe("createCliHostCredentialMintFlow", () => {
       signal: null,
       unavailableNote: "continuing without a host credential.",
       onUnauthorized: null,
+      renewSignIn: null,
     });
 
     await expect(
@@ -91,12 +94,12 @@ describe("createCliHostCredentialMintFlow", () => {
 
   it.each([
     { kind: "superseded" as const },
-    { kind: "unauthorized" as const },
+    { kind: "unauthorized" as const, status: 401 as const },
     { kind: "network-error" as const },
   ])(
     "returns unavailable (never throws) when the server responds $kind, including the 409 supersede path",
-    async ({ kind }) => {
-      mintMock.mockResolvedValue({ kind });
+    async (answer) => {
+      mintMock.mockResolvedValue(answer);
       const diag = vi.fn();
       const flow = createCliHostCredentialMintFlow({
         authnBaseUrl: "https://authn.example.test",
@@ -105,6 +108,7 @@ describe("createCliHostCredentialMintFlow", () => {
         signal: null,
         unavailableNote: "continuing without a host credential.",
         onUnauthorized: null,
+        renewSignIn: null,
       });
 
       await expect(
@@ -119,7 +123,7 @@ describe("createCliHostCredentialMintFlow", () => {
     // stored bearer fails for every client, so a caller with a follow-up
     // (the host install probe) needs to know, even though the flow itself
     // still returns the same `unavailable` the stream contract has room for.
-    mintMock.mockResolvedValue({ kind: "unauthorized" });
+    mintMock.mockResolvedValue({ kind: "unauthorized", status: 401 });
     const onUnauthorized = vi.fn();
     const flow = createCliHostCredentialMintFlow({
       authnBaseUrl: "https://authn.example.test",
@@ -128,6 +132,7 @@ describe("createCliHostCredentialMintFlow", () => {
       signal: null,
       unavailableNote: "continuing without a host credential.",
       onUnauthorized,
+      renewSignIn: null,
     });
 
     await expect(
@@ -151,6 +156,7 @@ describe("createCliHostCredentialMintFlow", () => {
         signal: null,
         unavailableNote: "continuing without a host credential.",
         onUnauthorized,
+        renewSignIn: null,
       });
 
       await expect(

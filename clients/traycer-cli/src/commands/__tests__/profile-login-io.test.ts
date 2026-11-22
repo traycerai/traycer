@@ -179,7 +179,7 @@ describe("PROCESS_PROFILE_LOGIN_IO.signInRequests.recordSignInRequest", () => {
   });
 
   function record(): Promise<SignInRequestRecordAnswer> {
-    return PROCESS_PROFILE_LOGIN_IO.signInRequests.recordSignInRequest(
+    return PROCESS_PROFILE_LOGIN_IO.openSignInRequests().recordSignInRequest(
       REQUEST,
       new AbortController().signal,
     );

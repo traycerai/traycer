@@ -341,6 +341,8 @@ export async function provisionInstalledHostCredential(
       onUnauthorized: () => {
         mintUnauthorized = true;
       },
+      // A refused mint is judged below, by a rotation of its own.
+      renewSignIn: null,
     });
     // The stored access token has a ~4h TTL, so an ordinary "already signed
     // in" install routinely starts this probe on an EXPIRED bearer - the

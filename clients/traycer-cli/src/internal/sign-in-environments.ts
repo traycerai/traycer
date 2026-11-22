@@ -7,7 +7,7 @@ import { validateAuthTokenIdentityAccessOnly } from "../../../shared/auth/auth-v
 import { config } from "../config";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import { resolveHostAuth } from "./host-auth";
-import { askWithStoredSignIn } from "./stored-sign-in-ask";
+import { openStoredSignIn } from "./stored-sign-in-ask";
 import {
   AUTHN_UNREACHABLE_MESSAGE,
   hostTokenFailureCliError,
@@ -77,8 +77,8 @@ export async function readSignInEnvironments(): Promise<
 > {
   const auth = await resolveHostAuth();
   if (auth === null) throw hostTokenFailureCliError({ kind: "no-sign-in" });
-  const read = await askWithStoredSignIn(
-    auth,
+  // Any rejection gets the refresh, not only a 401: this read always has.
+  const read = await openStoredSignIn(auth).ask(
     (token) => validateAuthTokenIdentityAccessOnly(config.authnBaseUrl, token),
     (answer) => answer.kind === "rejected",
     null,

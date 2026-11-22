@@ -49,6 +49,7 @@ import {
   readHostPidMetadata,
 } from "./pid-metadata";
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
+import { openStoredSignIn } from "../internal/stored-sign-in-ask";
 import { readRunningChatCount, runningChatsLine } from "./running-chat-count";
 import {
   readSignInEnvironments,
@@ -547,11 +548,18 @@ async function attendedTeamInstallAfterSignIn(
   if (auth === null) throw signedOutCliError();
   // Minted for the environment the sign-in's own list resolved: the shared
   // client refuses an answer for any other, and that id is what is staged.
-  const minted = await mintTeamComputerInstallTokenViaHttp(
-    auth.authnBaseUrl,
-    auth.token,
-    target.environmentId,
+  // Its refusal is a 401 alone; a refused refresh leaves that refusal as the answer.
+  const mint = await openStoredSignIn(auth).ask(
+    (token) =>
+      mintTeamComputerInstallTokenViaHttp(
+        auth.authnBaseUrl,
+        token,
+        target.environmentId,
+      ),
+    (answer) => answer.kind === "unauthorized",
+    null,
   );
+  const minted = mint.kind === "answered" ? mint.answer : mint.first;
   ctx.runtime.logger.info("Team install token request settled", {
     environment: ctx.runtime.environment,
     outcome: minted.kind,
@@ -667,8 +675,8 @@ export async function useInstalledHostTeam(
   };
   const target = await resolveSignInTeam(team);
   const endpoint = await resolveEndpoint();
-  const auth = await resolveHostAuth();
-  if (auth === null) {
+  const stored = await resolveHostAuth();
+  if (stored === null) {
     throw cliError({
       code: CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
       message: "Sign in with `traycer login`, then run the command again.",
@@ -676,11 +684,17 @@ export async function useInstalledHostTeam(
       exitCode: 1,
     });
   }
-  const directory = await readHostOwnershipViaHttp(
-    auth.authnBaseUrl,
-    auth.token,
-    endpoint.hostId,
+  const signIn = openStoredSignIn(stored);
+  // A refused refresh leaves authn's own refusal as the answer.
+  const read = await signIn.ask(
+    (token) =>
+      readHostOwnershipViaHttp(stored.authnBaseUrl, token, endpoint.hostId),
+    (answer) => answer.kind === "unauthorized" && answer.status === 401,
+    null,
   );
+  const directory = read.kind === "answered" ? read.answer : read.first;
+  // Every later call of the transfer carries the sign-in the read was answered on.
+  const auth = signIn.current();
   const host = directory.kind === "ok" ? directory.host : undefined;
   if (host === undefined) {
     throw cliError({
@@ -792,7 +806,8 @@ async function giveInstalledHostToTeam(
   moveTarget: EnvironmentOperationTarget,
   planHash: string,
 ): Promise<EnvironmentHostBinding> {
-  const { cloud, signInRejected } = createCliEnvironmentCloud(auth);
+  const { cloud, signInRejected, renewAfterRefusal } =
+    createCliEnvironmentCloud(auth);
   // The computer can start the move and restart before `start`'s reply is
   // sent; the staged attempt is then followed on the status instead.
   const sent: { attemptId: string | null; startReplyLost: boolean } = {
@@ -858,11 +873,25 @@ async function giveInstalledHostToTeam(
   // the token the command started with.
   const token = cloud.onOriginSignIn() ? cloud.bearer.getBearerToken() : null;
   if (binding === null || token === null) throw teamTransferNotConfirmed();
-  const confirmed = await readHostOwnershipViaHttp(
+  // The wait across the restart can outlast that token: a 401 takes the
+  // transfer's one refresh, on this same sign-in, if it is still unspent.
+  const first = await readHostOwnershipViaHttp(
     auth.authnBaseUrl,
     token,
     endpoint.hostId,
   );
+  const renewed =
+    first.kind === "unauthorized" && first.status === 401
+      ? await renewAfterRefusal(null)
+      : null;
+  const confirmed =
+    renewed === null
+      ? first
+      : await readHostOwnershipViaHttp(
+          auth.authnBaseUrl,
+          renewed,
+          endpoint.hostId,
+        );
   if (
     !cloud.onOriginSignIn() ||
     confirmed.kind !== "ok" ||

@@ -55,6 +55,11 @@ export type MintHostCredentialFetchResult =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
+/** What the HTTP call returns: a refusal also says whether authn sent 401 or 403. */
+export type MintHostCredentialHttpResult =
+  | Exclude<MintHostCredentialFetchResult, { readonly kind: "unauthorized" }>
+  | { readonly kind: "unauthorized"; readonly status: 401 | 403 };
+
 export type StepUpChallengeFetchResult =
   | { readonly kind: "ok"; readonly response: StepUpChallengeResponse }
   | { readonly kind: "unauthorized" }
@@ -303,7 +308,7 @@ export async function mintHostCredentialViaHttp(
   bearerToken: string,
   request: MintHostCredentialRequest,
   signal: AbortSignal | null,
-): Promise<MintHostCredentialFetchResult> {
+): Promise<MintHostCredentialHttpResult> {
   const response = await fetchAuthn(
     authnBaseUrl,
     "api/v3/hosts/token",
@@ -324,7 +329,7 @@ export async function mintHostCredentialViaHttp(
     return { kind: "superseded" };
   }
   if (response.status === 401 || response.status === 403) {
-    return { kind: "unauthorized" };
+    return { kind: "unauthorized", status: response.status };
   }
   if (response.status === 400) {
     // The server refused this hostId outright (not a UUID, or oversized). No

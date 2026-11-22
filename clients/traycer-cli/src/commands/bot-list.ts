@@ -8,6 +8,7 @@ import {
   type BotSnapshot,
 } from "../internal/bot-host";
 import { resolveHostAuth } from "../internal/host-auth";
+import { openStoredSignIn } from "../internal/stored-sign-in-ask";
 import {
   HOST_OWNERSHIP_UNCONFIRMED_MESSAGE,
   signedOutCliError,
@@ -123,11 +124,13 @@ async function environmentsOnThisComputer(
 ): Promise<readonly SignInEnvironment[]> {
   const auth = await resolveHostAuth();
   if (auth === null) throw signedOutCliError();
-  const directory = await readHostOwnershipViaHttp(
-    auth.authnBaseUrl,
-    auth.token,
-    hostId,
+  // A refused refresh leaves authn's own refusal as the answer.
+  const read = await openStoredSignIn(auth).ask(
+    (token) => readHostOwnershipViaHttp(auth.authnBaseUrl, token, hostId),
+    (answer) => answer.kind === "unauthorized" && answer.status === 401,
+    null,
   );
+  const directory = read.kind === "answered" ? read.answer : read.first;
   switch (directory.kind) {
     case "unauthorized":
       throw storedCredentialRejectedCliError();

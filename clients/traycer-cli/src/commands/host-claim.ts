@@ -10,9 +10,12 @@ import {
   resolveEndpoint,
   toAgentCliError,
 } from "../internal/host-rpc";
-import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
+import { resolveHostAuth } from "../internal/host-auth";
 import { storedCredentialRejectedCliError } from "../internal/host-door-words";
-import { askWithStoredSignIn } from "../internal/stored-sign-in-ask";
+import {
+  openStoredSignIn,
+  type StoredSignIn,
+} from "../internal/stored-sign-in-ask";
 import {
   formatCredentialProvisionNote,
   provisionRunningHostCredential,
@@ -64,10 +67,12 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
       );
     }
     const endpoint = await resolveEndpoint();
-    const { host, signedIn } = await readOwnershipForClaim(
-      auth,
-      endpoint.hostId,
-    );
+    // One refresh at most for the whole claim, shared by the read and the release.
+    const signIn = openStoredSignIn(auth);
+    const host = await readOwnershipForClaim(signIn, endpoint.hostId);
+    // The sign-in the read was answered on: a refreshed one replaces the
+    // stored token for every later call of this command.
+    const signedIn = signIn.current();
     if (host.kind === "sandbox") {
       throw claimRefused(CLI_ERROR_CODES.HOST_IS_SANDBOX, CLAIM_WORDS.sandbox);
     }
@@ -104,8 +109,7 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
     }
     // The question can outlast the token the read was answered on. A refused
     // refresh leaves the release's own refusal as the answer.
-    const release = await askWithStoredSignIn(
-      signedIn,
+    const release = await signIn.ask(
       (token) =>
         releaseTeamComputerViaHttp(
           signedIn.authnBaseUrl,
@@ -113,7 +117,7 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
           endpoint.hostId,
           environmentId,
         ),
-      (answer) => answer.kind === "unauthorized",
+      (answer) => answer.kind === "unauthorized" && answer.status === 401,
       null,
     );
     const released =
@@ -169,17 +173,17 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
 
 /**
  * authn's row for this computer, read on the stored sign-in and refreshed once
- * if refused. A refused refresh is a sign-in to make again; any other failure
+ * on a 401. A refused refresh is a sign-in to make again; any other failure
  * leaves ownership unconfirmed.
  */
 async function readOwnershipForClaim(
-  auth: HostAuth,
+  signIn: StoredSignIn,
   hostId: string,
-): Promise<{ readonly host: HostOwnership; readonly signedIn: HostAuth }> {
-  const read = await askWithStoredSignIn(
-    auth,
-    (token) => readHostOwnershipViaHttp(auth.authnBaseUrl, token, hostId),
-    (answer) => answer.kind === "unauthorized",
+): Promise<HostOwnership> {
+  const read = await signIn.ask(
+    (token) =>
+      readHostOwnershipViaHttp(signIn.current().authnBaseUrl, token, hostId),
+    (answer) => answer.kind === "unauthorized" && answer.status === 401,
     null,
   );
   if (read.kind === "refresh-rejected") {
@@ -191,7 +195,7 @@ async function readOwnershipForClaim(
       CLAIM_WORDS.ownershipUnconfirmed,
     );
   }
-  return { host: read.answer.host, signedIn: read.auth };
+  return read.answer.host;
 }
 
 function confirmLines(running: RunningChats): string {

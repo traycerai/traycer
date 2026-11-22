@@ -20,7 +20,10 @@ import {
 } from "../../../shared/host-client/provider-sign-in-request";
 import { openInBrowser } from "../auth/login-flow";
 import { resolveHostAuth } from "../internal/host-auth";
-import { askWithStoredSignIn } from "../internal/stored-sign-in-ask";
+import {
+  openStoredSignIn,
+  type StoredSignIn,
+} from "../internal/stored-sign-in-ask";
 import {
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
@@ -98,7 +101,8 @@ export interface ProfileLoginIo {
     onLine: (line: string) => void,
     onInterrupt: () => void,
   ) => (() => void) | null;
-  readonly signInRequests: SignInRequestClient;
+  /** Called once per wait: its records share one stored sign-in and its one refresh. */
+  readonly openSignInRequests: () => SignInRequestClient;
 }
 
 export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
@@ -144,20 +148,26 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
       lines.close();
     };
   },
-  signInRequests: {
-    // A refused refresh leaves authn's own refusal as the answer.
-    recordSignInRequest: async (request, signal) => {
-      const auth = await resolveHostAuth();
-      if (auth === null) return { kind: "unauthorized" };
-      const recorded = await askWithStoredSignIn(
-        auth,
-        (token) =>
-          recordSignInRequestViaHttp(auth.authnBaseUrl, token, request, signal),
-        (answer) => answer.kind === "unauthorized",
-        signal,
-      );
-      return recorded.kind === "answered" ? recorded.answer : recorded.first;
-    },
+  openSignInRequests: () => {
+    let signIn: StoredSignIn | null = null;
+    return {
+      // A refused refresh leaves authn's own refusal as the answer.
+      recordSignInRequest: async (request, signal) => {
+        if (signIn === null) {
+          const auth = await resolveHostAuth();
+          if (auth === null) return { kind: "unauthorized" };
+          signIn = openStoredSignIn(auth);
+        }
+        const { authnBaseUrl } = signIn.current();
+        const recorded = await signIn.ask(
+          (token) =>
+            recordSignInRequestViaHttp(authnBaseUrl, token, request, signal),
+          (answer) => answer.kind === "unauthorized",
+          signal,
+        );
+        return recorded.kind === "answered" ? recorded.answer : recorded.first;
+      },
+    };
   },
 };
 
@@ -784,6 +794,7 @@ async function awaitUntilSettled(
   signal: AbortSignal,
 ): Promise<AwaitLoginResult | null> {
   const recorded = new Set<string>();
+  const signInRequests = io.openSignInRequests();
   let recordedOperationId: string | null = null;
   let repolls = 0;
   for (;;) {
@@ -813,7 +824,7 @@ async function awaitUntilSettled(
         : null;
     if (signInRequest !== null) {
       const recording = await recordSignInRequestOnce(
-        io.signInRequests,
+        signInRequests,
         recorded,
         signInRequest,
         signal,

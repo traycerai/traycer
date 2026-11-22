@@ -67,6 +67,11 @@ export type MintLinkLoginCodeFetchResult =
   | { readonly kind: "no-session-family" }
   | { readonly kind: "network-error" };
 
+/** What the HTTP call returns: a refusal also says whether authn sent 401 or 403. */
+export type MintLinkLoginCodeHttpResult =
+  | Exclude<MintLinkLoginCodeFetchResult, { readonly kind: "unauthorized" }>
+  | { readonly kind: "unauthorized"; readonly status: 401 | 403 };
+
 export type ClaimLinkLoginCodeFetchResult =
   | {
       readonly kind: "claimed";
@@ -97,12 +102,22 @@ export type LinkLoginStatusFetchResult =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
+/** What the HTTP call returns: a refusal also says whether authn sent 401 or 403. */
+export type LinkLoginStatusHttpResult =
+  | Exclude<LinkLoginStatusFetchResult, { readonly kind: "unauthorized" }>
+  | { readonly kind: "unauthorized"; readonly status: 401 | 403 };
+
 export type RespondLinkLoginFetchResult =
   | { readonly kind: "ok" }
   | { readonly kind: "already-decided" }
   | { readonly kind: "gone" }
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
+
+/** What the HTTP call returns: a refusal also says whether authn sent 401 or 403. */
+export type RespondLinkLoginHttpResult =
+  | Exclude<RespondLinkLoginFetchResult, { readonly kind: "unauthorized" }>
+  | { readonly kind: "unauthorized"; readonly status: 401 | 403 };
 
 function authnApiUrl(authnBaseUrl: string, path: string): string {
   return new URL(
@@ -333,7 +348,7 @@ export async function mintLinkLoginCodeViaHttp(
   authnBaseUrl: string,
   bearerToken: string,
   signal: AbortSignal | null,
-): Promise<MintLinkLoginCodeFetchResult> {
+): Promise<MintLinkLoginCodeHttpResult> {
   const response = await postJson(
     authnBaseUrl,
     "api/v3/auth/link/mint",
@@ -345,7 +360,7 @@ export async function mintLinkLoginCodeViaHttp(
     return { kind: "network-error" };
   }
   if (response.status === 401 || response.status === 403) {
-    return { kind: "unauthorized" };
+    return { kind: "unauthorized", status: response.status };
   }
   if (response.status === 409) {
     return { kind: "claim-pending" };
@@ -481,7 +496,7 @@ export async function linkLoginStatusViaHttp(
   bearerToken: string,
   code: string,
   signal: AbortSignal | null,
-): Promise<LinkLoginStatusFetchResult> {
+): Promise<LinkLoginStatusHttpResult> {
   const response = await postJson(
     authnBaseUrl,
     "api/v3/auth/link/status",
@@ -496,7 +511,7 @@ export async function linkLoginStatusViaHttp(
     return { kind: "network-error" };
   }
   if (response.status === 401 || response.status === 403) {
-    return { kind: "unauthorized" };
+    return { kind: "unauthorized", status: response.status };
   }
   if (response.status === 404) {
     return { kind: "gone" };
@@ -516,7 +531,7 @@ export async function respondLinkLoginViaHttp(
   bearerToken: string,
   code: string,
   approve: boolean,
-): Promise<RespondLinkLoginFetchResult> {
+): Promise<RespondLinkLoginHttpResult> {
   const response = await postJson(
     authnBaseUrl,
     "api/v3/auth/link/respond",
@@ -528,7 +543,7 @@ export async function respondLinkLoginViaHttp(
     return { kind: "network-error" };
   }
   if (response.status === 401 || response.status === 403) {
-    return { kind: "unauthorized" };
+    return { kind: "unauthorized", status: response.status };
   }
   if (response.status === 404) {
     return { kind: "gone" };

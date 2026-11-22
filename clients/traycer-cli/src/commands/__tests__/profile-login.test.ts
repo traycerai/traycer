@@ -541,7 +541,7 @@ function makeIo(hasTerminal: boolean): FakeIo {
       wait,
       onInterrupt,
       readLines,
-      signInRequests: currentSignInRequestFetch().client,
+      openSignInRequests: () => currentSignInRequestFetch().client,
     },
     stdinIsTerminal,
     openUrl,

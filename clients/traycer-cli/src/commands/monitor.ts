@@ -406,6 +406,8 @@ async function signInMonitorCredential(
       unavailableNote:
         "continuing without a host credential — it will stop working when this connection ends.",
       onUnauthorized: null,
+      renewSignIn: async () =>
+        (await revalidator.revalidateCurrentContext()) === "rotated",
     }),
     // Proactively refresh the sign-in shortly before its ~4h TTL, and buy the
     // host-only token with it at once, so a long-running monitor never

@@ -158,7 +158,7 @@ describe("readHostOwnershipViaHttp", () => {
 
     await expect(
       readHostOwnershipViaHttp(AUTHN, BEARER, HOST_ID),
-    ).resolves.toEqual({ kind: "unauthorized" });
+    ).resolves.toEqual({ kind: "unauthorized", status: 401 });
   });
 
   it.each(["location-bearing 302", "opaque redirect"] as const)(
