@@ -169,6 +169,7 @@ const UNCOMMENTABLE = "Comments can't be added on this page.";
 
 afterEach(() => {
   cleanup();
+  disposeBridges();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   frames.toast.mockClear();
@@ -309,6 +310,26 @@ it("closes on the first Escape immediately after opening and restores focus", as
 });
 
 describe("the floating controls chip", () => {
+  it("asks the page for a typed zoom level, and shows the level the page then reports", () => {
+    renderPages({ pageZoom: true });
+    const bridge = realBridge();
+    const setHtmlView = vi.spyOn(bridge, "setHtmlView");
+    act(() => frameProps().onBridge?.(bridge));
+    act(() => frameProps().onStatus("ready"));
+    setHtmlView.mockClear();
+    const zoomLevel = screen.getByLabelText<HTMLInputElement>("Zoom level");
+
+    fireEvent.change(zoomLevel, { target: { value: "150" } });
+    fireEvent.keyDown(zoomLevel, { key: "Enter" });
+
+    expect(setHtmlView).toHaveBeenCalledTimes(1);
+    expect(setHtmlView).toHaveBeenCalledWith({ enabled: true, scale: 1.5, commenting: false });
+    // The field follows the page, not the draft: it reads 100% until the page reports 1.5.
+    expect(zoomLevel.value).toBe("100%");
+    act(() => frameProps().onHtmlZoom?.(1.5));
+    expect(zoomLevel.value).toBe("150%");
+  });
+
   it("offers no Back or Home on an artifact with one page", () => {
     renderPages({});
 

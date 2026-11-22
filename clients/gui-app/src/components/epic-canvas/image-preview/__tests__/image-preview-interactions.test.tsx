@@ -32,7 +32,11 @@ interface MockTransformRef {
     animationMs: number,
   ) => void;
   readonly instance: {
+    /** The library's live transform, which `ref.state` only copies. */
+    readonly state: ImagePreviewTransformState;
     readonly wrapperComponent: {
+      readonly clientWidth: number;
+      readonly clientHeight: number;
       readonly getBoundingClientRect: () => {
         readonly width: number;
         readonly height: number;
@@ -182,7 +186,18 @@ vi.mock("react-zoom-pan-pinch", () => {
           emitTransform(transformRef.current);
         },
         instance: {
+          get state() {
+            return (
+              transformRef.current ?? {
+                positionX: props.initialPositionX,
+                positionY: props.initialPositionY,
+                scale: props.initialScale,
+              }
+            );
+          },
           wrapperComponent: {
+            clientWidth: 800,
+            clientHeight: 600,
             getBoundingClientRect: () => ({ width: 800, height: 600 }),
           },
           contentComponent: {
@@ -481,16 +496,52 @@ describe("image preview interactions", () => {
   it("reflects the live scale in the Zoom level readout after a zoom-in click", () => {
     renderPreview(false);
 
-    const readout = screen.getByLabelText("Zoom level");
-    const fittedPercent = Number.parseInt(readout.textContent, 10);
+    const readout = screen.getByLabelText<HTMLInputElement>("Zoom level");
+    const fittedPercent = Number.parseInt(readout.value, 10);
     expect(Number.isNaN(fittedPercent)).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
 
-    const zoomedPercent = Number.parseInt(readout.textContent, 10);
+    const zoomedPercent = Number.parseInt(readout.value, 10);
     expect(Number.isNaN(zoomedPercent)).toBe(false);
     expect(zoomedPercent).toBeGreaterThan(fittedPercent);
   });
+
+  it("zooms to a typed level about the middle of the stage", () => {
+    renderPreview(false);
+    const zoomLevel = screen.getByLabelText<HTMLInputElement>("Zoom level");
+    const instance = state.instances[0];
+    const before = instance.ref.state;
+
+    fireEvent.change(zoomLevel, { target: { value: "150" } });
+    fireEvent.keyDown(zoomLevel, { key: "Enter" });
+
+    const after = instance.ref.state;
+    expect(zoomLevel.value).toBe("150%");
+    // The content point under the stage's middle (800 x 600) has not moved.
+    expect((400 - after.positionX) / after.scale).toBeCloseTo(
+      (400 - before.positionX) / before.scale,
+    );
+    expect((300 - after.positionY) / after.scale).toBeCloseTo(
+      (300 - before.positionY) / before.scale,
+    );
+  });
+
+  it.each([
+    ["900", "800%"],
+    ["10", "25%"],
+  ])(
+    "holds a typed %s to the view's own limits and settles the field on %s",
+    (typed, settled) => {
+      renderPreview(false);
+      const zoomLevel = screen.getByLabelText<HTMLInputElement>("Zoom level");
+
+      fireEvent.change(zoomLevel, { target: { value: typed } });
+      fireEvent.keyDown(zoomLevel, { key: "Enter" });
+
+      expect(zoomLevel.value).toBe(settled);
+    },
+  );
 
   it("disables zoom controls at the minimum and maximum boundaries", () => {
     state.stageRect = { width: 320, height: 240 };
