@@ -606,7 +606,7 @@ describe("released personal host, remote door", () => {
     }
   }, 20_000);
 
-  it("opens the redial with the host-only token when the row's confirmation for the attach begun under a sign-in plan answers false, though the capped refresh then answers rotated before its open was read", async () => {
+  it("opens the redial with the host-only token when the row read for the attach begun under a sign-in plan commits a row that no longer opens the released way, though the capped refresh then answers rotated before its open was read", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const relay = new FakeRelayHost();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
@@ -614,23 +614,30 @@ describe("released personal host, remote door", () => {
     const heldGrants: Array<(grant: AttachGrantProvision) => void> = [];
     let grantsAsked = 0;
     let confirmationsAsked = 0;
+    let rowOpensReleasedWay = true;
     const { door, refusals } = recordingDoor();
     relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
     relay.decideOpen = (_grant, openIndex) =>
       openIndex < 2
         ? { kind: "fatal", details: releasedRefusal() }
         : { kind: "ack" };
-    const personal = signOnFor(PERSONAL_ROW, signIn);
+    const personal = signOnWithLiveRow(
+      PERSONAL_ROW,
+      signIn,
+      () => rowOpensReleasedWay,
+    );
     if (personal === null) throw new Error("personal row must open released");
     const session = openSessionWithGrants(
       relay,
       {
         ...personal,
-        // The first attach under the sign-in plan finds the row still allowing
-        // it; the attach begun after the refresh's budget does not.
+        // The first attach under the sign-in plan reads the row and leaves it
+        // released; the read for the attach begun after the refresh's budget
+        // commits a row that is no longer the person's.
         confirmRow: () => {
           confirmationsAsked += 1;
-          return Promise.resolve(confirmationsAsked === 1);
+          if (confirmationsAsked === 2) rowOpensReleasedWay = false;
+          return Promise.resolve();
         },
         recovery: {
           revalidateForReconnect: () =>
