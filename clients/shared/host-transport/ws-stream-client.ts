@@ -2452,8 +2452,13 @@ class StreamSession<
     }
     this.signInFromMemory =
       remembered && answered && rowAnswer.state === "allowed";
+    // Asked again here: another transport may have heard this host name a
+    // reason since the refusal that planned the sign-in.
+    const namedMeanwhile =
+      released !== null && released.hosts.namedReason(selected.hostId);
     this.releasedPlan =
       signInNow !== null &&
+      !namedMeanwhile &&
       (this.releasedPlan === "sign-in-next" || this.signInFromMemory)
         ? "sign-in"
         : signInNow !== null &&
@@ -3299,6 +3304,28 @@ class StreamSession<
       return;
     }
     const details = termParse.data.details;
+    // The restart tombstone (P1.4 / D5 / M1), read before any routing so every
+    // arm reports it. The host is stating that the outage it is about to cause
+    // is deliberate - the one thing this window cannot infer for a restart it
+    // did not issue.
+    //
+    // `openFrameHostId`, not `endpoint()`: the identity THIS connection
+    // dialed, for the same reason the credential path reads it - the endpoint
+    // provider may already point somewhere else, and a tombstone filed
+    // against the wrong host would hold the wrong lease.
+    this.reportRestartIntentIfPresent(details);
+    // `retryable` marks a transient host-side rejection. The stable subscribe-
+    // timeout code is checked too because hosts through 1.1.9 emitted it without
+    // the additive flag; a new client must still recover when paired with one of
+    // those hosts. The chat session's lifecycle codes are the same case for
+    // `chat.subscribe`: a host released before it flagged them sends them bare,
+    // and reading them as terminal is what turned a Try again pressed mid-open
+    // into "This agent could not be opened." In every case credential recovery
+    // cannot help.
+    const retryable =
+      details.retryable === true ||
+      details.code === STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE ||
+      isRetryableSessionLifecycleFatal(this.config.method, details);
     const releasedWay = this.answersReleasedWay(details);
     const reason = readDoorReason(details.doorReason);
     const namedReason = reason !== "absent";
@@ -3334,7 +3361,13 @@ class StreamSession<
       this.dropAndReconnect(details);
       return;
     }
-    if (this.releasedPlan === "owner-sign-in") {
+    // Only a refusal of the invited sign-in: a restart or any other close of
+    // that stream takes its ordinary route below.
+    if (
+      this.releasedPlan === "owner-sign-in" &&
+      !retryable &&
+      isCredentialRefusal(details)
+    ) {
       this.answerOwnerSignInRefusal(details, reason === "token_expired");
       return;
     }
@@ -3379,30 +3412,9 @@ class StreamSession<
         return;
       }
     }
-    // The restart tombstone (P1.4 / D5 / M1), read BEFORE the frame is routed
-    // by `retryable`/`UNAUTHORIZED` so every arm reports it. The host is
-    // stating that the outage it is about to cause is deliberate - the one
-    // thing this window cannot infer for a restart it did not issue.
-    //
-    // `openFrameHostId`, not `endpoint()`: the identity THIS connection
-    // dialed, for the same reason the credential path reads it - the endpoint
-    // provider may already point somewhere else, and a tombstone filed
-    // against the wrong host would hold the wrong lease.
-    this.reportRestartIntentIfPresent(details);
-    // `retryable` marks a transient host-side rejection. The stable subscribe-
-    // timeout code is checked too because hosts through 1.1.9 emitted it without
-    // the additive flag; a new client must still recover when paired with one of
-    // those hosts. The chat session's lifecycle codes are the same case for
-    // `chat.subscribe`: a host released before it flagged them sends them bare,
-    // and reading them as terminal is what turned a Try again pressed mid-open
-    // into "This agent could not be opened." In every case credential recovery
-    // cannot help, so route it through ordinary transport reconnect before the
+    // A retryable close goes through ordinary transport reconnect before the
     // `UNAUTHORIZED` branch.
-    if (
-      details.retryable === true ||
-      details.code === STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE ||
-      isRetryableSessionLifecycleFatal(this.config.method, details)
-    ) {
+    if (retryable) {
       // A transient host blip must not count toward the credential give-up
       // bound, mirroring the `network-error` revalidation outcome: clear any
       // streak left by a prior genuine `UNAUTHORIZED` episode so a later real
@@ -3485,7 +3497,8 @@ class StreamSession<
         .allowed()
         .catch(() => false)
         .then((allowed) => {
-          if (this.disposed) return;
+          // A dial started while the row was asked (a wake) answers for itself.
+          if (this.disposed || this.activeSocket !== null) return;
           if (!allowed) {
             this.config.door?.refused(details);
             this.goTerminal(details);
@@ -3524,6 +3537,7 @@ class StreamSession<
     released?.forgetHeldRefusal();
     const userId = released?.signIn()?.identity.userId ?? null;
     if (
+      reason === "absent" ||
       reason === "owner_sign_in" ||
       reason === "not_provisioned" ||
       released === undefined ||
@@ -3567,7 +3581,10 @@ class StreamSession<
           door?.refused(details);
           // The next dial asks for a host-only token first; only when none can
           // be had does it probe, and the host invite the sign-in, again.
-          this.releasedPlan = "host-token";
+          // Only while no dial has started since: a refresh that answers after
+          // its budget must not change the plan of the dial that went without it.
+          if (this.releasedPlan === "owner-sign-in-next")
+            this.releasedPlan = "host-token";
         }
         return outcome;
       },
@@ -3588,7 +3605,8 @@ class StreamSession<
       .catch(() => false)
       .then((allowed) => {
         this.noHostTokenCheck = false;
-        if (this.disposed) return;
+        // A dial started while the row was asked (a wake) answers for itself.
+        if (this.disposed || this.activeSocket !== null) return;
         if (!allowed) {
           released.forgetHeldRefusal();
           this.scheduleReconnect();

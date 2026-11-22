@@ -472,10 +472,7 @@ async function completeReleasedStatusCall(
 
 function doorFatal(
   doorReason:
-    | "not_admitted"
-    | "owner_sign_in"
-    | "not_provisioned"
-    | "token_expired",
+    "not_admitted" | "owner_sign_in" | "not_provisioned" | "token_expired",
   reason: string,
 ): HostFrame {
   return {
@@ -869,6 +866,36 @@ describe("WsRpcClient", () => {
         RELEASED_TEST_SIGN_IN,
       ]);
     });
+
+    it.each(["not_provisioned", "owner_sign_in"] as const)(
+      "probes again on the next call when the invited sign-in is refused %s",
+      async (doorReason) => {
+        const rig = makeReleasedUnaryRig({
+          row: { owner: { kind: "user", id: RELEASED_TEST_USER } },
+          initialToken: null,
+          outcomes: [unavailable, unavailable, unavailable],
+        });
+
+        const first = await rig.start();
+        expect(first.open.token).toBe(NO_HOST_TOKEN_PROBE);
+        first.socket.fireMessage(
+          doorFatal("owner_sign_in", "current computer invited sign-in"),
+        );
+        const invited = await socketAfter(rig.sockets, 1);
+        expect((await openRecordedSocket(invited)).open.token).toBe(
+          RELEASED_TEST_SIGN_IN,
+        );
+        invited.socket.fireMessage(
+          doorFatal(doorReason, "the invited sign-in was not taken"),
+        );
+        await expect(first.pending).rejects.toBeInstanceOf(HostRpcError);
+
+        const next = await rig.start();
+        expect(next.open.token).toBe(NO_HOST_TOKEN_PROBE);
+        next.socket.fireMessage(doorFatal("not_admitted", "not admitted"));
+        await expect(next.pending).rejects.toBeInstanceOf(HostRpcError);
+      },
+    );
 
     it("uses the sign-in only after a current personal probe invites it", async () => {
       const rig = makeReleasedUnaryRig({

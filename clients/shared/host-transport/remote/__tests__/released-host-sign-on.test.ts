@@ -353,6 +353,53 @@ describe("released personal host, remote door", () => {
     }
   }, 20_000);
 
+  it("dials the host-only token when the host names a reason after the released refusal, before the sign-in is presented", async () => {
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const hosts = createReleasedHostMemory();
+    const rowAnswers: Array<(allowed: boolean) => void> = [];
+    const { door, refusals } = recordingDoor();
+    relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+    relay.decideOpen = (_grant, openIndex) =>
+      openIndex > 0 && isHostTokenAuthz(relay.openAuthz[openIndex])
+        ? { kind: "ack" }
+        : { kind: "fatal", details: releasedRefusal() };
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    const session = openSession(
+      relay,
+      signIn,
+      {
+        ...personal,
+        allowed: () =>
+          new Promise<boolean>((resolve) => {
+            rowAnswers.push(resolve);
+          }),
+        hosts,
+      },
+      door,
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(rowAnswers).toHaveLength(1), WAIT);
+      // Another transport hears this host name a reason while the row is asked.
+      hosts.refusedNamingReason("host-1");
+      rowAnswers[0](true);
+      await vi.waitFor(
+        () => expect(relay.openBearers.length).toBeGreaterThanOrEqual(2),
+        WAIT,
+      );
+      expect(relay.openBearers).toEqual(["", ""]);
+      expect(relay.openAuthz.every((authz) => isHostTokenAuthz(authz))).toBe(
+        true,
+      );
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 20_000);
+
   it("dials the host-only token when a remembered host's row no longer allows the sign-in", async () => {
     const relay = new FakeRelayHost();
     const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
