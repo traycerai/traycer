@@ -98,6 +98,7 @@ import {
   type HostTokenEraReply,
   type HostTokenObtainReply,
   type HostTokenRenewReply,
+  type HostTokenSnapshotReply,
   type HostTokensBridgeSurface,
 } from "../ipc-contracts/host-token-types";
 import { readSyncNumberFor } from "./sync-bootstrap";
@@ -796,6 +797,10 @@ export function buildHostTokensBridge(): HostTokensBridgeSurface {
         RunnerHostInvoke.hostTokensForgetUser,
         userId,
       ) as Promise<HostTokenEraReply>,
+    snapshot: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensSnapshot,
+      ) as Promise<HostTokenSnapshotReply>,
     subscribe: (handler) =>
       subscribe<HostTokenBridgeChange>(
         RunnerHostEvent.hostTokensChange,

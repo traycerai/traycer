@@ -48,6 +48,15 @@ export interface HostTokenPersistence {
 export interface HostTokenSource {
   /** Only a token stored in the person's current era is returned. */
   current(userId: string, hostId: string): HostToken | null;
+  /**
+   * The stored tokens are read: until then `current` knows none of them, and
+   * none is known to be missing. A local read, never the cloud.
+   */
+  loaded(): boolean;
+  /** Settles once {@link loaded}; never rejects. */
+  whenLoaded(): Promise<void>;
+  /** Every token {@link current} returns for the person, by host id. */
+  heldFor(userId: string): ReadonlyMap<string, HostToken>;
   /** Concurrent asks for one pair share one mint. */
   obtain(
     userId: string,
@@ -84,11 +93,17 @@ export function createHostTokenSource(deps: {
 }): HostTokenSource {
   let signIn = deps.signIn;
   let table: HostTokenTable = new Map();
+  let isLoaded = false;
+  // A table that could not be read is as loaded as an empty one: nothing more
+  // will come of waiting.
   const loaded = deps.persistence.load().then(
     (persisted) => {
       table = persisted;
+      isLoaded = true;
     },
-    () => undefined,
+    () => {
+      isLoaded = true;
+    },
   );
   const listeners = new Set<(change: HostTokenChange) => void>();
   const inFlight = new Map<string, Promise<HostTokenMintOutcome>>();
@@ -173,6 +188,16 @@ export function createHostTokenSource(deps: {
 
   return {
     current: held,
+    loaded: () => isLoaded,
+    whenLoaded: () => loaded,
+    heldFor: (userId) => {
+      const tokens = new Map<string, HostToken>();
+      for (const hostId of table.get(userId)?.keys() ?? []) {
+        const token = held(userId, hostId);
+        if (token !== null) tokens.set(hostId, token);
+      }
+      return tokens;
+    },
 
     obtain: async (userId, hostId, fresh, signal) => {
       const era = eraOf(userId);

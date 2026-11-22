@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 import { resolveHostAuth } from "../host-auth";
-import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type HostRequestOptions,
+} from "../../../../shared/host-transport/host-messenger";
+import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 
@@ -44,6 +49,8 @@ const logger = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
+type ClientOptions = WsRpcClientOptions<HostRpcRegistry>;
+
 vi.mock(
   "../../../../shared/host-transport/ws-rpc-client",
   async (importOriginal) => {
@@ -51,11 +58,21 @@ vi.mock(
       await importOriginal<
         typeof import("../../../../shared/host-transport/ws-rpc-client")
       >();
+    const { resolveStubbedCallBearer } = await import("./stub-rpc-bearer");
     return {
       ...actual,
       WsRpcClient: class {
-        constructor() {}
-        request = state.requests;
+        constructor(private readonly clientOptions: ClientOptions) {}
+        request = async (
+          method: string,
+          params: unknown,
+          options: HostRequestOptions,
+        ) =>
+          state.requests(
+            method,
+            params,
+            await resolveStubbedCallBearer(this.clientOptions, method, options),
+          );
         releaseIdleLocalSessions = vi.fn();
       },
     };
@@ -175,17 +192,21 @@ describe("callHostRpc host-token mint recovery", () => {
     expect(state.requests).not.toHaveBeenCalled();
   });
 
-  it("reports authn unreachable, never the rejected line, when sign-in refresh cannot reach authn", async () => {
+  it("reports no host-only token, never the rejected line, when sign-in refresh cannot reach authn", async () => {
     state.mintOutcomes.push({ kind: "sign-in-rejected" });
     state.revalidate.mockResolvedValue("network-error");
 
-    await expect(
-      toAgentCliError(callHostRpcAtEndpoint("agent.list", params, endpoint)),
-    ).rejects.toMatchObject({
-      code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-      message: "",
+    const error = await toAgentCliError(
+      callHostRpcAtEndpoint("agent.list", params, endpoint),
+    ).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toMatchObject({
+      message: "No host-only token is held for this host",
       exitCode: 1,
     });
+    expect(error).not.toMatchObject({ code: CLI_ERROR_CODES.AUTH_REJECTED });
     expect(state.mint).toHaveBeenCalledTimes(1);
     expect(state.revalidate).toHaveBeenCalledTimes(1);
     expect(state.requests).not.toHaveBeenCalled();

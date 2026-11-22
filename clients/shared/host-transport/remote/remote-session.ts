@@ -21,6 +21,7 @@ import type {
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { AttachGrantProvider } from "@traycer/protocol/host-transport/remote/grant";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import {
   isReleasedHostTokenRefusal,
   type ReleasedSignOn,
@@ -187,7 +188,18 @@ export interface RemoteSessionOptions<
    * other row. Presented only on the dial after this host refused the host-only
    * token the released way (`isReleasedHostTokenRefusal`).
    */
-  readonly releasedSignOn: ReleasedSignOn | null;
+  readonly releasedSignOn: RemoteReleasedSignOn | null;
+}
+
+/** A remote row's released sign-in. */
+export interface RemoteReleasedSignOn extends ReleasedSignOn {
+  /**
+   * `opensReleasedWay` of this host's row in the in-memory directory, read on
+   * every open and every credential push, never from the cloud. A row that has
+   * left the person (a team's now, another person's, or gone) is sent no
+   * sign-in, remembered or planned.
+   */
+  readonly opensReleasedWay: () => boolean;
 }
 
 /**
@@ -229,7 +241,12 @@ export class RemoteSession<
       | RemoteSessionOptions<RpcRegistry, StreamRegistry>
       | PoolSessionOptions<RpcRegistry, StreamRegistry>,
   ) {
-    super(toProtocolSessionOptions(options));
+    let closed = false;
+    super(toProtocolSessionOptions(options, () => closed));
+    // Caller close and terminal fatal both end here.
+    this.onClosed(() => {
+      closed = true;
+    });
     if (remoteTrafficDebugEnabled() && this.enableTrafficAccounting()) {
       const reader = this.trafficSnapshotReader();
       if (reader !== null) {
@@ -281,7 +298,8 @@ function createHostTokenRemoteSessionAuth(
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: SessionDoorObserver | null,
-  releasedSignOn: ReleasedSignOn | null,
+  releasedSignOn: RemoteReleasedSignOn | null,
+  sessionClosed: () => boolean,
 ): HostTokenSessionDial {
   if (releasedSignOn !== null)
     return createReleasedSignOnSessionAuth(
@@ -291,6 +309,7 @@ function createHostTokenRemoteSessionAuth(
       auth,
       door,
       releasedSignOn,
+      sessionClosed,
     );
   return {
     grantProvider,
@@ -311,12 +330,14 @@ function createHostTokenRemoteSessionAuth(
 
 /**
  * A dial presents the host-only token first, unless this process remembers the
- * host as released for this person (`ReleasedHostMemory`); the row was read
- * from the directory when this session was built, and an owner change builds
- * another. A released host's typed refusal of the token makes the
- * next dial present the sign-in, `authz: null`, as a released app did; that
- * connection's credential pushes carry the sign-in. A host that names its
- * reason is never handed the sign-in again.
+ * host as released for this person (`ReleasedHostMemory`). A released host's
+ * typed refusal of the token makes the next dial present the sign-in,
+ * `authz: null`, as a released app did; that connection's credential pushes
+ * carry the sign-in. Every open and every push first reads the row live
+ * (`RemoteReleasedSignOn.opensReleasedWay`): a row that has left the person
+ * takes the host-only token's path, so a session that redials on its own never
+ * carries the sign-in to it. A host that names its reason is never handed the
+ * sign-in again.
  */
 function createReleasedSignOnSessionAuth(
   hostId: string,
@@ -324,10 +345,12 @@ function createReleasedSignOnSessionAuth(
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: SessionDoorObserver | null,
-  releasedSignOn: ReleasedSignOn,
+  releasedSignOn: RemoteReleasedSignOn,
+  sessionClosed: () => boolean,
 ): HostTokenSessionDial {
   const readSignIn = bearerReader(releasedSignOn.signIn);
   const hosts = releasedSignOn.hosts;
+  const rowAllows = releasedSignOn.opensReleasedWay;
   let plan: "host-token" | "sign-in-next" | "sign-in" = "host-token";
   let openAdmitted = false;
   let signInFromMemory = false;
@@ -351,10 +374,12 @@ function createReleasedSignOnSessionAuth(
     readDoorReason(refusal.doorReason) !== "absent";
   // Only a refusal of this dial's open switches to the sign-in: a current host
   // can end a session it admitted the same way. With no sign-in to present,
-  // the refusal takes the host-only token's own path.
+  // the refusal takes the host-only token's own path, and so does a row that
+  // no longer allows it: the next open would present the token anyway.
   const answersReleasedWay = (refusal: FatalErrorDetails): boolean =>
     isReleasedHostTokenRefusal(refusal) &&
     !hosts.namedReason(hostId) &&
+    rowAllows() &&
     (plan === "sign-in" || (!openAdmitted && readSignIn() !== null));
   const recoverSignIn = async (
     refusal: FatalErrorDetails,
@@ -365,7 +390,8 @@ function createReleasedSignOnSessionAuth(
       recovery === null
         ? "rejected"
         : await revalidateStream(recovery, refusal);
-    if (dialsStarted !== askedAt) return outcome;
+    // A later dial owns the plan and the door, and a closed session has none.
+    if (dialsStarted !== askedAt || sessionClosed()) return outcome;
     if (outcome === "rotated" || outcome === "network-error") {
       plan = "sign-in-next";
       return outcome;
@@ -386,10 +412,12 @@ function createReleasedSignOnSessionAuth(
     readOpenAuth: () => {
       dialsStarted += 1;
       openAdmitted = false;
-      signInFromMemory = remembered() !== null;
+      const allowed = rowAllows();
+      signInFromMemory = allowed && remembered() !== null;
       // Asked again here: another transport may have heard this host name a
       // reason since the refusal that planned the sign-in.
       if (
+        allowed &&
         (plan === "sign-in-next" || signInFromMemory) &&
         !hosts.namedReason(hostId)
       ) {
@@ -407,7 +435,7 @@ function createReleasedSignOnSessionAuth(
       return hostTokenOpenAuth(readHostToken);
     },
     readCredentialUpdateBearer: () =>
-      plan === "sign-in" ? readSignIn() : readHostToken(),
+      plan === "sign-in" && rowAllows() ? readSignIn() : readHostToken(),
     currentFingerprint: () =>
       plan === "host-token" ? readHostToken() : readSignIn(),
     revalidateForReconnect: (refusal) => {
@@ -428,7 +456,12 @@ function createReleasedSignOnSessionAuth(
       // Answered by the next dial, or reported once its recovery gives up.
       refused: (details) => {
         if (named(details)) hosts.refusedNamingReason(hostId);
-        if (answersReleasedWay(details) || (signInFromMemory && named(details)))
+        // Only a credential reason is answered by the token dial; any other
+        // named reason shows its cover now.
+        if (
+          answersReleasedWay(details) ||
+          (signInFromMemory && named(details) && isCredentialRefusal(details))
+        )
           return;
         door?.refused(details);
       },
@@ -482,6 +515,7 @@ function toProtocolSessionOptions<
   options:
     | RemoteSessionOptions<RpcRegistry, StreamRegistry>
     | PoolSessionOptions<RpcRegistry, StreamRegistry>,
+  sessionClosed: () => boolean,
 ):
   | ProtocolRemoteSessionOptions<RpcRegistry, StreamRegistry>
   | ProtocolPoolSessionOptions<RpcRegistry, StreamRegistry> {
@@ -507,6 +541,7 @@ function toProtocolSessionOptions<
     auth,
     door,
     releasedSignOn,
+    sessionClosed,
   );
   return {
     ...coreOptions,

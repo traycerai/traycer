@@ -122,6 +122,39 @@ function namedRefusal(doorReason: NamedDoorReason): string {
   });
 }
 
+function retryableNamedRefusal(doorReason: NamedDoorReason): string {
+  return JSON.stringify({
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "current-host-refusal",
+      doorReason,
+      retryable: true,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
+/** Authn never answers: every mint for the pair stays pending. */
+async function blackHoledTokens(): Promise<{
+  readonly source: HostTokenSource;
+  readonly mintCalls: () => number;
+}> {
+  let mintCalls = 0;
+  const source = createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => {
+      mintCalls += 1;
+      return new Promise<HostTokenMintOutcome>(() => undefined);
+    },
+    signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
+    now: () => Date.now(),
+  });
+  await settle();
+  return { source, mintCalls: () => mintCalls };
+}
+
 function targetFor(
   hostId: string,
   owner: HostDirectoryEntry["owner"],
@@ -882,12 +915,7 @@ describe("local stream while authn cannot mint", () => {
       persistence: createMemoryHostTokenPersistence(),
       mint: () => {
         mintCalls += 1;
-        if (mintCalls === 1)
-          return Promise.resolve({
-            kind: "unavailable",
-            detail: "authn offline",
-          });
-        if (mintCalls === 2) {
+        if (mintCalls === 1) {
           markRacingMintStarted();
           return new Promise<HostTokenMintOutcome>((resolve) => {
             racingMint.resolve = resolve;
@@ -906,9 +934,8 @@ describe("local stream while authn cannot mint", () => {
       kind: "user",
       id: USER_A,
     });
-    await vi.waitFor(() => expect(mintCalls).toBeGreaterThanOrEqual(1));
-    const first = await socketAt(1);
     await racingMintStarted;
+    const first = await socketAt(1);
     expect((await readOpen(first)).token).toBe(expired.token);
 
     if (racingMint.resolve === undefined)
@@ -932,8 +959,8 @@ describe("local stream while authn cannot mint", () => {
 
     vi.setSystemTime(Math.max(Date.now(), freshExpiresAtMs) + 1);
     recovered.fireClose(1006, "dropped after token expiry");
-    await vi.waitFor(() => expect(mintCalls).toBeGreaterThanOrEqual(3));
     const afterOutage = await socketAt(3);
+    expect(mintCalls).toBeGreaterThanOrEqual(2);
     expect((await readOpen(afterOutage)).token).toBe(freshToken);
     afterOutage.fireMessage(openAckFrame([], null));
     await settle();
@@ -948,7 +975,7 @@ describe("local stream while authn cannot mint", () => {
     const hostId = "local-other-host-token-not-admitted";
     clearHostDoorState(hostId);
     const otherHostToken = expiredJwt(Date.now());
-    const { source } = await tokensFor(
+    const { source, mintCalls } = await tokensFor(
       hostId,
       [
         { kind: "unavailable", detail: "authn offline" },
@@ -961,6 +988,7 @@ describe("local stream while authn cannot mint", () => {
       id: "team-a",
       name: "Alpha",
     });
+    await vi.waitFor(() => expect(mintCalls()).toBeGreaterThanOrEqual(1));
     const socket = await socketAt(1);
     await settle();
     expect((await readOpen(socket)).token).toBe(otherHostToken.token);
@@ -1292,6 +1320,228 @@ describe("local stream while authn cannot mint", () => {
     expect(mintCalls()).toBe(0);
     expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE]);
     expect(heard).toEqual([]);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+  it.each([
+    {
+      id: "released",
+      name: "a released host",
+      answer: () => releasedRefusal(),
+      followedBySignIn: true,
+    },
+    {
+      id: "personal",
+      name: "a current personal host",
+      answer: () => namedRefusal("owner_sign_in"),
+      followedBySignIn: true,
+    },
+    {
+      id: "team",
+      name: "a current team host",
+      answer: () => namedRefusal("not_admitted"),
+      followedBySignIn: false,
+    },
+  ])(
+    "opens the first socket of $name with no timer advanced while authn never answers",
+    async ({ id, answer, followedBySignIn }) => {
+      const hostId = `local-black-holed-${id}`;
+      clearHostDoorState(hostId);
+      const { source, mintCalls } = await blackHoledTokens();
+      const { client, session } = openClient(hostId, source, {
+        kind: "user",
+        id: USER_A,
+      });
+      await settle();
+      expect(mintCalls()).toBe(1);
+      expect(FakeNativeWebSocket.instances).toHaveLength(1);
+      const probe = FakeNativeWebSocket.instances[0];
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      probe.fireMessage(answer());
+      if (followedBySignIn) {
+        const second = await socketOnThisTurn(2);
+        expect((await readOpen(second)).token).toBe(SIGN_IN_TOKEN);
+        expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE, SIGN_IN_TOKEN]);
+      } else {
+        await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_BACKOFF_MS * 4);
+        expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE]);
+      }
+      expect(heard).toEqual([]);
+      session.close();
+      client.close("test complete");
+      clearHostDoorState(hostId);
+    },
+  );
+
+  it("hands a current personal host the sign-in once and the minted host-only token on the next open, when authn answers ok after the first dial", async () => {
+    const hostId = "local-online-fresh-personal";
+    clearHostDoorState(hostId);
+    let answerMint: (outcome: HostTokenMintOutcome) => void = () => undefined;
+    const pendingMint = new Promise<HostTokenMintOutcome>((resolve) => {
+      answerMint = resolve;
+    });
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => pendingMint,
+      signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
+      now: () => Date.now(),
+    });
+    await settle();
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await settle();
+    expect(FakeNativeWebSocket.instances).toHaveLength(1);
+    const probe = FakeNativeWebSocket.instances[0];
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("owner_sign_in"));
+    const invited = await socketOnThisTurn(2);
+    expect((await readOpen(invited)).token).toBe(SIGN_IN_TOKEN);
+    invited.fireMessage(openAckFrame([], null));
+    await settle();
+
+    answerMint({
+      kind: "ok",
+      token: { token: HOST_ONLY_AFTER_MINT, expiresAtMs: Date.now() + 60_000 },
+    });
+    await vi.waitFor(() =>
+      expect(source.current(USER_A, hostId)?.token).toBe(HOST_ONLY_AFTER_MINT),
+    );
+    invited.fireClose(1006, "dropped after sign-in admission");
+    await vi.advanceTimersToNextTimerAsync();
+    const next = await socketAt(3);
+    expect((await readOpen(next)).token).toBe(HOST_ONLY_AFTER_MINT);
+    next.fireMessage(openAckFrame([], null));
+    await settle();
+
+    expect(sentTokens()).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN_TOKEN,
+      HOST_ONLY_AFTER_MINT,
+    ]);
+    expect(heard).toEqual([]);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("puts an expired released sign-in on the wire with no refresh before the dial", async () => {
+    const hostId = "local-released-expired-sign-in";
+    clearHostDoorState(hostId);
+    const expiredSignIn = expiredJwt(Date.now());
+    presentedSignIn = expiredSignIn.token;
+    let refreshCalls = 0;
+    streamAuth = {
+      revalidateForReconnect: () => {
+        refreshCalls += 1;
+        return Promise.resolve("network-error");
+      },
+    };
+    const { source } = await blackHoledTokens();
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await settle();
+    const probe = FakeNativeWebSocket.instances[0];
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(releasedRefusal());
+    const signedIn = await socketOnThisTurn(2);
+    expect((await readOpen(signedIn)).token).toBe(expiredSignIn.token);
+    expect(refreshCalls).toBe(0);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("takes the fresh-mint recovery, never the probe, when a locally usable host-only token is refused as expired", async () => {
+    const hostId = "local-usable-token-refused-expired";
+    clearHostDoorState(hostId);
+    const expired = expiredJwt(Date.now());
+    const usable = {
+      token: "locally-usable-host-token",
+      expiresAtMs: Date.now() + 60_000,
+    };
+    const reminted = "host-token-minted-after-the-refusal";
+    let authnAnswers = false;
+    let mintCalls = 0;
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve(
+          authnAnswers
+            ? {
+                kind: "ok",
+                token: { token: reminted, expiresAtMs: Date.now() + 60_000 },
+              }
+            : { kind: "unavailable", detail: "authn offline" },
+        );
+      },
+      signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
+      now: () => Date.now(),
+    });
+    await source.adopt(USER_A, hostId, expired, source.era(USER_A));
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await vi.waitFor(() => expect(mintCalls).toBeGreaterThanOrEqual(1));
+    const first = await socketAt(1);
+    expect((await readOpen(first)).token).toBe(expired.token);
+    first.fireMessage(openAckFrame([], null));
+    await settle();
+    // Another transport stored a token that this clock still reads as usable,
+    // and authn answers from here on.
+    await source.adopt(USER_A, hostId, usable, source.era(USER_A));
+    authnAnswers = true;
+    first.fireClose(1006, "dropped");
+    const second = await socketAt(2);
+    expect((await readOpen(second)).token).toBe(usable.token);
+    second.fireMessage(namedRefusal("token_expired"));
+    const third = await socketAt(3);
+    expect((await readOpen(third)).token).toBe(reminted);
+    expect(sentTokens()).toEqual([expired.token, usable.token, reminted]);
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("dials again after a retryable named probe refusal and carries the minted token, which clears the probe latch", async () => {
+    const hostId = "local-retryable-named-probe";
+    clearHostDoorState(hostId);
+    const minted = "minted-after-retryable-probe";
+    const { source, mintCalls } = await tokensFor(
+      hostId,
+      [
+        { kind: "unavailable", detail: "authn offline" },
+        {
+          kind: "ok",
+          token: { token: minted, expiresAtMs: Date.now() + 60_000 },
+        },
+      ],
+      null,
+    );
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    await vi.waitFor(() => expect(mintCalls()).toBeGreaterThanOrEqual(1));
+    const probe = await socketAt(1);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(retryableNamedRefusal("not_admitted"));
+    expect(processReleasedHosts.probeDeclined(USER_A, hostId)).toBe(true);
+
+    await vi.advanceTimersToNextTimerAsync();
+    const admitted = await socketCounted(2);
+    expect((await readOpen(admitted)).token).toBe(minted);
+    admitted.fireMessage(openAckFrame([], null));
+    await settle();
+    expect(processReleasedHosts.probeDeclined(USER_A, hostId)).toBe(false);
+    expect(sentTokens()).toEqual([NO_HOST_TOKEN_PROBE, minted]);
+    expect(hostDoorStateFor(hostId)).toBeNull();
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);

@@ -444,15 +444,20 @@ afterEach(() => {
 });
 
 describe("CLI credential probe against a released host", () => {
-  it("opens every dial sequence with the host-only token, then the sign-in after its bare refusal, and sends hostCredentialProvision while authn answers nothing for the host's row", async () => {
+  it("probes the first dial sequence without waiting for the mint, then signs in after the bare refusal; the next sequence opens with the host-only token that mint bought, and signs in only after the released host refuses it bare", async () => {
     const outcome = await probe("personal", 20_000);
-    const tokens = openTokens();
     expect(outcome).toEqual({ kind: "active", minted: true });
-    expect(tokens.length).toBeGreaterThanOrEqual(2);
-    expect(tokens.length % 2).toBe(0);
-    tokens.forEach((token, index) => {
-      expect(token).toBe(index % 2 === 0 ? HOST_TOKEN : SIGN_IN);
-    });
+    // Sequence 1 holds no token, so it goes at once with the probe while the
+    // mint runs in the background. The sequence's sign-in is admitted (`missing`),
+    // and the 750 ms push drain that follows lets the mint land. Sequence 2
+    // therefore opens with the held token, which this released host refuses as
+    // it would any host-only token; that refusal is its own, so the sign-in follows.
+    expect(openTokens()).toEqual([
+      NO_HOST_TOKEN_PROBE,
+      SIGN_IN,
+      HOST_TOKEN,
+      SIGN_IN,
+    ]);
     expect(harness.state.hostRowReads).toEqual([]);
     expect(provisionFrames()).toEqual([
       {
@@ -478,10 +483,13 @@ describe("CLI credential probe against a released host", () => {
     expect(provisionFrames()).toHaveLength(1);
   }, 30_000);
 
-  it("never sends the sign-in when a current host names its refusal of the host-only token", async () => {
+  it("opens the probe, then the host-only token twice, and never the sign-in, when a current host names its refusal of each", async () => {
     const outcome = await probe("current-token", 8_000);
-    // The one fresh-token recovery opens again with a host-only token.
-    expect(openTokens()).toEqual([HOST_TOKEN, HOST_TOKEN]);
+    // The probe goes at once while the mint runs; the host names its refusal
+    // of it, so no sign-in follows and the next open carries the token the
+    // mint bought. Its refusal takes the one fresh-token recovery, which opens
+    // again with a host-only token; a second refusal is final.
+    expect(openTokens()).toEqual([NO_HOST_TOKEN_PROBE, HOST_TOKEN, HOST_TOKEN]);
     expect(outcome).toEqual({
       kind: "error",
       message:

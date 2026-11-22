@@ -29,6 +29,19 @@ export interface HostTokenRenewReply extends HostTokenEraReply {
 }
 
 /**
+ * The tokens main holds for the person signed in there, with main's era for
+ * them, read in one step; `userId: null` and no tokens while no one is.
+ */
+export interface HostTokenSnapshotReply {
+  readonly userId: string | null;
+  readonly era: number;
+  readonly tokens: readonly {
+    readonly hostId: string;
+    readonly token: HostToken;
+  }[];
+}
+
+/**
  * The era the preload reports when main gives none (an unknown or untrusted
  * sender). Main never issues it, so any work that names it is refused.
  */
@@ -58,6 +71,7 @@ export interface HostTokensBridgeSurface {
     expectedEra: number,
   ): Promise<HostTokenEraReply>;
   forgetUser(userId: string): Promise<HostTokenEraReply>;
+  snapshot(): Promise<HostTokenSnapshotReply>;
   subscribe(handler: (change: HostTokenBridgeChange) => void): {
     dispose(): void;
   };

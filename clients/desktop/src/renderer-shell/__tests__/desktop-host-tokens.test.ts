@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
+import {
+  authnDidNotAnswer,
+  hostTokenBearer,
+  hostTokenBearerFor,
+  trackHostTokenMints,
+} from "@traycer-clients/shared/auth/host-token-lease";
 import type {
   HostTokenMintOutcome,
   HostTokenRenewal,
 } from "@traycer-clients/shared/auth/host-token-source";
 import type {
   HostTokenBridgeChange,
+  HostTokenSnapshotReply,
   HostTokensBridgeSurface,
 } from "../../ipc-contracts/host-token-types";
 import { NO_ISSUED_HOST_TOKEN_ERA } from "../../ipc-contracts/host-token-types";
@@ -26,12 +33,21 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+const EMPTY_SNAPSHOT: HostTokenSnapshotReply = {
+  userId: null,
+  era: NO_ISSUED_HOST_TOKEN_ERA,
+  tokens: [],
+};
+
 function bridgeFixture(): {
   readonly bridge: HostTokensBridgeSurface;
   readonly emit: (change: HostTokenBridgeChange) => void;
   readonly setEra: (era: number) => void;
+  readonly answerSnapshotWith: (reply: Promise<HostTokenSnapshotReply>) => void;
 } {
   let mainEra = 0;
+  let snapshotAnswer: Promise<HostTokenSnapshotReply> =
+    Promise.resolve(EMPTY_SNAPSHOT);
   let listener: ((change: HostTokenBridgeChange) => void) | null = null;
   const bridge: HostTokensBridgeSurface = {
     era: () => mainEra,
@@ -45,6 +61,7 @@ function bridgeFixture(): {
       mainEra += 1;
       return { era: mainEra };
     },
+    snapshot: () => snapshotAnswer,
     subscribe: (next) => {
       listener = next;
       return {
@@ -59,6 +76,9 @@ function bridgeFixture(): {
     emit: (change) => listener?.(change),
     setEra: (era) => {
       mainEra = era;
+    },
+    answerSnapshotWith: (reply) => {
+      snapshotAnswer = reply;
     },
   };
 }
@@ -83,6 +103,7 @@ describe("desktop host-token source eras", () => {
         mainEra += 1;
         return { era: mainEra };
       },
+      snapshot: async () => EMPTY_SNAPSHOT,
       subscribe: (_handler) => ({ dispose: () => undefined }),
     };
     const tokens = createDesktopHostTokenSource(bridge);
@@ -115,6 +136,7 @@ describe("desktop host-token source eras", () => {
         mainEra += 1;
         return { era: mainEra };
       },
+      snapshot: async () => EMPTY_SNAPSHOT,
       subscribe: (_handler) => ({ dispose: () => undefined }),
     };
     const tokens = createDesktopHostTokenSource(bridge);
@@ -367,5 +389,115 @@ describe("desktop host-token source eras", () => {
 
     expect(tokens.era(USER_ID)).toBe(1);
     expect(tokens.current(USER_ID, HOST_ID)).toBeNull();
+  });
+});
+
+describe("desktop host-token source snapshot", () => {
+  const signInLease = {
+    identity: { userId: USER_ID },
+    getBearerToken: () => "sign-in-token",
+  };
+  const OLD_TOKEN = { token: "older-host-token", expiresAtMs: 10_000 };
+  const heldReply = (
+    token: { readonly token: string; readonly expiresAtMs: number },
+    era: number,
+  ): HostTokenSnapshotReply => ({
+    userId: USER_ID,
+    era,
+    tokens: [{ hostId: HOST_ID, token }],
+  });
+
+  it("presents no token and takes no probe until main's snapshot is applied", async () => {
+    const snapshot = deferred<HostTokenSnapshotReply>();
+    const { bridge, answerSnapshotWith } = bridgeFixture();
+    answerSnapshotWith(snapshot.promise);
+    const tokens = createDesktopHostTokenSource(bridge);
+    const tracked = trackHostTokenMints(tokens);
+    const bearer = hostTokenBearer(
+      tracked,
+      () => signInLease,
+      HOST_ID,
+      () => undefined,
+    );
+    const unary = hostTokenBearerFor(tracked, () => undefined)(
+      HOST_ID,
+      signInLease,
+      false,
+    );
+
+    // Main may hold a token for this computer: no token is missing yet, so the
+    // stream presents none and does not probe, and a call waits for the read.
+    expect(tokens.loaded()).toBe(false);
+    expect(bearer()).toBeNull();
+    expect(authnDidNotAnswer(tracked, USER_ID, HOST_ID)).toBe(false);
+    expect(await Promise.race([unary, Promise.resolve("waiting")])).toBe(
+      "waiting",
+    );
+
+    snapshot.resolve(heldReply(HOST_TOKEN, 0));
+    await tokens.whenLoaded();
+
+    expect(tokens.loaded()).toBe(true);
+    expect(bearer()?.getBearerToken()).toBe(HOST_TOKEN.token);
+    expect((await unary)?.getBearerToken()).toBe(HOST_TOKEN.token);
+  });
+
+  it.each([
+    {
+      name: "a newer token of the same era",
+      changedHostId: HOST_ID,
+      change: { token: HOST_TOKEN, era: 0 },
+      expected: HOST_TOKEN,
+    },
+    {
+      name: "a removal of the same era",
+      changedHostId: HOST_ID,
+      change: { token: null, era: 0 },
+      expected: null,
+    },
+    {
+      // Another computer's change of a newer era moves this window to that era,
+      // which the snapshot's entries (read in the older one) are not in.
+      name: "a newer era's change of another computer",
+      changedHostId: "computer-b",
+      change: { token: HOST_TOKEN, era: 1 },
+      expected: null,
+    },
+  ])(
+    "does not let an older snapshot entry overwrite $name that arrived first",
+    async ({ changedHostId, change, expected }) => {
+      const reply = deferred<HostTokenSnapshotReply>();
+      const { bridge, emit, setEra, answerSnapshotWith } = bridgeFixture();
+      answerSnapshotWith(reply.promise);
+      setEra(change.era);
+      const tokens = createDesktopHostTokenSource(bridge);
+
+      emit({ userId: USER_ID, hostId: changedHostId, ...change });
+      reply.resolve(heldReply(OLD_TOKEN, 0));
+      await tokens.whenLoaded();
+
+      expect(tokens.current(USER_ID, HOST_ID)).toEqual(expected);
+    },
+  );
+
+  it("counts a failed snapshot as loaded with nothing held, so the dial probes", async () => {
+    const { bridge, answerSnapshotWith } = bridgeFixture();
+    answerSnapshotWith(Promise.reject(new Error("main did not answer")));
+    const tokens = createDesktopHostTokenSource(bridge);
+    const tracked = trackHostTokenMints(tokens);
+
+    await tokens.whenLoaded();
+
+    expect(tokens.loaded()).toBe(true);
+    expect(tokens.current(USER_ID, HOST_ID)).toBeNull();
+    expect(authnDidNotAnswer(tracked, USER_ID, HOST_ID)).toBe(true);
+    expect(
+      hostTokenBearer(
+        tracked,
+        () => signInLease,
+        HOST_ID,
+        () => undefined,
+      )(),
+    ).toBeNull();
   });
 });

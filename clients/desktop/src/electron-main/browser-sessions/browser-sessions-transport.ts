@@ -305,6 +305,11 @@ export interface BrowserSessionsTransportDeps {
   readonly cloudAuthorized: () => boolean;
   /** Re-read on every (re)dial, so a host that moved is followed. */
   readonly endpoint: () => HostTransportEndpoint | null;
+  /**
+   * The target's row in main's in-memory directory, never a cloud read; read
+   * on every remote dial, so a row that left the person is sent no sign-in.
+   */
+  readonly liveRow: () => HostDirectoryEntry | null;
   readonly appVersion: string | null;
   /** Main's host-only tokens; the sign-in goes only where `opensReleasedWay` allows. */
   readonly hostTokens: HostTokenSource;
@@ -357,7 +362,10 @@ export function openBrowserSessionsTransport(
       hostPublicKey: lane.entry.publicKey,
       bearer: deps.bearer,
       hostTokens: deps.hostTokens,
-      opensReleasedWay: opensReleasedWay(lane.entry, userId),
+      opensReleasedWay: () => {
+        const row = deps.liveRow();
+        return row !== null && opensReleasedWay(row, userId);
+      },
       door: null,
       onState: ignoreHostTokenState,
       cloudAuthorized: deps.cloudAuthorized,

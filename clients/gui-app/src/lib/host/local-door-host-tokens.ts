@@ -8,6 +8,8 @@ import { mintHostCredentialBeforeOpen } from "@/lib/auth/host-credential-provisi
 export function localDoorHostTokens(tokens: HostTokenAccess): HostTokenAccess {
   return {
     current: (userId, hostId) => tokens.current(userId, hostId),
+    loaded: () => tokens.loaded(),
+    whenLoaded: () => tokens.whenLoaded(),
     obtain: async (userId, hostId, fresh, signal) => {
       const outcome = await tokens.obtain(userId, hostId, fresh, signal);
       if (outcome.kind !== "not-admitted") return outcome;

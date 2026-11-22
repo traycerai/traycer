@@ -67,7 +67,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { useHostBinding } from "@/lib/host/runtime";
+import { getHostBindingSnapshot, useHostBinding } from "@/lib/host/runtime";
 import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
 import { onHostDoorRetry } from "@/lib/host/host-door-retry";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
@@ -238,6 +238,18 @@ export function hostStreamTransportKeyFor(
 }
 
 /**
+ * `opensReleasedWay` of `hostId`'s row in the app's in-memory directory, read
+ * on every call: a stream session redials on its own, long before a render
+ * could rebuild it from a changed row. No row, no sign-in.
+ */
+function liveOpensReleasedWay(hostId: string, userId: string): () => boolean {
+  return () => {
+    const row = getHostBindingSnapshot()?.directory.findById(hostId) ?? null;
+    return row !== null && opensReleasedWay(row, userId);
+  };
+}
+
+/**
  * Constructs a per-host stream client with the standard dial/heartbeat
  * timings - the single place those timings live, shared by the app-wide
  * `HostStreamProvider`, the transient per-tab binding hook below, and the
@@ -359,7 +371,10 @@ export function buildHostStreamClient(params: {
       hostPublicKey: params.target.publicKey,
       bearer: params.bearer,
       hostTokens: params.hostTokens,
-      opensReleasedWay: opensReleasedWay(params.target, params.userId),
+      opensReleasedWay: liveOpensReleasedWay(
+        params.target.hostId,
+        params.userId,
+      ),
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,

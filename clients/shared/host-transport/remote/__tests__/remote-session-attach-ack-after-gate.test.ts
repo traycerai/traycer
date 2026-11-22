@@ -766,7 +766,7 @@ describe("RemoteSession attach-ack budget and the dial gate", () => {
   ): TransportView {
     let nextRequestId = 0;
     const transport = createRemoteHostTransport({
-      opensReleasedWay: false,
+      opensReleasedWay: () => false,
       clientIdentity: TEST_CLIENT_IDENTITY,
       hostId,
       userId: USER_A,

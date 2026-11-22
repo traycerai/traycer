@@ -295,7 +295,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
           : credential.recover(endpoint.hostId, details),
       credential.signInRejected,
       (listener) =>
-        credential.onMintRefused((hostId, failure) => {
+        credential.onRefusalEndingCommand((hostId, failure) => {
           if (endpoint?.hostId === hostId) listener(failure);
         }),
       credential.presented,
@@ -328,10 +328,16 @@ interface MonitorCredential {
     hostId: string,
     details: FatalErrorDetails,
   ) => Promise<RevalidateOutcome>;
-  /** The host admitted an open: its recovery's bounds start again. */
+  /**
+   * The host admitted an open: its recovery's bounds start again, and a
+   * `not-admitted` of a mint begun before now ends nothing.
+   */
   readonly admitted: (hostId: string) => void;
   readonly signInRejected: () => boolean;
-  readonly onMintRefused: (listener: CliMintRefusalListener) => () => void;
+  /** See `CliHostTokens.onRefusalEndingCommand`. */
+  readonly onRefusalEndingCommand: (
+    listener: CliMintRefusalListener,
+  ) => () => void;
   readonly hostCredentialMint: HostCredentialMintFlow | null;
   /** `null` for the agent session capability: a released host takes that one as it is. */
   readonly releasedSignOn: (
@@ -390,6 +396,8 @@ async function signInMonitorCredential(
     refresh: () => revalidator.revalidateCurrentContext(),
     signal: null,
   });
+  // The tokens on disk, so the first dial presents the held one.
+  await hostTokens.whenLoaded();
   let refreshScheduler: { readonly stop: () => void } | null = null;
   return {
     presented: "host-token",
@@ -397,11 +405,11 @@ async function signInMonitorCredential(
     bearer: (hostId) => hostTokens.streamBearer(hostId),
     recover: (hostId, details) =>
       hostTokens.streamRecovery(hostId).revalidateRefused(details),
-    admitted: (hostId) => hostTokens.streamRecovery(hostId).admitted(),
+    admitted: (hostId) => hostTokens.admitted(hostId),
     signInRejected: () => hostTokens.signInRejected(),
-    onMintRefused: (listener) => hostTokens.onMintRefused(listener),
-    releasedSignOn: (hostId) =>
-      cliReleasedSignOn(hostId, lease, hostTokens),
+    onRefusalEndingCommand: (listener) =>
+      hostTokens.onRefusalEndingCommand(listener),
+    releasedSignOn: (hostId) => cliReleasedSignOn(hostId, lease, hostTokens),
     // Delegated host-credential provisioning. `monitor` is the CLI command
     // that most needs it: the host it watches should keep serving after this
     // process exits. Provisioning is silent, so this works the same whether
@@ -471,7 +479,7 @@ function capabilityMonitorCredential(
     recover: () => capability.streamRecovery(),
     admitted: () => undefined,
     signInRejected: () => false,
-    onMintRefused: () => () => undefined,
+    onRefusalEndingCommand: () => () => undefined,
     hostCredentialMint: null,
     releasedSignOn: () => null,
     startUpkeep: () => undefined,
@@ -505,9 +513,11 @@ type InboxMintRefusals = (
  * Every other fatal (e.g. `INCOMPATIBLE`) is terminal, with the door's line
  * when it is a door refusal.
  *
- * A mint authn refuses for good, whether the stream was waiting for its first
- * token or recovering, is terminal with the mint's line: no reconnect could
- * be given a token. One that cannot reach authn is waited out.
+ * A mint refusal that ends the command (`CliHostTokens.onRefusalEndingCommand`),
+ * whether the stream was waiting for its first token or recovering, is
+ * terminal with the mint's line. A `not-admitted` a sign-in may still follow,
+ * or one an admitted open has outlived, is not; one that cannot reach authn is
+ * waited out. No dial waits for the mint.
  */
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,

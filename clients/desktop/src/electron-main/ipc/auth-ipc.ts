@@ -27,10 +27,12 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
-import type {
-  HostTokenEraReply,
-  HostTokenObtainReply,
-  HostTokenRenewReply,
+import {
+  NO_ISSUED_HOST_TOKEN_ERA,
+  type HostTokenEraReply,
+  type HostTokenObtainReply,
+  type HostTokenRenewReply,
+  type HostTokenSnapshotReply,
 } from "../../ipc-contracts/host-token-types";
 import {
   listUserSessionsViaHttp,
@@ -276,6 +278,25 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       assertString(userId, "hostTokensForgetUser.userId");
       await tokens.forgetUser(userId);
       return { era: tokens.era(userId) };
+    },
+  );
+  // Only the person signed in here: a window may obtain nothing for anyone
+  // else. Tokens and era are read in one step, after the table is read.
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostTokensSnapshot,
+    async (): Promise<HostTokenSnapshotReply> => {
+      await tokens.whenLoaded();
+      const userId = (await bridge.authTokenStore.get())?.user.id ?? null;
+      if (userId === null)
+        return { userId, era: NO_ISSUED_HOST_TOKEN_ERA, tokens: [] };
+      return {
+        userId,
+        era: tokens.era(userId),
+        tokens: Array.from(tokens.heldFor(userId), ([hostId, token]) => ({
+          hostId,
+          token,
+        })),
+      };
     },
   );
   bridge.disposeFns.push(

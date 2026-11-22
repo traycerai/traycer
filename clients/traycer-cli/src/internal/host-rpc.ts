@@ -6,7 +6,10 @@ import {
   type AgentCommandCredential,
 } from "./agent-session-capability";
 import { localTeamAdmissionCliError } from "./local-open-auth";
-import { openCliHostSession } from "./cli-host-tokens";
+import {
+  requireCliHostSession,
+  type CliHostTokenFailure,
+} from "./cli-host-tokens";
 import type {
   ReleasedSignOn,
   ReleasedUnaryCause,
@@ -441,25 +444,20 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
-  const opened = await openCliHostSession(
+  const session = await requireCliHostSession(
     auth,
     endpoint.hostId,
-    false,
     dispatch.signal,
   );
-  if (opened.kind === "failed") {
-    createCliLogger(config.environment).warn(
-      "Host RPC blocked: no host-only token",
-      {
-        environment: config.environment,
-        method,
-        hostId: endpoint.hostId,
-        mintOutcome: opened.failure.kind,
-      },
-    );
-    throw hostTokenFailureCliError(opened.failure);
-  }
-  const session = opened.session;
+  // The call dials at once and the mint runs beside it. A refusal that ends
+  // the command fails it as it did when the mint came first, unless the call
+  // was answered anyway.
+  const ended: { refusal: CliHostTokenFailure | null } = { refusal: null };
+  const stopRefusals = session.tokens.onRefusalEndingCommand(
+    (hostId, failure) => {
+      if (hostId === endpoint.hostId) ended.refusal ??= failure;
+    },
+  );
   try {
     return await requestWithHostToken(
       method,
@@ -467,14 +465,44 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       endpoint,
       session.bearer,
       session.tokens.unaryRecovery(endpoint.hostId),
-      session.releasedSignOn,
+      {
+        releasedSignOn: session.releasedSignOn,
+        hostBearerFor: (waitForMint) =>
+          session.tokens.hostBearerFor(endpoint.hostId, waitForMint),
+        admitted: () => session.tokens.admitted(endpoint.hostId),
+      },
       retryPolicy,
       dispatch,
       () => session.tokens.signInRejected(),
     );
+  } catch (err) {
+    const refusal = ended.refusal;
+    if (refusal === null) throw err;
+    createCliLogger(config.environment).warn(
+      "Host RPC blocked: no host-only token",
+      {
+        environment: config.environment,
+        method,
+        hostId: endpoint.hostId,
+        mintOutcome: refusal.kind,
+      },
+    );
+    throw hostTokenFailureCliError(refusal);
   } finally {
+    stopRefusals();
     session.dispose();
   }
+}
+
+/** This machine's host, reached with this CLI's host-only token. */
+interface LocalHostDoor {
+  readonly releasedSignOn: ReleasedSignOn;
+  /** `CliHostTokens.hostBearerFor` of the host. */
+  readonly hostBearerFor: (
+    waitForMint: boolean,
+  ) => Promise<OpenFrameBearerSource | null>;
+  /** The host admitted a call. */
+  readonly admitted: () => void;
 }
 
 async function requestWithHostToken<
@@ -485,29 +513,32 @@ async function requestWithHostToken<
   endpoint: HostTransportEndpoint,
   bearer: OpenFrameBearerSource,
   recovery: RefusalAwareAuthRevalidator,
-  releasedSignOn: ReleasedSignOn | null,
+  localDoor: LocalHostDoor | null,
   retryPolicy: TransportRetryPolicy,
   dispatch: HostRpcDispatch,
   signInRejected: () => boolean,
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const client = new WsRpcClient<HostRpcRegistry>({
-    ...(releasedSignOn === null
+    ...(localDoor === null
       ? {}
       : {
-          // An empty token is a session that could present none; a held one
-          // the host refused as expired is not presented again.
-          hostBearerFor: (_hostId: string, held: OpenFrameBearerSource) =>
-            Promise.resolve(
-              held.getBearerToken() === "" ||
-                releasedSignOn.ownerSignInEligible()
-                ? null
-                : held,
-            ),
+          // Never waits for a mint authn has not answered, unless a current
+          // host named its reason for the probe.
+          hostBearerFor: (
+            _hostId: string,
+            _signIn: OpenFrameBearerSource,
+            waitForMint: boolean,
+          ) => localDoor.hostBearerFor(waitForMint),
+          doorFor: () => ({
+            refused: () => undefined,
+            admitted: localDoor.admitted,
+          }),
           releasedSignOnFor: (
             _authority: HostRequestAuthority,
             cause: ReleasedUnaryCause,
           ) => {
+            const releasedSignOn = localDoor.releasedSignOn;
             const signIn = releasedSignOn.signIn();
             const eligible =
               cause === "refused" ||
@@ -521,9 +552,10 @@ async function requestWithHostToken<
             );
           },
           heldTokenRefusedFor: (_authority, presented) =>
-            releasedSignOn.heldTokenRefused(presented),
-          forgetHeldRefusalFor: () => releasedSignOn.forgetHeldRefusal(),
-          releasedHosts: releasedSignOn.hosts,
+            localDoor.releasedSignOn.heldTokenRefused(presented),
+          forgetHeldRefusalFor: () =>
+            localDoor.releasedSignOn.forgetHeldRefusal(),
+          releasedHosts: localDoor.releasedSignOn.hosts,
           surfacesNotProvisioned: true,
         }),
     registry: hostRpcRegistry,

@@ -1232,6 +1232,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.hostTokensRenew,
           RunnerHostInvoke.hostTokensAdopt,
           RunnerHostInvoke.hostTokensForgetUser,
+          RunnerHostInvoke.hostTokensSnapshot,
           // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.
           RunnerHostInvoke.selectionAttach,
           RunnerHostInvoke.selectionReportEvidence,

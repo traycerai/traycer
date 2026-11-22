@@ -299,16 +299,9 @@ export async function provisionInstalledHostCredential(
   // occasional ack losing the race with the grace timer cannot accumulate
   // into a false "this host has no credential capability" verdict.
   let consecutiveSilentOpens = 0;
-  // A mint of the host-only token authn refused for good, and the wake-up of
-  // the lap waiting on an ack that can now never come.
+  // A mint refusal that ends the command (`CliHostTokens.onRefusalEndingCommand`),
+  // and the wake-up of the lap waiting on an ack that can now never come.
   let mintRefusal: CliHostTokenFailure | null = null;
-  // authn has no row for this person: a released host is then opened with the
-  // sign-in, as a released CLI's probe opened it, so the probe goes on. It
-  // explains the end only if that does not provision the host.
-  let signInAfterNotAdmitted: CliHostTokenFailure | null = null;
-  // An open was admitted after it: the host took the sign-in, so a later 404
-  // for the host-only token is expected and explains nothing.
-  let admittedAfterNotAdmitted = false;
   let wakeOnMintRefusal: (() => void) | null = null;
   let stopMintRefusals: () => void = () => undefined;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
@@ -380,23 +373,23 @@ export async function provisionInstalledHostCredential(
       lease,
       tokens,
     );
-    // A mint authn refuses for good (a computer with no row answers a bare
-    // 404) can never become a token, so the probe ends at once rather than
-    // waiting out its budget, unless the first 404 leaves the sign-in to try.
-    stopMintRefusals = tokens.onMintRefused((hostId, failure) => {
+    // The tokens on disk, so the first dial presents the held one.
+    await tokens.whenLoaded();
+    // A refusal no token or sign-in can follow ends the probe at once rather
+    // than waiting out its budget. A `not-admitted` (a computer with no row
+    // answers a bare 404) a sign-in may still follow is left to the stream,
+    // and explains the end only if that does not provision the host.
+    stopMintRefusals = tokens.onRefusalEndingCommand((hostId, failure) => {
       if (endpoint?.hostId !== hostId) return;
       options.logger.warn("Host credential provisioning token mint refused", {
         environment: options.environment,
         failure: failure.kind,
       });
-      if (failure.kind === "not-admitted" && admittedAfterNotAdmitted) return;
-      if (failure.kind !== "not-admitted" || signInAfterNotAdmitted !== null) {
-        mintRefusal = failure;
-        if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
-        return;
-      }
-      signInAfterNotAdmitted = failure;
+      mintRefusal = failure;
+      if (wakeOnMintRefusal !== null) wakeOnMintRefusal();
     });
+    const deferredNotAdmitted = (): CliHostTokenFailure | null =>
+      endpoint === null ? null : tokens.deferredNotAdmitted(endpoint.hostId);
     // Recovery of a refused token, as on every other CLI open: one fresh
     // token and one more open, and a second refusal is final.
     const streamAuth: StreamAuthRevalidator = {
@@ -438,8 +431,8 @@ export async function provisionInstalledHostCredential(
       // has no earlier handshake in this process to seed from anyway.
       hostId: null,
       endpoint: () => endpoint,
-      // `null` (the transport's wait) until a host-only token is held for
-      // the host the endpoint names.
+      // `null` while no host-only token can be presented for the host the
+      // endpoint names: the stream then probes while authn has not answered.
       bearer: () =>
         endpoint === null ? null : tokens.streamBearer(endpoint.hostId)(),
       presentsHeldPastExpiry: () =>
@@ -448,14 +441,13 @@ export async function provisionInstalledHostCredential(
       releasedSignOn,
       auth: streamAuth,
       // Each admitted open resets the host's recovery, so the one fresh token
-      // is earned again after a good open.
+      // is earned again after a good open, and fences off a `not-admitted` of
+      // a mint begun before it.
       door: {
         refused: () => undefined,
         admitted: () => {
           doorRetried = false;
-          if (signInAfterNotAdmitted !== null) admittedAfterNotAdmitted = true;
-          if (endpoint !== null)
-            tokens.streamRecovery(endpoint.hostId).admitted();
+          if (endpoint !== null) tokens.admitted(endpoint.hostId);
         },
       },
       // No tracker wired yet on the CLI side: this is a short-lived
@@ -527,9 +519,7 @@ export async function provisionInstalledHostCredential(
       if (credentialRejected || tokens.signInRejected()) {
         return { kind: "unauthorized" };
       }
-      const refusal =
-        mintRefusal ??
-        (admittedAfterNotAdmitted ? null : signInAfterNotAdmitted);
+      const refusal = mintRefusal ?? deferredNotAdmitted();
       if (refusal !== null) return mintRefusalOutcome(refusal);
       if (mintUnavailable) {
         return { kind: "mint-unavailable" };
@@ -591,7 +581,7 @@ export async function provisionInstalledHostCredential(
       !credentialRejected &&
       !tokens.signInRejected() &&
       mintRefusal === null &&
-      (signInAfterNotAdmitted === null || admittedAfterNotAdmitted) &&
+      deferredNotAdmitted() === null &&
       !mintUnavailable &&
       !mintProvisioned &&
       !mintInvoked &&

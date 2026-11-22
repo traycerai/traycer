@@ -1868,6 +1868,8 @@ class StreamSession<
    * (the user stays signed in, so recovery is a manual reload).
    */
   private noProgressUnauthorizedReconnects = 0;
+  /** The host whose refusals `noProgressUnauthorizedReconnects` counts. */
+  private noProgressHostId: string | null = null;
   /**
    * Live subscription to the clock tracker's `skewed → ok` edge while this
    * session is PARKED, or `null` when it is not parked. Doubles as the parked
@@ -1898,11 +1900,18 @@ class StreamSession<
     | "owner-sign-in-next"
     | "owner-sign-in" = "host-token";
   /**
+   * The host whose answer planned `sign-in-next` or `owner-sign-in-next`. A dial
+   * to any other host (the endpoint moved meanwhile) starts on the host-only
+   * token: one host's answer is never spent on another.
+   */
+  private releasedPlanHostId: string | null = null;
+  /**
    * With no host-only token to present, the next dial, or this one, carries
    * `NO_HOST_TOKEN_PROBE`, so that only a host answering it the released way is
-   * then handed the sign-in.
+   * then handed the sign-in. Bound, like the plan, to the host it was meant for.
    */
   private probeNext = false;
+  private probeNextHostId: string | null = null;
   private probing = false;
   /**
    * Dials that chose a plan. A refresh that answers after its budget acts only
@@ -2419,19 +2428,31 @@ class StreamSession<
     const namedMeanwhile =
       released !== null && released.hosts.namedReason(selected.hostId);
     this.dialsStarted += 1;
+    // Another host's refusals never count toward this host's give-up bound.
+    if (this.noProgressHostId !== selected.hostId) {
+      this.noProgressHostId = selected.hostId;
+      this.noProgressUnauthorizedReconnects = 0;
+    }
+    const plannedForThisHost = this.releasedPlanHostId === selected.hostId;
     this.releasedPlan =
       signInNow !== null &&
       !namedMeanwhile &&
+      plannedForThisHost &&
       this.releasedPlan === "sign-in-next"
         ? "sign-in"
         : signInNow !== null &&
             released !== null &&
+            plannedForThisHost &&
             this.releasedPlan === "owner-sign-in-next" &&
             released.ownerSignInEligible()
           ? "owner-sign-in"
           : "host-token";
-    this.probing = this.probeNext && this.releasedPlan === "host-token";
+    this.probing =
+      this.probeNext &&
+      this.probeNextHostId === selected.hostId &&
+      this.releasedPlan === "host-token";
     this.probeNext = false;
+    this.probeNextHostId = null;
     const bearer = this.wireBearer();
     this.openFrameBearer = bearer;
     this.usesSessionGrant = false;
@@ -2452,7 +2473,7 @@ class StreamSession<
           released.hostTokenUnobtainable() &&
           released.signIn() !== null
         ) {
-          this.probeWithoutHostToken();
+          this.probeWithoutHostToken(selected.hostId);
           return;
         }
         if (this.releasedPlan === "host-token") released?.forgetHeldRefusal();
@@ -2478,12 +2499,12 @@ class StreamSession<
       auth !== null &&
       expiresAtMs !== null &&
       expiresAtMs <= Date.now() &&
-      // The host judges an expired sign-in on this door by its own reading of authn.
-      this.releasedPlan !== "owner-sign-in" &&
-      !(
-        this.releasedPlan === "host-token" &&
-        (this.config.presentsHeldPastExpiry?.() ?? false)
-      )
+      // Only a host-only token is refreshed before its dial, and not one held
+      // past its end while authn has not answered. A sign-in, released or
+      // invited, goes as it is: the host judges it, and its recovery runs after
+      // the host's answer, so no dial to this machine's host waits on the cloud.
+      this.releasedPlan === "host-token" &&
+      !(this.config.presentsHeldPastExpiry?.() ?? false)
     ) {
       // THE EXPIRY READ IS A COMPARISON AGAINST `Date.now()`, so on a machine
       // whose clock is hours off it says "expired" about a bearer minted
@@ -2497,8 +2518,6 @@ class StreamSession<
       console.debug(
         `[stream] pre-dial bearer already expired; revalidating before dial method=${String(this.config.method)}`,
       );
-      // The redial after the refresh presents the sign-in again.
-      if (this.releasedPlan === "sign-in") this.releasedPlan = "sign-in-next";
       this.transitionTo("reconnecting", null, null);
       void this.revalidateThenReconnect(
         auth,
@@ -2706,6 +2725,15 @@ class StreamSession<
       return;
     }
 
+    // The released sign-in goes only to a host no transport has heard name a
+    // reason: asked again at OPEN, because the dial can wait for a slot.
+    if (
+      this.releasedPlan === "sign-in" &&
+      this.openFrameHostId !== null &&
+      (this.config.releasedSignOn?.hosts.namedReason(this.openFrameHostId) ??
+        false)
+    )
+      this.releasedPlan = "host-token";
     // A queued dial must still belong to its signed-in user at OPEN. Keep a
     // minted grant as the wire token, but recheck its user's live bearer too.
     const liveBearer = this.currentUserBearerToken();
@@ -3310,9 +3338,10 @@ class StreamSession<
         released !== null &&
         released.ownerSignInEligible()
       ) {
+        // Planned before the teardown drops the dialed host.
+        this.planNext("owner-sign-in-next");
         this.teardownSocket(1000, "owner-sign-in");
         this.resetForReconnect(null);
-        this.releasedPlan = "owner-sign-in-next";
         this.connect();
         return;
       }
@@ -3444,13 +3473,14 @@ class StreamSession<
     if (released === null) return;
     const recovery = released.recovery;
     if (this.releasedPlan === "host-token") {
+      // Planned before the teardown drops the dialed host.
+      this.planNext("sign-in-next");
       this.teardownSocket(1000, "released-host-sign-on");
       this.resetForReconnect(null);
-      this.releasedPlan = "sign-in-next";
       this.connect();
       return;
     }
-    this.releasedPlan = "sign-in-next";
+    this.planNext("sign-in-next");
     if (recovery === null) {
       this.config.door?.refused(details);
       this.goTerminal(details);
@@ -3462,6 +3492,7 @@ class StreamSession<
       revalidateForReconnect: async () => {
         const outcome = await revalidateStream(recovery, details);
         if (
+          !this.disposed &&
           this.dialsStarted === askedAt &&
           (outcome === "rejected" || outcome === "local-plane-retained")
         )
@@ -3513,7 +3544,7 @@ class StreamSession<
       this.dropAndReconnect(details);
       return;
     }
-    this.releasedPlan = "owner-sign-in-next";
+    this.planNext("owner-sign-in-next");
     if (recovery === null) {
       door?.refused(details);
       this.goTerminal(details);
@@ -3523,7 +3554,11 @@ class StreamSession<
     this.handleUnauthorizedFatalError(details, {
       revalidateForReconnect: async () => {
         const outcome = await revalidateStream(recovery, details);
-        if (outcome !== "rotated" && this.dialsStarted === askedAt) {
+        if (
+          outcome !== "rotated" &&
+          !this.disposed &&
+          this.dialsStarted === askedAt
+        ) {
           door?.refused(details);
           // The next dial asks for a host-only token first; only when none can
           // be had does it probe, and the host invite the sign-in, again.
@@ -3540,9 +3575,16 @@ class StreamSession<
    * that answers the probe the released way: team computers and sandboxes are
    * all current hosts, and every current host names its reason.
    */
-  private probeWithoutHostToken(): void {
+  private probeWithoutHostToken(hostId: string): void {
     this.probeNext = true;
+    this.probeNextHostId = hostId;
     this.connect();
+  }
+
+  /** Plans the next dial to the host whose answer this dial just heard. */
+  private planNext(plan: "sign-in-next" | "owner-sign-in-next"): void {
+    this.releasedPlan = plan;
+    this.releasedPlanHostId = this.openFrameHostId;
   }
 
   /** The lease this dial presents, or the next one will: the host-only token, or the sign-in. */
@@ -3602,8 +3644,11 @@ class StreamSession<
     rejectedToken: string | null,
     refusal: FatalErrorDetails | null,
   ): Promise<void> {
+    const askedAt = this.dialsStarted;
     const outcome = await this.revalidateWithinBudget(auth, refusal);
-    if (this.disposed) {
+    // A dial started meanwhile (a wake) owns the stream now: its own answers
+    // decide, never this refresh's.
+    if (this.disposed || this.dialsStarted !== askedAt) {
       return;
     }
     // Wake-recovery trace: which way the overnight-expired-bearer revalidation

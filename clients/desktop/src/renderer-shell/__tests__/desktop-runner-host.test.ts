@@ -291,6 +291,7 @@ function buildFakeBridge(
       renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
       adopt: async () => ({ era: 0 }),
       forgetUser: async () => ({ era: 0 }),
+      snapshot: async () => ({ userId: null, era: 0, tokens: [] }),
       subscribe: () => ({ dispose: () => undefined }),
     },
     listUserSessions: async () => ({ kind: "network-error" as const }),
