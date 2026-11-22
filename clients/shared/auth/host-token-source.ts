@@ -153,13 +153,6 @@ function mayWriteFor(asker: MintAsker): () => boolean {
   return () => asker.observedNow() === asker.observed;
 }
 
-// What a flight's mint came to: authn's answer, and the write it made under
-// the checks of the asker that started it (`null`: nothing was written).
-interface MintFlight {
-  readonly outcome: HostTokenMintOutcome;
-  readonly written: TableWriteResult | null;
-}
-
 // What a mint is asked with, beyond the pair and era.
 interface MintAsk {
   readonly signal: AbortSignal | null;
@@ -320,10 +313,10 @@ export function createHostTokenSource(deps: {
   // mint an owner not yet observed started, which only such owners join; and
   // each observed process's own, under `ownerKey`. An observed owner never
   // joins a mint started for an owner not yet observed, nor the reverse.
-  const latestFlight = new Map<string, Promise<MintFlight>>();
-  const renewFlights = new Map<string, Promise<MintFlight>>();
-  const unknownFlights = new Map<string, Promise<MintFlight>>();
-  const observedFlights = new Map<string, Promise<MintFlight>>();
+  const latestFlight = new Map<string, Promise<HostTokenMintOutcome>>();
+  const renewFlights = new Map<string, Promise<HostTokenMintOutcome>>();
+  const unknownFlights = new Map<string, Promise<HostTokenMintOutcome>>();
+  const observedFlights = new Map<string, Promise<HostTokenMintOutcome>>();
   // Each pair's minting refresh (its end, never the token), so a refresh mints once per
   // host. Process memory only: a restart mints once more at most.
   const mintedWith = new Map<string, number>();
@@ -450,40 +443,26 @@ export function createHostTokenSource(deps: {
       if (mark === null) mintedWith.delete(key);
       else if (before === undefined || before < mark) mintedWith.set(key, mark);
     };
-    // Every asker is told the mint's answer, and its write is judged by its
-    // own rule. The starter's write was judged by the starter's. A joiner
-    // whose rule is not the starter's process check (a renewal, an ask with no
-    // owner or with one not yet observed) writes the minted token itself when
-    // that check declined it, under its own rule: era and order only.
+    // A flight shares the request, never the write: authn's answer is shared,
+    // and every asker, starter and joiner alike, writes the token itself under
+    // its own rule (its era, its own check, its own `replaces`) and is answered
+    // from its own write. A second write of the same token changes nothing.
     const answerFor = async (
-      flight: MintFlight,
+      outcome: HostTokenMintOutcome,
     ): Promise<HostTokenMintOutcome> => {
-      const { outcome } = flight;
-      if (flight.written === null || outcome.kind !== "ok") return outcome;
-      let written = flight.written;
-      if (written.kind === "not-wanted" && asker.kind !== "known") {
-        written = await store(userId, hostId, outcome.token, {
-          era,
-          mayWrite: mayWriteFor(asker),
-          replaces,
-        });
-        refreshMoved(written);
-      }
-      return answerAfter(userId, hostId, era, written, outcome.token);
-    };
-    if (running !== undefined) return running.then(answerFor);
-    const attempt = (async (): Promise<MintFlight> => {
-      const outcome = await deps.mint(hostId, signInToken, signal);
-      if (eraOf(userId) !== era)
-        return { outcome: { kind: "superseded" }, written: null };
-      if (outcome.kind !== "ok") return { outcome, written: null };
+      if (outcome.kind !== "ok") return outcome;
       const written = await store(userId, hostId, outcome.token, {
         era,
         mayWrite: mayWriteFor(asker),
         replaces,
       });
       refreshMoved(written);
-      return { outcome, written };
+      return answerAfter(userId, hostId, era, written, outcome.token);
+    };
+    if (running !== undefined) return running.then(answerFor);
+    const attempt = (async (): Promise<HostTokenMintOutcome> => {
+      const outcome = await deps.mint(hostId, signInToken, signal);
+      return eraOf(userId) !== era ? { kind: "superseded" } : outcome;
     })().finally(() => {
       if (asker.kind === "none") {
         if (renewFlights.get(flightKey) === attempt)
