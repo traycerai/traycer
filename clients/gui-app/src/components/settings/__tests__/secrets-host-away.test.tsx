@@ -5,6 +5,7 @@ import { environmentStatusFixture } from "@/lib/environment/__tests__/environmen
 import { resetEnvironmentSectionReads } from "@/components/settings/__tests__/environment-section-reads-fixture";
 import {
   mountSettings,
+  type MountedSettings,
   offlineWindowHost,
   resetWindowHost,
   SECRETS_LIST,
@@ -161,6 +162,7 @@ afterEach(() => {
 });
 
 const SECRETS_DESCRIPTION = "Values and logins your agents use.";
+const SECRETS_NAME = "OPENAI_API_KEY";
 const secretsRow = (): Element | null =>
   screen.queryByTestId("settings-sidebar-item-secrets");
 
@@ -178,6 +180,9 @@ describe("Personal's Secrets under a window host that is listed but offline", ()
     expect(secretsRow()).not.toBeNull();
     expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
     expect(screen.queryByTestId("personal-source-loading")).toBeNull();
+    // Only the cloud frame lists: the host frame, with no list served, draws
+    // the title and description alone.
+    expect(await screen.findByText(SECRETS_NAME)).toBeTruthy();
   });
 
   it("offers no Secrets row on a reachable host that runs Personal and does not serve the list", async () => {
@@ -230,13 +235,14 @@ describe("Personal's Secrets once the window host that answered goes offline", (
     });
     expect(await screen.findByText(SECRETS_DESCRIPTION)).toBeTruthy();
     expect(screen.queryByTestId("personal-source-loading")).toBeNull();
+    expect(await screen.findByText(SECRETS_NAME)).toBeTruthy();
   });
 });
 
 describe("Personal's Secrets once the window host that went offline comes back", () => {
-  async function mountAnsweredThenOffline(): Promise<void> {
+  async function mountAnsweredThenOffline(): Promise<MountedSettings> {
     useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
-    mountSettings({
+    const mounted = mountSettings({
       host: hostScopeOptionFixture({ hostId: "host-a", name: "dev-box" }),
       manifest: { "environment.status": 1 },
       handlers: {
@@ -252,6 +258,7 @@ describe("Personal's Secrets once the window host that went offline comes back",
     await waitFor(() => {
       expect(secretsRow()).not.toBeNull();
     });
+    return mounted;
   }
 
   it("drops the Secrets row and draws the host's page when it runs Personal without the list", async () => {
@@ -261,6 +268,9 @@ describe("Personal's Secrets once the window host that went offline comes back",
 
     await waitFor(() => {
       expect(secretsRow()).toBeNull();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(SECRETS_NAME)).toBeNull();
     });
     expect(
       await screen.findByRole("heading", { name: "Secrets" }),
@@ -274,7 +284,7 @@ describe("Personal's Secrets once the window host that went offline comes back",
 
     takeWindowHostOnline({ "environment.status": 1, [SECRETS_LIST]: 1 });
 
-    expect(await screen.findByText("OPENAI_API_KEY")).toBeTruthy();
+    expect(await screen.findByText(SECRETS_NAME)).toBeTruthy();
     expect(secretsRow()).not.toBeNull();
     expect(screen.queryByTestId("personal-source-loading")).toBeNull();
   });
