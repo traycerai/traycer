@@ -200,8 +200,7 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      | ((session: FakeStreamSession, lapIndex: number) => void)
-      | null,
+      ((session: FakeStreamSession, lapIndex: number) => void) | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
@@ -1031,7 +1030,19 @@ describe("provisionInstalledHostCredential", () => {
       readonly detail: string;
     }>();
     mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
-    mocks.hostTokenMintMock.mockImplementationOnce(() => pendingMint.promise);
+    // The request the mint rides on carries its own signal; it is aborted when
+    // the probe's cancel reaches it, not before.
+    const mintRequest: {
+      signal: AbortSignal | null;
+      abortedAtMint: boolean | null;
+    } = { signal: null, abortedAtMint: null };
+    mocks.hostTokenMintMock.mockImplementationOnce(
+      (_request: unknown, _a: unknown, _b: unknown, signal: AbortSignal) => {
+        mintRequest.signal = signal;
+        mintRequest.abortedAtMint = signal.aborted;
+        return pendingMint.promise;
+      },
+    );
     mocks.onSessionCreated = (): void => {
       setTimeout(() => {
         const options = capturedClientOptions();
@@ -1055,7 +1066,8 @@ describe("provisionInstalledHostCredential", () => {
       kind: "mint-unavailable",
     });
     expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
-    expect(mocks.hostTokenMintMock.mock.calls[0][3]).toBe(probeSignal());
+    expect(mintRequest.abortedAtMint).toBe(false);
+    expect(mintRequest.signal?.aborted).toBe(true);
     expect(probeSignal().aborted).toBe(true);
     pendingMint.resolve({ kind: "unavailable", detail: "cancelled" });
   });
