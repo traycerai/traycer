@@ -359,21 +359,26 @@ export class HostDirectoryService implements IHostDirectoryService {
   /**
    * Poll mode's clock stops while the window is hidden, so each tick of a
    * hidden span is skipped: the hide is marked, and so is each tick the span
-   * then skips, on the poll's own interval.
+   * then skips, on the poll's own interval. A skipped tick is a time, read
+   * from the clock at each check ({@link noteHiddenTicks}), never a timer's
+   * flag: a stalled runtime runs a timer late, or a show clears it first.
    */
   private readonly handleVisibilityChangeWhilePolling = (): void => {
     if (isDocumentVisible()) {
-      this.stopHiddenTickMarks();
+      this.noteHiddenTicks();
+      this.hiddenSpanStartedAt = null;
       return;
     }
     this.markMissedWhileHidden();
-    if (this.hiddenTickMarks !== null) return;
-    this.hiddenTickMarks = window.setInterval(() => {
-      this.markMissedWhileHidden();
-    }, HOST_DIRECTORY_REFRESH_POLL_MS);
+    if (this.hiddenSpanStartedAt !== null) return;
+    this.hiddenSpanStartedAt = Date.now();
+    this.hiddenTicksNoted = 0;
   };
   private stopPollVisibility: (() => void) | null = null;
-  private hiddenTickMarks: number | null = null;
+  /** When poll mode's running hidden span began, or null while shown. */
+  private hiddenSpanStartedAt: number | null = null;
+  /** The poll ticks of that span already marked. */
+  private hiddenTicksNoted = 0;
   /**
    * One ordered clock for {@link catchUpAfterHidden}. Each mark, each read's
    * start and each confirmation begun while hidden takes the next number.
@@ -767,6 +772,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * whatever order a settle, a retirement and a wake run in.
    */
   private noteEra(): void {
+    this.noteHiddenTicks();
     const identity = this.authContextId();
     const credentialGeneration = this.credentialGeneration();
     if (
@@ -780,10 +786,19 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.latestMark = this.order;
   }
 
-  private stopHiddenTickMarks(): void {
-    if (this.hiddenTickMarks === null) return;
-    window.clearInterval(this.hiddenTickMarks);
-    this.hiddenTickMarks = null;
+  /**
+   * Marks the poll ticks the running hidden span has skipped by now, as one
+   * mark. Runs wherever {@link noteEra} runs, so a tick that came due is
+   * marked before any read starts or any check is made after it.
+   */
+  private noteHiddenTicks(): void {
+    if (this.hiddenSpanStartedAt === null) return;
+    const due = Math.floor(
+      (Date.now() - this.hiddenSpanStartedAt) / HOST_DIRECTORY_REFRESH_POLL_MS,
+    );
+    if (due <= this.hiddenTicksNoted) return;
+    this.hiddenTicksNoted = due;
+    this.markMissedWhileHidden();
   }
 
   private isCurrentEra(era: AuthEra): boolean {
@@ -1143,7 +1158,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.stopPushVisibility = null;
     this.stopPollVisibility?.();
     this.stopPollVisibility = null;
-    this.stopHiddenTickMarks();
+    this.hiddenSpanStartedAt = null;
     // No mark is outstanding once nothing skips changes any more.
     if (this.latestMark > this.settledOwnedStart)
       this.settledOwnedStart = this.latestMark;

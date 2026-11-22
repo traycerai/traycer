@@ -38,9 +38,7 @@ export async function confirmRowWithin(
   });
   try {
     await Promise.race([
-      confirm(
-        () => !settled && Date.now() < deadline && attach.current(),
-      ).then(
+      confirm(() => !settled && Date.now() < deadline && attach.current()).then(
         () => undefined,
         () => undefined,
       ),
