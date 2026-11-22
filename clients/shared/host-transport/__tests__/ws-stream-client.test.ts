@@ -81,7 +81,6 @@ import {
   STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
 } from "@traycer/protocol/framework/stream-ws-protocol";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
-import { processReleasedHosts } from "../released-sign-on";
 
 /**
  * StubWebSocket - fully scriptable `StreamWebSocketLike` mirror of the
@@ -5142,320 +5141,6 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
-  it("mints exactly once when the capability comes back after a refused hand-over, and not while it is absent", async () => {
-    const mint = vi
-      .fn<HostCredentialMintFlow>()
-      .mockResolvedValueOnce(
-        provisioned({ token: "refused-credential", refreshToken: "r1" }),
-      )
-      .mockResolvedValueOnce(
-        provisioned({ token: "retried-credential", refreshToken: "r2" }),
-      )
-      .mockResolvedValue({ kind: "unavailable" });
-    const { factory, sockets } = makeFactory();
-    const client = makeProvisioningClient({
-      factory,
-      mint,
-      endpoint: () => HOST_A,
-      authToken: undefined,
-    });
-    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
-    await flush();
-
-    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
-    await flush();
-    expect(mint).toHaveBeenCalledTimes(1);
-    expect(provisionFrames(sockets[0].socket)).toHaveLength(1);
-
-    // The host refused the hand-over without a word. Each redial reports
-    // needs-reauth; the first two without the capability, so nothing can be sent.
-    const redial = async (
-      capabilities: readonly string[] | undefined,
-    ): Promise<StubStreamWebSocket> => {
-      const previousCount = sockets.length;
-      sockets[previousCount - 1].socket.fireClose(1000, "drop", false);
-      const next = await nthSocket(sockets, previousCount);
-      next.fireOpen();
-      await pollUntil(
-        "reconnected socket to send its open frame",
-        () => next.textSent.length > 0,
-      );
-      const open = JSON.parse(next.textSent[0]) as {
-        readonly manifest: Record<string, { major: number; minor: number }>;
-      };
-      next.fireText({
-        ...streamOpenAck(open.manifest, capabilities),
-        hostCredentialState: "needs-reauth",
-      });
-      await flush();
-      return next;
-    };
-
-    await redial(undefined);
-    await redial(undefined);
-    expect(mint).toHaveBeenCalledTimes(1);
-
-    const offered = await redial([CAP_PROVISION]);
-    expect(mint).toHaveBeenCalledTimes(2);
-    expect(provisionFrames(offered).map((frame) => frame.token)).toEqual([
-      "retried-credential",
-    ]);
-    session.close();
-  });
-
-  /** A mint flow whose first `count` calls each resolve when the test says so. */
-  function heldMints(count: number): {
-    readonly mint: HostCredentialMintFlow;
-    readonly resolve: (call: number, outcome: Provisioned) => void;
-  } {
-    const resolvers: Array<(outcome: Provisioned) => void> = [];
-    const mint = vi.fn<HostCredentialMintFlow>(
-      () =>
-        new Promise<Provisioned>((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
-    return {
-      mint,
-      resolve: (call, outcome) => {
-        const resolveCall = resolvers[call];
-        if (resolveCall === undefined || call >= count)
-          throw new Error(`mint call ${call} was never started`);
-        resolveCall(outcome);
-      },
-    };
-  }
-
-  /** Drops the last socket, waits for the redial, and acks it with the capability and `state`. */
-  async function reconnectWith(
-    sockets: RecordedSocket[],
-    state: "missing" | "needs-reauth",
-  ): Promise<StubStreamWebSocket> {
-    const previousCount = sockets.length;
-    const next = await nthSocket(sockets, previousCount);
-    next.fireOpen();
-    await pollUntil(
-      "reconnected socket to send its open frame",
-      () => next.textSent.length > 0,
-    );
-    ackProvisionHandshake(next, state);
-    await flush();
-    return next;
-  }
-
-  it("discards a needs-reauth credential whose asker dropped before the mint resolved, and mints again when the reconnect asks", async () => {
-    const mints = heldMints(2);
-    const { factory, sockets } = makeFactory();
-    const client = makeProvisioningClient({
-      factory,
-      mint: mints.mint,
-      endpoint: () => HOST_A,
-      authToken: undefined,
-    });
-    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
-    await flush();
-
-    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
-    await flush();
-    expect(mints.mint).toHaveBeenCalledTimes(1);
-
-    // The only session ends before the mint resolves: nothing can take it.
-    sockets[0].socket.fireClose(1000, "drop", false);
-    mints.resolve(
-      0,
-      provisioned({ token: "old-credential", refreshToken: "old-refresh" }),
-    );
-    await flush();
-    expect(pendingMap(client).has(HOST_A.hostId)).toBe(false);
-
-    await reconnectWith(sockets, "needs-reauth");
-    expect(mints.mint).toHaveBeenCalledTimes(2);
-    mints.resolve(
-      1,
-      provisioned({ token: "new-credential", refreshToken: "new-refresh" }),
-    );
-    await flush();
-
-    expect(allProvisionFrames(sockets).map((frame) => frame.token)).toEqual([
-      "new-credential",
-    ]);
-    session.close();
-  });
-
-  it("pushes a needs-reauth credential at once to a live sibling session when the asker dropped, with no second mint", async () => {
-    const mints = heldMints(2);
-    const { factory, sockets } = makeFactory();
-    const client = makeProvisioningClient({
-      factory,
-      mint: mints.mint,
-      endpoint: () => HOST_A,
-      authToken: undefined,
-    });
-    const asker = client.subscribe("epic.subscribe", { epicId: "epic-1" });
-    await flush();
-    const sibling = client.subscribe("epic.subscribe", { epicId: "epic-2" });
-    await flush();
-
-    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
-    await flush();
-    expect(mints.mint).toHaveBeenCalledTimes(1);
-    const siblingSocket = await nthSocket(sockets, 1);
-    completeProvisionHandshake(siblingSocket, "needs-reauth");
-    await flush();
-    expect(mints.mint).toHaveBeenCalledTimes(1);
-
-    sockets[0].socket.fireClose(1000, "drop", false);
-    mints.resolve(
-      0,
-      provisioned({ token: "sibling-credential", refreshToken: "r" }),
-    );
-    await flush();
-
-    expect(provisionFrames(siblingSocket).map((frame) => frame.token)).toEqual([
-      "sibling-credential",
-    ]);
-    expect(mints.mint).toHaveBeenCalledTimes(1);
-    asker.close();
-    sibling.close();
-  });
-
-  it("holds a missing-state credential across the asker's drop and delivers it on the reconnect", async () => {
-    const mints = heldMints(1);
-    const { factory, sockets } = makeFactory();
-    const client = makeProvisioningClient({
-      factory,
-      mint: mints.mint,
-      endpoint: () => HOST_A,
-      authToken: undefined,
-    });
-    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
-    await flush();
-
-    completeProvisionHandshake(sockets[0].socket, "missing");
-    await flush();
-    expect(mints.mint).toHaveBeenCalledTimes(1);
-
-    sockets[0].socket.fireClose(1000, "drop", false);
-    mints.resolve(
-      0,
-      provisioned({ token: "held-credential", refreshToken: "held-refresh" }),
-    );
-    await flush();
-    expect(pendingMap(client).has(HOST_A.hostId)).toBe(true);
-
-    const next = await reconnectWith(sockets, "missing");
-
-    expect(provisionFrames(next).map((frame) => frame.token)).toEqual([
-      "held-credential",
-    ]);
-    expect(mints.mint).toHaveBeenCalledTimes(1);
-    session.close();
-  });
-
-  describe("a host process replaced after the asking session subscribed", () => {
-    // A host id of its own: the process-wide host memory is shared, and the
-    // replacement observed here must not reach another test's host.
-    const HOST_REPLACED: HostDirectoryEntry = {
-      ...HOST_A,
-      hostId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-    };
-
-    /** The session subscribed to the earlier process, the host replaced, no frame since. */
-    async function replacedWhileMinting(state: "missing" | "needs-reauth") {
-      processReleasedHosts.observeInstance(HOST_REPLACED.hostId, "100");
-      const mints = heldMints(1);
-      const { factory, sockets } = makeFactory();
-      const client = makeProvisioningClient({
-        factory,
-        mint: mints.mint,
-        endpoint: () => HOST_REPLACED,
-        authToken: undefined,
-      });
-      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
-      await flush();
-      completeProvisionHandshake(sockets[0].socket, state);
-      await flush();
-      expect(mints.mint).toHaveBeenCalledTimes(1);
-
-      processReleasedHosts.observeInstance(HOST_REPLACED.hostId, "200");
-      mints.resolve(
-        0,
-        provisioned({ token: "late-credential", refreshToken: "late-refresh" }),
-      );
-      await flush();
-      return { client, sockets, session };
-    }
-
-    it("sends a needs-reauth credential to no socket of the replaced process, and discards it", async () => {
-      const { client, sockets, session } =
-        await replacedWhileMinting("needs-reauth");
-
-      expect(allProvisionFrames(sockets)).toEqual([]);
-      expect(pendingMap(client).has(HOST_REPLACED.hostId)).toBe(false);
-      session.close();
-    });
-
-    it("sends a missing-state credential to no socket of the replaced process, and keeps holding it", async () => {
-      const { client, sockets, session } =
-        await replacedWhileMinting("missing");
-
-      expect(allProvisionFrames(sockets)).toEqual([]);
-      expect(pendingMap(client).has(HOST_REPLACED.hostId)).toBe(true);
-      session.close();
-    });
-  });
-
-  it("mints nothing from an armed retry while the host withholds the capability, and once when it offers it", async () => {
-    const mint = vi
-      .fn<HostCredentialMintFlow>()
-      .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
-      .mockResolvedValue({ kind: "unavailable" });
-    const { factory, sockets } = makeFactory();
-    const client = makeProvisioningClient({
-      factory,
-      mint,
-      endpoint: () => HOST_A,
-      authToken: undefined,
-    });
-    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
-    await flush();
-
-    // Call 1 arms the retry and gives the attempt marker back.
-    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
-    await flush();
-    expect(mint).toHaveBeenCalledTimes(1);
-
-    // The redial reports needs-reauth with the capability withheld.
-    sockets[0].socket.fireClose(1000, "drop", false);
-    const withheld = await nthSocket(sockets, 1);
-    withheld.fireOpen();
-    await pollUntil(
-      "reconnected socket to send its open frame",
-      () => withheld.textSent.length > 0,
-    );
-    const open = JSON.parse(withheld.textSent[0]) as {
-      readonly manifest: Record<string, { major: number; minor: number }>;
-    };
-    withheld.fireText({
-      ...streamOpenAck(open.manifest, undefined),
-      hostCredentialState: "needs-reauth",
-    });
-    await flush();
-
-    // Past the floor + jitter ceiling: the armed retry fires and mints nothing.
-    await wait(1_600);
-    expect(mint).toHaveBeenCalledTimes(1);
-
-    // The next ack that offers the capability mints, once.
-    withheld.fireClose(1000, "drop", false);
-    const offered = await nthSocket(sockets, 2);
-    completeProvisionHandshake(offered, "needs-reauth");
-    await flush();
-    expect(mint).toHaveBeenCalledTimes(2);
-
-    session.close();
-  });
-
   it("skips mint when hostId is not a UUID (marks attempted, no OTP)", async () => {
     const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();
@@ -5891,9 +5576,7 @@ describe("WsStreamClient host credential provisioning", () => {
     // credential that was already pending when a re-arm transition (the
     // "burn" below) delivered it keeps the marker clear: that transition's
     // own top-of-function flush runs and returns before the attempt-marker
-    // code could set it again. Call B is a first enrolment (`missing`): a
-    // `needs-reauth` credential is never held for a later connection, so only
-    // a `missing` one can wait for the burn.
+    // code could set it again.
     const deferredB: { resolve: ((outcome: Provisioned) => void) | null } = {
       resolve: null,
     };
@@ -5922,11 +5605,15 @@ describe("WsStreamClient host credential provisioning", () => {
     await flush();
     expect(mint).toHaveBeenCalledTimes(1);
 
-    // Call B: the host now reports `missing`. Left deferred so it can resolve
-    // with nothing subscribed to receive it.
+    // Call B: same state, no transition - only the marker being clear lets
+    // this ask again. Left deferred so it can resolve with nothing
+    // subscribed to receive it.
     sockets[0].socket.fireClose(1000, "drop", false);
     await wait(30);
-    completeProvisionHandshake(sockets[sockets.length - 1].socket, "missing");
+    completeProvisionHandshake(
+      sockets[sockets.length - 1].socket,
+      "needs-reauth",
+    );
     await flush();
     expect(mint).toHaveBeenCalledTimes(2);
 
@@ -5949,14 +5636,11 @@ describe("WsStreamClient host credential provisioning", () => {
     // than being delivered here.
     expect(pendingMap(client).has(HOST_A.hostId)).toBe(true);
 
-    // The burn: a transition ack. It clears the attempt marker and
-    // `handedOffHostIds`, then its own top-of-function flush delivers call B's
-    // pending credential before the attempt gate can run again - so the
-    // handoff lands with the marker still clear.
-    completeProvisionHandshake(
-      sockets[sockets.length - 1].socket,
-      "needs-reauth",
-    );
+    // The burn: a transition ack. It clears the (already-clear) attempt
+    // marker and `handedOffHostIds`, then its own top-of-function flush
+    // delivers call B's pending credential before the attempt gate can run
+    // again - so the handoff lands with the marker still clear.
+    completeProvisionHandshake(sockets[sockets.length - 1].socket, "missing");
     await flush();
     expect(mint).toHaveBeenCalledTimes(2);
     expect(provisionFrames(sockets[sockets.length - 1].socket)).toHaveLength(1);

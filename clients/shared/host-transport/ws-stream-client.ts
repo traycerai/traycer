@@ -529,11 +529,6 @@ export class WsStreamClient<
    * credential it asks for.
    */
   private readonly provisionRetryTimers = new Map<string, TimerHandle>();
-  /**
-   * Hosts whose last ack withheld the provision capability. A retry that fires
-   * meanwhile mints nothing; the ack that next offers the capability does.
-   */
-  private readonly provisionWithheldHostIds = new Set<string>();
   private readonly provisionGenerations = new Map<string, number>();
   private openedCredentialSocketSequence = 0;
   private readonly teamCredentialSocketBarriers = new Map<string, number>();
@@ -1114,9 +1109,7 @@ export class WsStreamClient<
       this.handedOffHostIds.delete(hostId);
       return;
     }
-    // Cleared even while the host withholds the capability: the ack that next
-    // offers it reports the same state, so this edge is the only one left to
-    // re-arm on, and the host paces how often it offers.
+    if (!canProvision) return;
     if (
       previousState !== state &&
       (state === "missing" || state === "needs-reauth")
@@ -1134,11 +1127,6 @@ export class WsStreamClient<
       // Whatever we handed this host, it is not holding it any more.
       this.handedOffHostIds.delete(hostId);
     }
-    if (!canProvision) {
-      this.provisionWithheldHostIds.add(hostId);
-      return;
-    }
-    this.provisionWithheldHostIds.delete(hostId);
     if (this.flushPendingProvision(hostId)) {
       return;
     }
@@ -1254,15 +1242,7 @@ export class WsStreamClient<
       }, holdForMs),
     };
     this.pendingProvisions.set(hostId, pending);
-    if (this.flushPendingProvision(hostId) || state !== "needs-reauth") return;
-    // A needs-reauth hand-over is never held for a later connection. Clearing
-    // the marker lets the next needs-reauth ack that offers the capability mint
-    // again; a `missing` hand-over (first enrolment) stays held as above.
-    this.discardPendingProvision(hostId);
-    this.provisionAttemptedHostIds.delete(hostId);
-    console.warn(
-      `[stream] discarded a needs-reauth host credential no live session could take (client=${this.instanceId}, host=${hostId})`,
-    );
+    this.flushPendingProvision(hostId);
   }
 
   private onPendingProvisionExpired(hostId: string): void {
@@ -1358,7 +1338,6 @@ export class WsStreamClient<
         // is protecting.
         return;
       }
-      if (this.provisionWithheldHostIds.has(hostId)) return;
       this.provisionAttemptedHostIds.add(hostId);
       void this.runMintFlow(mint, hostId, reason);
     }, delayMs);
@@ -2494,8 +2473,6 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
    * capability, and this connection is bound to the very host the credential was
    * minted for - a client can hold sessions against several hosts at once, and
    * the credential names its host in a claim the wrong host would reject anyway.
-   * Refuses too when the process this socket opened to is no longer the host's
-   * current one: the ingress fence drops such a socket only on its next frame.
    */
   pushHostCredentialProvision(
     hostId: string,
@@ -2513,10 +2490,6 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       return false;
     }
     if (this.openFrameHostId !== hostId) {
-      return false;
-    }
-    const owner = this.socketOwner;
-    if (owner === null || !this.config.hosts.isCurrent(owner)) {
       return false;
     }
     const socket = this.activeSocket;
