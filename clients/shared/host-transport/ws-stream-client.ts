@@ -1109,7 +1109,9 @@ export class WsStreamClient<
       this.handedOffHostIds.delete(hostId);
       return;
     }
-    if (!canProvision) return;
+    // Cleared even while the host withholds the capability: the ack that next
+    // offers it reports the same state, so this edge is the only one left to
+    // re-arm on, and the host paces how often it offers.
     if (
       previousState !== state &&
       (state === "missing" || state === "needs-reauth")
@@ -1127,6 +1129,7 @@ export class WsStreamClient<
       // Whatever we handed this host, it is not holding it any more.
       this.handedOffHostIds.delete(hostId);
     }
+    if (!canProvision) return;
     if (this.flushPendingProvision(hostId)) {
       return;
     }
