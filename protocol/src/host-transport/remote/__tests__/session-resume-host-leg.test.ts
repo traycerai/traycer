@@ -78,6 +78,7 @@ import type { AttachGrantProvider } from "../grant";
 import {
   encodeResumeFrame,
   parseResumeFrame,
+  RESUME_RING_BYTES,
   ResumeLedger,
 } from "../../resume-ledger";
 import {
@@ -223,6 +224,8 @@ class FakeSocket implements StreamWebSocketLike {
 
 interface HostConnection {
   readonly index: number;
+  /** The relay session this leg is bound to; a claimed leg keeps its predecessor's. */
+  readonly sid: number;
   readonly socket: FakeSocket;
   noise: NoiseSession | null;
   /** The host's own ring and receive count. */
@@ -298,6 +301,8 @@ class FakeHost {
   advertiseBodyCompression = false;
   /** The host deduplicates unary idempotency keys. */
   advertiseIdempotencyKey = false;
+  /** The relay's attach ack carries a resume key, so a lost client leg is claimed back, not rebuilt. */
+  issueResumeKey = false;
   resumeReply: ResumeReply = "answer";
   /** Answer the first frame of each SUBSCRIBE with a snapshot tick (n = 0). */
   autoTick = true;
@@ -314,25 +319,33 @@ class FakeHost {
   readonly factory: IStreamWebSocketFactory = {
     create: (url: string): StreamWebSocketLike => {
       this.urls.push(url);
+      const claimed = this.claimedBy(url);
       const connection: HostConnection = {
         index: this.connections.length,
+        sid: claimed?.sid ?? this.connections.length + 1,
         socket: new FakeSocket((data) => this.onClientSend(connection, data)),
-        noise: null,
-        ledger: new ResumeLedger(() => undefined),
-        reassembler: new ChunkReassembler(undefined),
-        seqByStream: new Map(),
-        streamIds: [],
+        noise: claimed?.noise ?? null,
+        ledger: claimed?.ledger ?? new ResumeLedger(() => undefined),
+        reassembler: claimed?.reassembler ?? new ChunkReassembler(undefined),
+        seqByStream: claimed?.seqByStream ?? new Map(),
+        streamIds: claimed?.streamIds ?? [],
         queue: Promise.resolve(),
         dropInbound: false,
         dropOutbound: false,
       };
       this.connections.push(connection);
-      const sid = this.connections.length;
       queueMicrotask(() => {
         connection.socket.onopen?.({ type: "open" });
         connection.socket.onmessage?.({
           type: "text",
-          data: JSON.stringify({ type: "attach_ack", role: "client", sid }),
+          data: JSON.stringify({
+            type: "attach_ack",
+            role: "client",
+            sid: connection.sid,
+            ...(this.issueResumeKey
+              ? { resumeKey: `resume-key-${connection.sid}` }
+              : {}),
+          }),
         });
       });
       return connection.socket;
@@ -395,6 +408,15 @@ class FakeHost {
       },
       binary: null,
     });
+  }
+
+  /** The leg a dial's `resume=<sid>:<key>` claim names, when it names one. */
+  private claimedBy(url: string): HostConnection | undefined {
+    const claim = new URL(url).searchParams.get("resume");
+    if (claim === null) return undefined;
+    return this.connections.find(
+      (entry) => `${entry.sid}:resume-key-${entry.sid}` === claim,
+    );
   }
 
   /** The relay socket drops from the server side. */
@@ -778,6 +800,7 @@ interface FixtureConfig {
   readonly advertiseBodyCompression: boolean;
   readonly auth: RemoteSessionAuth;
   readonly advertiseIdempotencyKey: boolean;
+  readonly issueResumeKey: boolean;
   readonly autoTick: boolean;
   readonly livenessProbe: SessionLivenessProbe | null;
 }
@@ -788,6 +811,7 @@ const LIVE: FixtureConfig = {
   advertiseBodyCompression: false,
   auth: hostAuth(),
   advertiseIdempotencyKey: false,
+  issueResumeKey: false,
   autoTick: true,
   livenessProbe: null,
 };
@@ -864,6 +888,7 @@ async function openFixture(
   host.advertiseCredentialUpdate = config.advertiseCredentialUpdate;
   host.advertiseBodyCompression = config.advertiseBodyCompression;
   host.advertiseIdempotencyKey = config.advertiseIdempotencyKey;
+  host.issueResumeKey = config.issueResumeKey;
   host.autoTick = config.autoTick;
   const spies = buildEvidence();
   const grants = vi.fn<AttachGrantProvider>(() =>
@@ -2082,6 +2107,7 @@ describe("RemoteSession host-leg resume", () => {
       advertiseBodyCompression: false,
       auth: hostAuth(),
       advertiseIdempotencyKey: false,
+      issueResumeKey: false,
       autoTick: false,
       livenessProbe: probe,
     };
@@ -2353,43 +2379,6 @@ describe("RemoteSession host-leg resume", () => {
       );
       expect(host.connections).toHaveLength(1);
     });
-    /** Holds the seal of each credential update from `arm` until `release`; `held` counts the seals waiting. */
-    function holdCredentialSeals(): {
-      readonly arm: () => void;
-      readonly held: () => number;
-      readonly release: () => void;
-    } {
-      const original = NoiseChannel.prototype.encrypt;
-      let gate: Promise<void> | null = null;
-      let open: () => void = () => undefined;
-      let held = 0;
-      vi.spyOn(NoiseChannel.prototype, "encrypt").mockImplementation(
-        async function (this: NoiseChannel, muxFrame: Uint8Array) {
-          const waiting = gate;
-          if (
-            waiting !== null &&
-            muxFrame[1] === MuxFrameType.CREDENTIAL_UPDATE
-          ) {
-            held += 1;
-            await waiting;
-          }
-          return original.call(this, muxFrame);
-        },
-      );
-      return {
-        arm: () => {
-          gate = new Promise<void>((resolve) => {
-            open = resolve;
-          });
-        },
-        held: () => held,
-        release: () => {
-          gate = null;
-          open();
-        },
-      };
-    }
-
     /** The credential plane `rs` gives a released host: the sign-in goes only while the row allows it. */
     function sealCheckedPlane(
       read: () => string,
@@ -2810,6 +2799,43 @@ describe("RemoteSession host-leg resume", () => {
     });
   });
 
+  /** Holds the seal of each credential update from `arm` until `release`; `held` counts the seals waiting. */
+  function holdCredentialSeals(): {
+    readonly arm: () => void;
+    readonly held: () => number;
+    readonly release: () => void;
+  } {
+    const original = NoiseChannel.prototype.encrypt;
+    let gate: Promise<void> | null = null;
+    let open: () => void = () => undefined;
+    let held = 0;
+    vi.spyOn(NoiseChannel.prototype, "encrypt").mockImplementation(
+      async function (this: NoiseChannel, muxFrame: Uint8Array) {
+        const waiting = gate;
+        if (
+          waiting !== null &&
+          muxFrame[1] === MuxFrameType.CREDENTIAL_UPDATE
+        ) {
+          held += 1;
+          await waiting;
+        }
+        return original.call(this, muxFrame);
+      },
+    );
+    return {
+      arm: () => {
+        gate = new Promise<void>((resolve) => {
+          open = resolve;
+        });
+      },
+      held: () => held,
+      release: () => {
+        gate = null;
+        open();
+      },
+    };
+  }
+
   describe("the pacer is charged the bytes a credential update is actually written with", () => {
     const SHORT = "short-bearer";
     const LARGE = "g".repeat(60_000);
@@ -2865,7 +2891,7 @@ describe("RemoteSession host-leg resume", () => {
       return largeFrameBytes;
     }
 
-    async function pacedFixture(): Promise<{
+    async function pacedFixture(issueResumeKey: boolean): Promise<{
       readonly fixture: Fixture;
       readonly plane: QueuedPlane;
     }> {
@@ -2874,6 +2900,7 @@ describe("RemoteSession host-leg resume", () => {
         ...LIVE,
         autoTick: false,
         advertiseCredentialUpdate: true,
+        issueResumeKey,
         auth: plane.auth,
       });
       return { fixture, plane };
@@ -2899,7 +2926,7 @@ describe("RemoteSession host-leg resume", () => {
     }
 
     it("makes the next update wait for the bytes of a larger bearer written in place of a short one on its first write", async () => {
-      const { fixture, plane } = await pacedFixture();
+      const { fixture, plane } = await pacedFixture(false);
       const { host, session } = fixture;
       await drainToBetweenOneAndTwoLargeFrames(fixture, plane);
       const sent = host.credentialUpdates.length;
@@ -2913,7 +2940,7 @@ describe("RemoteSession host-leg resume", () => {
     });
 
     it("makes the next update wait for the bytes of a larger bearer written in place of a short one on its replay", async () => {
-      const { fixture, plane } = await pacedFixture();
+      const { fixture, plane } = await pacedFixture(false);
       const { host, session } = fixture;
       await drainToBetweenOneAndTwoLargeFrames(fixture, plane);
       const sent = host.credentialUpdates.length;
@@ -2935,7 +2962,7 @@ describe("RemoteSession host-leg resume", () => {
     });
 
     it("gives no credit when a large update is rewritten to a short bearer: the next update still waits for the bytes it was charged", async () => {
-      const { fixture, plane } = await pacedFixture();
+      const { fixture, plane } = await pacedFixture(false);
       const { host, session } = fixture;
       await drainToBetweenOneAndTwoLargeFrames(fixture, plane);
       const sent = host.credentialUpdates.length;
@@ -2949,7 +2976,7 @@ describe("RemoteSession host-leg resume", () => {
     });
 
     it("holds in the resume ledger the grown frame as written, so the replay of a grown update is byte for byte what was sent", async () => {
-      const { fixture, plane } = await pacedFixture();
+      const { fixture, plane } = await pacedFixture(false);
       const { host, session } = fixture;
 
       const socket = host.live().socket;
@@ -2978,6 +3005,128 @@ describe("RemoteSession host-leg resume", () => {
       expect(Array.from(replayed.plaintext)).toEqual(
         Array.from(encodeMuxFrame(grown.nextFrame())),
       );
+    });
+
+    /** The encoded size of a credential update frame that carries `bearer` in one frame. */
+    function updateFrameBytes(bearer: string): number {
+      const source = new OutboundChunkSource(
+        {
+          type: MuxFrameType.CREDENTIAL_UPDATE,
+          streamId: SESSION_CONTROL_STREAM_ID,
+          qos: QosClass.INTERACTIVE,
+          json: { bearer },
+          binary: null,
+        },
+        () => 0,
+        false,
+      );
+      return encodeMuxFrame(source.nextFrame()).length;
+    }
+
+    /**
+     * Writes into a lost leg: first one short update, then unchanged ones
+     * until the ring holds everything but 2,000 bytes of its bound, all of it
+     * unread by the host. A resume before them has acknowledged what came
+     * earlier, so the short update is the ring's oldest frame. Returns the
+     * bearers of the unchanged updates, in order.
+     */
+    async function writeIntoLostLegUntilRingNearlyFull(
+      fixture: Fixture,
+      plane: QueuedPlane,
+    ): Promise<readonly string[]> {
+      const { host, session } = fixture;
+      host.loseLeg();
+      host.attach();
+      await advanceUntil(() => host.resumes.length === 1, 5_000);
+      host.loseLeg();
+      const socket = host.live().socket;
+      const writeOne = async (bearer: string): Promise<void> => {
+        const before = socket.binarySends;
+        plane.queue.push(bearer, bearer);
+        session.notifyBearerRotated();
+        await advanceUntil(() => socket.binarySends > before, 5_000);
+      };
+      await writeOne(SHORT);
+      const room = RESUME_RING_BYTES - 2_000 - updateFrameBytes(SHORT);
+      const framing = updateFrameBytes("x") - 1;
+      const count = Math.ceil(room / 64_000);
+      const each = Math.floor(room / count);
+      const bearers: string[] = [];
+      for (let index = 0; index < count; index += 1) {
+        const bytes = index === count - 1 ? room - each * (count - 1) : each;
+        bearers.push("f".repeat(bytes - framing));
+      }
+      for (const bearer of bearers) await writeOne(bearer);
+      return bearers;
+    }
+
+    it("replays the whole gap on the next resume when the leg dies while a larger credential replay is sealed", async () => {
+      const { fixture, plane } = await pacedFixture(true);
+      const { host } = fixture;
+      const bearers = await writeIntoLostLegUntilRingNearlyFull(fixture, plane);
+      const seals = holdCredentialSeals();
+      seals.arm();
+      plane.queue.push(LARGE);
+      host.attach();
+      await until(() => seals.held() === 1);
+      // The relay closes the client's leg while the frame seals; the session
+      // claims itself back and the resend after that reads the short bearer.
+      host.dropSocket(1006, "relay-closed");
+      plane.queue.push(SHORT, ...bearers);
+      seals.release();
+      const total = 1 + bearers.length;
+      await advanceUntil(
+        () => host.credentialUpdates.length === total || host.opens > 1,
+        30_000,
+      );
+
+      expect(host.opens).toBe(1);
+      expect(host.handshakes).toBe(1);
+      expect(host.credentialUpdates).toHaveLength(total);
+      expect(host.credentialUpdates[0]?.bearer).toBe(SHORT);
+    });
+
+    it("ends the connection instead of rewriting a replayed credential larger when the new bytes would evict an unacknowledged frame", async () => {
+      const { fixture, plane } = await pacedFixture(false);
+      const { host, session } = fixture;
+      const bearers = await writeIntoLostLegUntilRingNearlyFull(fixture, plane);
+      plane.queue.push(LARGE, ...bearers);
+      host.attach();
+      await advanceUntil(
+        () => host.credentialUpdates.length > 0 || host.connections.length > 1,
+        10_000,
+      );
+
+      expect(host.credentialUpdates.filter((u) => u.bearer === LARGE)).toEqual(
+        [],
+      );
+      await advanceUntil(
+        () => host.connections.length === 2 && session.isReady(),
+        30_000,
+      );
+      expect(host.opens).toBe(2);
+    });
+
+    it("charges the pacer for a rewritten credential when it reaches the socket: a leg that dies while it is sealed leaves no charge", async () => {
+      const { fixture, plane } = await pacedFixture(true);
+      const { host, session } = fixture;
+      await drainToBetweenOneAndTwoLargeFrames(fixture, plane);
+      const sent = host.credentialUpdates.length;
+      const seals = holdCredentialSeals();
+      seals.arm();
+
+      plane.queue.push(SHORT, LARGE);
+      session.notifyBearerRotated();
+      await until(() => seals.held() === 1);
+      host.dropSocket(1006, "relay-closed");
+      plane.queue.push(LARGE);
+      seals.release();
+      // The first redial is due at once: no time passes, so the bucket does not refill.
+      await step(0);
+      // The replay is the only charge.
+      await until(() => host.credentialUpdates.length === sent + 1);
+
+      expect(host.credentialUpdates[sent]?.bearer).toBe(LARGE);
     });
   });
 });
