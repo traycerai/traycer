@@ -1,3 +1,4 @@
+import { RECONNECT_MAX_BACKOFF_MS } from "@traycer/protocol/host-transport/remote/config";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -369,6 +370,7 @@ describe("the hostTokensAdopt handler", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const reports: string[] = [];
     const socketsCreated: string[] = [];
+    vi.useFakeTimers();
     rig.hold();
     const built = createRemoteHostTransport({
       clientIdentity: TEST_CLIENT_IDENTITY,
@@ -413,12 +415,12 @@ describe("the hostTokensAdopt handler", () => {
       await vi.waitFor(() =>
         expect(main.current("user-a", hostId)?.token).toBe("minted-host-token"),
       );
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      // Past the longest redial backoff: no later dial or report either.
+      await vi.advanceTimersByTimeAsync(RECONNECT_MAX_BACKOFF_MS);
       expect(socketsCreated).toEqual([]);
       expect(reports).toEqual([]);
     } finally {
+      vi.useRealTimers();
       retireAllRemoteSessions();
       vi.unstubAllGlobals();
       vi.restoreAllMocks();

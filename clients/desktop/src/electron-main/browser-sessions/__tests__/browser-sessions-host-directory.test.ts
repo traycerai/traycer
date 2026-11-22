@@ -395,7 +395,7 @@ describe("main resolves the browser.sessions host itself", () => {
       listRegisteredHosts,
       now: () => now,
     });
-    void directory.resolve("host-previous");
+    const resolvingPrevious = directory.resolve("host-previous");
     await vi.waitFor(() => expect(reads).toHaveLength(1));
 
     directory.reset();
@@ -413,10 +413,8 @@ describe("main resolves the browser.sessions host itself", () => {
     // The set-aside read answering last neither replaces the new account's
     // rows nor arms the miss cooldown against the next lookup.
     reads[0](remoteResponse("host-previous"));
-    // A macrotask turn drains every promise continuation the late answer queued.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    // The set-aside lookup's own settlement: nothing of the late answer is left to run.
+    await resolvingPrevious;
     expect(directory.peek("host-2")).not.toBeNull();
     expect(directory.peek("host-previous")).toBeNull();
   });

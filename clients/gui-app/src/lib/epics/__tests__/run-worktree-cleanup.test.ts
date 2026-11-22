@@ -416,22 +416,27 @@ describe("runWorktreeCleanup on a current host", () => {
   });
 
   it("ignores the stream entering backoff AFTER the command was sent, and settles it unconfirmed on the later drop", async () => {
-    const promise = runTaskCleanup(["/wt/a"]);
-    let settled = false;
-    void promise.then(() => {
-      settled = true;
-    });
-    commandCallbacks().onConnectionStatus(status("connecting", null, true));
-    commandCallbacks().onBackoffEntered(true);
-    await Promise.resolve();
-    expect(settled).toBe(false);
+    vi.useFakeTimers();
+    try {
+      const promise = runTaskCleanup(["/wt/a"]);
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      commandCallbacks().onConnectionStatus(status("connecting", null, true));
+      commandCallbacks().onBackoffEntered(true);
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
+      expect(settled).toBe(false);
 
-    commandCallbacks().onConnectionStatus(status("reconnecting", null, true));
-    await expect(promise).resolves.toEqual({
-      removed: [],
-      failed: [],
-      uncertain: ["/wt/a"],
-    });
+      commandCallbacks().onConnectionStatus(status("reconnecting", null, true));
+      await expect(promise).resolves.toEqual({
+        removed: [],
+        failed: [],
+        uncertain: ["/wt/a"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports a close BEFORE the command was sent as failed at once", async () => {
