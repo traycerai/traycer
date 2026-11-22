@@ -3,7 +3,10 @@ import {
   defineVersionedRpcRegistry,
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/index";
-import { SESSION_CAPABILITY_CREDENTIAL_UPDATE } from "@traycer/protocol/host-transport/mux";
+import {
+  MuxFrameType,
+  SESSION_CAPABILITY_CREDENTIAL_UPDATE,
+} from "@traycer/protocol/host-transport/mux";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
   CLIENT_REAUTH_JITTER_MS,
@@ -24,6 +27,7 @@ import {
 } from "@traycer-clients/shared/auth/host-token-source";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { NoiseChannel } from "@traycer/protocol/host-transport/remote/noise-channel";
 import { retireAllRemoteSessions } from "../active-remote-sessions";
 import {
   createRemoteHostTransport,
@@ -50,14 +54,15 @@ const RELEASED_REFUSAL: FatalErrorDetails = {
 /** How a test's transport is built: its host, whether the row opens released, and its sign-in. */
 interface TransportSettings {
   readonly hostId: string;
-  readonly releasedWay: boolean;
+  /** Read live, as the row is: whether the person's own computer may be handed the sign-in. */
+  readonly releasedWay: () => boolean;
   readonly confirmRow: (() => Promise<boolean>) | null;
   readonly signIn: () => string;
 }
 
 const PLAIN_TRANSPORT: TransportSettings = {
   hostId: HOST_ID,
-  releasedWay: false,
+  releasedWay: () => false,
   confirmRow: null,
   signIn: () => SIGN_IN,
 };
@@ -186,7 +191,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
-      opensReleasedWay: () => settings.releasedWay,
+      opensReleasedWay: settings.releasedWay,
       confirmRowBeforeSignIn: settings.confirmRow,
       hostId: settings.hostId,
       userId: USER_ID,
@@ -404,6 +409,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
   /** A released host that takes the sign-in the host-only token's refusal asks for, and the row confirmations a test scripts. */
   function releasedSession(
     hostId: string,
+    releasedWay: () => boolean,
     confirmRow: () => Promise<boolean>,
     signIn: () => string,
   ): RemoteHostTransport<
@@ -417,7 +423,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
         : { kind: "fatal", details: RELEASED_REFUSAL };
     const { session } = openTransport({
       hostId,
-      releasedWay: true,
+      releasedWay,
       confirmRow,
       signIn,
     });
@@ -436,7 +442,12 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
       confirmations += 1;
       return confirmations === 2 ? pending : Promise.resolve(true);
     };
-    const session = releasedSession(RELEASED_HOST_ID, confirmRow, () => signIn);
+    const session = releasedSession(
+      RELEASED_HOST_ID,
+      () => true,
+      confirmRow,
+      () => signIn,
+    );
     session.start();
     await advanceUntil(() => session.isReady(), 15_000);
     expect(relay.openBearers).toEqual(["", SIGN_IN]);
@@ -466,6 +477,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     };
     const session = releasedSession(
       `${RELEASED_HOST_ID}-last-answer-false`,
+      () => true,
       confirmRow,
       () => signIn,
     );
@@ -534,6 +546,93 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     answerSecondRelinkMint("unauthorized");
     await advanceUntil(() => session.isReady() && authn.calls() === 7, 30_000);
     expect(revalidations).toBe(4);
+  });
+
+  /** Holds the seal of each credential update from `arm` until `release`; `held` counts the seals waiting. */
+  function holdCredentialSeals(): {
+    readonly arm: () => void;
+    readonly held: () => number;
+    readonly release: () => void;
+  } {
+    const original = NoiseChannel.prototype.encrypt;
+    let gate: Promise<void> | null = null;
+    let open: () => void = () => undefined;
+    let held = 0;
+    vi.spyOn(NoiseChannel.prototype, "encrypt").mockImplementation(
+      async function (this: NoiseChannel, muxFrame: Uint8Array) {
+        const waiting = gate;
+        if (
+          waiting !== null &&
+          muxFrame[1] === MuxFrameType.CREDENTIAL_UPDATE
+        ) {
+          held += 1;
+          await waiting;
+        }
+        return original.call(this, muxFrame);
+      },
+    );
+    return {
+      arm: () => {
+        gate = new Promise<void>((resolve) => {
+          open = resolve;
+        });
+      },
+      held: () => held,
+      release: () => {
+        gate = null;
+        open();
+      },
+    };
+  }
+
+  it("never lets a credential update sealed with the sign-in reach the host when the row stops allowing it during the seal, and ends the connection", async () => {
+    let row = true;
+    const seals = holdCredentialSeals();
+    const session = releasedSession(
+      `${RELEASED_HOST_ID}-row-flips-in-seal`,
+      () => row,
+      () => Promise.resolve(true),
+      () => SIGN_IN,
+    );
+    session.start();
+    await advanceUntil(() => session.isReady(), 15_000);
+    expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+    seals.arm();
+    session.notifyBearerRotated();
+    await advanceUntil(() => seals.held() === 1, 5_000);
+    row = false;
+    seals.release();
+    // The connection ends, and the next open reads the row afresh: no sign-in.
+    await advanceUntil(() => relay.openBearers.length >= 3, 30_000);
+
+    expect(sentCredentialBearers()).toEqual([]);
+    expect(relay.openBearers).toEqual(["", SIGN_IN, ""]);
+  });
+
+  it("sends a credential update sealed with the sign-in as sealed when the sign-in rotates during the seal and the row still allows it, with the leg up", async () => {
+    let signIn = SIGN_IN;
+    const seals = holdCredentialSeals();
+    const session = releasedSession(
+      `${RELEASED_HOST_ID}-rotates-in-seal`,
+      () => true,
+      () => Promise.resolve(true),
+      () => signIn,
+    );
+    session.start();
+    await advanceUntil(() => session.isReady(), 15_000);
+    expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+    seals.arm();
+    session.notifyBearerRotated();
+    await advanceUntil(() => seals.held() === 1, 5_000);
+    signIn = ROTATED_SIGN_IN;
+    seals.release();
+    await advanceUntil(() => sentCredentialBearers().length === 1, 5_000);
+
+    expect(sentCredentialBearers()).toEqual([SIGN_IN]);
+    expect(session.isReady()).toBe(true);
+    expect(relay.openBearers).toEqual(["", SIGN_IN]);
   });
 
   /** The bearer of every credential update the fake host has received. */

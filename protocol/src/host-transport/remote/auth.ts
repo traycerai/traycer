@@ -59,12 +59,13 @@ export interface RemoteSessionAuth extends SessionCredentialPlane {
     attachGrant: AttachGrant,
   ) => RemoteSessionOpenAuth | null;
   /**
-   * Whether the `open` read last may still be written, asked once it is sealed
-   * and just before it is sent: a sealed `open` cannot be read again, so a
-   * `false` ends the connection and the next dial reads a new one. Absent: an
-   * open that never stops being writable.
+   * Whether a frame sealed with `bearer` (an `open`'s, or a credential
+   * update's) may still be sent, asked after the seal and just before the
+   * send. A sealed frame can be neither read again nor skipped, so a `false`
+   * ends the connection and the next dial reads its own. Absent: every sealed
+   * credential stays sendable.
    */
-  readonly openStillWritable?: () => boolean;
+  readonly sealedStillWritable?: (bearer: string) => boolean;
 }
 
 /** The bearer a pool session presents on `open`. */

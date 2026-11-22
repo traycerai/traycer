@@ -732,10 +732,23 @@ function createReleasedSignOnSessionAuth(
       ? Promise.resolve("rejected")
       : revalidateStream(auth, refusal);
   };
+  /**
+   * The sign-in values given to frames (an `open`, a credential update) since
+   * the last sealed frame was asked about, so a sealed frame can say whether it
+   * carries the sign-in: a host-only token never equals one. Writes run one at
+   * a time and each reads its bearer just before its seal, so the frame asked
+   * about next was given its value after the last answer.
+   */
+  const signInsGiven = new Set<string>();
+  const giveSignIn = (signIn: string): string => {
+    signInsGiven.add(signIn);
+    return signIn;
+  };
   const sessionAuth: RemoteSessionAuth = {
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
       dialsStarted += 1;
+      signInsGiven.clear();
       dialOwner = hosts.currentInstance(hostId);
       openAdmitted = false;
       signInFromMemory = rowAllows() && remembered() !== null;
@@ -755,7 +768,11 @@ function createReleasedSignOnSessionAuth(
         if (lease !== null && signIn !== null) {
           plan = { kind: "sign-in", authority };
           signInUserId = lease.identity.userId;
-          return { bearer: signIn, authz: null, fingerprint: signIn };
+          return {
+            bearer: giveSignIn(signIn),
+            authz: null,
+            fingerprint: signIn,
+          };
         }
       }
       signInFromMemory = false;
@@ -763,17 +780,23 @@ function createReleasedSignOnSessionAuth(
       plan = HOST_TOKEN_PLAN;
       return hostTokenOpenAuth(readHostToken);
     },
-    // Asked once the open is sealed: an open carrying the sign-in goes only
-    // while the row, its authority and the host still allow it.
-    openStillWritable: () => plan.kind !== "sign-in" || signInGoesNow(),
+    // Asked once an open or a credential update is sealed: one carrying the
+    // sign-in goes only while the row, its authority and the host still allow
+    // it. A rotation within a kind is sent as sealed.
+    sealedStillWritable: (bearer) => {
+      const writable = !signInsGiven.has(bearer) || signInGoesNow();
+      signInsGiven.clear();
+      return writable;
+    },
     // Once a host names a reason, no transport in this process hands it the
     // released-way sign-in again, until this process sees that host's local
     // process instance change: an admitted sign-in session's update carries
     // the host-only token then, and the fingerprint names what is sent.
-    readCredentialUpdateBearer: () =>
-      plan.kind === "sign-in" && signInGoesNow()
-        ? readSignIn()
-        : readHostToken(),
+    readCredentialUpdateBearer: () => {
+      if (!(plan.kind === "sign-in" && signInGoesNow())) return readHostToken();
+      const signIn = readSignIn();
+      return signIn === null ? null : giveSignIn(signIn);
+    },
     // The credential the next frame presents, so a rotated sign-in is
     // progress and the same one again is not, as in desktop-v1.5.4.
     currentFingerprint: () =>

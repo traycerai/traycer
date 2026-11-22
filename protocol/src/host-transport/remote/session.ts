@@ -130,6 +130,7 @@ import {
 import {
   encodeResumeFrame,
   parseResumeFrame,
+  RESUME_RING_BYTES,
   ResumeLedger,
   type ResumeGapReport,
 } from "@traycer/protocol/host-transport/resume-ledger";
@@ -140,7 +141,9 @@ import {
 } from "@traycer/protocol/framework/client-identity";
 import {
   ChunkReassembler,
+  BULK_CHUNK_SIZE_BYTES,
   ChunkReassemblyError,
+  COMPRESSION_MIN_PAYLOAD_BYTES,
   encodeMuxMessageBody,
   MuxFrameOverExpansionError,
   STREAM_FRAME_NOT_ALLOWED_CODE,
@@ -954,6 +957,18 @@ interface ActiveConnection {
    */
   hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
+  /**
+   * The bearer each `open` and credential-update frame of this connection
+   * carries while it is queued and unwritten, by its control-stream seq:
+   * taken out at its write, so it holds no more than the queue does.
+   */
+  readonly unsentBearers: Map<number, string>;
+  /**
+   * The bearer of each written chunk of a credential update too long for one
+   * frame, by seq, newest last: no single chunk holds it, and a resend needs
+   * it. Holds no more chunks than the resume ledger can.
+   */
+  readonly writtenChunkBearers: Map<number, string>;
   cloudVerdictUpdateSupported: boolean;
   idempotencyKeySupported: boolean;
   /**
@@ -2269,15 +2284,19 @@ export class RemoteSession<
     if (bearer === null) {
       return;
     }
-    this.enqueueMessage(connection, {
-      type: MuxFrameType.CREDENTIAL_UPDATE,
-      streamId: SESSION_CONTROL_STREAM_ID,
-      qos: QosClass.INTERACTIVE,
-      json: {
-        bearer,
-      } satisfies CredentialUpdatePayload,
-      binary: null,
-    });
+    this.enqueueCredentialFrame(
+      connection,
+      {
+        type: MuxFrameType.CREDENTIAL_UPDATE,
+        streamId: SESSION_CONTROL_STREAM_ID,
+        qos: QosClass.INTERACTIVE,
+        json: {
+          bearer,
+        } satisfies CredentialUpdatePayload,
+        binary: null,
+      },
+      bearer,
+    );
   }
 
   /**
@@ -2940,6 +2959,8 @@ export class RemoteSession<
       hostManifest: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
+      unsentBearers: new Map(),
+      writtenChunkBearers: new Map(),
       cloudVerdictUpdateSupported: false,
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
@@ -3428,13 +3449,17 @@ export class RemoteSession<
       // dropped while unverified come back authorized.
       cloudAuthorized: sentCloudAuthorized,
     };
-    this.enqueueMessage(connection, {
-      type: MuxFrameType.OPEN,
-      streamId: SESSION_CONTROL_STREAM_ID,
-      qos: QosClass.INTERACTIVE,
-      json: { ...open },
-      binary: null,
-    });
+    this.enqueueCredentialFrame(
+      connection,
+      {
+        type: MuxFrameType.OPEN,
+        streamId: SESSION_CONTROL_STREAM_ID,
+        qos: QosClass.INTERACTIVE,
+        json: { ...open },
+        binary: null,
+      },
+      openAuth.bearer,
+    );
   }
 
   private dispatchInbound(
@@ -6680,10 +6705,21 @@ export class RemoteSession<
     if (connection === null) {
       return;
     }
-    const written = this.withCredentialReadNow(frame);
-    if (written === null) {
-      this.dropUnwritableCredential(generation);
-      return;
+    // Taken here: once written, a frame is resent only from the ledger, whose
+    // bytes carry the bearer themselves.
+    const carried = this.takeUnsentBearer(connection, frame);
+    let written: EncodeMuxFrameInput = frame;
+    let sealedBearer = carried;
+    if (frame.type === MuxFrameType.CREDENTIAL_UPDATE) {
+      const write =
+        carried === null ? null : this.credentialWriteNow(frame, carried);
+      if (write === null) {
+        this.dropUnwritableCredential(generation);
+        return;
+      }
+      written = write.frame;
+      sealedBearer = write.bearer;
+      if (frame.chunked) rememberChunkBearer(connection, frame.seq, write.bearer);
     }
     const plaintext = encodeMuxFrame(written);
     // Appended before the seal, in pull order: the scheduler runs one write at
@@ -6694,12 +6730,7 @@ export class RemoteSession<
     if (pending !== undefined) {
       pending.sealed = true;
     }
-    await this.sealAndSend(
-      generation,
-      connection,
-      plaintext,
-      frame.type === MuxFrameType.OPEN,
-    );
+    await this.sealAndSend(generation, connection, plaintext, sealedBearer);
   }
 
   /**
@@ -6716,47 +6747,87 @@ export class RemoteSession<
     if (!this.isCurrent(generation) || connection === null) {
       return;
     }
-    let resent = muxFrame;
-    if (muxFrame[1] === MuxFrameType.CREDENTIAL_UPDATE) {
-      const written = this.withCredentialReadNow(decodeMuxFrame(muxFrame));
-      if (written === null) {
-        this.dropUnwritableCredential(generation);
-        return;
-      }
-      resent = encodeMuxFrame(written);
+    if (muxFrame[1] !== MuxFrameType.CREDENTIAL_UPDATE) {
+      // An `open` is never in a gap: only a ready session relinks.
+      await this.sealAndSend(generation, connection, muxFrame, null);
+      return;
     }
-    // An `open` is never in a gap: only a ready session relinks.
-    await this.sealAndSend(generation, connection, resent, false);
+    const frame = decodeMuxFrame(muxFrame);
+    const carried = frame.chunked
+      ? (connection.writtenChunkBearers.get(frame.seq) ?? null)
+      : writtenCredentialBearer(frame);
+    const write =
+      carried === null ? null : this.credentialWriteNow(frame, carried);
+    if (write === null) {
+      this.dropUnwritableCredential(generation);
+      return;
+    }
+    await this.sealAndSend(
+      generation,
+      connection,
+      write.frame === frame ? muxFrame : encodeMuxFrame(write.frame),
+      write.bearer,
+    );
   }
 
   /**
-   * `frame` as written now: a credential update carries the bearer read at
-   * this write, not at its enqueue, so a row or owner that changed in between
-   * is honoured. `null` when there is no bearer to write under its drawn seq.
+   * A credential update as written now, under the seq it drew: the bearer is
+   * read at this write, not at its enqueue, so a row or owner that changed in
+   * between is honoured. The bearer `carried` writes `frame` itself, as
+   * enqueued. A new one is written only into one unchunked, uncompressed frame
+   * whose new body stays under the size at which a frame is compressed,
+   * framed exactly as `enqueueMessage` frames such a body. `null` where
+   * nothing correct fits the seq: no bearer, or another framing that would
+   * need a new one.
    */
-  private withCredentialReadNow(
+  private credentialWriteNow(
     frame: EncodeMuxFrameInput,
-  ): EncodeMuxFrameInput | null {
-    if (frame.type !== MuxFrameType.CREDENTIAL_UPDATE) return frame;
+    carried: string,
+  ): { readonly frame: EncodeMuxFrameInput; readonly bearer: string } | null {
     const bearer = this.options.auth.readCredentialUpdateBearer();
     if (bearer === null) return null;
-    // The body `enqueueMessage` built, one unchunked frame: a bearer is far
-    // under both the chunk size and the size at which a frame is compressed,
-    // so an unchanged bearer encodes to the same bytes.
-    return {
-      ...frame,
-      compressed: false,
-      json: null,
-      binary: encodeMuxMessageBody(
-        { bearer } satisfies CredentialUpdatePayload,
-        null,
-      ),
-    };
+    if (bearer === carried) return { frame, bearer };
+    const binary = encodeMuxMessageBody(
+      { bearer } satisfies CredentialUpdatePayload,
+      null,
+    );
+    if (
+      frame.chunked ||
+      frame.compressed ||
+      binary.byteLength >= COMPRESSION_MIN_PAYLOAD_BYTES
+    )
+      return null;
+    return { frame: { ...frame, json: null, binary }, bearer };
+  }
+
+  /** Enqueues an `open` or credential update, recording its bearer by seq. */
+  private enqueueCredentialFrame(
+    connection: ActiveConnection,
+    message: OutboundMessage,
+    bearer: string,
+  ): void {
+    this.enqueueMessageWithSeq(connection, message, () => {
+      const seq = this.nextSeq(SESSION_CONTROL_STREAM_ID);
+      connection.unsentBearers.set(seq, bearer);
+      return seq;
+    });
+  }
+
+  /** The bearer an unsent `open` or credential update carries, taken out. */
+  private takeUnsentBearer(
+    connection: ActiveConnection,
+    frame: EncodeMuxFrameInput,
+  ): string | null {
+    if (frame.streamId !== SESSION_CONTROL_STREAM_ID) return null;
+    const bearer = connection.unsentBearers.get(frame.seq);
+    if (bearer === undefined) return null;
+    connection.unsentBearers.delete(frame.seq);
+    return bearer;
   }
 
   /**
-   * Nothing may be written under a seq already drawn: the connection ends, and
-   * the next one starts a fresh ledger and seq space.
+   * Nothing may be written under a seq already drawn: the connection ends,
+   * and the next one starts a fresh ledger, with no resume.
    */
   private dropUnwritableCredential(generation: number): void {
     this.handleConnectionLost(
@@ -6770,7 +6841,7 @@ export class RemoteSession<
     generation: number,
     connection: ActiveConnection,
     muxFrame: Uint8Array,
-    open: boolean,
+    sealedBearer: string | null,
   ): Promise<void> {
     const leg = connection.socket;
     // A frame whose leg went while it sealed is in the ledger, sealed or not:
@@ -6788,12 +6859,13 @@ export class RemoteSession<
     if (!this.isLegCurrent(connection, leg)) {
       return;
     }
-    // A sealed `open` cannot be read again: one no longer writable ends the
+    // A sealed `open` or credential update can be neither read again nor
+    // skipped: one whose credential may no longer be written ends the
     // connection, and the next dial reads its own.
     if (
-      open &&
+      sealedBearer !== null &&
       this.dial.kind === "relay" &&
-      this.dial.auth.openStillWritable?.() === false
+      this.dial.auth.sealedStillWritable?.(sealedBearer) === false
     ) {
       this.dropUnwritableCredential(generation);
       return;
@@ -7604,6 +7676,35 @@ export class RemoteSession<
  * session goes terminal instead of looping forever - mirrors the local stream
  * transport's identically-named bound.
  */
+/**
+ * The most chunks of credential updates the resume ledger can hold at once:
+ * every chunk but a message's last is a full chunk, and the ledger keeps no
+ * more than {@link RESUME_RING_BYTES}; the oldest message kept may be down to
+ * its last chunk.
+ */
+const CREDENTIAL_CHUNKS_RESENDABLE =
+  2 * Math.floor(RESUME_RING_BYTES / BULK_CHUNK_SIZE_BYTES) + 1;
+
+function rememberChunkBearer(
+  connection: ActiveConnection,
+  seq: number,
+  bearer: string,
+): void {
+  const remembered = connection.writtenChunkBearers;
+  remembered.set(seq, bearer);
+  for (const oldest of remembered.keys()) {
+    if (remembered.size <= CREDENTIAL_CHUNKS_RESENDABLE) break;
+    remembered.delete(oldest);
+  }
+}
+
+/** The bearer a written single-frame credential update carries, read back from it. */
+function writtenCredentialBearer(frame: MuxFrame): string | null {
+  const message = new ChunkReassembler(undefined).accept(frame);
+  const bearer: unknown = message?.json?.bearer;
+  return typeof bearer === "string" ? bearer : null;
+}
+
 const MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS = 3;
 
 /**
