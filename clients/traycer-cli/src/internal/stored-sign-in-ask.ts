@@ -11,14 +11,17 @@ import type { HostAuth } from "./host-auth";
 
 /**
  * When the refresh itself fails, `first` is authn's refusal from before it.
- * When the refreshed pair cannot be saved, as for every other command:
- * - a full disk refuses the write before anything is spent: the disk line is
- *   printed, the refresh counts as unavailable, and `first` stands unsent again;
- * - spent, and still unsaved after the store's three re-drives a second apart:
- *   the pair is used from memory and the call is sent again on it; the disk line
- *   is printed only when the disk is out of space, and a later command recovers
- *   the pair through the spent-base marker;
- * - spent, and a re-drive saves it: as an ordinary refresh.
+ * When the refreshed pair cannot be saved, the store behaves as for every other
+ * command (`withCommitRetry`, `store/credentials-store.ts`):
+ * - a write refused for lack of space before anything is spent: the disk line
+ *   is printed, the refresh counts as unavailable, and `first` stands, not sent
+ *   again;
+ * - spent, and still unsaved after up to three more save attempts a second
+ *   apart: the pair is used from memory and the call is sent again on it. The
+ *   disk line is printed only when that last failed save reported no space left.
+ *   The spent-base marker it leaves lets a later command recover the pair only
+ *   while authn can still replay that rotation;
+ * - spent, and a later save attempt lands it: as an ordinary refresh.
  */
 type StoredSignInAnswer<Answer> =
   | { readonly kind: "answered"; readonly answer: Answer }
@@ -30,6 +33,11 @@ type RefreshOutcome =
   | { readonly kind: "rejected" }
   | { readonly kind: "unavailable" };
 
+/** One sign-in generation: the stored one, then the one its refresh returned. */
+interface Generation {
+  readonly auth: HostAuth;
+}
+
 /** A stored sign-in and its one refresh, held by one claim, one record or one environments read. */
 export interface StoredSignIn {
   /** The stored sign-in, or the one its refresh returned. */
@@ -38,9 +46,9 @@ export interface StoredSignIn {
   refreshSpent(): boolean;
   /**
    * Asks authn on the current sign-in. A refusal the caller names (a 401) gets
-   * the one refresh and one more ask on the refreshed token. Every later
+   * the one refresh and one more ask on the refreshed sign-in. Every later
    * refusal, and every refusal while that refresh is in flight, shares it: it
-   * never refreshes twice, and an ask already refused on the refreshed token is
+   * never refreshes twice, and an ask already sent on the refreshed sign-in is
    * not sent again.
    */
   ask<Answer>(
@@ -51,36 +59,42 @@ export interface StoredSignIn {
 }
 
 export function openStoredSignIn(auth: HostAuth): StoredSignIn {
-  let signedIn = auth;
-  // Runs under the signal of the first caller it refuses, which cuts it. A
-  // caller that joins it in flight waits for that refresh's own bound (about
-  // 14 s), whatever its own signal does; no caller asks on one sign-in
-  // concurrently today.
+  const stored: Generation = { auth };
+  let generation = stored;
+  // Runs under the signal of the first caller it refuses, and only that signal
+  // cuts it. A caller that joins it in flight waits, whatever its own signal
+  // does, for the first caller's path: the lock wait (`CREDENTIALS_LOCK_WAIT_MS`,
+  // 12 s, `store/credentials-store.ts`), the refresh request (10 s,
+  // `AUTH_FETCH_TIMEOUT_MS` in `shared/auth/auth-validation.ts`), and, after a
+  // spend whose save fails, up to three more save attempts a second apart, each
+  // taking the lock again. No caller asks on one sign-in concurrently today.
   let refresh: Promise<RefreshOutcome> | null = null;
   const refreshOnce = (signal: AbortSignal | null): Promise<RefreshOutcome> => {
     if (refresh === null) {
       refresh = refreshStoredSignIn(auth, signal).then((outcome) => {
         if (outcome.kind === "refreshed")
-          signedIn = { ...auth, token: outcome.token };
+          generation = { auth: { ...auth, token: outcome.token } };
         return outcome;
       });
     }
     return refresh;
   };
   return {
-    current: () => signedIn,
+    current: () => generation.auth,
     refreshSpent: () => refresh !== null,
     async ask(ask, refused, signal) {
-      const sentOn = signedIn.token;
-      const first = await ask(sentOn);
+      // The generation, not the token text: a refresh may return the same
+      // access token with a new refresh token.
+      const sentOn = generation;
+      const first = await ask(sentOn.auth.token);
       if (!refused(first)) return { kind: "answered", answer: first };
       const outcome = await refreshOnce(signal);
       if (outcome.kind === "unavailable")
         return { kind: "refresh-unavailable", first };
       if (outcome.kind === "rejected")
         return { kind: "refresh-rejected", first };
-      // Sent after the run's refresh had landed: refused on the refreshed token.
-      if (sentOn !== auth.token) return { kind: "answered", answer: first };
+      // Sent on the refreshed sign-in: its refusal is final.
+      if (sentOn !== stored) return { kind: "answered", answer: first };
       return { kind: "answered", answer: await ask(outcome.token) };
     },
   };

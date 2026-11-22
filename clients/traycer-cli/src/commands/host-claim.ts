@@ -67,11 +67,13 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
       );
     }
     const endpoint = await resolveEndpoint();
-    // One refresh at most for the whole claim, shared by the read and the release.
+    // One refresh at most between the two direct calls to authn, the ownership
+    // read and the release. The host calls and the final provisioning step keep
+    // their own existing recovery, which can refresh on their own refusals.
     const signIn = openStoredSignIn(auth);
     const host = await readOwnershipForClaim(signIn, endpoint.hostId);
-    // The sign-in the read was answered on: a refreshed one replaces the
-    // stored token for every later call of this command.
+    // The sign-in the read was answered on, handed to the two host reads and
+    // the release.
     const signedIn = signIn.current();
     if (host.kind === "sandbox") {
       throw claimRefused(CLI_ERROR_CODES.HOST_IS_SANDBOX, CLAIM_WORDS.sandbox);
