@@ -474,6 +474,13 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
 
   const handleZoomIn = useCallback(() => zoomBy(ZOOM_STEP), [zoomBy]);
   const handleZoomOut = useCallback(() => zoomBy(1 / ZOOM_STEP), [zoomBy]);
+  const handleZoomTo = useCallback(
+    (percent: number) => {
+      setScaleMode(null);
+      applyScale(percent / 100);
+    },
+    [applyScale, setScaleMode],
+  );
 
   const matchCountLabel = (() => {
     if (matchState === null) return "";
@@ -501,6 +508,7 @@ function DocxDocument(props: DocumentViewerProps): ReactNode {
           canZoomOut: scalePercent === null || scalePercent > MIN_SCALE * 100,
           onZoomIn: handleZoomIn,
           onZoomOut: handleZoomOut,
+          onZoomTo: handleZoomTo,
           fitKind: "width",
           fitActive: scaleMode === "page-width",
           onFit: handleFitWidth,

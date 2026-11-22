@@ -263,7 +263,9 @@ describe("<DocxPreview />", () => {
 
     await waitForReady(2);
     // available = 832 - 16*2 = 800; scale = 800 / 400 = 2 -> 200%.
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("200%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "200%",
+    );
 
     const host = screen.getByTestId("docx-preview-host");
     expect(host.shadowRoot?.querySelectorAll("section.docx").length).toBe(2);
@@ -368,10 +370,14 @@ describe("<DocxPreview />", () => {
     setScrollContainerWidth(832);
 
     await waitForReady(2);
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("200%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "200%",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("220%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "220%",
+    );
 
     expect(resizeObservers).toHaveLength(1);
     act(() => {
@@ -379,10 +385,52 @@ describe("<DocxPreview />", () => {
     });
     // A manual zoom cleared the automatic fit mode - the resize must not
     // silently snap the zoom back to fit-to-width.
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("220%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "220%",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Fit to width" }));
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("200%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "200%",
+    );
+  });
+
+  it("holds a typed zoom level to the largest size and takes one inside the range as typed", async () => {
+    mockRenderAsyncWith([{ widthPx: 400, paragraphs: [["Page one"]] }]);
+
+    render(<DocxPreview {...baseProps({})} />);
+    setScrollContainerWidth(832);
+    await waitForReady(1);
+    const zoomLevel = screen.getByLabelText<HTMLInputElement>("Zoom level");
+
+    fireEvent.change(zoomLevel, { target: { value: "900" } });
+    fireEvent.keyDown(zoomLevel, { key: "Enter" });
+    expect(zoomLevel.value).toBe("500%");
+
+    fireEvent.change(zoomLevel, { target: { value: "150" } });
+    fireEvent.keyDown(zoomLevel, { key: "Enter" });
+    expect(zoomLevel.value).toBe("150%");
+  });
+
+  it("treats even the level the fit already shows as a manual zoom, so a later resize does not re-fit", async () => {
+    mockRenderAsyncWith([{ widthPx: 400, paragraphs: [["Page one"]] }]);
+
+    render(<DocxPreview {...baseProps({})} />);
+    setScrollContainerWidth(832);
+    await waitForReady(1);
+    const zoomLevel = screen.getByLabelText<HTMLInputElement>("Zoom level");
+    const fittedPercent = zoomLevel.value.replace("%", "");
+
+    fireEvent.change(zoomLevel, { target: { value: fittedPercent } });
+    fireEvent.keyDown(zoomLevel, { key: "Enter" });
+    // A fit that survived the typing would follow this narrower container down
+    // to 150%.
+    setScrollContainerWidth(632);
+    act(() => {
+      resizeObservers[0]?.trigger();
+    });
+
+    expect(zoomLevel.value).toBe(`${fittedPercent}%`);
   });
 
   it("shows 100% in the Zoom level readout and marks Actual size pressed after clicking it", async () => {
@@ -399,7 +447,9 @@ describe("<DocxPreview />", () => {
 
     fireEvent.click(actualSizeButton);
 
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("100%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "100%",
+    );
     expect(actualSizeButton.getAttribute("aria-pressed")).toBe("true");
   });
 
@@ -635,7 +685,9 @@ describe("<DocxPreview />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
     expect(pageField.value).toBe("2");
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("220%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "220%",
+    );
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Search document" }),
@@ -659,7 +711,9 @@ describe("<DocxPreview />", () => {
     expect(screen.getByLabelText<HTMLInputElement>("Page number").value).toBe(
       "1",
     );
-    expect(screen.getByLabelText("Zoom level").textContent).toBe("200%");
+    expect(screen.getByLabelText<HTMLInputElement>("Zoom level").value).toBe(
+      "200%",
+    );
 
     const host = screen.getByTestId("docx-preview-host");
     expect(host.shadowRoot?.querySelectorAll(".docx-wrapper").length).toBe(1);
