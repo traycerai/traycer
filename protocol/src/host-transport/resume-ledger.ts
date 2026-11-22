@@ -141,30 +141,29 @@ export class ResumeLedger {
     const copy = new Uint8Array(plaintext);
     this.frames.set(index, copy);
     this.retainedBytes += copy.byteLength;
-    this.evictOverBound();
-    return index;
-  }
-
-  /**
-   * Retain `plaintext` as frame `index`, when a resend wrote that frame
-   * differently: the ring holds what was sent. A frame no longer retained
-   * stays out. Only the byte bound evicts.
-   */
-  replace(index: number, plaintext: Uint8Array): void {
-    const retained = this.frames.get(index);
-    if (retained === undefined) return;
-    const copy = new Uint8Array(plaintext);
-    this.frames.set(index, copy);
-    this.retainedBytes += copy.byteLength - retained.byteLength;
-    this.evictOverBound();
-  }
-
-  private evictOverBound(): void {
     for (const [oldIndex, frame] of this.frames) {
       if (this.retainedBytes <= RESUME_RING_BYTES) break;
       this.frames.delete(oldIndex);
       this.retainedBytes -= frame.byteLength;
     }
+    return index;
+  }
+
+  /**
+   * Retain `plaintext` as frame `index`, when that frame was sent differently
+   * from its entry: the ring holds what was sent. A replacement never evicts:
+   * one that would not fit the byte bound changes nothing and answers `false`.
+   * `true` once the ring holds it, or where it holds no such frame (no longer
+   * retained, or a dropped ledger).
+   */
+  replace(index: number, plaintext: Uint8Array): boolean {
+    const retained = this.frames.get(index);
+    if (retained === undefined) return true;
+    const grown = plaintext.byteLength - retained.byteLength;
+    if (this.retainedBytes + grown > RESUME_RING_BYTES) return false;
+    this.frames.set(index, new Uint8Array(plaintext));
+    this.retainedBytes += grown;
+    return true;
   }
 
   /**

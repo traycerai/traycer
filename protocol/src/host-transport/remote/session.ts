@@ -6730,11 +6730,13 @@ export class RemoteSession<
       if (frame.chunked)
         rememberChunkBearer(connection, frame.seq, write.bearer);
     }
-    const plaintext = encodeMuxFrame(written);
-    // Appended before the seal, in pull order: the scheduler runs one write at
-    // a time, so ring order is wire order, and a write that fails below leaves
-    // the frame in the gap rather than nowhere.
-    connection.ledger.append(plaintext);
+    const enqueued = encodeMuxFrame(frame);
+    const plaintext = written === frame ? enqueued : encodeMuxFrame(written);
+    // The frame as enqueued is appended before the seal, in pull order: the
+    // scheduler runs one write at a time, so ring order is wire order, and a
+    // write that fails below leaves the frame in the gap rather than nowhere.
+    // A rewrite replaces that entry only as it is sent.
+    const index = connection.ledger.append(enqueued);
     const pending = this.pendingUnary.get(frame.streamId);
     if (pending !== undefined) {
       pending.sealed = true;
@@ -6745,6 +6747,7 @@ export class RemoteSession<
       plaintext,
       sealedBearer,
       reportSent,
+      written === frame ? null : index,
     );
   }
 
@@ -6753,7 +6756,7 @@ export class RemoteSession<
    * credential update carries the bearer read now, under its own seq: the host
    * never counted the gap (it starts at the host's `received`), so it has seen
    * no encoding of this frame, and its sequence gate reads only the seq. The
-   * ledger then holds what was written, at the frame's `index`.
+   * ledger takes a rewrite at the frame's `index` only as it is sent.
    */
   private async writeResentFrame(
     generation: number,
@@ -6773,6 +6776,7 @@ export class RemoteSession<
         muxFrame,
         null,
         reportSent,
+        null,
       );
       return;
     }
@@ -6788,17 +6792,14 @@ export class RemoteSession<
       this.dropUnwritableCredential(generation);
       return;
     }
-    let resent = muxFrame;
-    if (write.frame !== frame) {
-      resent = encodeMuxFrame(write.frame);
-      connection.ledger.replace(index, resent);
-    }
+    const rewritten = write.frame !== frame;
     await this.sealAndSend(
       generation,
       connection,
-      resent,
+      rewritten ? encodeMuxFrame(write.frame) : muxFrame,
       write.bearer,
       reportSent,
+      rewritten ? index : null,
     );
   }
 
@@ -6872,13 +6873,18 @@ export class RemoteSession<
     );
   }
 
-  /** Seals and sends `muxFrame`, reporting its bytes once it reaches the socket. */
+  /**
+   * Seals and sends `muxFrame`, reporting its bytes once it reaches the
+   * socket. `replacesIndex` names the ledger entry the bytes rewrite, recorded
+   * in the same step as the send.
+   */
   private async sealAndSend(
     generation: number,
     connection: ActiveConnection,
     muxFrame: Uint8Array,
     sealedBearer: string | null,
     reportSent: (bytes: number) => void,
+    replacesIndex: number | null,
   ): Promise<void> {
     const leg = connection.socket;
     // A frame whose leg went while it sealed is in the ledger, sealed or not:
@@ -6903,6 +6909,15 @@ export class RemoteSession<
       sealedBearer !== null &&
       this.dial.kind === "relay" &&
       this.dial.auth.sealedStillWritable?.(sealedBearer) === false
+    ) {
+      this.dropUnwritableCredential(generation);
+      return;
+    }
+    // A rewrite reaches the ledger only as it is sent; one that would evict a
+    // retained frame to fit is not sent, and its entry stands.
+    if (
+      replacesIndex !== null &&
+      !connection.ledger.replace(replacesIndex, muxFrame)
     ) {
       this.dropUnwritableCredential(generation);
       return;
