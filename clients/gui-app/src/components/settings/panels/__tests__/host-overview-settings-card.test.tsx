@@ -26,7 +26,7 @@ import type {
 import { environmentPreviewLocalFactsRequestSchema } from "@traycer/protocol/host/environment/contracts";
 import type {
   EnvironmentMoveStopPreviewResponseV11,
-  EnvironmentMoveStopRequestV11,
+  EnvironmentMoveStopRequestV12,
 } from "@traycer/protocol/host/environment/move-contracts";
 import type {
   EnvironmentMoveStageRequest,
@@ -1432,7 +1432,7 @@ describe("<HostOverviewSettingsCard /> after Stop using Personal", () => {
       { managed: [], needsChoice: [logLevel, editor] },
     ];
     let previewReads = 0;
-    const sent: EnvironmentMoveStopRequestV11[] = [];
+    const sent: EnvironmentMoveStopRequestV12[] = [];
     renderCard(environmentStatusFixture({}), {
       "environment.status": () => environmentStatusFixture({}),
       "environment.move.stopPreview": () => {
