@@ -5141,6 +5141,67 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
+  it("mints exactly once when the capability comes back after a refused hand-over, and not while it is absent", async () => {
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockResolvedValueOnce(
+        provisioned({ token: "refused-credential", refreshToken: "r1" }),
+      )
+      .mockResolvedValueOnce(
+        provisioned({ token: "retried-credential", refreshToken: "r2" }),
+      )
+      .mockResolvedValue({ kind: "unavailable" });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(provisionFrames(sockets[0].socket)).toHaveLength(1);
+
+    // The host refused the hand-over without a word. Each redial reports
+    // needs-reauth; the first two without the capability, so nothing can be sent.
+    const redial = async (
+      capabilities: readonly string[] | undefined,
+    ): Promise<StubStreamWebSocket> => {
+      const previousCount = sockets.length;
+      sockets[previousCount - 1].socket.fireClose(1000, "drop", false);
+      const next = await nthSocket(sockets, previousCount);
+      next.fireOpen();
+      await pollUntil(
+        "reconnected socket to send its open frame",
+        () => next.textSent.length > 0,
+      );
+      const open = JSON.parse(next.textSent[0]) as {
+        readonly manifest: Record<string, { major: number; minor: number }>;
+      };
+      next.fireText({
+        ...streamOpenAck(open.manifest, capabilities),
+        hostCredentialState: "needs-reauth",
+      });
+      await flush();
+      return next;
+    };
+
+    await redial(undefined);
+    await redial(undefined);
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    const offered = await redial([CAP_PROVISION]);
+    expect(mint).toHaveBeenCalledTimes(2);
+    expect(provisionFrames(offered).map((frame) => frame.token)).toEqual([
+      "retried-credential",
+    ]);
+    session.close();
+  });
+
   it("skips mint when hostId is not a UUID (marks attempted, no OTP)", async () => {
     const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();
