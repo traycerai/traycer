@@ -5798,9 +5798,9 @@ export class RemoteSession<
     if (outcome === "network-error") {
       this.noProgressUnauthorizedReconnects = 0;
       const retryInMs = this.scheduleReconnectForFailedGeneration(
-      generation,
-      "backoff",
-    );
+        generation,
+        "backoff",
+      );
       this.dialFailures.recordFailure({
         cause:
           "the host rejected the session bearer (UNAUTHORIZED) and revalidating the credential hit a network error",

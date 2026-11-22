@@ -1647,7 +1647,6 @@ describe("released personal host, local stream", () => {
       };
       const { sockets, statuses } = releasedStream(signIn, {
         revalidateForReconnect: refresh,
-        revalidateRefused: refresh,
       });
       // The host refuses every open the released way except the rotated
       // sign-in, answered as each dial appears.
@@ -2399,7 +2398,7 @@ describe("released personal host, local stream", () => {
             HOST_ID,
             USER_ID,
             () => signIn,
-            { revalidateForReconnect: rotate, revalidateRefused: rotate },
+            { revalidateForReconnect: rotate },
             NO_MINTS,
             hosts,
           ),
@@ -2461,7 +2460,7 @@ describe("released personal host, local stream", () => {
           HOST_ID,
           USER_ID,
           () => signIn,
-          { revalidateForReconnect: refresh, revalidateRefused: refresh },
+          { revalidateForReconnect: refresh },
           NO_MINTS,
           hosts,
         ),
@@ -3398,6 +3397,7 @@ describe("released personal host, local stream", () => {
     ): {
       readonly sockets: StubStreamWebSocket[];
       readonly statuses: string[];
+      readonly session: IStreamSession;
     } {
       const { factory, sockets } = makeStubSocketFactory();
       const client = makeStreamClientAt({

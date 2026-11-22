@@ -726,7 +726,6 @@ describe("released personal host, remote door", () => {
               ? null
               : {
                   revalidateForReconnect: () => Promise.resolve(recovery),
-                  revalidateRefused: () => Promise.resolve(recovery),
                 },
         },
         door,
@@ -765,7 +764,6 @@ describe("released personal host, remote door", () => {
         ...base,
         recovery: {
           revalidateForReconnect: rotate,
-          revalidateRefused: rotate,
         },
       },
       door,
@@ -853,7 +851,6 @@ describe("released personal host, remote door", () => {
         ...base,
         recovery: {
           revalidateForReconnect: refresh,
-          revalidateRefused: refresh,
         },
       },
       door,
@@ -927,7 +924,6 @@ describe("released personal host, remote door", () => {
         ...base,
         recovery: {
           revalidateForReconnect: () => Promise.resolve("rotated"),
-          revalidateRefused: () => Promise.resolve("rotated"),
         },
       },
       door,
@@ -1089,7 +1085,6 @@ describe("released personal host, remote door", () => {
           ...personal,
           recovery: {
             revalidateForReconnect: refresh,
-            revalidateRefused: refresh,
           },
         },
         door,
@@ -1225,7 +1220,6 @@ describe("released personal host, remote door", () => {
           hosts,
           recovery: {
             revalidateForReconnect: refresh,
-            revalidateRefused: refresh,
           },
         },
         door,

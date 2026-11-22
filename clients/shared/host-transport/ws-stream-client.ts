@@ -1888,9 +1888,9 @@ function authorityOwner(authority: SignInAuthority): HostInstance {
  * on the current `phase` so invalid transitions surface as no-ops rather
  * than silent crashes.
  */
-class StreamSession<
-  Registry extends VersionedStreamRpcRegistry,
-> implements IStreamSession, BackoffSignalling {
+class StreamSession<Registry extends VersionedStreamRpcRegistry>
+  implements IStreamSession, BackoffSignalling
+{
   private readonly config: StreamSessionOptions<Registry>;
 
   private status: StreamConnectionStatus = "connecting";
@@ -2580,7 +2580,8 @@ class StreamSession<
     this.probing =
       this.probeNextOwner === dialedOwner && this.releasedPlan === "host-token";
     this.probeNextOwner = null;
-    const bearer = this.wireBearer(selected.hostId);    this.openFrameBearer = bearer;
+    const bearer = this.wireBearer(selected.hostId);
+    this.openFrameBearer = bearer;
     this.usesSessionGrant = false;
     let token: string;
     try {
@@ -2815,7 +2816,8 @@ class StreamSession<
       this.releasedPlan = "host-token";
     // A queued dial must still belong to its signed-in user at OPEN. Keep a
     // minted grant as the wire token, but recheck its user's live bearer too.
-    const liveBearer = this.currentUserBearerToken(hostId);    const token = this.usesSessionGrant ? this.openFrameToken : liveBearer;
+    const liveBearer = this.currentUserBearerToken(hostId);
+    const token = this.usesSessionGrant ? this.openFrameToken : liveBearer;
     if (liveBearer === null || token === null) {
       this.teardownSocket(4000, "missing-open-token");
       this.onTransportDrop();

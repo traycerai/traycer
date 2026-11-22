@@ -162,7 +162,8 @@ function obtainOwnerOf(value: unknown): HostTokenObtainOwner | null {
   if (typeof value !== "object")
     throw new Error("hostTokensObtain.owner requires an object or null");
   const observed: unknown = Reflect.get(value, "observed");
-  if (observed !== null) assertString(observed, "hostTokensObtain.owner.observed");
+  if (observed !== null)
+    assertString(observed, "hostTokensObtain.owner.observed");
   return { observed };
 }
 
@@ -243,9 +244,7 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
           ? await tokens.obtain(userId, hostId, fresh, {
               signal: null,
               owner:
-                asked === null
-                  ? null
-                  : { hostId, observed: asked.observed },
+                asked === null ? null : { hostId, observed: asked.observed },
             })
           : { kind: "superseded" };
       return { outcome, era: tokens.era(userId) };

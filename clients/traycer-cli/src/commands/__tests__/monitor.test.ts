@@ -35,7 +35,8 @@ import {
 // frames. Protocol/transport coverage lives in the shared ws-stream-client tests.
 type FakeSession = {
   statusChange:
-    ((status: string, reason: unknown, retryCause: unknown) => void) | null;
+    | ((status: string, reason: unknown, retryCause: unknown) => void)
+    | null;
   serverFrame: ((envelope: unknown) => void) | null;
   closed: boolean;
 };
@@ -1233,7 +1234,8 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          (() => void) | undefined;
+          | (() => void)
+          | undefined;
         cb?.();
         return true;
       });
@@ -1281,7 +1283,8 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          (() => void) | undefined;
+          | (() => void)
+          | undefined;
         cb?.();
         return true;
       });
@@ -1328,7 +1331,8 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          (() => void) | undefined;
+          | (() => void)
+          | undefined;
         cb?.();
         return true;
       });
@@ -1393,7 +1397,8 @@ describe("mixed-version inbox message frames", () => {
       .spyOn(process.stdout, "write")
       .mockImplementation((..._args: unknown[]) => {
         const cb = _args.find((arg) => typeof arg === "function") as
-          ((error: Error) => void) | undefined;
+          | ((error: Error) => void)
+          | undefined;
         cb?.(new Error("EPIPE: broken pipe"));
         return true;
       });

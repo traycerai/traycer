@@ -100,13 +100,11 @@ vi.mock(
   "@traycer-clients/shared/host-transport/worktree-delete-stream-client",
   () => ({
     WorktreeDeleteStreamClient: class {
-      private readonly worktreePath: string;
       constructor(options: {
         readonly worktreePath: string;
         readonly stopOwners: boolean;
         readonly callbacks: WorktreeDeleteStreamCallbacks;
       }) {
-        this.worktreePath = options.worktreePath;
         legacyMock.paths.push(options.worktreePath);
         legacyMock.stopOwnersByPath.set(
           options.worktreePath,

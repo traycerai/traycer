@@ -771,12 +771,15 @@ function runInboxSubscription(
       const refusal = refusalOf(details);
       const left = refusal !== null && !refusal.current;
       const subscribeAfterDelay = (): void => {
-        logger.debug("Monitor auth verdict outlived its host; retry scheduled", {
-          environment: config.environment,
-          retryDelayMs: AUTH_RETRY_DELAY_MS,
-          agentId: target.agentId,
-          epicId: target.epicId,
-        });
+        logger.debug(
+          "Monitor auth verdict outlived its host; retry scheduled",
+          {
+            environment: config.environment,
+            retryDelayMs: AUTH_RETRY_DELAY_MS,
+            agentId: target.agentId,
+            epicId: target.epicId,
+          },
+        );
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
       };
       logger.debug("Monitor auth revalidation completed", {

@@ -597,11 +597,11 @@ function createReleasedSignOnSessionAuth(
   };
   /** The authority the next open's sign-in would rest on, if one is planned. */
   const plannedAuthority = (): SignInAuthority | null =>
-    plan.kind === "sign-in-next" ? { kind: "released", owner: plan.owner } : null;
-  const signInPlanned = (): boolean => {
-    const authority = plannedAuthority();
-    return authority !== null && hosts.isCurrent(authority.owner);
-  };
+    plan.kind === "sign-in-next"
+      ? { kind: "released", owner: plan.owner }
+      : null;
+  const signInPlanned = (): boolean =>
+    plan.kind === "sign-in-next" && hosts.isCurrent(plan.owner);
   /** Whether a frame written now may carry the sign-in, and on what authority. */
   const signInGoesNow = (): boolean => {
     const authority =
@@ -737,7 +737,9 @@ function createReleasedSignOnSessionAuth(
     // process instance change: an admitted sign-in session's update carries
     // the host-only token then, and the fingerprint names what is sent.
     readCredentialUpdateBearer: () =>
-      plan.kind === "sign-in" && signInGoesNow() ? readSignIn() : readHostToken(),
+      plan.kind === "sign-in" && signInGoesNow()
+        ? readSignIn()
+        : readHostToken(),
     // The credential the next frame presents, so a rotated sign-in is
     // progress and the same one again is not, as in desktop-v1.5.4.
     currentFingerprint: () =>
