@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { config } from "../../config";
 import {
   refreshAnswer,
+  refreshedPairAnswer,
   REFRESHED_REFRESH_TOKEN,
   REFRESHED_TOKEN,
   removeStoredSignIn,
@@ -24,6 +25,7 @@ type Answer = "ok" | "refused";
 
 let refreshRequests: number;
 let refreshStatus: number | null;
+let refreshedAccessToken: string;
 /** Holds the refresh request open until `releaseRefresh` is called. */
 let refreshGate: Promise<void>;
 let releaseRefresh: () => void;
@@ -33,6 +35,7 @@ let markRefreshArrived: () => void;
 beforeEach(async () => {
   refreshRequests = 0;
   refreshStatus = 200;
+  refreshedAccessToken = REFRESHED_TOKEN;
   refreshGate = new Promise((resolve) => {
     releaseRefresh = resolve;
   });
@@ -48,7 +51,9 @@ beforeEach(async () => {
       refreshRequests += 1;
       markRefreshArrived();
       await refreshGate;
-      return refreshAnswer(refreshStatus);
+      return refreshStatus === 200
+        ? refreshedPairAnswer(refreshedAccessToken, REFRESHED_REFRESH_TOKEN)
+        : refreshAnswer(refreshStatus);
     }),
   );
   await seedStoredSignIn(STORED_TOKEN, USER_ID);
@@ -115,6 +120,38 @@ describe("openStoredSignIn", () => {
     expect(first).toEqual({ kind: "answered", answer: "refused" });
     expect(second).toEqual({ kind: "answered", answer: "refused" });
     expect(sentOn).toEqual([STORED_TOKEN, REFRESHED_TOKEN, REFRESHED_TOKEN]);
+    expect(refreshRequests).toBe(1);
+  });
+
+  it("does not send an ask again when it is refused after a refresh that returned the same access token", async () => {
+    releaseRefresh();
+    refreshedAccessToken = STORED_TOKEN;
+    const signIn = openStoredSignIn(AUTH);
+    const sentOn: string[] = [];
+    let refusals = 1;
+
+    const first = await signIn.ask(
+      async (token): Promise<Answer> => {
+        sentOn.push(token);
+        if (refusals === 0) return "ok";
+        refusals -= 1;
+        return "refused";
+      },
+      isRefused,
+      null,
+    );
+    const second = await signIn.ask(
+      async (token): Promise<Answer> => {
+        sentOn.push(token);
+        return "refused";
+      },
+      isRefused,
+      null,
+    );
+
+    expect(first).toEqual({ kind: "answered", answer: "ok" });
+    expect(second).toEqual({ kind: "answered", answer: "refused" });
+    expect(sentOn).toEqual([STORED_TOKEN, STORED_TOKEN, STORED_TOKEN]);
     expect(refreshRequests).toBe(1);
   });
 

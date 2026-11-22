@@ -46,17 +46,22 @@ export function storedSignInBytes(): Promise<string> {
   return readFile(credentialsPath(), "utf8");
 }
 
+/** authn's 200 answer to a refresh, with the pair it returns. */
+export function refreshedPairAnswer(
+  token: string,
+  refreshToken: string,
+): Response {
+  return new Response(JSON.stringify({ token, refreshToken }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 /** `null` is authn being unreachable: the request itself throws. */
 export function refreshAnswer(status: number | null): Response {
   if (status === null) throw new TypeError("fetch failed");
   if (status === 200) {
-    return new Response(
-      JSON.stringify({
-        token: REFRESHED_TOKEN,
-        refreshToken: REFRESHED_REFRESH_TOKEN,
-      }),
-      { status, headers: { "content-type": "application/json" } },
-    );
+    return refreshedPairAnswer(REFRESHED_TOKEN, REFRESHED_REFRESH_TOKEN);
   }
   return new Response(JSON.stringify({}), {
     status,
@@ -70,27 +75,50 @@ export function bearerOf(init: RequestInit | undefined): string | null {
 
 /**
  * A fake clock for a call that waits on a request authn never answers. Date
- * moves with it, so {@link advanceFakeClockUntil} can report how long the wait
- * took.
+ * moves with it, so {@link advanceFakeClockToDeadline} can report how long the
+ * wait took.
  */
 export function useBoundedFakeClock(): void {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
 }
 
+/** The most turns {@link advanceFakeClockToDeadline} drains before it fails. */
+const MAX_DRAIN_TURNS = 100;
+
 /**
- * Moves the fake clock to each next timer until `settled`, yielding to real
- * I/O between moves (the store's file work is not on the clock), and returns
- * the fake time that took.
+ * Runs the fake clock toward `deadlineMs`, from the moment the request the
+ * test waits on has started, until `operation` has settled, and returns the
+ * fake time that took. Each turn yields to real I/O (the store's file work is
+ * not on the clock) and then runs the next timer, never starting one once the
+ * deadline has passed. It fails the test after {@link MAX_DRAIN_TURNS} turns
+ * with the operation still pending. The caller awaits `operation` itself and
+ * asserts its result.
  */
-export async function advanceFakeClockUntil(
-  settled: () => boolean,
+export async function advanceFakeClockToDeadline(
+  operation: Promise<unknown>,
+  deadlineMs: number,
 ): Promise<number> {
   const startedAt = Date.now();
-  while (!settled()) {
+  let settledAt: number | null = null;
+  const markSettled = (): void => {
+    settledAt = Date.now();
+  };
+  const readSettledAt = (): number | null => settledAt;
+  void operation.then(markSettled, markSettled);
+  for (let turn = 0; readSettledAt() === null; turn += 1) {
+    if (turn === MAX_DRAIN_TURNS) {
+      throw new Error(
+        `the operation was still pending after ${MAX_DRAIN_TURNS} drain turns, ${Date.now() - startedAt} ms into its ${deadlineMs} ms deadline`,
+      );
+    }
     await new Promise<void>((resolve) => setImmediate(resolve));
-    if (!settled() && vi.getTimerCount() > 0) {
+    if (
+      readSettledAt() === null &&
+      Date.now() < startedAt + deadlineMs &&
+      vi.getTimerCount() > 0
+    ) {
       await vi.advanceTimersToNextTimerAsync();
     }
   }
-  return Date.now() - startedAt;
+  return (readSettledAt() ?? startedAt) - startedAt;
 }

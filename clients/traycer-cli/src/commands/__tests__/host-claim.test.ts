@@ -63,9 +63,10 @@ import type { HostClaimArgs } from "../host-claim";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import {
-  advanceFakeClockUntil,
+  advanceFakeClockToDeadline,
   bearerOf,
   refreshAnswer,
+  refreshedPairAnswer,
   REFRESHED_REFRESH_TOKEN,
   REFRESHED_TOKEN,
   removeStoredSignIn,
@@ -98,6 +99,11 @@ let ownershipRefusedBearers: string[] = [];
 let releaseStatus = 204;
 let releaseRefusedBearers: string[] = [];
 let refreshStatus: number | null = 200;
+// authn's answer by arrival, not by bearer: a refresh may return the access
+// token it was sent, so the refusals of the two calls cannot name a bearer.
+let ownershipRefusalsLeft = 0;
+let releaseRefusalsLeft = 0;
+let refreshedAccessToken = REFRESHED_TOKEN;
 let hungPaths: string[] = [];
 let onHung: () => void = () => {};
 let fileAtRefreshedRequest: Array<{
@@ -162,7 +168,9 @@ beforeEach(() => {
           onHung();
           return new Promise<Response>(() => {});
         }
-        return refreshAnswer(refreshStatus);
+        return refreshStatus === 200
+          ? refreshedPairAnswer(refreshedAccessToken, REFRESHED_REFRESH_TOKEN)
+          : refreshAnswer(refreshStatus);
       }
       if (bearerOf(init) === `Bearer ${REFRESHED_TOKEN}`) {
         fileAtRefreshedRequest.push({
@@ -182,11 +190,19 @@ beforeEach(() => {
         if (ownershipRefusedBearers.includes(bearerOf(init) ?? "")) {
           return jsonResponse(401, {});
         }
+        if (ownershipRefusalsLeft > 0) {
+          ownershipRefusalsLeft -= 1;
+          return jsonResponse(401, {});
+        }
         return jsonResponse(ownershipStatus, { hosts: [ownership] });
       }
       if (parsed.pathname === `/api/v3/hosts/${HOST_ID}/team-release`) {
         events.push("release");
         if (releaseRefusedBearers.includes(bearerOf(init) ?? "")) {
+          return jsonResponse(401, {});
+        }
+        if (releaseRefusalsLeft > 0) {
+          releaseRefusalsLeft -= 1;
           return jsonResponse(401, {});
         }
         if (releaseStatus === 204) return new Response(null, { status: 204 });
@@ -235,6 +251,9 @@ beforeEach(() => {
   releaseStatus = 204;
   releaseRefusedBearers = [];
   refreshStatus = 200;
+  ownershipRefusalsLeft = 0;
+  releaseRefusalsLeft = 0;
+  refreshedAccessToken = REFRESHED_TOKEN;
   hungPaths = [];
   onHung = () => {};
   fileAtRefreshedRequest = [];
@@ -598,8 +617,11 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
     return requests.map(({ url }) => new URL(url).pathname);
   }
 
-  /** Runs the claim, on a fake clock, until it ends on a request authn never answers. */
-  async function claimBoundedByHang(): Promise<{
+  /**
+   * Runs the claim, on a fake clock, from the request authn never answers to
+   * the end of the claim, and bounds that wait at `deadlineMs`.
+   */
+  async function claimBoundedByHang(deadlineMs: number): Promise<{
     readonly outcome: unknown;
     readonly elapsedMs: number;
   }> {
@@ -607,23 +629,13 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
     const hung = new Promise<void>((resolve) => {
       onHung = resolve;
     });
-    let outcome: unknown = null;
-    let settled = false;
-    void makeClaimCommand(true)(fakeCtx(false))
-      .then(
-        (result) => {
-          outcome = result;
-        },
-        (error: unknown) => {
-          outcome = error;
-        },
-      )
-      .then(() => {
-        settled = true;
-      });
+    const ended = makeClaimCommand(true)(fakeCtx(false)).then(
+      (result): unknown => result,
+      (error: unknown) => error,
+    );
     await hung;
-    const elapsedMs = await advanceFakeClockUntil(() => settled);
-    return { outcome, elapsedMs };
+    const elapsedMs = await advanceFakeClockToDeadline(ended, deadlineMs);
+    return { outcome: await ended, elapsedMs };
   }
 
   describe("when it reads the computer's ownership", () => {
@@ -743,7 +755,7 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
     it("keeps the ownership line, with no refresh, when authn never answers the read", async () => {
       hungPaths = [OWNERSHIP_PATH];
 
-      const { outcome, elapsedMs } = await claimBoundedByHang();
+      const { outcome, elapsedMs } = await claimBoundedByHang(REQUEST_BOUND_MS);
 
       expect(outcome).toMatchObject({
         code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
@@ -757,7 +769,7 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
       ownershipRefusedBearers = [STORED_HEADER];
       hungPaths = [STORED_SIGN_IN_REFRESH_PATH];
 
-      const { outcome, elapsedMs } = await claimBoundedByHang();
+      const { outcome, elapsedMs } = await claimBoundedByHang(REFRESH_BOUND_MS);
 
       expect(outcome).toMatchObject({
         code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
@@ -844,6 +856,32 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
       ]);
     });
 
+    it("sends the release once when the refresh returned the same access token with a new refresh token", async () => {
+      ownershipRefusalsLeft = 1;
+      releaseRefusalsLeft = 1;
+      refreshedAccessToken = BEARER;
+
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: RELEASE_REFUSED,
+        exitCode: 1,
+      });
+
+      expect(requestedPaths()).toEqual([
+        OWNERSHIP_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        OWNERSHIP_PATH,
+        RELEASE_PATH,
+      ]);
+      expect(callsTo(RELEASE_PATH)).toEqual([STORED_HEADER]);
+      expect(JSON.parse(await storedSignInBytes())).toMatchObject({
+        token: BEARER,
+        refreshToken: REFRESHED_REFRESH_TOKEN,
+      });
+    });
+
     it("keeps the release line and sends no refresh when authn answers 403", async () => {
       releaseStatus = 403;
       const before = await storedSignInBytes();
@@ -863,7 +901,7 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
     it("keeps the failed-claim line, with no refresh, when authn never answers the release", async () => {
       hungPaths = [RELEASE_PATH];
 
-      const { outcome, elapsedMs } = await claimBoundedByHang();
+      const { outcome, elapsedMs } = await claimBoundedByHang(REQUEST_BOUND_MS);
 
       expect(outcome).toMatchObject({
         code: CLI_ERROR_CODES.AUTH_NETWORK,
@@ -877,7 +915,7 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
       releaseRefusedBearers = [STORED_HEADER];
       hungPaths = [STORED_SIGN_IN_REFRESH_PATH];
 
-      const { outcome, elapsedMs } = await claimBoundedByHang();
+      const { outcome, elapsedMs } = await claimBoundedByHang(REFRESH_BOUND_MS);
 
       expect(outcome).toMatchObject({
         code: CLI_ERROR_CODES.AUTH_REJECTED,

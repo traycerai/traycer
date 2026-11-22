@@ -5,7 +5,7 @@ import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider
 import type { SignInRequestRecordAnswer } from "../../../../shared/host-client/provider-sign-in-request";
 import { PROCESS_PROFILE_LOGIN_IO } from "../profile-login";
 import {
-  advanceFakeClockUntil,
+  advanceFakeClockToDeadline,
   bearerOf,
   refreshAnswer,
   REFRESHED_REFRESH_TOKEN,
@@ -275,13 +275,10 @@ describe("PROCESS_PROFILE_LOGIN_IO.openSignInRequests().recordSignInRequest", ()
     const hung = new Promise<void>((resolve) => {
       onHung = resolve;
     });
-    let settled = false;
-    const answer = record().finally(() => {
-      settled = true;
-    });
+    const answer = record();
     await hung;
 
-    const elapsedMs = await advanceFakeClockUntil(() => settled);
+    const elapsedMs = await advanceFakeClockToDeadline(answer, RECORD_BOUND_MS);
 
     expect(await answer).toEqual({ kind: "failed" });
     expect(elapsedMs).toBeLessThanOrEqual(RECORD_BOUND_MS);
@@ -295,13 +292,13 @@ describe("PROCESS_PROFILE_LOGIN_IO.openSignInRequests().recordSignInRequest", ()
     const hung = new Promise<void>((resolve) => {
       onHung = resolve;
     });
-    let settled = false;
-    const answer = record().finally(() => {
-      settled = true;
-    });
+    const answer = record();
     await hung;
 
-    const elapsedMs = await advanceFakeClockUntil(() => settled);
+    const elapsedMs = await advanceFakeClockToDeadline(
+      answer,
+      REFRESH_BOUND_MS,
+    );
 
     expect(await answer).toEqual({ kind: "unauthorized" });
     expect(elapsedMs).toBeLessThanOrEqual(REFRESH_BOUND_MS);
