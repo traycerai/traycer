@@ -629,13 +629,21 @@ export const environmentMoveStopPreviewUpgradeV10ToV11 = defineUpgradePath<
  * Two folders of one account stay separate entries; credential kind decides whether sign-in is
  * offered.
  */
-export const environmentMovePersonalProfileSchema = lazySchema(() =>
+export const environmentMovePersonalProfileSchemaV12 = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     profileId: z.string().min(1),
     label: z.string(),
     signIn: z.enum(["offered", "not-needed"]),
   }),
+);
+export type EnvironmentMovePersonalProfileV12 = z.infer<
+  typeof environmentMovePersonalProfileSchemaV12
+>;
+
+/** `@1.3`: `shared` is a folder whose sign-in the environment holds; a skipped one leaves this computer. */
+export const environmentMovePersonalProfileSchema = lazySchema(() =>
+  environmentMovePersonalProfileSchemaV12.extend({ shared: z.boolean() }),
 );
 export type EnvironmentMovePersonalProfile = z.infer<
   typeof environmentMovePersonalProfileSchema
@@ -654,13 +662,25 @@ export type EnvironmentMoveStopPreviewRequestV12 = z.infer<
 export const environmentMoveStopPreviewResponseSchemaV12 = lazySchema(() =>
   environmentMoveStopPreviewResponseSchemaV11.extend({
     personalProfiles: z
-      .array(environmentMovePersonalProfileSchema)
+      .array(environmentMovePersonalProfileSchemaV12)
       .nullable()
       .optional(),
   }),
 );
 export type EnvironmentMoveStopPreviewResponseV12 = z.infer<
   typeof environmentMoveStopPreviewResponseSchemaV12
+>;
+
+export const environmentMoveStopPreviewResponseSchemaV13 = lazySchema(() =>
+  environmentMoveStopPreviewResponseSchemaV11.extend({
+    personalProfiles: z
+      .array(environmentMovePersonalProfileSchema)
+      .nullable()
+      .optional(),
+  }),
+);
+export type EnvironmentMoveStopPreviewResponseV13 = z.infer<
+  typeof environmentMoveStopPreviewResponseSchemaV13
 >;
 
 export const environmentMoveStopPreviewV12 = defineRpcContract({
@@ -678,6 +698,30 @@ export const environmentMoveStopPreviewUpgradeV11ToV12 = defineUpgradePath<
   to: { major: 1, minor: 2 },
   upgradeRequest: (request) => ({ ...request, profileMode: null }),
   upgradeResponse: (response) => ({ ...response, personalProfiles: null }),
+});
+
+export const environmentMoveStopPreviewV13 = defineRpcContract({
+  method: "environment.move.stopPreview",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: environmentMoveStopPreviewRequestSchemaV12,
+  responseSchema: environmentMoveStopPreviewResponseSchemaV13,
+});
+
+export const environmentMoveStopPreviewUpgradeV12ToV13 = defineUpgradePath<
+  typeof environmentMoveStopPreviewV12,
+  typeof environmentMoveStopPreviewV13
+>({
+  from: { major: 1, minor: 2 },
+  to: { major: 1, minor: 3 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    personalProfiles:
+      response.personalProfiles === null ||
+      response.personalProfiles === undefined
+        ? response.personalProfiles
+        : response.personalProfiles.map((row) => ({ ...row, shared: false })),
+  }),
 });
 
 /**
@@ -727,12 +771,34 @@ export const environmentMoveStopV10 = defineRpcContract({
  * A choice for an exact folder. `admissionId` is the opaque startLogin
  * handle of its held leave sign-in, not the destination folder's id.
  */
+export const environmentMoveProfileSignInChoiceSchemaV11 = lazySchema(() =>
+  z.object({
+    providerId: providerIdSchema,
+    profileId: z.string().min(1),
+    signIn: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("skip") }),
+      z.object({
+        kind: z.literal("signed-in"),
+        admissionId: z.string().min(1),
+      }),
+    ]),
+  }),
+);
+export type EnvironmentMoveProfileSignInChoiceV11 = z.infer<
+  typeof environmentMoveProfileSignInChoiceSchemaV11
+>;
+
+/**
+ * `@1.2`: `skip` is a pressed Skip, which removes a shared folder from this
+ * computer; `untouched` is an offered folder nobody answered, kept as it is.
+ */
 export const environmentMoveProfileSignInChoiceSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,
     profileId: z.string().min(1),
     signIn: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("skip") }),
+      z.object({ kind: z.literal("untouched") }),
       z.object({
         kind: z.literal("signed-in"),
         admissionId: z.string().min(1),
@@ -748,12 +814,23 @@ export const environmentMoveStopRequestSchemaV11 = lazySchema(() =>
   environmentMoveStopRequestSchema.extend({
     profileMode: z.literal("keep-personal").nullable().default(null),
     profileSignIns: z
-      .array(environmentMoveProfileSignInChoiceSchema)
+      .array(environmentMoveProfileSignInChoiceSchemaV11)
       .default([]),
   }),
 );
 export type EnvironmentMoveStopRequestV11 = z.infer<
   typeof environmentMoveStopRequestSchemaV11
+>;
+
+export const environmentMoveStopRequestSchemaV12 = lazySchema(() =>
+  environmentMoveStopRequestSchemaV11.extend({
+    profileSignIns: z
+      .array(environmentMoveProfileSignInChoiceSchema)
+      .default([]),
+  }),
+);
+export type EnvironmentMoveStopRequestV12 = z.infer<
+  typeof environmentMoveStopRequestSchemaV12
 >;
 
 export const environmentMoveProfileResultSchema = lazySchema(() =>
@@ -806,4 +883,29 @@ export const environmentMoveStopUpgradeV10ToV11 = defineUpgradePath<
     profileSignIns: [],
   }),
   upgradeResponse: (response) => ({ ...response, profileResults: null }),
+});
+
+export const environmentMoveStopV12 = defineRpcContract({
+  method: "environment.move.stop",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: environmentMoveStopRequestSchemaV12,
+  responseSchema: environmentMoveStopResponseSchemaV11,
+});
+
+/** A `@1.1` client sent `skip` for answered and unanswered folders alike, and its skip never removed one. */
+export const environmentMoveStopUpgradeV11ToV12 = defineUpgradePath<
+  typeof environmentMoveStopV11,
+  typeof environmentMoveStopV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => ({
+    ...request,
+    profileSignIns: request.profileSignIns.map((choice) =>
+      choice.signIn.kind === "skip"
+        ? { ...choice, signIn: { kind: "untouched" as const } }
+        : choice,
+    ),
+  }),
+  upgradeResponse: (response) => response,
 });

@@ -1553,17 +1553,18 @@ describe("the environments redesign's new @1.0 methods", () => {
         wire.method === "environment.move.plan" ? ["1", "2"] : ["1"],
       );
       expect(entry[1].latestMinor).toBe(
-        wire.method === "environment.move.plan" ||
-          wire.method === "environment.move.stopPreview"
-          ? 2
-          : wire.method === "environment.move.stop" ||
-              wire.method === "environment.configuration.mcpServers.put" ||
-              wire.method === "environment.configuration.guide.get" ||
-              wire.method === "environment.configuration.skills.list" ||
-              wire.method === "environment.plans.list" ||
-              wire.method === "environment.plans.unlink"
-            ? 1
-            : 0,
+        wire.method === "environment.move.stopPreview"
+          ? 3
+          : wire.method === "environment.move.plan" ||
+              wire.method === "environment.move.stop"
+            ? 2
+            : wire.method === "environment.configuration.mcpServers.put" ||
+                wire.method === "environment.configuration.guide.get" ||
+                wire.method === "environment.configuration.skills.list" ||
+                wire.method === "environment.plans.list" ||
+                wire.method === "environment.plans.unlink"
+              ? 1
+              : 0,
       );
       expect(entry[1].versions[0].contract).toBe(wire.contract);
       expect(entry[1].versions[0].upgradeFromPreviousVersion).toBeNull();

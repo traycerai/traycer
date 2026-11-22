@@ -30,7 +30,7 @@ import { AddProviderProfileDialog } from "@/components/settings/panels/add-provi
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
   EnvironmentMovePersonalProfile,
-  EnvironmentMoveStopPreviewResponseV12,
+  EnvironmentMoveStopPreviewResponseV13,
   EnvironmentMoveStopResponseV11,
 } from "@traycer/protocol/host/environment/move-contracts";
 import {
@@ -117,7 +117,35 @@ const folder = (
   profileId,
   label,
   signIn,
+  shared: false,
 });
+
+const SHARED_FOLDER = (
+  profileId: string,
+  label: string,
+): EnvironmentMovePersonalProfile => ({
+  ...FOLDER(profileId, label, "offered"),
+  shared: true,
+});
+
+const GUIDANCE =
+  "Sign in to each account you want to keep using on this computer, or skip it.";
+const SKIPPED_SHARED = "Skipped. Not kept on this computer.";
+const CUT_GUIDANCE_SENTENCE = "A skipped account keeps working until";
+
+function guidanceParagraphs(): string[] {
+  return Array.from(
+    screen.getByTestId("personal-leave-accounts").querySelectorAll("p"),
+  )
+    .map((paragraph) => paragraph.textContent)
+    .filter((text) => text.startsWith("Sign in to each account"));
+}
+
+function stopRequests(harness: RemoteHarness): unknown[] {
+  return harness.relay.unaryRequests
+    .filter((request) => request.method === "environment.move.stop")
+    .map((request) => request.params);
+}
 
 type ProvidersList = ResponseOfMethod<HostRpcRegistry, "providers.list">;
 type StartLogin = ResponseOfMethod<HostRpcRegistry, "providers.startLogin">;
@@ -395,7 +423,7 @@ function failed(code: string, message: string): HostResponse {
 
 function preview(
   profiles: readonly EnvironmentMovePersonalProfile[] | null | undefined,
-): EnvironmentMoveStopPreviewResponseV12 {
+): EnvironmentMoveStopPreviewResponseV13 {
   const base = { managed: [], needsChoice: [] };
   return profiles === undefined
     ? base
@@ -890,7 +918,7 @@ describe("StopSharingSession over the real remote session", () => {
           {
             providerId: "codex",
             profileId: "folder-one",
-            signIn: { kind: "skip" },
+            signIn: { kind: "untouched" },
           },
         ],
       },
@@ -928,7 +956,7 @@ describe("StopSharingSession over the real remote session", () => {
           {
             providerId: "codex",
             profileId: "folder-one",
-            signIn: { kind: "skip" },
+            signIn: { kind: "untouched" },
           },
         ],
       },
@@ -1033,7 +1061,7 @@ describe("StopSharingSession over the real remote session", () => {
           {
             providerId: "codex",
             profileId: "folder-one",
-            signIn: { kind: "skip" },
+            signIn: { kind: "untouched" },
           },
         ],
       },
@@ -1093,11 +1121,8 @@ describe("StopSharingSession over the real remote session", () => {
       await screen.findByTestId("personal-leave-codex-folder-one"),
     ).toBeTruthy();
     expect(await screen.findByText("Same account as Work")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "Sign in to each account you want to keep using on this computer, or skip it. A skipped account keeps working until Codex asks for a new sign-in.",
-      ),
-    ).toBeTruthy();
+    expect(screen.getAllByText(GUIDANCE)).toHaveLength(1);
+    expect(screen.queryByText(new RegExp(CUT_GUIDANCE_SENTENCE))).toBeNull();
     expect(requestCount(harness.relay, "providers.list")).toBe(1);
 
     fireEvent.click(
@@ -1225,17 +1250,10 @@ describe("StopSharingSession over the real remote session", () => {
     ).toBeTruthy();
     expect(screen.queryByText("Same account as Work")).toBeNull();
     expect(requestCount(harness.relay, "providers.list")).toBe(0);
-    const guidance = Array.from(
-      screen.getByTestId("personal-leave-accounts").querySelectorAll("p"),
-    )
-      .map((paragraph) => paragraph.textContent)
-      .filter((text) => text.startsWith("Sign in to each account"));
-    expect(guidance).toEqual([
-      "Sign in to each account you want to keep using on this computer, or skip it. A skipped account keeps working until Codex asks for a new sign-in.",
-    ]);
+    expect(guidanceParagraphs()).toEqual([GUIDANCE]);
   });
 
-  it("shows one guidance paragraph per offered provider in first-row order", async () => {
+  it("states once what Skip asks for, naming no provider and no kept-until-sign-in promise", async () => {
     const rows = [
       folder("codex", "work", "Work", "offered"),
       folder("claude-code", "home", "Home", "offered"),
@@ -1259,15 +1277,8 @@ describe("StopSharingSession over the real remote session", () => {
     );
 
     await screen.findByTestId("personal-leave-accounts");
-    const guidance = Array.from(
-      screen.getByTestId("personal-leave-accounts").querySelectorAll("p"),
-    )
-      .map((paragraph) => paragraph.textContent)
-      .filter((text) => text.startsWith("Sign in to each account"));
-    expect(guidance).toEqual([
-      "Sign in to each account you want to keep using on this computer, or skip it. A skipped account keeps working until Codex asks for a new sign-in.",
-      "Sign in to each account you want to keep using on this computer, or skip it. A skipped account keeps working until Claude Code asks for a new sign-in.",
-    ]);
+    expect(guidanceParagraphs()).toEqual([GUIDANCE]);
+    expect(screen.queryByText(new RegExp(CUT_GUIDANCE_SENTENCE))).toBeNull();
     expect(screen.getByText("Keeps working. No sign-in needed.")).toBeTruthy();
   });
 
@@ -1425,55 +1436,66 @@ describe("StopSharingSession over the real remote session", () => {
     });
   });
 
-  it("reports when Stop could not keep a staged sign-in", async () => {
-    const harness = makeHarness(({ method }) => {
-      if (method === "environment.move.stopPreview")
-        return successful(preview([FOLDER("folder-one", "Work", "offered")]));
-      if (method === "providers.list") return successful(providerList([]));
-      if (method === "providers.startLogin")
-        return successful(started("held-admission", null));
-      if (method === "providers.awaitLogin")
-        return successful(staged("folder-one"));
-      if (method === "environment.move.stop")
-        return successful({
-          outcome: "stopped",
-          profileResults: [
-            {
-              providerId: "codex",
-              profileId: "folder-one",
-              signIn: "installation-failed",
-            },
-          ],
-        });
-      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
-    });
-    await renderSession(
-      harness.client,
-      {
-        showListAfterStop: false,
-        showToaster: true,
-      },
-      null,
-    );
-
-    await screen.findByTestId("personal-leave-codex-folder-one");
-    fireEvent.click(
-      within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
-        "button",
-        { name: "Sign in" },
-      ),
-    );
-    fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
-    expect(await screen.findByText("Signed in")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
-
-    expect(
-      await screen.findByText(
+  it.each([
+    {
+      name: "an own sign-in row, in both sentences",
+      row: FOLDER("folder-one", "Work", "offered"),
+      toast:
         "The sign-in for Work wasn't kept. It works until Codex asks for a new sign-in.",
-      ),
-    ).toBeTruthy();
-    expect(harness.relay.errors).toEqual([]);
-  });
+    },
+    {
+      name: "a shared row, in one sentence",
+      row: SHARED_FOLDER("folder-one", "Work"),
+      toast: "The sign-in for Work wasn't kept.",
+    },
+  ])(
+    "reports when Stop could not keep a staged sign-in of $name",
+    async ({ row, toast }) => {
+      const harness = makeHarness(({ method }) => {
+        if (method === "environment.move.stopPreview")
+          return successful(preview([row]));
+        if (method === "providers.list") return successful(providerList([]));
+        if (method === "providers.startLogin")
+          return successful(started("held-admission", null));
+        if (method === "providers.awaitLogin")
+          return successful(staged("folder-one"));
+        if (method === "environment.move.stop")
+          return successful({
+            outcome: "stopped",
+            profileResults: [
+              {
+                providerId: "codex",
+                profileId: "folder-one",
+                signIn: "installation-failed",
+              },
+            ],
+          });
+        return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+      });
+      await renderSession(
+        harness.client,
+        {
+          showListAfterStop: false,
+          showToaster: true,
+        },
+        null,
+      );
+
+      await screen.findByTestId("personal-leave-codex-folder-one");
+      fireEvent.click(
+        within(screen.getByTestId("personal-leave-codex-folder-one")).getByRole(
+          "button",
+          { name: "Sign in" },
+        ),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+      expect(await screen.findByText("Signed in")).toBeTruthy();
+      fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+
+      expect(await screen.findByText(toast)).toBeTruthy();
+      expect(harness.relay.errors).toEqual([]);
+    },
+  );
 });
 
 describe("provider metadata retry after an initial read failure", () => {
@@ -1561,15 +1583,159 @@ describe("provider metadata retry after an initial read failure", () => {
   });
 });
 
+describe("Skip at Stop sharing removes only a shared account", () => {
+  const renderOptions = { showListAfterStop: false, showToaster: false };
+
+  function rowOf(profileId: string): HTMLElement {
+    return screen.getByTestId(`personal-leave-codex-${profileId}`);
+  }
+
+  it("says a skipped shared row is not kept and an own sign-in row keeps working, and sends skip for both", async () => {
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview")
+        return successful(
+          preview([
+            SHARED_FOLDER("shared-one", "Shared"),
+            FOLDER("own-one", "Own", "offered"),
+            FOLDER("key-one", "Key", "not-needed"),
+          ]),
+        );
+      if (method === "providers.list") return successful(providerList([]));
+      if (method === "environment.move.stop") return successful(stopped());
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    await renderSession(harness.client, renderOptions, null);
+
+    await screen.findByTestId("personal-leave-codex-shared-one");
+    expect(screen.queryByText(SKIPPED_SHARED)).toBeNull();
+    fireEvent.click(
+      within(rowOf("shared-one")).getByRole("button", { name: "Skip" }),
+    );
+    fireEvent.click(
+      within(rowOf("own-one")).getByRole("button", { name: "Skip" }),
+    );
+
+    expect(within(rowOf("shared-one")).getByText(SKIPPED_SHARED)).toBeTruthy();
+    expect(within(rowOf("shared-one")).queryByText(/Works until/)).toBeNull();
+    expect(
+      within(rowOf("own-one")).getByText(
+        "Skipped. Works until Codex asks for a new sign-in.",
+      ),
+    ).toBeTruthy();
+    expect(within(rowOf("own-one")).queryByText(SKIPPED_SHARED)).toBeNull();
+    expect(within(rowOf("key-one")).queryByText(SKIPPED_SHARED)).toBeNull();
+
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    await screen.findByTestId("stop-complete");
+    expect(stopRequests(harness)).toEqual([
+      {
+        choices: [],
+        profileMode: "keep-personal",
+        profileSignIns: [
+          {
+            providerId: "codex",
+            profileId: "shared-one",
+            signIn: { kind: "skip" },
+          },
+          {
+            providerId: "codex",
+            profileId: "own-one",
+            signIn: { kind: "skip" },
+          },
+        ],
+      },
+    ]);
+    expect(harness.relay.errors).toEqual([]);
+  });
+
+  it("sends untouched, never skip, for an offered row nobody answered, and again after Undo", async () => {
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview")
+        return successful(
+          preview([
+            SHARED_FOLDER("shared-one", "Shared"),
+            SHARED_FOLDER("shared-two", "Second shared"),
+            FOLDER("own-one", "Own", "offered"),
+          ]),
+        );
+      if (method === "providers.list") return successful(providerList([]));
+      if (method === "environment.move.stop") return successful(stopped());
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    await renderSession(harness.client, renderOptions, null);
+
+    await screen.findByTestId("personal-leave-codex-shared-one");
+    fireEvent.click(
+      within(rowOf("shared-two")).getByRole("button", { name: "Skip" }),
+    );
+    expect(within(rowOf("shared-two")).getByText(SKIPPED_SHARED)).toBeTruthy();
+    fireEvent.click(
+      within(rowOf("shared-two")).getByRole("button", { name: "Undo" }),
+    );
+    expect(screen.queryByText(SKIPPED_SHARED)).toBeNull();
+
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    await screen.findByTestId("stop-complete");
+    expect(stopRequests(harness)).toEqual([
+      {
+        choices: [],
+        profileMode: "keep-personal",
+        profileSignIns: ["shared-one", "shared-two", "own-one"].map(
+          (profileId) => ({
+            providerId: "codex",
+            profileId,
+            signIn: { kind: "untouched" },
+          }),
+        ),
+      },
+    ]);
+    expect(harness.relay.errors).toEqual([]);
+  });
+
+  it("gives a host that still serves Preview 1.2 and Stop 1.1 the legacy sheet, whose Skip would remove nothing", async () => {
+    const harness = makeHarness(({ method }) => {
+      if (method === "environment.move.stopPreview")
+        return successful(preview(null));
+      if (method === "environment.move.stop") return successful(stopped());
+      if (method === "providers.list") return successful(providerList([]));
+      return failed("E_UNEXPECTED", `unexpected method: ${method}`);
+    });
+    setAdvertisedMethodVersion(harness.relay, "environment.move.stopPreview", {
+      major: 1,
+      minor: 2,
+    });
+    setAdvertisedMethodVersion(harness.relay, "environment.move.stop", {
+      major: 1,
+      minor: 1,
+    });
+    await renderSession(harness.client, renderOptions, null);
+
+    await screen.findByTestId("stop-sharing-managed-empty");
+    expect(screen.queryByTestId("personal-leave-accounts")).toBeNull();
+    fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
+    await screen.findByTestId("stop-complete");
+    expect(
+      harness.relay.unaryRequests
+        .filter((request) => request.method === "environment.move.stopPreview")
+        .map((request) => request.params),
+    ).not.toContainEqual({ profileMode: "keep-personal" });
+    expect(stopRequests(harness)).toEqual([
+      { choices: [], profileMode: null, profileSignIns: [] },
+    ]);
+    expect(requestCount(harness.relay, "providers.list")).toBe(0);
+    expect(harness.relay.errors).toEqual([]);
+  });
+});
+
 describe("RemoteSession rechecks the leave floors after reconnect", () => {
   it.each([
     {
-      label: "the Preview 1.2 floor",
+      label: "the Preview 1.3 floor",
       method: "environment.move.stopPreview",
-      version: { major: 1, minor: 1 },
+      version: { major: 1, minor: 2 },
       requirement: {
         method: "environment.move.stopPreview",
-        version: { major: 1, minor: 2 },
+        version: { major: 1, minor: 3 },
       },
     },
     {
@@ -1615,7 +1781,7 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
         params: { profileMode: "keep-personal" },
         requiredHostMethodVersion: {
           method: "environment.move.stopPreview",
-          version: { major: 1, minor: 2 },
+          version: { major: 1, minor: 3 },
         },
       });
 
@@ -1643,7 +1809,7 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
     },
   );
 
-  it("refuses Stop below 1.1 on the redialed connection through the real sheet mutation", async () => {
+  it("refuses Stop below 1.2 on the redialed connection through the real sheet mutation", async () => {
     const harness = makeHarness(({ method }) => {
       if (method === "environment.move.stopPreview") {
         return successful(preview([]));
@@ -1663,13 +1829,13 @@ describe("RemoteSession rechecks the leave floors after reconnect", () => {
     await screen.findByTestId("stop-sharing-managed-empty");
     harness.armFloorDowngrade("environment.move.stop", {
       major: 1,
-      minor: 0,
+      minor: 1,
     });
 
     fireEvent.click(screen.getByTestId("stop-sharing-confirm"));
     await expectFloorRefusalAfterReconnect(harness, {
       method: "environment.move.stop",
-      version: { major: 1, minor: 1 },
+      version: { major: 1, minor: 2 },
     });
     expect(harness.capturedFloorCalls).toEqual([
       {
