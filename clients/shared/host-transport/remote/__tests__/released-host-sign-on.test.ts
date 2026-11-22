@@ -606,6 +606,76 @@ describe("released personal host, remote door", () => {
     }
   }, 20_000);
 
+  it("opens the redial with the host-only token when the row's confirmation for the attach begun under a sign-in plan answers false, though the capped refresh then answers rotated before its open was read", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const relay = new FakeRelayHost();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const refreshes: Array<(outcome: RevalidateOutcome) => void> = [];
+    const heldGrants: Array<(grant: AttachGrantProvision) => void> = [];
+    let grantsAsked = 0;
+    let confirmationsAsked = 0;
+    const { door, refusals } = recordingDoor();
+    relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+    relay.decideOpen = (_grant, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: releasedRefusal() }
+        : { kind: "ack" };
+    const personal = signOnFor(PERSONAL_ROW, signIn);
+    if (personal === null) throw new Error("personal row must open released");
+    const session = openSessionWithGrants(
+      relay,
+      {
+        ...personal,
+        // The first attach under the sign-in plan finds the row still allowing
+        // it; the attach begun after the refresh's budget does not.
+        confirmRow: () => {
+          confirmationsAsked += 1;
+          return Promise.resolve(confirmationsAsked === 1);
+        },
+        recovery: {
+          revalidateForReconnect: () =>
+            new Promise<RevalidateOutcome>((resolve) => {
+              refreshes.push(resolve);
+            }),
+        },
+      },
+      door,
+      () => {
+        grantsAsked += 1;
+        return grantsAsked < 3
+          ? Promise.resolve(OK_GRANT)
+          : new Promise<AttachGrantProvision>((resolve) => {
+              heldGrants.push(resolve);
+            });
+      },
+    );
+    try {
+      session.start();
+      await vi.waitFor(() => expect(refreshes).toHaveLength(1), WAIT);
+      expect(relay.openBearers).toEqual(["", SIGN_IN]);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.waitFor(() => expect(heldGrants).toHaveLength(1), WAIT);
+
+      signIn.rotate(ROTATED_SIGN_IN);
+      refreshes[0]("rotated");
+      await vi.advanceTimersByTimeAsync(0);
+      heldGrants[0](OK_GRANT);
+
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(confirmationsAsked).toBe(2);
+      expect(relay.openBearers).toEqual(["", SIGN_IN, ""]);
+      expect(relay.openAuthz[2]).toEqual({
+        v: OPEN_AUTHZ_SESSION_GRANT_VERSION,
+        grant: HOST_TOKEN,
+      });
+      expect(refusals).toEqual([]);
+    } finally {
+      session.close();
+      vi.useRealTimers();
+    }
+  }, 20_000);
+
   it.each(["rejected", "local-plane-retained"] as const)(
     "tells the door nothing when a sign-in refresh that ran past the budget answers %s after the newer attach began and before its open was read",
     async (late) => {
