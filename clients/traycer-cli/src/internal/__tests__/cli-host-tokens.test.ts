@@ -197,26 +197,6 @@ describe("callHostRpc host-token mint recovery", () => {
     expect(state.requests).not.toHaveBeenCalled();
   });
 
-  it("reports no host-only token, never the rejected line, when sign-in refresh cannot reach authn", async () => {
-    state.mintOutcomes.push({ kind: "sign-in-rejected" });
-    state.revalidate.mockResolvedValue("network-error");
-
-    const error = await toAgentCliError(
-      callHostRpcAtEndpoint("agent.list", params, endpoint),
-    ).then(
-      () => null,
-      (caught: unknown) => caught,
-    );
-    expect(error).toMatchObject({
-      message: "No host-only token is held for this host",
-      exitCode: 1,
-    });
-    expect(error).not.toMatchObject({ code: CLI_ERROR_CODES.AUTH_REJECTED });
-    expect(state.mint).toHaveBeenCalledTimes(1);
-    expect(state.revalidate).toHaveBeenCalledTimes(1);
-    expect(state.requests).not.toHaveBeenCalled();
-  });
-
   it.each(["token_expired", "not_admitted"] as const)(
     "does not send a third request when the replacement token is refused again for %s",
     async (doorReason) => {

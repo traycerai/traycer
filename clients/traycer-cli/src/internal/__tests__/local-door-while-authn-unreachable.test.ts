@@ -45,6 +45,7 @@ const ELEVEN_MINUTES_MS = 11 * 60 * 1000;
 type DoorMode =
   | "unavailable"
   | "unavailable-once"
+  | "sign-in-rejected"
   | "not-admitted"
   | "black-hole";
 
@@ -259,6 +260,9 @@ function installFetch(): void {
         }
         if (harness.state.mode === "unavailable") {
           return jsonResponse({ message: "offline" }, 503);
+        }
+        if (harness.state.mode === "sign-in-rejected") {
+          return jsonResponse({ message: "unauthorized" }, 401);
         }
         return jsonResponse({ message: "missing" }, 404);
       }
@@ -698,6 +702,25 @@ describe("CLI local doors while authn cannot mint", () => {
       message: "No host-only token is held for this host",
     });
     expect(harness.sockets).toHaveLength(1);
+  });
+
+  it("reports no host-only token, never the rejected line, when authn refuses the sign-in and the refresh cannot reach authn", async () => {
+    harness.state.mode = "sign-in-rejected";
+    const pending = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+    const probe = await socketAt(0);
+    expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireFrame(namedProbeRefusal());
+    const error = await toAgentCliError(pending).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(error).toMatchObject({
+      exitCode: 1,
+      message: "No host-only token is held for this host",
+    });
+    expect(error).not.toMatchObject({ code: CLI_ERROR_CODES.AUTH_REJECTED });
+    expect(harness.sockets).toHaveLength(1);
+    expect(harness.state.table.get(USER_ID)?.has(HOST_ID) ?? false).toBe(false);
   });
 
   it("opens the sign-in at once after a released host refuses the held token while authn answers nothing", async () => {
