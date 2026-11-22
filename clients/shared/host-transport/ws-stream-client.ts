@@ -3537,6 +3537,7 @@ class StreamSession<
     released?.forgetHeldRefusal();
     const userId = released?.signIn()?.identity.userId ?? null;
     if (
+      reason === "absent" ||
       reason === "owner_sign_in" ||
       reason === "not_provisioned" ||
       released === undefined ||

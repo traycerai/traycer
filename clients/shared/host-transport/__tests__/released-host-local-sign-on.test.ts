@@ -128,6 +128,22 @@ function namedRefusal(doorReason: "owner_sign_in" | "token_expired"): {
   };
 }
 
+function bareUnauthorized(): {
+  readonly kind: "fatalError";
+  readonly details: FatalErrorDetails;
+} {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "the sign-in was not accepted",
+      retryable: false,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
 function hostRestarting(): {
   readonly kind: "fatalError";
   readonly details: FatalErrorDetails;
@@ -446,6 +462,41 @@ describe("released personal host, local stream", () => {
     expect(
       refusals.every((details) => hostDoorStateOfRefusal(details) === null),
     ).toBe(true);
+    expect(hosts.probeDeclined(USER_ID, mockLocalHostEntry.hostId)).toBe(false);
+  });
+
+  it("probes again on the next dial when the invited owner sign-in is refused without a door reason", async () => {
+    const hosts = createReleasedHostMemory();
+    const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
+    const { factory, sockets } = makeStubSocketFactory();
+    const { door } = recordingDoor();
+    const client = makeStreamClientHolding(
+      factory,
+      () => null,
+      USER_ID,
+      {
+        signIn: () => signIn,
+        recovery: null,
+        allowed: () => Promise.resolve(true),
+        hostTokenUnobtainable: () => true,
+        ownerSignInEligible: () => true,
+        heldTokenRefused: () => false,
+        forgetHeldRefusal: () => undefined,
+        hosts,
+      },
+      door,
+      NO_TRANSPORT_EVIDENCE,
+    );
+    subscribe(client);
+    await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+    expect((await openFrame(sockets[0])).token).toBe(NO_HOST_TOKEN_PROBE);
+    sockets[0].fireText(namedRefusal("owner_sign_in"));
+    await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+    expect((await openFrame(sockets[1])).token).toBe(SIGN_IN);
+    sockets[1].fireText(bareUnauthorized());
+
+    await vi.waitFor(() => expect(sockets).toHaveLength(3), WAIT);
+    expect((await openFrame(sockets[2])).token).toBe(NO_HOST_TOKEN_PROBE);
     expect(hosts.probeDeclined(USER_ID, mockLocalHostEntry.hostId)).toBe(false);
   });
 
