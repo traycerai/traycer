@@ -709,10 +709,15 @@ describe("released personal host, remote door", () => {
       const relay = new FakeRelayHost();
       const signIn = new MutableBearerLease(SIGN_IN, USER_ID);
       const { door, refusals } = recordingDoor();
-      relay.decideOpen = (bearer) => ({
+      // The host-only token's open is refused the released way; the sign-in's,
+      // bare, with `reason`. The open's own bearer picks the refusal: the first
+      // argument is the relay grant, the same for both.
+      relay.decideOpen = (_grant, openIndex) => ({
         kind: "fatal",
         details:
-          bearer === "" ? releasedRefusal() : releasedRefusalSaying(reason),
+          relay.openBearers[openIndex] === SIGN_IN
+            ? releasedRefusalSaying(reason)
+            : releasedRefusal(),
       });
       const base = signOnFor(PERSONAL_ROW, signIn);
       if (base === null) throw new Error("personal row must open released");
@@ -734,6 +739,8 @@ describe("released personal host, remote door", () => {
         session.start();
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
         expect(relay.openBearers.slice(0, 2)).toEqual(["", SIGN_IN]);
+        // The session ended on the sign-in's own refusal, not the token's.
+        expect(session.terminalFatal()?.reason).toBe(reason);
         expect(refusals).toEqual([]);
       } finally {
         session.close();
