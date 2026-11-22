@@ -19,6 +19,7 @@ import type {
   RemoteHostDirectoryEntry,
   RemoteHostFetchOutcome,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { RegisteredHostsChange } from "@traycer-clients/shared/platform/runner-host";
 import { ROW_CONFIRM_CEILING_MS } from "@traycer-clients/shared/host-transport/row-confirmation";
@@ -156,7 +157,7 @@ function personalRow(
 /** One `host.echo` call to `hostId`, through the real runtime messenger, reading its row from `resolveTarget`. */
 function callThroughMessenger(input: {
   readonly hostId: string;
-  readonly resolveTarget: (hostId: string) => RemoteHostDirectoryEntry | null;
+  readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
   readonly confirm: () => Promise<unknown>;
   readonly disposers: Array<() => void>;
 }): void {
@@ -303,10 +304,7 @@ describe("a window's remote sign-in with the real host directory", () => {
       call: (confirm) => {
         callThroughMessenger({
           hostId,
-          resolveTarget: (id) => {
-            const row = directory.findById(id);
-            return row === null || row.kind !== "remote" ? null : row;
-          },
+          resolveTarget: (id) => directory.findById(id),
           confirm,
           disposers,
         });
