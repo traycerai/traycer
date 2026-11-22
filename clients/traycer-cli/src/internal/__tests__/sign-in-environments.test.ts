@@ -6,10 +6,12 @@ import {
 import {
   bearerOf,
   refreshAnswer,
+  REFRESHED_REFRESH_TOKEN,
   REFRESHED_TOKEN,
   removeStoredSignIn,
   seedStoredSignIn,
   STORED_SIGN_IN_REFRESH_PATH,
+  storedSignInBytes,
 } from "../../__tests__/support/stored-sign-in";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { readSignInEnvironments } from "../sign-in-environments";
@@ -22,11 +24,15 @@ const PERSONAL_ENVIRONMENT_ID = "environment-personal";
 
 let calls: Array<{ readonly pathname: string; readonly bearer: string | null }>;
 let refusedBearers: string[];
+let refusedStatus: number;
+let fileAtRefreshedRead: string[];
 let refreshStatus: number | null;
 
 beforeEach(async () => {
   calls = [];
   refusedBearers = [];
+  refusedStatus = 401;
+  fileAtRefreshedRead = [];
   refreshStatus = 200;
   vi.stubGlobal(
     "fetch",
@@ -37,8 +43,11 @@ beforeEach(async () => {
       if (pathname === STORED_SIGN_IN_REFRESH_PATH) {
         return refreshAnswer(refreshStatus);
       }
+      if (bearer === REFRESHED_HEADER) {
+        fileAtRefreshedRead.push(await storedSignInBytes());
+      }
       if (refusedBearers.includes(bearer ?? "")) {
-        return new Response("{}", { status: 401 });
+        return new Response("{}", { status: refusedStatus });
       }
       return new Response(
         JSON.stringify(
@@ -70,6 +79,10 @@ function identityReads(): Array<string | null> {
     .map(({ bearer }) => bearer);
 }
 
+function paths(): string[] {
+  return calls.map(({ pathname }) => pathname);
+}
+
 function refreshCount(): number {
   return calls.filter(
     ({ pathname }) => pathname === STORED_SIGN_IN_REFRESH_PATH,
@@ -89,6 +102,26 @@ describe("readSignInEnvironments", () => {
       },
     ]);
 
+    expect(paths()).toEqual([
+      NEGOTIATED_PATH,
+      STORED_SIGN_IN_REFRESH_PATH,
+      NEGOTIATED_PATH,
+    ]);
+    expect(identityReads()).toEqual([STORED_HEADER, REFRESHED_HEADER]);
+    expect(fileAtRefreshedRead.map((bytes) => JSON.parse(bytes))).toEqual([
+      expect.objectContaining({
+        token: REFRESHED_TOKEN,
+        refreshToken: REFRESHED_REFRESH_TOKEN,
+      }),
+    ]);
+  });
+
+  it("refreshes a sign-in authn answers 403 to, as it always has", async () => {
+    refusedBearers = [STORED_HEADER];
+    refusedStatus = 403;
+
+    await readSignInEnvironments();
+
     expect(identityReads()).toEqual([STORED_HEADER, REFRESHED_HEADER]);
     expect(refreshCount()).toBe(1);
   });
@@ -96,13 +129,15 @@ describe("readSignInEnvironments", () => {
   it("tells the person to sign in again when the refresh is refused", async () => {
     refusedBearers = [STORED_HEADER];
     refreshStatus = 401;
+    const before = await storedSignInBytes();
 
     await expect(readSignInEnvironments()).rejects.toMatchObject({
       code: CLI_ERROR_CODES.AUTH_REJECTED,
       message:
         "The stored credential was rejected. Run `traycer login` to re-authenticate.",
     });
-    expect(identityReads()).toEqual([STORED_HEADER]);
+    expect(paths()).toEqual([NEGOTIATED_PATH, STORED_SIGN_IN_REFRESH_PATH]);
+    expect(await storedSignInBytes()).toBe(before);
   });
 
   it("tells the person to sign in again, after one refresh, when the refreshed sign-in is refused too", async () => {

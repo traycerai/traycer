@@ -9,7 +9,7 @@ vi.mock("../../../../shared/auth/devices-sessions-fetcher", () => ({
 const mintMock = vi.mocked(mintHostCredentialViaHttp);
 
 afterEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
 function okMintBody(hostId: string) {
@@ -165,4 +165,195 @@ describe("createCliHostCredentialMintFlow", () => {
       expect(onUnauthorized).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("createCliHostCredentialMintFlow renewSignIn", () => {
+  const MISSING = { hostId: "host-1", reason: "missing" } as const;
+
+  /** A flow whose `bearer()` is whatever the test's sign-in currently holds. */
+  function flowOn(
+    signIn: { token: string },
+    renewSignIn: () => Promise<boolean>,
+    onUnauthorized: () => void,
+    diag: (line: string) => void,
+    signal: AbortSignal | null,
+  ) {
+    return createCliHostCredentialMintFlow({
+      authnBaseUrl: "https://authn.example.test",
+      bearer: () => signIn.token,
+      diag,
+      signal,
+      unavailableNote: "continuing without a host credential.",
+      onUnauthorized,
+      renewSignIn,
+    });
+  }
+
+  function bearersSent(): readonly string[] {
+    return mintMock.mock.calls.map(([, bearer]) => bearer);
+  }
+
+  it("renews once on a 401 and sends the mint once more on the new bearer", async () => {
+    const signIn = { token: "old-jwt" };
+    const renewSignIn = vi.fn<() => Promise<boolean>>(async () => {
+      signIn.token = "new-jwt";
+      return true;
+    });
+    const onUnauthorized = vi.fn<() => void>();
+    mintMock
+      .mockResolvedValueOnce({ kind: "unauthorized", status: 401 })
+      .mockResolvedValueOnce({ kind: "ok", response: okMintBody("host-1") });
+    const flow = flowOn(
+      signIn,
+      renewSignIn,
+      onUnauthorized,
+      () => undefined,
+      null,
+    );
+
+    await expect(flow(MISSING)).resolves.toMatchObject({
+      kind: "provisioned",
+      token: "host-access-jws",
+    });
+
+    expect(renewSignIn).toHaveBeenCalledTimes(1);
+    expect(bearersSent()).toEqual(["old-jwt", "new-jwt"]);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it("ends after one renewal when the mint is refused again on the new bearer, and still reports the refusal", async () => {
+    const signIn = { token: "old-jwt" };
+    const renewSignIn = vi.fn<() => Promise<boolean>>(async () => {
+      signIn.token = "new-jwt";
+      return true;
+    });
+    const onUnauthorized = vi.fn<() => void>();
+    const diag = vi.fn<(line: string) => void>();
+    mintMock.mockResolvedValue({ kind: "unauthorized", status: 401 });
+    const flow = flowOn(signIn, renewSignIn, onUnauthorized, diag, null);
+
+    await expect(flow(MISSING)).resolves.toEqual({ kind: "unavailable" });
+
+    expect(renewSignIn).toHaveBeenCalledTimes(1);
+    expect(bearersSent()).toEqual(["old-jwt", "new-jwt"]);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(diag).toHaveBeenCalledWith(
+      "could not provision host host-1 (unauthorized); continuing without a host credential.",
+    );
+  });
+
+  it("leaves the advisory unauthorized line, and sends no second mint, when the renewal is refused", async () => {
+    const signIn = { token: "old-jwt" };
+    const renewSignIn = vi.fn<() => Promise<boolean>>(async () => false);
+    const onUnauthorized = vi.fn<() => void>();
+    const diag = vi.fn<(line: string) => void>();
+    mintMock.mockResolvedValue({ kind: "unauthorized", status: 401 });
+    const flow = flowOn(signIn, renewSignIn, onUnauthorized, diag, null);
+
+    await expect(flow(MISSING)).resolves.toEqual({ kind: "unavailable" });
+
+    expect(renewSignIn).toHaveBeenCalledTimes(1);
+    expect(bearersSent()).toEqual(["old-jwt"]);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(diag.mock.calls).toEqual([
+      [
+        "could not provision host host-1 (unauthorized); continuing without a host credential.",
+      ],
+    ]);
+  });
+
+  it("does not renew on a 403, and reports the refusal as before", async () => {
+    const signIn = { token: "old-jwt" };
+    const renewSignIn = vi.fn<() => Promise<boolean>>(async () => true);
+    const onUnauthorized = vi.fn<() => void>();
+    const diag = vi.fn<(line: string) => void>();
+    mintMock.mockResolvedValue({ kind: "unauthorized", status: 403 });
+    const flow = flowOn(signIn, renewSignIn, onUnauthorized, diag, null);
+
+    await expect(flow(MISSING)).resolves.toEqual({ kind: "unavailable" });
+
+    expect(renewSignIn).not.toHaveBeenCalled();
+    expect(bearersSent()).toEqual(["old-jwt"]);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    expect(diag.mock.calls).toEqual([
+      [
+        "could not provision host host-1 (unauthorized); continuing without a host credential.",
+      ],
+    ]);
+  });
+
+  it("does not renew when the service never answers: the mint ends on the flow's own signal with no renewal", async () => {
+    const signIn = { token: "old-jwt" };
+    const renewSignIn = vi.fn<() => Promise<boolean>>(async () => true);
+    const bound = new AbortController();
+    // The real call turns an aborted request into "network-error".
+    mintMock.mockImplementation(
+      (_url, _bearer, _request, signal) =>
+        new Promise((resolve) => {
+          signal?.addEventListener("abort", () =>
+            resolve({ kind: "network-error" }),
+          );
+        }),
+    );
+    const flow = flowOn(
+      signIn,
+      renewSignIn,
+      () => undefined,
+      () => undefined,
+      bound.signal,
+    );
+
+    const settled = flow(MISSING);
+    bound.abort();
+
+    await expect(settled).resolves.toEqual({ kind: "unavailable" });
+    expect(renewSignIn).not.toHaveBeenCalled();
+    expect(bearersSent()).toEqual(["old-jwt"]);
+  });
+
+  it("sends only the first mint when a 401 is followed by a renewal that never answers, ending on the flow's own signal", async () => {
+    const signIn = { token: "old-jwt" };
+    const bound = new AbortController();
+    const renewSignIn = vi.fn<() => Promise<boolean>>(
+      () =>
+        new Promise((resolve) => {
+          bound.signal.addEventListener("abort", () => resolve(false));
+        }),
+    );
+    mintMock.mockResolvedValue({ kind: "unauthorized", status: 401 });
+    const flow = flowOn(
+      signIn,
+      renewSignIn,
+      () => undefined,
+      () => undefined,
+      bound.signal,
+    );
+
+    const settled = flow(MISSING);
+    await vi.waitFor(() => expect(renewSignIn).toHaveBeenCalledTimes(1));
+    bound.abort();
+
+    await expect(settled).resolves.toEqual({ kind: "unavailable" });
+    expect(renewSignIn).toHaveBeenCalledTimes(1);
+    expect(bearersSent()).toEqual(["old-jwt"]);
+  });
+
+  it("renews once for the whole flow: a later mint refused with a 401 does not renew again", async () => {
+    const signIn = { token: "old-jwt" };
+    const renewSignIn = vi.fn<() => Promise<boolean>>(async () => false);
+    mintMock.mockResolvedValue({ kind: "unauthorized", status: 401 });
+    const flow = flowOn(
+      signIn,
+      renewSignIn,
+      () => undefined,
+      () => undefined,
+      null,
+    );
+
+    await flow(MISSING);
+    await flow({ hostId: "host-2", reason: "missing" });
+
+    expect(renewSignIn).toHaveBeenCalledTimes(1);
+    expect(bearersSent()).toEqual(["old-jwt", "old-jwt"]);
+  });
 });

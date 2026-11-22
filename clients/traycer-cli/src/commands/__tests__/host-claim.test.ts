@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { HostOwnership } from "@traycer-clients/shared/host-client/host-ownership";
 import type { CommandContext } from "../../runner/runner";
 
@@ -38,6 +39,13 @@ vi.mock("../../host/install-auth", async (importOriginal) => {
   };
 });
 
+vi.mock("@sentry/node", () => ({
+  captureException: vi.fn(),
+  addBreadcrumb: vi.fn(),
+  close: vi.fn(),
+  getClient: () => undefined,
+}));
+
 vi.mock("node:readline/promises", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("node:readline/promises")>();
@@ -55,14 +63,17 @@ import type { HostClaimArgs } from "../host-claim";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import {
+  advanceFakeClockUntil,
   bearerOf,
   refreshAnswer,
+  REFRESHED_REFRESH_TOKEN,
   REFRESHED_TOKEN,
   removeStoredSignIn,
   seedStoredSignIn,
   STORED_REFRESH_TOKEN,
   STORED_SIGN_IN_REFRESH_PATH,
   storedSignInBytes,
+  useBoundedFakeClock,
 } from "../../__tests__/support/stored-sign-in";
 
 const HOST_ID = "host-local";
@@ -87,6 +98,12 @@ let ownershipRefusedBearers: string[] = [];
 let releaseStatus = 204;
 let releaseRefusedBearers: string[] = [];
 let refreshStatus: number | null = 200;
+let hungPaths: string[] = [];
+let onHung: () => void = () => {};
+let fileAtRefreshedRequest: Array<{
+  readonly pathname: string;
+  readonly bytes: string;
+}> = [];
 let releaseBody: unknown = {};
 let questionAnswer = "y";
 let localFacts: () => Promise<unknown> = noTeamWork;
@@ -141,7 +158,24 @@ beforeEach(() => {
       const parsed = new URL(url);
       if (parsed.pathname === STORED_SIGN_IN_REFRESH_PATH) {
         events.push("refresh");
+        if (hungPaths.includes(parsed.pathname)) {
+          onHung();
+          return new Promise<Response>(() => {});
+        }
         return refreshAnswer(refreshStatus);
+      }
+      if (bearerOf(init) === `Bearer ${REFRESHED_TOKEN}`) {
+        fileAtRefreshedRequest.push({
+          pathname: parsed.pathname,
+          bytes: await storedSignInBytes(),
+        });
+      }
+      if (hungPaths.includes(parsed.pathname)) {
+        events.push(
+          parsed.pathname.endsWith("team-release") ? "release" : "ownership",
+        );
+        onHung();
+        return new Promise<Response>(() => {});
       }
       if (parsed.pathname === "/api/v3/hosts") {
         events.push("ownership");
@@ -201,6 +235,9 @@ beforeEach(() => {
   releaseStatus = 204;
   releaseRefusedBearers = [];
   refreshStatus = 200;
+  hungPaths = [];
+  onHung = () => {};
+  fileAtRefreshedRequest = [];
   releaseBody = {};
   questionAnswer = "y";
   localFacts = noTeamWork;
@@ -209,6 +246,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   if (savedStdinIsTTY === undefined) {
@@ -469,6 +507,55 @@ describe("buildHostClaimCommand", () => {
   );
 });
 
+const RESULT_ERROR_LINE = z.object({
+  type: z.literal("result"),
+  status: z.literal("error"),
+  error: z.object({ code: z.string(), message: z.string() }),
+});
+
+/** The real runner, with its stdout and exit code read the way a caller reads them. */
+async function runClaimThroughRunner(): Promise<{
+  readonly printed: z.infer<typeof RESULT_ERROR_LINE>["error"];
+  readonly exitCode: number | string | null | undefined;
+}> {
+  const chunks: string[] = [];
+  vi.spyOn(process.stdout, "write").mockImplementation(((
+    chunk: string | Uint8Array,
+    callback: (() => void) | undefined,
+  ) => {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    if (callback !== undefined) callback();
+    return true;
+  }) as never);
+  const priorExitCode = process.exitCode;
+  process.exitCode = undefined;
+  // The runner keeps the first failing code it records; a fresh copy per run.
+  vi.resetModules();
+  const { runCommand } = await import("../../runner/runner");
+  // Loaded after the reset too, so its errors are the runner's own class.
+  const { buildHostClaimCommand: freshClaimCommand } =
+    await import("../host-claim");
+  try {
+    await runCommand(freshClaimCommand({ yes: true }), {
+      json: true,
+      quiet: false,
+      noProgress: true,
+      noBootstrap: false,
+    });
+    const exitCode = process.exitCode;
+    const lines = chunks
+      .join("")
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => RESULT_ERROR_LINE.safeParse(JSON.parse(line)))
+      .flatMap((parsed) => (parsed.success ? [parsed.data.error] : []));
+    expect(lines).toHaveLength(1);
+    return { printed: lines[0], exitCode };
+  } finally {
+    process.exitCode = priorExitCode;
+  }
+}
+
 describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
   const STORED_USER_ID = "member-1";
   const REFRESHED_HEADER = `Bearer ${REFRESHED_TOKEN}`;
@@ -479,8 +566,21 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
     "The stored credential was rejected. Run `traycer login` to re-authenticate.";
   const RELEASE_REFUSED =
     "Sign in as a member of this team to claim this computer.";
+  const OWNERSHIP_PATH = "/api/v3/hosts";
+  const RELEASE_PATH = `/api/v3/hosts/${HOST_ID}/team-release`;
+  // Each shared HTTP function bounds its own request at 10 s. The refresh has
+  // the same bound for its request, plus the store's own retry waits.
+  const REQUEST_BOUND_MS = 10_000;
+  const REFRESH_BOUND_MS = 20_000;
 
   beforeEach(async () => {
+    // The real resolver, on the sign-in the suite seeds.
+    const actual = await vi.importActual<
+      typeof import("../../internal/host-auth")
+    >("../../internal/host-auth");
+    mocks.resolveHostAuthMock.mockImplementation(() =>
+      actual.resolveHostAuth(),
+    );
     await seedStoredSignIn(BEARER, STORED_USER_ID);
   });
 
@@ -494,70 +594,119 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
       .map(({ init }) => bearerOf(init));
   }
 
-  const OWNERSHIP_PATH = "/api/v3/hosts";
-  const RELEASE_PATH = `/api/v3/hosts/${HOST_ID}/team-release`;
+  function requestedPaths(): string[] {
+    return requests.map(({ url }) => new URL(url).pathname);
+  }
+
+  /** Runs the claim, on a fake clock, until it ends on a request authn never answers. */
+  async function claimBoundedByHang(): Promise<{
+    readonly outcome: unknown;
+    readonly elapsedMs: number;
+  }> {
+    useBoundedFakeClock();
+    const hung = new Promise<void>((resolve) => {
+      onHung = resolve;
+    });
+    let outcome: unknown = null;
+    let settled = false;
+    void makeClaimCommand(true)(fakeCtx(false))
+      .then(
+        (result) => {
+          outcome = result;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      )
+      .then(() => {
+        settled = true;
+      });
+    await hung;
+    const elapsedMs = await advanceFakeClockUntil(() => settled);
+    return { outcome, elapsedMs };
+  }
 
   describe("when it reads the computer's ownership", () => {
-    it("refreshes once, reads again on the refreshed sign-in and carries it to the claim", async () => {
+    it("refreshes once, reads again on the refreshed sign-in and carries it to every later call", async () => {
       ownershipRefusedBearers = [STORED_HEADER];
 
       const result = await makeClaimCommand(true)(fakeCtx(false));
 
       expect(result.human).toBe("This computer is yours.");
+      expect(requestedPaths()).toEqual([
+        OWNERSHIP_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        OWNERSHIP_PATH,
+        RELEASE_PATH,
+      ]);
       expect(callsTo(OWNERSHIP_PATH)).toEqual([
         STORED_HEADER,
         REFRESHED_HEADER,
       ]);
-      expect(callsTo(STORED_SIGN_IN_REFRESH_PATH)).toHaveLength(1);
       const refresh = requests.find(
         ({ url }) => new URL(url).pathname === STORED_SIGN_IN_REFRESH_PATH,
       );
       expect(JSON.parse(String(refresh?.init?.body))).toMatchObject({
         refreshToken: STORED_REFRESH_TOKEN,
       });
-      expect(JSON.parse(await storedSignInBytes())).toMatchObject({
+      expect(fileAtRefreshedRequest.map(({ pathname }) => pathname)).toEqual([
+        OWNERSHIP_PATH,
+        RELEASE_PATH,
+      ]);
+      expect(JSON.parse(fileAtRefreshedRequest[0].bytes)).toMatchObject({
         token: REFRESHED_TOKEN,
+        refreshToken: REFRESHED_REFRESH_TOKEN,
       });
       expect(callsTo(RELEASE_PATH)).toEqual([REFRESHED_HEADER]);
-      expect(mocks.callHostRpcAtResolvedEndpointMock).toHaveBeenCalledWith(
+      for (const method of [
         "environment.host.read",
-        {},
-        expect.objectContaining({ hostId: HOST_ID }),
-        expect.objectContaining({ token: REFRESHED_TOKEN }),
-        expect.anything(),
-      );
+        "environment.previewLocalFacts",
+      ]) {
+        expect(mocks.callHostRpcAtResolvedEndpointMock).toHaveBeenCalledWith(
+          method,
+          expect.anything(),
+          expect.objectContaining({ hostId: HOST_ID }),
+          expect.objectContaining({ token: REFRESHED_TOKEN }),
+          expect.anything(),
+        );
+      }
     });
 
-    it("ends with the sign-in to make again, and leaves the stored sign-in as it was, when the refresh is refused", async () => {
+    it("prints the sign-in to make again, exits 1 and leaves the stored sign-in as it was, when the refresh is refused", async () => {
       ownershipRefusedBearers = [STORED_HEADER];
       refreshStatus = 401;
       const before = await storedSignInBytes();
 
-      await expect(
-        makeClaimCommand(true)(fakeCtx(false)),
-      ).rejects.toMatchObject({
+      const run = await runClaimThroughRunner();
+
+      expect(run.printed).toEqual({
         code: CLI_ERROR_CODES.AUTH_REJECTED,
         message: CREDENTIAL_REJECTED,
-        exitCode: 1,
       });
-
-      expect(events).toEqual(["ownership", "refresh"]);
+      expect(run.exitCode).toBe(1);
+      expect(requestedPaths()).toEqual([
+        OWNERSHIP_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+      ]);
       expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
       expect(await storedSignInBytes()).toBe(before);
     });
 
-    it("keeps the ownership line when the read is refused again on the refreshed sign-in", async () => {
+    it("prints the ownership line and exits 1 after one refresh when the read is refused again on the refreshed sign-in", async () => {
       ownershipRefusedBearers = [STORED_HEADER, REFRESHED_HEADER];
 
-      await expect(
-        makeClaimCommand(true)(fakeCtx(false)),
-      ).rejects.toMatchObject({
+      const run = await runClaimThroughRunner();
+
+      expect(run.printed).toEqual({
         code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
         message: OWNERSHIP_UNCONFIRMED,
-        exitCode: 1,
       });
-
-      expect(events).toEqual(["ownership", "refresh", "ownership"]);
+      expect(run.exitCode).toBe(1);
+      expect(requestedPaths()).toEqual([
+        OWNERSHIP_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        OWNERSHIP_PATH,
+      ]);
     });
 
     it("keeps the ownership line when authn cannot be reached for the refresh", async () => {
@@ -574,19 +723,72 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
 
       expect(events).toEqual(["ownership", "refresh"]);
     });
+
+    it("keeps the ownership line and sends no refresh when authn answers 403", async () => {
+      ownershipStatus = 403;
+      const before = await storedSignInBytes();
+
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: OWNERSHIP_UNCONFIRMED,
+        exitCode: 1,
+      });
+
+      expect(requestedPaths()).toEqual([OWNERSHIP_PATH]);
+      expect(await storedSignInBytes()).toBe(before);
+    });
+
+    it("keeps the ownership line, with no refresh, when authn never answers the read", async () => {
+      hungPaths = [OWNERSHIP_PATH];
+
+      const { outcome, elapsedMs } = await claimBoundedByHang();
+
+      expect(outcome).toMatchObject({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: OWNERSHIP_UNCONFIRMED,
+      });
+      expect(elapsedMs).toBeLessThanOrEqual(REQUEST_BOUND_MS);
+      expect(requestedPaths()).toEqual([OWNERSHIP_PATH]);
+    });
+
+    it("keeps the ownership line, after one refresh request, when the refresh never answers", async () => {
+      ownershipRefusedBearers = [STORED_HEADER];
+      hungPaths = [STORED_SIGN_IN_REFRESH_PATH];
+
+      const { outcome, elapsedMs } = await claimBoundedByHang();
+
+      expect(outcome).toMatchObject({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: OWNERSHIP_UNCONFIRMED,
+      });
+      expect(requestedPaths()).toEqual([
+        OWNERSHIP_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+      ]);
+      expect(elapsedMs).toBeLessThanOrEqual(REFRESH_BOUND_MS);
+    });
   });
 
   describe("when it releases the team's computer", () => {
-    it("refreshes once and sends the release again on the refreshed sign-in", async () => {
+    it("refreshes once and sends the release again on the refreshed sign-in, saved before it is sent", async () => {
       releaseRefusedBearers = [STORED_HEADER];
 
       const result = await makeClaimCommand(true)(fakeCtx(false));
 
       expect(result.human).toBe("This computer is yours.");
+      expect(requestedPaths()).toEqual([
+        OWNERSHIP_PATH,
+        RELEASE_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        RELEASE_PATH,
+      ]);
       expect(callsTo(RELEASE_PATH)).toEqual([STORED_HEADER, REFRESHED_HEADER]);
-      expect(callsTo(STORED_SIGN_IN_REFRESH_PATH)).toHaveLength(1);
-      expect(JSON.parse(await storedSignInBytes())).toMatchObject({
+      expect(fileAtRefreshedRequest).toHaveLength(1);
+      expect(JSON.parse(fileAtRefreshedRequest[0].bytes)).toMatchObject({
         token: REFRESHED_TOKEN,
+        refreshToken: REFRESHED_REFRESH_TOKEN,
       });
       expect(mocks.provisionRunningHostCredentialMock).toHaveBeenCalledTimes(1);
     });
@@ -620,6 +822,73 @@ describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
       });
 
       expect(events).toEqual(["ownership", "release", "refresh", "release"]);
+    });
+
+    it("sends no second refresh when the ownership read already refreshed and the release is refused", async () => {
+      ownershipRefusedBearers = [STORED_HEADER];
+      releaseRefusedBearers = [REFRESHED_HEADER];
+
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: RELEASE_REFUSED,
+        exitCode: 1,
+      });
+
+      expect(requestedPaths()).toEqual([
+        OWNERSHIP_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+        OWNERSHIP_PATH,
+        RELEASE_PATH,
+      ]);
+    });
+
+    it("keeps the release line and sends no refresh when authn answers 403", async () => {
+      releaseStatus = 403;
+      const before = await storedSignInBytes();
+
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: RELEASE_REFUSED,
+        exitCode: 1,
+      });
+
+      expect(requestedPaths()).toEqual([OWNERSHIP_PATH, RELEASE_PATH]);
+      expect(await storedSignInBytes()).toBe(before);
+    });
+
+    it("keeps the failed-claim line, with no refresh, when authn never answers the release", async () => {
+      hungPaths = [RELEASE_PATH];
+
+      const { outcome, elapsedMs } = await claimBoundedByHang();
+
+      expect(outcome).toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_NETWORK,
+        message: "Could not claim this computer. Try again.",
+      });
+      expect(elapsedMs).toBeLessThanOrEqual(REQUEST_BOUND_MS);
+      expect(requestedPaths()).toEqual([OWNERSHIP_PATH, RELEASE_PATH]);
+    });
+
+    it("keeps the release line, after one refresh request, when the refresh never answers", async () => {
+      releaseRefusedBearers = [STORED_HEADER];
+      hungPaths = [STORED_SIGN_IN_REFRESH_PATH];
+
+      const { outcome, elapsedMs } = await claimBoundedByHang();
+
+      expect(outcome).toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: RELEASE_REFUSED,
+      });
+      expect(elapsedMs).toBeLessThanOrEqual(REFRESH_BOUND_MS);
+      expect(requestedPaths()).toEqual([
+        OWNERSHIP_PATH,
+        RELEASE_PATH,
+        STORED_SIGN_IN_REFRESH_PATH,
+      ]);
     });
   });
 });

@@ -1,4 +1,5 @@
 import { readFile, rm } from "node:fs/promises";
+import { vi } from "vitest";
 import { writeCredentialsFile } from "@traycer/protocol/config/credentials";
 import { config } from "../../config";
 import { cliCredentialsPath } from "../../store/paths";
@@ -65,4 +66,31 @@ export function refreshAnswer(status: number | null): Response {
 
 export function bearerOf(init: RequestInit | undefined): string | null {
   return new Headers(init?.headers).get("authorization");
+}
+
+/**
+ * A fake clock for a call that waits on a request authn never answers. Date
+ * moves with it, so {@link advanceFakeClockUntil} can report how long the wait
+ * took.
+ */
+export function useBoundedFakeClock(): void {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+}
+
+/**
+ * Moves the fake clock to each next timer until `settled`, yielding to real
+ * I/O between moves (the store's file work is not on the clock), and returns
+ * the fake time that took.
+ */
+export async function advanceFakeClockUntil(
+  settled: () => boolean,
+): Promise<number> {
+  const startedAt = Date.now();
+  while (!settled()) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (!settled() && vi.getTimerCount() > 0) {
+      await vi.advanceTimersToNextTimerAsync();
+    }
+  }
+  return Date.now() - startedAt;
 }

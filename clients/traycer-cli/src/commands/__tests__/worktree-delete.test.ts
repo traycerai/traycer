@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
+import type { HostCredentialMintFlow } from "../../../../shared/host-transport/host-credential-mint-flow";
 import { buildWorktreeDeleteCommand } from "../worktree-delete";
 import {
   CliError,
@@ -18,6 +19,15 @@ import { resolveHostAuth } from "../../internal/host-auth";
 import { resolveEndpoint } from "../../internal/host-rpc";
 import { config } from "../../config";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
+import {
+  bearerOf,
+  refreshAnswer,
+  REFRESHED_REFRESH_TOKEN,
+  REFRESHED_TOKEN,
+  seedStoredSignIn,
+  STORED_SIGN_IN_REFRESH_PATH,
+  storedSignInBytes,
+} from "../../__tests__/support/stored-sign-in";
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -46,6 +56,7 @@ type FakeSession = {
 
 type CapturedStreamOptions = {
   readonly bearer: () => OpenFrameBearerSource | null;
+  readonly hostCredentialMint: HostCredentialMintFlow | null;
 };
 
 // Shared, hoisted so the module mock factory can reference them.
@@ -56,6 +67,7 @@ const hoisted = vi.hoisted(() => ({
   state: {
     sessions: [] as FakeSession[],
     bearer: null as CapturedStreamOptions["bearer"] | null,
+    hostCredentialMint: null as CapturedStreamOptions["hostCredentialMint"],
     home: { path: null as string | null },
     fetch: vi.fn(),
     // What the transport's compatibility check would say about the batch
@@ -71,6 +83,7 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
     options: CapturedStreamOptions,
   ) {
     hoisted.state.bearer = options.bearer;
+    hoisted.state.hostCredentialMint = options.hostCredentialMint;
     return {
       subscribe: hoisted.subscribeMock,
       close: hoisted.clientCloseMock,
@@ -171,6 +184,7 @@ beforeEach(async () => {
     join(tmpdir(), "traycer-cli-delete-"),
   );
   hoisted.state.bearer = null;
+  hoisted.state.hostCredentialMint = null;
   hoisted.state.fetch.mockReset();
   hoisted.state.fetch.mockResolvedValue(
     new Response(
@@ -981,5 +995,123 @@ describe("buildWorktreeDeleteCommand legacy stream v1.1 holders", () => {
       exitCode: 1,
       message: expect.stringContaining("Held by Chat: fix flaky test."),
     });
+  });
+});
+
+// The delegated host-credential mint `worktree delete` hands its stream client:
+// a refused mint renews the command's own sign-in. The sign-in service is the
+// suite's stubbed `fetch`; the stored sign-in is the real store under the temp
+// home; the stream client is the suite's.
+describe("worktree delete's host credential mint on a refused sign-in", () => {
+  const MINT_PATH = "/api/v3/hosts/token";
+  const MINT_REFUSED_HEADER = "Bearer token";
+  const MINT_BODY = {
+    token: "host-access-jws",
+    refreshToken: "host-refresh-jwe",
+    familyId: "family-1",
+    hostId: "host-1",
+    expiresIn: 900,
+    provisionedAt: "2026-07-08T12:00:00.000Z",
+  };
+
+  interface Arrival {
+    readonly path: string;
+    readonly bearer: string | null;
+    /** The stored sign-in as it was when the request arrived. */
+    readonly stored: string;
+  }
+
+  let arrivals: Arrival[] = [];
+  let mintStatuses: Record<string, number> = {};
+
+  function sentTo(path: string): readonly Arrival[] {
+    return arrivals.filter((arrival) => arrival.path === path);
+  }
+
+  beforeEach(async () => {
+    arrivals = [];
+    mintStatuses = { [MINT_REFUSED_HEADER]: 401 };
+    await seedStoredSignIn("token", "user");
+    const grant = await hoisted.state.fetch();
+    hoisted.state.fetch.mockImplementation(
+      async (input: string, init: RequestInit | undefined) => {
+        const path = new URL(String(input)).pathname;
+        arrivals.push({
+          path,
+          bearer: bearerOf(init),
+          stored: await storedSignInBytes(),
+        });
+        if (path === STORED_SIGN_IN_REFRESH_PATH) return refreshAnswer(200);
+        if (path !== MINT_PATH) return grant.clone();
+        const status = mintStatuses[bearerOf(init) ?? ""];
+        return status === undefined
+          ? new Response(JSON.stringify(MINT_BODY), { status: 200 })
+          : new Response("{}", { status });
+      },
+    );
+  });
+
+  async function openedMint(recorded: ProgressInfo[]): Promise<{
+    readonly mint: HostCredentialMintFlow;
+    readonly finish: () => Promise<void>;
+  }> {
+    const pending = startWorktreeDelete("/wt/x", jsonCtx(recorded));
+    await waitForSessions(1);
+    const mint = hoisted.state.hostCredentialMint;
+    if (mint === null)
+      throw new Error("the stream client got no credential mint");
+    return {
+      mint,
+      finish: async () => {
+        commandSession().frameHandler?.({
+          kind: "target.complete",
+          worktreePath: "/wt/x",
+          deleted: true,
+          hasBinaryPayload: false,
+        });
+        await pending;
+      },
+    };
+  }
+
+  it("renews the command's own sign-in once and mints again on it, with both new tokens already saved", async () => {
+    const { mint, finish } = await openedMint([]);
+
+    await expect(
+      mint({ hostId: "host-1", reason: "missing" }),
+    ).resolves.toMatchObject({
+      kind: "provisioned",
+      token: "host-access-jws",
+    });
+    await finish();
+
+    expect(sentTo(STORED_SIGN_IN_REFRESH_PATH)).toHaveLength(1);
+    expect(sentTo(MINT_PATH).map(({ bearer }) => bearer)).toEqual([
+      MINT_REFUSED_HEADER,
+      `Bearer ${REFRESHED_TOKEN}`,
+    ]);
+    expect(JSON.parse(sentTo(MINT_PATH)[1].stored)).toMatchObject({
+      token: REFRESHED_TOKEN,
+      refreshToken: REFRESHED_REFRESH_TOKEN,
+    });
+  });
+
+  it("sends no refresh when the mint is refused with a 403", async () => {
+    mintStatuses = { [MINT_REFUSED_HEADER]: 403 };
+    const recorded: ProgressInfo[] = [];
+    const { mint, finish } = await openedMint(recorded);
+
+    await expect(
+      mint({ hostId: "host-1", reason: "missing" }),
+    ).resolves.toEqual({
+      kind: "unavailable",
+    });
+    await finish();
+
+    expect(recorded.map(({ message }) => message)).toContain(
+      "could not provision host host-1 (unauthorized); continuing without a host credential — it will stop working when this connection ends.",
+    );
+    expect(sentTo(STORED_SIGN_IN_REFRESH_PATH)).toHaveLength(0);
+    expect(sentTo(MINT_PATH)).toHaveLength(1);
   });
 });

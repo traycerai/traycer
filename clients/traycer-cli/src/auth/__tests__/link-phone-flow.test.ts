@@ -11,6 +11,17 @@ import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
 import type { RuntimeContext } from "../../runner/runtime";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import {
+  bearerOf,
+  refreshAnswer,
+  REFRESHED_REFRESH_TOKEN,
+  REFRESHED_TOKEN,
+  removeStoredSignIn,
+  seedStoredSignIn,
+  STORED_SIGN_IN_REFRESH_PATH,
+  storedSignInBytes,
+} from "../../__tests__/support/stored-sign-in";
 
 // The QR encoder is faked outright: this suite is about the flow's states, and
 // the payload it encodes is covered by the shared client's own suite.
@@ -902,5 +913,363 @@ describe("runLinkPhoneFlow", () => {
       runLinkPhoneFlow(interactiveCtx(), { showQr: true }),
     ).rejects.toThrowError(/Not logged in/);
     expect(mintMock).not.toHaveBeenCalled();
+  });
+});
+
+// The flow's one sign-in on a refused stored token. The three authn calls stay
+// the suite's mocks, answering by the bearer they were sent; the refresh goes
+// through the real store on the stored sign-in, to a stubbed `fetch`.
+describe("runLinkPhoneFlow on a refused stored sign-in", () => {
+  type Call = "mint" | "status" | "respond";
+
+  interface Arrival {
+    readonly label: string;
+    /** The stored sign-in as it was when the request arrived. */
+    stored: string;
+  }
+
+  const STORED_TOKEN = "bearer-1";
+  const REFRESH_BOUND_MS = 10_000;
+  const MINT_LINE = "The stored credential was rejected";
+  const STATUS_LINE = "rejected while waiting";
+
+  let arrivals: Arrival[] = [];
+  let refusals: Record<Call, Record<string, 401 | 403>> = {
+    mint: {},
+    status: {},
+    respond: {},
+  };
+  let claimOnStatus = true;
+  let refreshStatus: number | null = 200;
+  let hungRefresh = false;
+
+  function labels(): readonly string[] {
+    return arrivals.map(({ label }) => label);
+  }
+
+  async function arrive(call: Call, bearer: string): Promise<void> {
+    const arrival: Arrival = { label: `${call} ${bearer}`, stored: "" };
+    arrivals.push(arrival);
+    arrival.stored = await storedSignInBytes();
+  }
+
+  function neverAnswers(
+    signal: AbortSignal | null | undefined,
+  ): Promise<never> {
+    return new Promise((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    });
+  }
+
+  beforeEach(async () => {
+    arrivals = [];
+    refusals = { mint: {}, status: {}, respond: {} };
+    claimOnStatus = true;
+    refreshStatus = 200;
+    hungRefresh = false;
+    answer.current = "y";
+    mintMock.mockImplementation(async (_url, bearer) => {
+      await arrive("mint", bearer);
+      const refused = refusals.mint[bearer];
+      return refused === undefined
+        ? mintedCode("ABCDE-FGHJK")
+        : { kind: "unauthorized", status: refused };
+    });
+    statusMock.mockImplementation(async (_url, bearer) => {
+      await arrive("status", bearer);
+      const refused = refusals.status[bearer];
+      if (refused !== undefined)
+        return { kind: "unauthorized", status: refused };
+      return claimOnStatus ? CLAIMED : UNCLAIMED;
+    });
+    respondMock.mockImplementation(async (_url, bearer) => {
+      await arrive("respond", bearer);
+      const refused = refusals.respond[bearer];
+      return refused === undefined
+        ? { kind: "ok" }
+        : { kind: "unauthorized", status: refused };
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        expect(new URL(String(input)).pathname).toBe(
+          STORED_SIGN_IN_REFRESH_PATH,
+        );
+        expect(bearerOf(init)).toBe(`Bearer ${STORED_TOKEN}`);
+        const arrival: Arrival = { label: "refresh", stored: "" };
+        arrivals.push(arrival);
+        arrival.stored = await storedSignInBytes();
+        return hungRefresh
+          ? neverAnswers(init?.signal)
+          : refreshAnswer(refreshStatus);
+      }),
+    );
+    await seedStoredSignIn(STORED_TOKEN, "u1");
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await removeStoredSignIn();
+  });
+
+  /**
+   * Lets the flow's real I/O finish, and moves the fake clock one poll only
+   * while the flow is waiting out its poll interval: not while a refresh is in
+   * flight. Stops once `until` holds.
+   */
+  async function driveUntil(
+    run: Promise<unknown>,
+    until: () => boolean,
+  ): Promise<void> {
+    let settled = false;
+    void run.then(() => {
+      settled = true;
+    });
+    while (!settled && !until()) {
+      await nextTurn();
+      if (
+        !settled &&
+        !until() &&
+        vi.getTimerCount() > 0 &&
+        arrivals.at(-1)?.label !== "refresh"
+      ) {
+        await vi.advanceTimersByTimeAsync(POLL_MS);
+      }
+    }
+  }
+
+  async function runToEnd(): Promise<PromiseSettledResult<unknown>> {
+    const settled = Promise.allSettled([
+      runLinkPhoneFlow(interactiveCtx(), { showQr: true }),
+    ]);
+    await driveUntil(settled, () => false);
+    const [result] = await settled;
+    return result;
+  }
+
+  async function runUntilRefreshHangs(): Promise<
+    PromiseSettledResult<unknown>
+  > {
+    hungRefresh = true;
+    const settled = Promise.allSettled([
+      runLinkPhoneFlow(interactiveCtx(), { showQr: true }),
+    ]);
+    await driveUntil(settled, () => labels().includes("refresh"));
+    await vi.advanceTimersByTimeAsync(REFRESH_BOUND_MS);
+    const [result] = await settled;
+    return result;
+  }
+
+  const NEW = REFRESHED_TOKEN;
+  const MINT = `mint ${STORED_TOKEN}`;
+  const STATUS = `status ${STORED_TOKEN}`;
+
+  const calls: readonly {
+    readonly call: Call;
+    /** What the call's refusal ends the run with. */
+    readonly line: string;
+    /** What the run sent before the call under test. */
+    readonly before: readonly string[];
+    /** The whole run when its one refresh lets the call through. */
+    readonly succeeds: readonly string[];
+  }[] = [
+    {
+      call: "mint",
+      line: MINT_LINE,
+      before: [],
+      succeeds: [
+        MINT,
+        "refresh",
+        `mint ${NEW}`,
+        `status ${NEW}`,
+        `respond ${NEW}`,
+      ],
+    },
+    {
+      call: "status",
+      line: STATUS_LINE,
+      before: [MINT],
+      succeeds: [MINT, STATUS, "refresh", `status ${NEW}`, `respond ${NEW}`],
+    },
+    {
+      call: "respond",
+      line: MINT_LINE,
+      before: [MINT, STATUS],
+      succeeds: [
+        MINT,
+        STATUS,
+        `respond ${STORED_TOKEN}`,
+        "refresh",
+        `respond ${NEW}`,
+      ],
+    },
+  ];
+
+  describe.each(calls)("the $call call", ({ call, line, before, succeeds }) => {
+    const REFUSED = `${call} ${STORED_TOKEN}`;
+    const RETRIED = `${call} ${NEW}`;
+
+    it("refreshes once and sends the call again on the refreshed token, with both new tokens already saved", async () => {
+      refusals[call] = { [STORED_TOKEN]: 401 };
+
+      const result = await runToEnd();
+
+      expect(result.status).toBe("fulfilled");
+      expect(labels()).toEqual(succeeds);
+      expect(
+        JSON.parse(
+          arrivals.find(({ label }) => label === RETRIED)?.stored ?? "null",
+        ),
+      ).toMatchObject({
+        token: REFRESHED_TOKEN,
+        refreshToken: REFRESHED_REFRESH_TOKEN,
+      });
+    });
+
+    it.each([
+      { name: "refused", status: 401 },
+      { name: "unreachable", status: null },
+    ])(
+      "ends with its own line, sending no second call, and leaves the file as it was when the refresh is $name",
+      async ({ status }) => {
+        refusals[call] = { [STORED_TOKEN]: 401 };
+        refreshStatus = status;
+        const stored = await storedSignInBytes();
+
+        const result = await runToEnd();
+
+        expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, line);
+        expect(labels()).toEqual([...before, REFUSED, "refresh"]);
+        expect(await storedSignInBytes()).toBe(stored);
+      },
+    );
+
+    it("ends once, after one refresh, when the call is refused again on the refreshed token", async () => {
+      refusals[call] = { [STORED_TOKEN]: 401, [NEW]: 401 };
+
+      const result = await runToEnd();
+
+      expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, line);
+      expect(labels()).toEqual([...before, REFUSED, "refresh", RETRIED]);
+    });
+
+    it("ends with its own line on a 403, and sends no refresh", async () => {
+      refusals[call] = { [STORED_TOKEN]: 403 };
+      const stored = await storedSignInBytes();
+
+      const result = await runToEnd();
+
+      expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, line);
+      expect(labels()).toEqual([...before, REFUSED]);
+      expect(await storedSignInBytes()).toBe(stored);
+    });
+
+    it("keeps the first refusal on the refresh's own bound when a 401 is followed by a refresh that never answers", async () => {
+      refusals[call] = { [STORED_TOKEN]: 401 };
+      const stored = await storedSignInBytes();
+
+      const result = await runUntilRefreshHangs();
+
+      expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, line);
+      expect(labels()).toEqual([...before, REFUSED, "refresh"]);
+      expect(await storedSignInBytes()).toBe(stored);
+    });
+  });
+
+  it("sends no refresh when the mint ends on its bound without an answer", async () => {
+    mintMock.mockImplementation(async (_url, bearer) => {
+      await arrive("mint", bearer);
+      return { kind: "network-error" };
+    });
+
+    const result = await runToEnd();
+
+    expectCliError(
+      result,
+      CLI_ERROR_CODES.AUTH_NETWORK,
+      2,
+      "Could not reach the authn service",
+    );
+    expect(labels()).toEqual([MINT]);
+  });
+
+  it("sends no refresh, and keeps watching, when a status read ends on its bound without an answer", async () => {
+    let reads = 0;
+    statusMock.mockImplementation(async (_url, bearer) => {
+      await arrive("status", bearer);
+      reads += 1;
+      return reads === 1 ? { kind: "network-error" } : CLAIMED;
+    });
+
+    const result = await runToEnd();
+
+    expect(result.status).toBe("fulfilled");
+    expect(labels()).toEqual([MINT, STATUS, STATUS, `respond ${STORED_TOKEN}`]);
+  });
+
+  it("sends no refresh when the answer ends on its bound without an answer", async () => {
+    respondMock.mockImplementation(async (_url, bearer) => {
+      await arrive("respond", bearer);
+      return { kind: "network-error" };
+    });
+
+    const result = await runToEnd();
+
+    expectCliError(
+      result,
+      CLI_ERROR_CODES.AUTH_NETWORK,
+      2,
+      "record your answer",
+    );
+    expect(labels()).toEqual([MINT, STATUS, `respond ${STORED_TOKEN}`]);
+  });
+
+  it("sends one refresh in all for two refused status reads in two turns, and ends the second on the existing line", async () => {
+    claimOnStatus = false;
+    let reads = 0;
+    statusMock.mockImplementation(async (_url, bearer) => {
+      await arrive("status", bearer);
+      reads += 1;
+      return reads === 2 ? UNCLAIMED : { kind: "unauthorized", status: 401 };
+    });
+
+    const result = await runToEnd();
+
+    expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, STATUS_LINE);
+    expect(labels()).toEqual([
+      MINT,
+      STATUS,
+      "refresh",
+      `status ${NEW}`,
+      `status ${NEW}`,
+    ]);
+  });
+
+  it("sends no second refresh for a status read refused after the mint spent the flow's one", async () => {
+    refusals.mint = { [STORED_TOKEN]: 401 };
+    refusals.status = { [NEW]: 401 };
+
+    const result = await runToEnd();
+
+    expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, STATUS_LINE);
+    expect(labels()).toEqual([MINT, "refresh", `mint ${NEW}`, `status ${NEW}`]);
+  });
+
+  it("sends no second refresh for an answer refused after the status read spent the flow's one", async () => {
+    refusals.status = { [STORED_TOKEN]: 401 };
+    refusals.respond = { [NEW]: 401 };
+
+    const result = await runToEnd();
+
+    expectCliError(result, CLI_ERROR_CODES.AUTH_REJECTED, 1, MINT_LINE);
+    expect(labels()).toEqual([
+      MINT,
+      STATUS,
+      "refresh",
+      `status ${NEW}`,
+      `respond ${NEW}`,
+    ]);
   });
 });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
+import type { HostCredentialMintFlow } from "../../../../shared/host-transport/host-credential-mint-flow";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,6 +11,19 @@ import { config } from "../../config";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
 import { buildProgramWithAgentRoles } from "../../index";
 import { resolveHostAuth } from "../../internal/host-auth";
+import {
+  createCliCredentialsStore,
+  createStoreBackedRevalidator,
+} from "../../store/credentials-store";
+import {
+  bearerOf,
+  refreshAnswer,
+  REFRESHED_REFRESH_TOKEN,
+  REFRESHED_TOKEN,
+  seedStoredSignIn,
+  STORED_SIGN_IN_REFRESH_PATH,
+  storedSignInBytes,
+} from "../../__tests__/support/stored-sign-in";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import {
   callAgentHostRpcWithDispatch,
@@ -39,7 +53,7 @@ type FakeSession = {
 type CapturedStreamClientOptions = {
   readonly endpoint: () => unknown;
   readonly bearer: () => OpenFrameBearerSource | null;
-  readonly hostCredentialMint: unknown;
+  readonly hostCredentialMint: HostCredentialMintFlow | null;
 };
 
 const {
@@ -1474,5 +1488,111 @@ describe("mixed-version inbox message frames", () => {
 
     stdoutSpy.mockRestore();
     void result;
+  });
+});
+
+// The delegated host-credential mint `monitor` hands its stream client: a
+// refused mint renews the command's own sign-in. The monitor's revalidator and
+// store are the real ones for this case; the sign-in service is the suite's
+// stubbed `fetch` and the stream client is the suite's.
+describe("monitor's host credential mint on a refused sign-in", () => {
+  const MINT_PATH = "/api/v3/hosts/token";
+  const REFUSED_HEADER = "Bearer tok-1";
+
+  interface Arrival {
+    readonly path: string;
+    readonly bearer: string | null;
+    /** The stored sign-in as it was when the request arrived. */
+    readonly stored: string;
+  }
+
+  let arrivals: Arrival[] = [];
+
+  function sentTo(path: string): readonly Arrival[] {
+    return arrivals.filter((arrival) => arrival.path === path);
+  }
+
+  async function openedMint(): Promise<{
+    readonly mint: HostCredentialMintFlow;
+    readonly finish: () => Promise<void>;
+  }> {
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch(
+      (caught: unknown) => caught,
+    );
+    await waitForSessions(1);
+    const mint = streamClientOptions[0]?.hostCredentialMint ?? null;
+    if (mint === null)
+      throw new Error("the stream client got no credential mint");
+    return {
+      mint,
+      finish: async () => {
+        sessions[0]?.statusChange?.("closed", incompatibleFatal(), null);
+        await result;
+      },
+    };
+  }
+
+  beforeEach(async () => {
+    arrivals = [];
+    await seedStoredSignIn("tok-1", "u1");
+    const actual = await vi.importActual<
+      typeof import("../../store/credentials-store")
+    >("../../store/credentials-store");
+    vi.mocked(createCliCredentialsStore).mockImplementationOnce(
+      actual.createCliCredentialsStore,
+    );
+    vi.mocked(createStoreBackedRevalidator).mockImplementationOnce(
+      actual.createStoreBackedRevalidator,
+    );
+    const hostTokenGrant = fetchMock.getMockImplementation();
+    if (hostTokenGrant === undefined)
+      throw new Error("no default fetch answer");
+    fetchMock.mockImplementation(
+      async (input: string, init: RequestInit | undefined) => {
+        const path = new URL(String(input)).pathname;
+        arrivals.push({
+          path,
+          bearer: bearerOf(init),
+          stored: await storedSignInBytes(),
+        });
+        if (path === STORED_SIGN_IN_REFRESH_PATH) return refreshAnswer(200);
+        if (path !== MINT_PATH) return hostTokenGrant(input, init);
+        return bearerOf(init) === REFUSED_HEADER
+          ? new Response("{}", { status: 401 })
+          : new Response(
+              JSON.stringify({
+                token: "host-access-jws",
+                refreshToken: "host-refresh-jwe",
+                familyId: "family-1",
+                hostId: "d1",
+                expiresIn: 900,
+                provisionedAt: "2026-07-08T12:00:00.000Z",
+              }),
+              { status: 200 },
+            );
+      },
+    );
+  });
+
+  it("renews the command's own sign-in once and mints again on it, with both new tokens already saved", async () => {
+    const { mint, finish } = await openedMint();
+
+    await expect(
+      mint({ hostId: "d1", reason: "missing" }),
+    ).resolves.toMatchObject({
+      kind: "provisioned",
+      token: "host-access-jws",
+    });
+    await finish();
+
+    expect(sentTo(STORED_SIGN_IN_REFRESH_PATH)).toHaveLength(1);
+    expect(sentTo(MINT_PATH).map(({ bearer }) => bearer)).toEqual([
+      REFUSED_HEADER,
+      `Bearer ${REFRESHED_TOKEN}`,
+    ]);
+    expect(JSON.parse(sentTo(MINT_PATH)[1].stored)).toMatchObject({
+      token: REFRESHED_TOKEN,
+      refreshToken: REFRESHED_REFRESH_TOKEN,
+    });
   });
 });

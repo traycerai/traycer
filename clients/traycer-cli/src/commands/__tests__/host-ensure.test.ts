@@ -749,6 +749,11 @@ describe("buildHostEnsureCommand", () => {
       "stops before anything is installed or started when $label at the token's mint",
       async ({ answer, error }) => {
         const mintRequests = stubMintAnswer(answer);
+        // A 401 on the mint asks for the stored sign-in's one refresh; it is
+        // refused here, so the mint's own refusal is the answer.
+        mocks.createStoreBackedRevalidatorMock.mockReturnValue({
+          revalidateCurrentContext: async () => "rejected",
+        });
 
         await expect(
           buildHostEnsureCommand(baseArgs({ team: "acme" }))(fakeCtx()),

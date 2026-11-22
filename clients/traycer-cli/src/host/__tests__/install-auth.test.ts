@@ -10,6 +10,7 @@ import {
   vi,
 } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -224,6 +225,17 @@ import {
   TEAM_TRANSFER_DISCLOSURE_VERSION,
 } from "@traycer/protocol/host/environment/team-transfer-disclosure";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import {
+  AUTHN_UNREACHABLE_MESSAGE,
+  UNWORDED_MINT_REFUSAL_MESSAGE,
+} from "../../internal/host-door-words";
+import {
+  bearerOf,
+  refreshAnswer,
+  REFRESHED_REFRESH_TOKEN,
+  REFRESHED_TOKEN,
+  STORED_SIGN_IN_REFRESH_PATH,
+} from "../../__tests__/support/stored-sign-in";
 import { createAuthenticatedUserFixture } from "../../../../shared/test-fixtures/authenticated-user";
 
 const credentialsRoot = mkdtempSync(join(tmpdir(), "team-install-auth-test-"));
@@ -1744,5 +1756,560 @@ describe("install auth helpers", () => {
         expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
       },
     );
+  });
+
+  describe("the team install's calls to the sign-in service on a refused stored sign-in", () => {
+    // authn's mint, directory and refresh answer over a stubbed `fetch`: the
+    // mint and ownership reads are the real ones, and the stored sign-in is the
+    // real store on this suite's private file. The computer's own calls stand in.
+    type ServiceCall = "mint" | "ownership" | "refresh" | "move-acceptance";
+    type Reply = Response | "hang";
+
+    interface Arrival {
+      readonly call: ServiceCall;
+      readonly bearer: string | null;
+      /** The stored sign-in as it was when the request arrived. */
+      readonly stored: string;
+    }
+
+    const STORED_HEADER = "Bearer stored-bearer";
+    const REFRESHED_HEADER = `Bearer ${REFRESHED_TOKEN}`;
+    const MINT_BOUND_MS = 15_000;
+    const OWNERSHIP_BOUND_MS = 10_000;
+    const REJECTED_LINE =
+      "The stored credential was rejected. Run `traycer login` to re-authenticate.";
+    const UNCONFIRMED_LINE =
+      "This computer's ownership could not be confirmed. Try again.";
+
+    let arrivals: Arrival[] = [];
+    let arrivalWaiters: {
+      readonly count: number;
+      readonly resolve: () => void;
+    }[] = [];
+    let refusals: Partial<Record<ServiceCall, Record<string, number>>> = {};
+    /** Refusals of the directory once the move has been accepted: the give's confirmation. */
+    let confirmationRefusals: Record<string, number> = {};
+    let hung: string[] = [];
+    let refreshStatus: number | null = 200;
+    let moved = false;
+
+    function callOf(pathname: string): ServiceCall {
+      if (pathname === STORED_SIGN_IN_REFRESH_PATH) return "refresh";
+      if (pathname === "/api/v3/hosts/team-install-tokens") return "mint";
+      if (pathname === "/api/v3/hosts") return "ownership";
+      return "move-acceptance";
+    }
+
+    function json(status: number, body: unknown): Response {
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    function replyTo(call: ServiceCall, bearer: string | null): Reply {
+      const refused =
+        (call === "ownership" && moved
+          ? confirmationRefusals[bearer ?? ""]
+          : undefined) ?? refusals[call]?.[bearer ?? ""];
+      if (refused !== undefined) {
+        return call === "mint" && refused === 403
+          ? json(403, { code: "environment_action_forbidden" })
+          : json(refused, {});
+      }
+      switch (call) {
+        case "refresh":
+          return refreshAnswer(refreshStatus);
+        case "mint":
+          return json(200, {
+            token: "team-install-secret",
+            environmentId: "environment-acme",
+            expiresAt: 1_800_000_000,
+          });
+        case "ownership":
+          return json(200, {
+            hosts: [
+              {
+                hostId: TEST_HOST_ID,
+                owner: moved
+                  ? { kind: "team", id: TEST_TEAM_ID, name: "Acme" }
+                  : { kind: "user", id: "member-1" },
+                kind: "personal",
+                remoteAccess: false,
+              },
+            ],
+          });
+        case "move-acceptance":
+          moved = true;
+          return json(201, { acceptanceId: MOVE_ACCEPTANCE_ID });
+      }
+    }
+
+    function callsSent(): readonly ServiceCall[] {
+      return arrivals.map(({ call }) => call);
+    }
+
+    function arrivalsOf(call: ServiceCall): readonly Arrival[] {
+      return arrivals.filter((arrival) => arrival.call === call);
+    }
+
+    function bearersOf(call: ServiceCall): readonly (string | null)[] {
+      return arrivalsOf(call).map(({ bearer }) => bearer);
+    }
+
+    function untilArrivals(count: number): Promise<void> {
+      if (arrivals.length >= count) return Promise.resolve();
+      return new Promise((resolve) => {
+        arrivalWaiters.push({ count, resolve });
+      });
+    }
+
+    function neverAnswers(
+      signal: AbortSignal | null | undefined,
+    ): Promise<never> {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        });
+      });
+    }
+
+    function tokenOf(auth: unknown): string | null {
+      return typeof auth === "object" &&
+        auth !== null &&
+        "token" in auth &&
+        typeof auth.token === "string"
+        ? auth.token
+        : null;
+    }
+
+    function storedBytes(): Promise<string> {
+      return readFile(mocks.credentialsPath, "utf8");
+    }
+
+    /** The whole call, run to its end across the bound the sign-in service never answers within. */
+    async function endedAfter(
+      boundMs: number,
+      sent: number,
+      run: Promise<unknown>,
+    ): Promise<unknown> {
+      const ended = run.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      await untilArrivals(sent);
+      await vi.advanceTimersByTimeAsync(boundMs);
+      return ended;
+    }
+
+    const SIGNED_IN_SESSION = {
+      preflight: signedIn(),
+      inlineSignInToken: null,
+    };
+
+    beforeEach(async () => {
+      arrivals = [];
+      arrivalWaiters = [];
+      refusals = {};
+      confirmationRefusals = {};
+      hung = [];
+      refreshStatus = 200;
+      moved = false;
+      const mint = await vi.importActual<
+        typeof import("@traycer-clients/shared/host-client/team-computer-install")
+      >("@traycer-clients/shared/host-client/team-computer-install");
+      const ownership = await vi.importActual<
+        typeof import("@traycer-clients/shared/host-client/host-ownership")
+      >("@traycer-clients/shared/host-client/host-ownership");
+      const store = await vi.importActual<
+        typeof import("../../store/credentials-store")
+      >("../../store/credentials-store");
+      mocks.mintTeamInstallTokenMock.mockImplementation(
+        mint.mintTeamComputerInstallTokenViaHttp,
+      );
+      mocks.readHostOwnershipMock.mockImplementation(
+        ownership.readHostOwnershipViaHttp,
+      );
+      mocks.createStoreBackedRevalidatorMock.mockImplementation(
+        store.createStoreBackedRevalidator,
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async (input, init) => {
+          const call = callOf(new URL(String(input)).pathname);
+          const bearer = bearerOf(init);
+          arrivals.push({
+            call,
+            bearer,
+            stored: await storedBytes(),
+          });
+          for (const waiter of arrivalWaiters) {
+            if (arrivals.length >= waiter.count) waiter.resolve();
+          }
+          if (hung.includes(`${call}#${arrivalsOf(call).length}`)) {
+            return neverAnswers(init?.signal);
+          }
+          const reply = replyTo(call, bearer);
+          return reply === "hang" ? neverAnswers(init?.signal) : reply;
+        }),
+      );
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    describe("the enrol token mint", () => {
+      function mintToken() {
+        return beginAttendedTeamInstall(fakeCtx(), "acme");
+      }
+
+      it("refreshes once and mints again on the refreshed sign-in, which was already saved when the mint arrived", async () => {
+        refusals = { mint: { [STORED_HEADER]: 401 } };
+
+        await expect(mintToken()).resolves.toMatchObject({
+          kind: "enrol",
+          token: "team-install-secret",
+        });
+
+        expect(callsSent()).toEqual(["mint", "refresh", "mint"]);
+        expect(bearersOf("mint")).toEqual([STORED_HEADER, REFRESHED_HEADER]);
+        expect(JSON.parse(arrivalsOf("mint")[1].stored)).toMatchObject({
+          token: REFRESHED_TOKEN,
+          refreshToken: REFRESHED_REFRESH_TOKEN,
+        });
+      });
+
+      it.each([
+        { name: "refused", status: 401 },
+        { name: "unreachable", status: null },
+      ])(
+        "keeps the stored-credential line, sends no second mint and leaves the file as it was when the refresh is $name",
+        async ({ status }) => {
+          refusals = { mint: { [STORED_HEADER]: 401 } };
+          refreshStatus = status;
+          const before = await storedBytes();
+
+          await expect(mintToken()).rejects.toMatchObject({
+            code: CLI_ERROR_CODES.AUTH_REJECTED,
+            message: REJECTED_LINE,
+            exitCode: 1,
+          });
+
+          expect(callsSent()).toEqual(["mint", "refresh"]);
+          expect(await storedBytes()).toBe(before);
+        },
+      );
+
+      it("ends after one refresh when the mint is refused again on the refreshed sign-in", async () => {
+        refusals = {
+          mint: { [STORED_HEADER]: 401, [REFRESHED_HEADER]: 401 },
+        };
+
+        await expect(mintToken()).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.AUTH_REJECTED,
+          message: REJECTED_LINE,
+          exitCode: 1,
+        });
+
+        expect(callsSent()).toEqual(["mint", "refresh", "mint"]);
+      });
+
+      it("prints the refusal line on a 403 as without a retry, and sends no refresh", async () => {
+        refusals = { mint: { [STORED_HEADER]: 403 } };
+        const before = await storedBytes();
+
+        await expect(mintToken()).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.FORBIDDEN,
+          message: UNWORDED_MINT_REFUSAL_MESSAGE,
+          exitCode: 1,
+        });
+
+        expect(callsSent()).toEqual(["mint"]);
+        expect(await storedBytes()).toBe(before);
+      });
+
+      it("ends on the mint's own bound with no refresh when the sign-in service never answers", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        hung = ["mint#1"];
+
+        expect(await endedAfter(MINT_BOUND_MS, 1, mintToken())).toMatchObject({
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: AUTHN_UNREACHABLE_MESSAGE,
+          exitCode: 1,
+        });
+        expect(callsSent()).toEqual(["mint"]);
+      });
+
+      it("keeps the first refusal on the refresh's own bound when a 401 is followed by a refresh that never answers", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        refusals = { mint: { [STORED_HEADER]: 401 } };
+        hung = ["refresh#1"];
+        const before = await storedBytes();
+
+        expect(
+          await endedAfter(OWNERSHIP_BOUND_MS, 2, mintToken()),
+        ).toMatchObject({
+          code: CLI_ERROR_CODES.AUTH_REJECTED,
+          message: REJECTED_LINE,
+          exitCode: 1,
+        });
+        expect(callsSent()).toEqual(["mint", "refresh"]);
+        expect(await storedBytes()).toBe(before);
+      });
+    });
+
+    describe("the transfer's ownership read", () => {
+      function transfer() {
+        return completeTeamInstall("acme", SIGNED_IN_SESSION, vi.fn());
+      }
+
+      it("refreshes once, reads again on the refreshed sign-in, and every later call of the transfer carries it", async () => {
+        refusals = { ownership: { [STORED_HEADER]: 401 } };
+
+        await expect(transfer()).resolves.toEqual(teamBinding);
+
+        expect(callsSent()).toEqual([
+          "ownership",
+          "refresh",
+          "ownership",
+          "move-acceptance",
+          "ownership",
+        ]);
+        expect(bearersOf("ownership")).toEqual([
+          STORED_HEADER,
+          REFRESHED_HEADER,
+          REFRESHED_HEADER,
+        ]);
+        expect(bearersOf("move-acceptance")).toEqual([REFRESHED_HEADER]);
+        expect(JSON.parse(arrivalsOf("ownership")[1].stored)).toMatchObject({
+          token: REFRESHED_TOKEN,
+          refreshToken: REFRESHED_REFRESH_TOKEN,
+        });
+        // Every call on the computer is made with that sign-in.
+        const tokensOnTheComputer =
+          mocks.callHostRpcAtResolvedEndpointMock.mock.calls.map(
+            ([, , , auth]) => tokenOf(auth),
+          );
+        expect(tokensOnTheComputer).not.toEqual([]);
+        expect(new Set(tokensOnTheComputer)).toEqual(
+          new Set([REFRESHED_TOKEN]),
+        );
+      });
+
+      it.each([
+        { name: "refused", status: 401 },
+        { name: "unreachable", status: null },
+      ])(
+        "keeps the ownership line, touches nothing on the computer and leaves the file as it was when the refresh is $name",
+        async ({ status }) => {
+          refusals = { ownership: { [STORED_HEADER]: 401 } };
+          refreshStatus = status;
+          const before = await storedBytes();
+
+          await expect(transfer()).rejects.toMatchObject({
+            code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+            message: UNCONFIRMED_LINE,
+            exitCode: 1,
+          });
+
+          expect(callsSent()).toEqual(["ownership", "refresh"]);
+          expect(
+            mocks.callHostRpcAtResolvedEndpointMock,
+          ).not.toHaveBeenCalled();
+          expect(await storedBytes()).toBe(before);
+        },
+      );
+
+      it("ends after one refresh when the read is refused again on the refreshed sign-in", async () => {
+        refusals = {
+          ownership: { [STORED_HEADER]: 401, [REFRESHED_HEADER]: 401 },
+        };
+
+        await expect(transfer()).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: UNCONFIRMED_LINE,
+          exitCode: 1,
+        });
+
+        expect(callsSent()).toEqual(["ownership", "refresh", "ownership"]);
+      });
+
+      it("prints the ownership line on a 403 as without a retry, and sends no refresh", async () => {
+        refusals = { ownership: { [STORED_HEADER]: 403 } };
+
+        await expect(transfer()).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: UNCONFIRMED_LINE,
+          exitCode: 1,
+        });
+
+        expect(callsSent()).toEqual(["ownership"]);
+      });
+
+      it("ends on the read's own bound with no refresh when the sign-in service never answers", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        hung = ["ownership#1"];
+
+        expect(
+          await endedAfter(OWNERSHIP_BOUND_MS, 1, transfer()),
+        ).toMatchObject({
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: UNCONFIRMED_LINE,
+          exitCode: 1,
+        });
+        expect(callsSent()).toEqual(["ownership"]);
+      });
+
+      it("keeps the first refusal on the refresh's own bound when a 401 is followed by a refresh that never answers", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        refusals = { ownership: { [STORED_HEADER]: 401 } };
+        hung = ["refresh#1"];
+
+        expect(
+          await endedAfter(OWNERSHIP_BOUND_MS, 2, transfer()),
+        ).toMatchObject({
+          code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+          message: UNCONFIRMED_LINE,
+          exitCode: 1,
+        });
+        expect(callsSent()).toEqual(["ownership", "refresh"]);
+      });
+    });
+
+    describe("the give's ownership confirmation after the restart", () => {
+      const TRANSFER_NOT_CONFIRMED = {
+        code: CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+        message: TRANSFER_LINE,
+        exitCode: 1,
+      };
+
+      function give() {
+        return completeTeamInstall("acme", SIGNED_IN_SESSION, vi.fn());
+      }
+
+      it("takes the transfer's one refresh when it is unspent, and confirms on the refreshed sign-in saved before the resend", async () => {
+        confirmationRefusals = { [STORED_HEADER]: 401 };
+
+        await expect(give()).resolves.toEqual(teamBinding);
+
+        expect(callsSent()).toEqual([
+          "ownership",
+          "move-acceptance",
+          "ownership",
+          "refresh",
+          "ownership",
+        ]);
+        expect(bearersOf("ownership")).toEqual([
+          STORED_HEADER,
+          STORED_HEADER,
+          REFRESHED_HEADER,
+        ]);
+        expect(JSON.parse(arrivalsOf("ownership")[2].stored)).toMatchObject({
+          token: REFRESHED_TOKEN,
+          refreshToken: REFRESHED_REFRESH_TOKEN,
+        });
+      });
+
+      it("sends no second refresh, and ends with the transfer line, when the move's own call already spent it", async () => {
+        refusals = { "move-acceptance": { [STORED_HEADER]: 401 } };
+        confirmationRefusals = { [REFRESHED_HEADER]: 401 };
+
+        await expect(give()).rejects.toMatchObject(TRANSFER_NOT_CONFIRMED);
+
+        expect(callsSent()).toEqual([
+          "ownership",
+          "move-acceptance",
+          "refresh",
+          "move-acceptance",
+          "ownership",
+        ]);
+        expect(bearersOf("ownership")).toEqual([
+          STORED_HEADER,
+          REFRESHED_HEADER,
+        ]);
+      });
+
+      it.each([
+        { name: "refused", status: 401 },
+        { name: "unreachable", status: null },
+      ])(
+        "ends with the transfer line, sending no resend and leaving the file as it was, when the refresh is $name",
+        async ({ status }) => {
+          confirmationRefusals = { [STORED_HEADER]: 401 };
+          refreshStatus = status;
+          const before = await storedBytes();
+
+          await expect(give()).rejects.toMatchObject(TRANSFER_NOT_CONFIRMED);
+
+          expect(callsSent()).toEqual([
+            "ownership",
+            "move-acceptance",
+            "ownership",
+            "refresh",
+          ]);
+          expect(await storedBytes()).toBe(before);
+        },
+      );
+
+      it("ends with the transfer line after one refresh when the confirmation is refused again on the refreshed sign-in", async () => {
+        confirmationRefusals = {
+          [STORED_HEADER]: 401,
+          [REFRESHED_HEADER]: 401,
+        };
+
+        await expect(give()).rejects.toMatchObject(TRANSFER_NOT_CONFIRMED);
+
+        expect(callsSent()).toEqual([
+          "ownership",
+          "move-acceptance",
+          "ownership",
+          "refresh",
+          "ownership",
+        ]);
+      });
+
+      it("ends with the transfer line on a 403, and sends no refresh", async () => {
+        confirmationRefusals = { [STORED_HEADER]: 403 };
+
+        await expect(give()).rejects.toMatchObject(TRANSFER_NOT_CONFIRMED);
+
+        expect(callsSent()).toEqual([
+          "ownership",
+          "move-acceptance",
+          "ownership",
+        ]);
+      });
+
+      it("ends on the confirmation's own bound with no refresh when the sign-in service never answers", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        hung = ["ownership#2"];
+
+        expect(await endedAfter(OWNERSHIP_BOUND_MS, 3, give())).toMatchObject(
+          TRANSFER_NOT_CONFIRMED,
+        );
+        expect(callsSent()).toEqual([
+          "ownership",
+          "move-acceptance",
+          "ownership",
+        ]);
+      });
+
+      it("ends with the transfer line on the refresh's own bound when a 401 is followed by a refresh that never answers", async () => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        confirmationRefusals = { [STORED_HEADER]: 401 };
+        hung = ["refresh#1"];
+
+        expect(await endedAfter(OWNERSHIP_BOUND_MS, 4, give())).toMatchObject(
+          TRANSFER_NOT_CONFIRMED,
+        );
+        expect(callsSent()).toEqual([
+          "ownership",
+          "move-acceptance",
+          "ownership",
+          "refresh",
+        ]);
+      });
+    });
   });
 });
