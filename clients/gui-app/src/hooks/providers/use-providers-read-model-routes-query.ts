@@ -10,6 +10,11 @@ interface ModelRoutesData {
   readonly routes: ReadonlyArray<{
     readonly profileId: string | null;
     readonly resolvedModel: string | null;
+    /**
+     * What the folder's handshake said, expired or not: the model it named, or
+     * `null` when it named no first-party one. `undefined` is no handshake.
+     */
+    readonly reportedModel: string | null | undefined;
     readonly expiresAt: number;
   }>;
 }
@@ -55,6 +60,8 @@ export function useProvidersReadModelRoutesQuery(input: {
             // A reply with no live budget is unresolved. It must not arm an
             // expiry refresh that immediately asks for another expired reply.
             resolvedModel: expiresAt > now ? route.resolvedModel : null,
+            reportedModel:
+              route.validForMs > 0 ? route.resolvedModel : undefined,
             expiresAt,
           };
         }),
