@@ -344,6 +344,83 @@ describe("main resolves the browser.sessions host itself", () => {
     expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
   });
 
+  it("adopts nothing from a registry read that was in flight when the identity changed", async () => {
+    const reads: Array<(result: HostListFetchResult) => void> = [];
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string) =>
+        new Promise<HostListFetchResult>((resolve) => {
+          reads.push(resolve);
+        }),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => "bearer",
+      listRegisteredHosts,
+      now: () => now,
+    });
+    let publications = 0;
+    directory.subscribe(() => {
+      publications += 1;
+    });
+    const resolving = directory.resolve("host-2");
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+
+    directory.reset();
+    reads[0](remoteResponse("host-2"));
+    await resolving;
+
+    // The previous account's row must not reach the cache, the endpoint
+    // lookup, or the subscribers after the account was switched.
+    expect(directory.peek("host-2")).toBeNull();
+    expect(directory.endpoint("host-2")).toBeNull();
+    expect(publications).toBe(0);
+  });
+
+  it("starts a new registry read after a reset instead of joining the one in flight", async () => {
+    const reads: Array<(result: HostListFetchResult) => void> = [];
+    let bearer = "previous-bearer";
+    const listRegisteredHosts = vi.fn(
+      (_authnBaseUrl: string, _bearer: string) =>
+        new Promise<HostListFetchResult>((resolve) => {
+          reads.push(resolve);
+        }),
+    );
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => bearer,
+      listRegisteredHosts,
+      now: () => now,
+    });
+    void directory.resolve("host-previous");
+    await vi.waitFor(() => expect(reads).toHaveLength(1));
+
+    directory.reset();
+    bearer = "next-bearer";
+    const resolvingNext = directory.resolve("host-2");
+
+    expect(listRegisteredHosts).toHaveBeenCalledTimes(2);
+    expect(listRegisteredHosts).toHaveBeenLastCalledWith(
+      "https://authn.test",
+      "next-bearer",
+    );
+    reads[1](remoteResponse("host-2"));
+    expect((await resolvingNext)?.kind).toBe("remote");
+
+    // The set-aside read answering last neither replaces the new account's
+    // rows nor arms the miss cooldown against the next lookup.
+    reads[0](remoteResponse("host-previous"));
+    // A macrotask turn drains every promise continuation the late answer queued.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(directory.peek("host-2")).not.toBeNull();
+    expect(directory.peek("host-previous")).toBeNull();
+  });
+
   it("answers a looped unknown id from cache instead of amplifying it to authn", async () => {
     const listRegisteredHosts = vi.fn(() =>
       Promise.resolve(remoteResponse("host-2")),
