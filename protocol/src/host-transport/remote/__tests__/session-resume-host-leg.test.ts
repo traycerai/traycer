@@ -3128,5 +3128,32 @@ describe("RemoteSession host-leg resume", () => {
 
       expect(host.credentialUpdates[sent]?.bearer).toBe(LARGE);
     });
+
+    it("appends to the ledger the short bytes a queued large credential update is rewritten to, so the append evicts nothing and a later resume replays the whole gap", async () => {
+      const { fixture, plane } = await pacedFixture(false);
+      const { host, session } = fixture;
+      const bearers = await writeIntoLostLegUntilRingNearlyFull(fixture, plane);
+      const socket = host.live().socket;
+      const before = socket.binarySends;
+
+      // Queued large, rewritten to short at its first write: the ring has room
+      // for what is sealed, not for what was enqueued.
+      plane.queue.push(LARGE, SHORT);
+      session.notifyBearerRotated();
+      await advanceUntil(() => socket.binarySends > before, 5_000);
+
+      plane.queue.push(SHORT, ...bearers, SHORT);
+      host.attach();
+      const total = bearers.length + 2;
+      await advanceUntil(
+        () => host.credentialUpdates.length === total || host.opens > 1,
+        30_000,
+      );
+
+      expect(host.opens).toBe(1);
+      expect(host.handshakes).toBe(1);
+      expect(host.credentialUpdates).toHaveLength(total);
+      expect(host.credentialUpdates[total - 1]?.bearer).toBe(SHORT);
+    });
   });
 });
