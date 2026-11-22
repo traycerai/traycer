@@ -20,6 +20,7 @@ import {
 } from "../../../shared/host-client/provider-sign-in-request";
 import { openInBrowser } from "../auth/login-flow";
 import { resolveHostAuth } from "../internal/host-auth";
+import { askWithStoredSignIn } from "../internal/stored-sign-in-ask";
 import {
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
@@ -144,15 +145,18 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
     };
   },
   signInRequests: {
+    // A refused refresh leaves authn's own refusal as the answer.
     recordSignInRequest: async (request, signal) => {
       const auth = await resolveHostAuth();
       if (auth === null) return { kind: "unauthorized" };
-      return recordSignInRequestViaHttp(
-        auth.authnBaseUrl,
-        auth.token,
-        request,
+      const recorded = await askWithStoredSignIn(
+        auth,
+        (token) =>
+          recordSignInRequestViaHttp(auth.authnBaseUrl, token, request, signal),
+        (answer) => answer.kind === "unauthorized",
         signal,
       );
+      return recorded.kind === "answered" ? recorded.answer : recorded.first;
     },
   },
 };

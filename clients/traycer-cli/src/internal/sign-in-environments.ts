@@ -3,20 +3,11 @@ import type {
   EnvironmentDescriptor,
   EnvironmentOwnerKind,
 } from "@traycer/protocol/host/environment/contracts";
-import {
-  MutableBearerLease,
-  readLeaseBearer,
-} from "@traycer-clients/shared/auth/bearer-source";
-import type { RevalidateOutcome } from "@traycer-clients/shared/auth/bearer-revalidator";
 import { validateAuthTokenIdentityAccessOnly } from "../../../shared/auth/auth-validation";
 import { config } from "../config";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
-import {
-  createCliCredentialsStore,
-  createStoreBackedRevalidator,
-} from "../store/credentials-store";
-import type { SignInRevalidator } from "./cli-host-tokens";
 import { resolveHostAuth } from "./host-auth";
+import { askWithStoredSignIn } from "./stored-sign-in-ask";
 import {
   AUTHN_UNREACHABLE_MESSAGE,
   hostTokenFailureCliError,
@@ -86,37 +77,17 @@ export async function readSignInEnvironments(): Promise<
 > {
   const auth = await resolveHostAuth();
   if (auth === null) throw hostTokenFailureCliError({ kind: "no-sign-in" });
-  const first = await validateAuthTokenIdentityAccessOnly(
-    config.authnBaseUrl,
-    auth.token,
+  const read = await askWithStoredSignIn(
+    auth,
+    (token) => validateAuthTokenIdentityAccessOnly(config.authnBaseUrl, token),
+    (answer) => answer.kind === "rejected",
+    null,
   );
-  if (first.kind === "valid") return describeSignInEnvironments(first.user);
-  if (first.kind === "network-error") throw unreachable();
-  const lease = new MutableBearerLease(auth.token, auth.userId);
-  const store = createCliCredentialsStore();
-  // Typed to its own refresh, as the mint's is: the shared `AuthRevalidator`
-  // it also satisfies declares the same method as `Promise<unknown>`.
-  const revalidator: SignInRevalidator = createStoreBackedRevalidator({
-    store,
-    lease,
-    signal: null,
-  });
-  let refreshed: RevalidateOutcome;
-  try {
-    refreshed = await revalidator.revalidateCurrentContext();
-  } finally {
-    store.dispose();
-  }
-  if (refreshed === "network-error") throw unreachable();
-  if (refreshed === "rejected") throw rejected();
-  const token = readLeaseBearer(lease);
-  if (token === null) throw rejected();
-  const second = await validateAuthTokenIdentityAccessOnly(
-    config.authnBaseUrl,
-    token,
-  );
-  if (second.kind === "valid") return describeSignInEnvironments(second.user);
-  if (second.kind === "network-error") throw unreachable();
+  if (read.kind === "refresh-unavailable") throw unreachable();
+  if (read.kind === "refresh-rejected") throw rejected();
+  if (read.answer.kind === "valid")
+    return describeSignInEnvironments(read.answer.user);
+  if (read.answer.kind === "network-error") throw unreachable();
   throw rejected();
 }
 

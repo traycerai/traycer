@@ -1,5 +1,8 @@
 import { createInterface } from "node:readline/promises";
-import { readHostOwnershipViaHttp } from "@traycer-clients/shared/host-client/host-ownership";
+import {
+  readHostOwnershipViaHttp,
+  type HostOwnership,
+} from "@traycer-clients/shared/host-client/host-ownership";
 import { releaseTeamComputerViaHttp } from "@traycer-clients/shared/host-client/team-computer-release";
 import {
   callHostRpcAtResolvedEndpoint,
@@ -7,7 +10,9 @@ import {
   resolveEndpoint,
   toAgentCliError,
 } from "../internal/host-rpc";
-import { resolveHostAuth } from "../internal/host-auth";
+import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
+import { storedCredentialRejectedCliError } from "../internal/host-door-words";
+import { askWithStoredSignIn } from "../internal/stored-sign-in-ask";
 import {
   formatCredentialProvisionNote,
   provisionRunningHostCredential,
@@ -59,21 +64,14 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
       );
     }
     const endpoint = await resolveEndpoint();
-    const ownership = await readHostOwnershipViaHttp(
-      auth.authnBaseUrl,
-      auth.token,
+    const { host, signedIn } = await readOwnershipForClaim(
+      auth,
       endpoint.hostId,
     );
-    if (ownership.kind !== "ok") {
-      throw claimRefused(
-        CLI_ERROR_CODES.CLOUD_UNREACHABLE,
-        CLAIM_WORDS.ownershipUnconfirmed,
-      );
-    }
-    if (ownership.host.kind === "sandbox") {
+    if (host.kind === "sandbox") {
       throw claimRefused(CLI_ERROR_CODES.HOST_IS_SANDBOX, CLAIM_WORDS.sandbox);
     }
-    const owner = ownership.host.owner;
+    const owner = host.owner;
     if (owner.kind !== "team") {
       throw claimRefused(
         CLI_ERROR_CODES.INVALID_ARGUMENT,
@@ -87,13 +85,15 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         "environment.host.read",
         {},
         endpoint,
-        auth,
+        signedIn,
         PLAIN_DISPATCH,
       ),
     );
     const environmentId = binding.environment.environmentId;
     ctx.output.humanRequired(
-      confirmLines(await readRunningChatCount(endpoint, auth, environmentId)),
+      confirmLines(
+        await readRunningChatCount(endpoint, signedIn, environmentId),
+      ),
     );
     if (!args.yes && !(await confirmClaim(ctx))) {
       return {
@@ -102,12 +102,22 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
         exitCode: 0,
       };
     }
-    const released = await releaseTeamComputerViaHttp(
-      auth.authnBaseUrl,
-      auth.token,
-      endpoint.hostId,
-      environmentId,
+    // The question can outlast the token the read was answered on. A refused
+    // refresh leaves the release's own refusal as the answer.
+    const release = await askWithStoredSignIn(
+      signedIn,
+      (token) =>
+        releaseTeamComputerViaHttp(
+          signedIn.authnBaseUrl,
+          token,
+          endpoint.hostId,
+          environmentId,
+        ),
+      (answer) => answer.kind === "unauthorized",
+      null,
     );
+    const released =
+      release.kind === "answered" ? release.answer : release.first;
     ctx.runtime.logger.info("Host claim release settled", {
       environment: ctx.runtime.environment,
       hostId: endpoint.hostId,
@@ -155,6 +165,33 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
       exitCode: 0,
     };
   };
+}
+
+/**
+ * authn's row for this computer, read on the stored sign-in and refreshed once
+ * if refused. A refused refresh is a sign-in to make again; any other failure
+ * leaves ownership unconfirmed.
+ */
+async function readOwnershipForClaim(
+  auth: HostAuth,
+  hostId: string,
+): Promise<{ readonly host: HostOwnership; readonly signedIn: HostAuth }> {
+  const read = await askWithStoredSignIn(
+    auth,
+    (token) => readHostOwnershipViaHttp(auth.authnBaseUrl, token, hostId),
+    (answer) => answer.kind === "unauthorized",
+    null,
+  );
+  if (read.kind === "refresh-rejected") {
+    throw storedCredentialRejectedCliError();
+  }
+  if (read.kind === "refresh-unavailable" || read.answer.kind !== "ok") {
+    throw claimRefused(
+      CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      CLAIM_WORDS.ownershipUnconfirmed,
+    );
+  }
+  return { host: read.answer.host, signedIn: read.auth };
 }
 
 function confirmLines(running: RunningChats): string {
