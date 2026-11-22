@@ -482,4 +482,45 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
     expect(rig.reads.issued()).toBe(3);
     expect(rig.reads.running()).toBe(1);
   });
+
+  // The ceiling is a time: a confirmation whose clock has passed it starts no
+  // read, though its timer's callback has not run yet. The clock is moved with
+  // `setSystemTime`, which fires no timer.
+  it("(past the ceiling, identity change) starts no read once the clock is past the ceiling though its timer has not run, and resolves when it runs", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    const confirmation = rig.confirm();
+    await drain();
+    // Read A is held; a change of the signed-in person makes it insufficient.
+    expect(rig.reads.issued()).toBe(2);
+    rig.switchIdentity("user-b");
+    vi.setSystemTime(Date.now() + ROW_CONFIRM_CEILING_MS + 1);
+
+    rig.reads.answer(1, "row-a");
+    await drain();
+
+    expect(rig.reads.issued()).toBe(2);
+    await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS);
+    expect(confirmation.resolved()).toBe(true);
+    expect(rig.reads.issued()).toBe(2);
+  });
+
+  it("(past the ceiling, rotation) starts no read at the rotation's wake once the clock is past the ceiling though its timer has not run, and resolves when it runs", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    const confirmation = rig.confirm();
+    await drain();
+    expect(rig.reads.issued()).toBe(2);
+    vi.setSystemTime(Date.now() + ROW_CONFIRM_CEILING_MS + 1);
+
+    rig.rotateCredential();
+    rig.directory.invalidateInFlightRefresh();
+    rig.reads.answer(1, "row-a");
+    await drain();
+
+    expect(rig.reads.issued()).toBe(2);
+    await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS);
+    expect(confirmation.resolved()).toBe(true);
+    expect(rig.reads.issued()).toBe(2);
+  });
 });
