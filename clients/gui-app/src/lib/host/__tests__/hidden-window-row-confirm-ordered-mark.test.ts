@@ -1,0 +1,237 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { remoteEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import type {
+  RemoteHostFetcher,
+  RemoteHostFetchOutcome,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { RegisteredHostsChange } from "@traycer-clients/shared/platform/runner-host";
+import { ROW_CONFIRM_CEILING_MS } from "@traycer-clients/shared/host-transport/row-confirmation";
+import { confirmRowWhenHidden } from "@/lib/host/hidden-window-row-confirm";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
+
+// A hidden window's stale state is an ordered mark: every skipped push moves
+// it, and it ends only when a read that STARTED after the latest mark, in the
+// current era, as the current read, has settled. The confirmation waits for
+// that, within the one ceiling measured from its own start. Every registry
+// read here is held by hand: nothing is settled by a clock or a turn count
+// except the ceiling itself, on the fake clock.
+
+const IDENTITY = "user-a";
+
+/** Each `GET /api/v3/hosts` the directory issues, settled by the test. */
+interface HeldReads {
+  readonly fetcher: RemoteHostFetcher;
+  /** Reads issued so far, in order, the first being the start's own, already answered. */
+  readonly issued: () => number;
+  readonly running: () => number;
+  /** The most reads ever running at once. */
+  readonly mostAtOnce: () => number;
+  /** Settles the read at `index` with one row named `rowId`. */
+  readonly answer: (index: number, rowId: string) => void;
+}
+
+function heldReads(): HeldReads {
+  const settlers: Array<(outcome: RemoteHostFetchOutcome) => void> = [];
+  let running = 0;
+  let mostAtOnce = 0;
+  const fetcher: RemoteHostFetcher = () =>
+    new Promise<RemoteHostFetchOutcome>((resolve) => {
+      running += 1;
+      mostAtOnce = Math.max(mostAtOnce, running);
+      const index = settlers.length;
+      const settle = (outcome: RemoteHostFetchOutcome): void => {
+        running -= 1;
+        resolve(outcome);
+      };
+      settlers.push(settle);
+      if (index === 0) settle({ kind: "hosts", entries: [] });
+    });
+  return {
+    fetcher,
+    issued: () => settlers.length,
+    running: () => running,
+    mostAtOnce: () => mostAtOnce,
+    answer: (index, rowId) => {
+      const settle = settlers.at(index);
+      if (settle === undefined)
+        throw new Error(`the directory issued no read ${index} yet`);
+      settle({ kind: "hosts", entries: [remoteEntry(rowId, null)] });
+    },
+  };
+}
+
+interface Rig {
+  readonly directory: HostDirectoryService;
+  readonly reads: HeldReads;
+  /** A registry push the shell delivers; the window skips it while hidden. */
+  readonly push: () => void;
+  readonly rotateCredential: () => number;
+  readonly currentCredential: () => number;
+  /** The confirmation a remote attach starts, and whether it has resolved. */
+  readonly confirm: () => { readonly resolved: () => boolean };
+  readonly rowIds: () => Promise<string[]>;
+}
+
+const directories: HostDirectoryService[] = [];
+
+async function startedHiddenWindow(): Promise<Rig> {
+  const host = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "http://localhost:5005",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  const handlers = new Set<(change: RegisteredHostsChange) => void>();
+  host.onRegisteredHostsChange = (handler) => {
+    handlers.add(handler);
+    return { dispose: () => handlers.delete(handler) };
+  };
+  const reads = heldReads();
+  let credential = 1;
+  const directory = new HostDirectoryService({
+    onRegistryPollTick: null,
+    runnerHost: host,
+    authContextId: () => IDENTITY,
+    credentialGeneration: () => credential,
+    localHostIdSeeder: null,
+    remoteFetcher: reads.fetcher,
+  });
+  directories.push(directory);
+  await directory.start();
+  __setBrowserDocumentHiddenForTests(true);
+  return {
+    directory,
+    reads,
+    push: () => {
+      for (const handler of handlers)
+        handler({ identityKey: IDENTITY, response: { hosts: [] } });
+    },
+    rotateCredential: () => {
+      credential += 1;
+      return credential;
+    },
+    currentCredential: () => credential,
+    confirm: () => {
+      let resolved = false;
+      void confirmRowWhenHidden(() => directory)().then(() => {
+        resolved = true;
+      });
+      return { resolved: () => resolved };
+    },
+    rowIds: async () => (await directory.list()).map((entry) => entry.hostId),
+  };
+}
+
+/** Lets what a settled read or an elapsed ceiling resolves run; no timer is due at 0. */
+async function drain(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(0);
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  for (const directory of directories.splice(0)) directory.dispose();
+  __setBrowserDocumentHiddenForTests(false);
+  vi.useRealTimers();
+});
+
+describe("a hidden window's row confirmation waits for a read that started after the latest skip", () => {
+  it("(a) still waits for the current-era read when the superseded pre-rotation read settles first", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    // A read starts under era 1; a rotation moves to era 2, whose read is held.
+    const eraOneRead = rig.directory.refreshForEra({
+      identity: IDENTITY,
+      credentialGeneration: rig.currentCredential(),
+    });
+    const era = rig.rotateCredential();
+    rig.directory.invalidateInFlightRefresh();
+    const eraTwoRead = rig.directory.refreshForEra({
+      identity: IDENTITY,
+      credentialGeneration: era,
+    });
+    // The window is shown; its catch-up joins the era-2 read.
+    __setBrowserDocumentHiddenForTests(false);
+    expect(rig.reads.issued()).toBe(3);
+
+    rig.reads.answer(1, "era-one-row");
+    await eraOneRead;
+    const confirmation = rig.confirm();
+    await drain();
+
+    expect(confirmation.resolved()).toBe(false);
+    expect(rig.reads.issued()).toBe(3);
+
+    rig.reads.answer(2, "era-two-row");
+    await eraTwoRead;
+    await drain();
+
+    expect(confirmation.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["era-two-row"]);
+    expect(rig.reads.mostAtOnce()).toBeLessThanOrEqual(2);
+  });
+
+  it("(b) does not resolve when a read settles that a skip landed during, and resolves only after the read that follows it", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    const confirmation = rig.confirm();
+    await drain();
+    // The first read; a skip lands during it, so it settles nothing.
+    expect(rig.reads.issued()).toBe(2);
+    rig.push();
+    rig.reads.answer(1, "row-1");
+    await drain();
+    // The second read; a skip lands during it as well.
+    expect(rig.reads.issued()).toBe(3);
+    rig.push();
+    rig.reads.answer(2, "row-2");
+    await drain();
+
+    expect(confirmation.resolved()).toBe(false);
+    // A further read follows, with no second GET beside a running one.
+    expect(rig.reads.issued()).toBe(4);
+    expect(rig.reads.running()).toBe(1);
+
+    rig.reads.answer(3, "row-3");
+    await drain();
+
+    expect(confirmation.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["row-3"]);
+    expect(rig.reads.mostAtOnce()).toBe(1);
+  });
+
+  it("(c) keeps waiting through every read a skip lands during, and resolves with the last row at the one ceiling from its start", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    const confirmation = rig.confirm();
+    await drain();
+    // Three reads, each settling a second after the last, a skip landing
+    // during each: no read of them started after the latest skip.
+    for (let read = 1; read <= 3; read += 1) {
+      expect(rig.reads.issued()).toBe(read + 1);
+      rig.push();
+      await vi.advanceTimersByTimeAsync(1_000);
+      rig.reads.answer(read, `row-${read}`);
+      await drain();
+      expect(confirmation.resolved()).toBe(false);
+    }
+    expect(rig.reads.issued()).toBe(5);
+    expect(rig.reads.running()).toBe(1);
+
+    // The ceiling runs from the confirmation's start, not from each read's.
+    await vi.advanceTimersByTimeAsync(ROW_CONFIRM_CEILING_MS - 3_000 - 1);
+    expect(confirmation.resolved()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(confirmation.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["row-3"]);
+    expect(rig.reads.mostAtOnce()).toBe(1);
+  });
+});
