@@ -401,7 +401,12 @@ function createReleasedSignOnSessionAuth(
         rowAnswer.userId === rememberedFor &&
         rowAnswer.allowed;
       rowAnswer = null;
-      if (plan === "sign-in-next" || signInFromMemory) {
+      // Asked again here: another transport may have heard this host name a
+      // reason since the refusal that planned the sign-in.
+      if (
+        (plan === "sign-in-next" || signInFromMemory) &&
+        !hosts.namedReason(hostId)
+      ) {
         const lease = releasedSignOn.signIn();
         const signIn = readSignIn();
         if (lease !== null && signIn !== null) {

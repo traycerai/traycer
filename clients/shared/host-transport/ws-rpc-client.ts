@@ -715,6 +715,7 @@ export class WsRpcClient<
       this.releasedSignOnFor !== undefined &&
       !usesSessionGrant &&
       !this.signInAuthorities.has(authority) &&
+      !this.releasedHosts.namedReason(authority.endpoint.hostId) &&
       isReleasedHostTokenRefusal(details)
     );
   }
@@ -1047,10 +1048,13 @@ export class WsRpcClient<
           reason === "token_expired" &&
           (this.ownerSignInAuthorities.get(authority) ?? null) !== null;
         if (ownerSignIn && named && reason !== "token_expired") {
-          this.releasedHosts.declineProbe(
-            authority.bearer.identity.userId,
-            selected.hostId,
-          );
+          // As on the stream: neither describes this person, so neither
+          // latches the probe.
+          if (reason !== "not_provisioned" && reason !== "owner_sign_in")
+            this.releasedHosts.declineProbe(
+              authority.bearer.identity.userId,
+              selected.hostId,
+            );
           this.forgetHeldRefusalFor?.(authority);
         }
         const heldRefused =
