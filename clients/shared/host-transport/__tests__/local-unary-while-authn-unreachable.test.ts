@@ -861,12 +861,22 @@ describe("local unary while authn cannot mint", () => {
     if (retried === undefined) throw new Error("minted dial missing");
     const open = await openAndRead(retried);
     expect(open.token).toBe(minted);
-    ackAndEcho(retried, open);
+    // The host admits persistent sessions, so the minted socket is adopted as
+    // one: only an armed release closes it once the call leaves it. A legacy
+    // one-shot socket would close at the call's end whether or not it was armed.
+    retried.fireMessage({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: open.optionalManifest,
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
     await answerEcho(retried);
     expect(await driven.settled).toEqual({
       kind: "fulfilled",
       value: { echoed: "hi" },
     });
+    // No release after the call settled: the one made during the mint is the
+    // only one, and the close of the minted socket is what the test waits on.
     await vi.waitFor(() => expect(retried.closed).not.toBeNull(), WAIT);
   });
 
