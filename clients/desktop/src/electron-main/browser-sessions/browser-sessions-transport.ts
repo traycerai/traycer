@@ -111,7 +111,8 @@ export interface BrowserSessionsHostDirectory {
    * was given - but the cache is keyed by host id alone, so a sign-out or an
    * account switch would otherwise let the next account dial the previous
    * account's row for the same id. The cooldown goes with it: a fresh identity
-   * is exactly the moment one read is owed rather than deferred.
+   * is exactly the moment one read is owed rather than deferred. A read still
+   * in flight was made for the previous identity, so its answer is dropped.
    */
   reset(): void;
 }
@@ -164,16 +165,22 @@ export function createBrowserSessionsHostDirectory(
   let forced = false;
   /** Registry reads that completed and were adopted. */
   let readsAdopted = 0;
+  /**
+   * Bumped by `reset`. A read started under an earlier identity answers for
+   * that identity: it is not adopted, joined or counted against the floor.
+   */
+  let generation = 0;
   const listeners = new Set<() => void>();
 
   const refresh = async (): Promise<void> => {
+    const startedIn = generation;
     const bearerToken = deps.bearerToken();
     if (bearerToken === null) return;
     const result = await deps.listRegisteredHosts(
       deps.authnBaseUrl(),
       bearerToken,
     );
-    if (result.kind !== "ok") return;
+    if (startedIn !== generation || result.kind !== "ok") return;
     const next = new Map<string, HostDirectoryEntry>();
     for (const item of result.response.hosts) {
       next.set(
@@ -218,7 +225,9 @@ export function createBrowserSessionsHostDirectory(
         // Stamped on every completed ATTEMPT, not on success. The floor
         // exists because a miss is renderer-triggered, and an unhealthy authn
         // is exactly when a loop of unknown ids would otherwise become one
-        // request each - the failure a rate limit is most needed for.
+        // request each - the failure a rate limit is most needed for. Only
+        // the read still in flight: one a `reset` set aside stamps nothing.
+        if (inFlight !== started) return;
         lastRefreshAt = deps.now();
         inFlight = null;
       });
@@ -261,6 +270,8 @@ export function createBrowserSessionsHostDirectory(
       return readsAdopted > before;
     },
     reset: () => {
+      generation += 1;
+      inFlight = null;
       cachedRemote = new Map();
       lastRefreshAt = null;
       forced = true;
