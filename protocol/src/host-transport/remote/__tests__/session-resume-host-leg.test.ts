@@ -43,6 +43,7 @@ import {
   MuxFrameType,
   NOISE_PROLOGUE,
   QosClass,
+  SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   SESSION_CAPABILITY_RESUME,
   SESSION_CONTROL_STREAM_ID,
   type EncodeMuxFrameInput,
@@ -259,6 +260,21 @@ class FakeHost {
   /** Every RESUME the client sent, as parsed. */
   readonly resumes: ResumePayload[] = [];
   readonly openCapabilities: unknown[] = [];
+  /** The bearer of every OPEN the host read, in order. */
+  readonly openBearers: unknown[] = [];
+  /** Every credential update the host read, with the seq it arrived under and its bytes. */
+  readonly credentialUpdates: {
+    readonly connection: number;
+    readonly seq: number;
+    readonly bearer: unknown;
+    readonly plaintext: Uint8Array;
+  }[] = [];
+  /** type and seq of every session-control frame but a RESUME, by connection. */
+  readonly controlFrames: {
+    readonly connection: number;
+    readonly type: number;
+    readonly seq: number;
+  }[] = [];
   readonly subscribedStreams: number[] = [];
   /** Method of every REQUEST read, in order. */
   readonly requestMethods: string[] = [];
@@ -270,6 +286,7 @@ class FakeHost {
   handshakes = 0;
   opens = 0;
   advertiseResume = true;
+  advertiseCredentialUpdate = false;
   /** The host deduplicates unary idempotency keys. */
   advertiseIdempotencyKey = false;
   resumeReply: ResumeReply = "answer";
@@ -510,6 +527,16 @@ class FakeHost {
       streamId: frame.streamId,
     });
     connection.ledger.receive(plaintext);
+    if (
+      frame.streamId === SESSION_CONTROL_STREAM_ID &&
+      frame.type !== MuxFrameType.RESUME
+    ) {
+      this.controlFrames.push({
+        connection: connection.index,
+        type: frame.type,
+        seq: frame.seq,
+      });
+    }
     if (frame.type === MuxFrameType.RESUME) {
       const resume = parseResumeFrame(frame);
       if (resume === null) {
@@ -520,6 +547,14 @@ class FakeHost {
       return;
     }
     const message = connection.reassembler.accept(frame);
+    if (frame.type === MuxFrameType.CREDENTIAL_UPDATE && message !== null) {
+      this.credentialUpdates.push({
+        connection: connection.index,
+        seq: frame.seq,
+        bearer: message.json?.bearer,
+        plaintext,
+      });
+    }
     if (message !== null) {
       await this.handleMessage(connection, message);
     }
@@ -574,6 +609,7 @@ class FakeHost {
     ) {
       this.opens += 1;
       this.openCapabilities.push(json.capabilities);
+      this.openBearers.push(json.bearer);
       await this.sendMux(connection, {
         type: MuxFrameType.OPEN_ACK,
         streamId: SESSION_CONTROL_STREAM_ID,
@@ -589,6 +625,9 @@ class FakeHost {
           },
           capabilities: [
             ...(this.advertiseResume ? [SESSION_CAPABILITY_RESUME] : []),
+            ...(this.advertiseCredentialUpdate
+              ? [SESSION_CAPABILITY_CREDENTIAL_UPDATE]
+              : []),
             ...(this.advertiseIdempotencyKey
               ? [UNARY_CAPABILITY_IDEMPOTENCY_KEY]
               : []),
@@ -716,6 +755,8 @@ function hostAuth(): RemoteSessionAuth {
 
 interface FixtureConfig {
   readonly advertiseResume: boolean;
+  readonly advertiseCredentialUpdate: boolean;
+  readonly auth: RemoteSessionAuth;
   readonly advertiseIdempotencyKey: boolean;
   readonly autoTick: boolean;
   readonly livenessProbe: SessionLivenessProbe | null;
@@ -723,6 +764,8 @@ interface FixtureConfig {
 
 const LIVE: FixtureConfig = {
   advertiseResume: true,
+  advertiseCredentialUpdate: false,
+  auth: hostAuth(),
   advertiseIdempotencyKey: false,
   autoTick: true,
   livenessProbe: null,
@@ -787,8 +830,17 @@ async function advanceUntil(
 }
 
 async function readyFixture(config: FixtureConfig): Promise<Fixture> {
+  return openFixture(config, true);
+}
+
+/** The session started; with `awaitReady`, returned once it is ready and its first tick has arrived. */
+async function openFixture(
+  config: FixtureConfig,
+  awaitReady: boolean,
+): Promise<Fixture> {
   const host = new FakeHost();
   host.advertiseResume = config.advertiseResume;
+  host.advertiseCredentialUpdate = config.advertiseCredentialUpdate;
   host.advertiseIdempotencyKey = config.advertiseIdempotencyKey;
   host.autoTick = config.autoTick;
   const spies = buildEvidence();
@@ -804,7 +856,7 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
     attachBaseUrl: ATTACH_URL,
     hostStaticPublicKey: host.publicKey,
     grantProvider: grants,
-    auth: hostAuth(),
+    auth: config.auth,
     clock: null,
     rpcRegistry,
     streamRegistry,
@@ -828,9 +880,11 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
   stream.onServerFrame((envelope) => {
     ticks.push(typeof envelope.n === "number" ? envelope.n : -1);
   });
-  await until(() => session.isReady());
-  if (config.autoTick) {
-    await until(() => ticks.length === 1);
+  if (awaitReady) {
+    await until(() => session.isReady());
+    if (config.autoTick) {
+      await until(() => ticks.length === 1);
+    }
   }
   stream.onStatusChange((status, _reason, _retryCause, continuity) => {
     statuses.push({ status, continuity });
@@ -2002,6 +2056,8 @@ describe("RemoteSession host-leg resume", () => {
     const probe: SessionLivenessProbe = { method: STATUS_METHOD, params: {} };
     const SILENT: FixtureConfig = {
       advertiseResume: true,
+      advertiseCredentialUpdate: false,
+      auth: hostAuth(),
       advertiseIdempotencyKey: false,
       autoTick: false,
       livenessProbe: probe,
@@ -2067,6 +2123,212 @@ describe("RemoteSession host-leg resume", () => {
       expect(new URL(host.urls[1] ?? "").searchParams.get("prev")).toBe(
         "1006:server-drop",
       );
+    });
+  });
+  describe("a credential update is written under its drawn seq with the bearer read at the write", () => {
+    const SIGN_IN_BEARER = "sign-in-bearer";
+    const HOST_ONLY_BEARER = "host-only-bearer";
+
+    /**
+     * A credential plane whose reads are scripted: `answers[n]` is the n-th
+     * read of the bearer a credential update carries, and the last answer
+     * stands for every read after it. The first read is the enqueue's, the
+     * second the write's, the third a resend's.
+     */
+    function scriptedCredentialPlane(answers: readonly (string | null)[]): {
+      readonly auth: RemoteSessionAuth;
+      readonly reads: () => number;
+    } {
+      let reads = 0;
+      return {
+        auth: {
+          ...hostAuth(),
+          readCredentialUpdateBearer: () => {
+            const answer = answers[Math.min(reads, answers.length - 1)];
+            reads += 1;
+            return answer ?? null;
+          },
+        },
+        reads: () => reads,
+      };
+    }
+
+    /** The seqs of the session-control frames the host read on `connection`, in order. */
+    function controlSeqs(host: FakeHost, connection: number): number[] {
+      return host.controlFrames
+        .filter((frame) => frame.connection === connection)
+        .map((frame) => frame.seq);
+    }
+
+    it("writes the host-only token under the enqueued update's seq when the row stops allowing the sign-in before the write, and keeps the leg up", async () => {
+      const plane = scriptedCredentialPlane([SIGN_IN_BEARER, HOST_ONLY_BEARER]);
+      const fixture = await readyFixture({
+        ...LIVE,
+        advertiseCredentialUpdate: true,
+        auth: plane.auth,
+      });
+      const { host, session } = fixture;
+
+      session.notifyBearerRotated();
+      await until(() => host.credentialUpdates.length === 1);
+
+      const [update] = host.credentialUpdates;
+      expect(update?.bearer).toBe(HOST_ONLY_BEARER);
+      expect(plane.reads()).toBe(2);
+      // No seq is skipped or repeated: the update took the next one.
+      const seqs = controlSeqs(host, 0);
+      expect(seqs).toEqual(range(seqs.length - 1));
+      expect(update?.seq).toBe(seqs[seqs.length - 1]);
+      expect(session.isReady()).toBe(true);
+      expect(fixture.readinessLost).not.toHaveBeenCalled();
+      expect(host.connections).toHaveLength(1);
+      expect(host.handshakes).toBe(1);
+      expect(host.opens).toBe(1);
+    });
+
+    it("replays the host-only token under the lost update's seq across a resume when the row stopped allowing the sign-in meanwhile, and keeps the leg up", async () => {
+      // The enqueue and the write that the relay loses read the sign-in; the resend reads the host-only token.
+      const plane = scriptedCredentialPlane([
+        SIGN_IN_BEARER,
+        SIGN_IN_BEARER,
+        HOST_ONLY_BEARER,
+      ]);
+      const fixture = await readyFixture({
+        ...LIVE,
+        advertiseCredentialUpdate: true,
+        auth: plane.auth,
+      });
+      const { host, session } = fixture;
+      const socket = host.live().socket;
+      const before = socket.binarySends;
+
+      host.loseLeg();
+      session.notifyBearerRotated();
+      await until(() => socket.binarySends > before);
+      expect(host.credentialUpdates).toEqual([]);
+
+      host.attach();
+      await until(() => host.credentialUpdates.length === 1);
+
+      const [update] = host.credentialUpdates;
+      expect(update?.bearer).toBe(HOST_ONLY_BEARER);
+      expect(plane.reads()).toBe(3);
+      // The resend took the seq the lost write drew: nothing between it and the OPEN.
+      const seqs = controlSeqs(host, 0);
+      expect(seqs).toEqual(range(seqs.length - 1));
+      expect(update?.seq).toBe(seqs[seqs.length - 1]);
+      expect(host.resumes).toHaveLength(1);
+      expect(session.isReady()).toBe(true);
+      expect(fixture.readinessLost).not.toHaveBeenCalled();
+      expect(host.connections).toHaveLength(1);
+      expect(host.handshakes).toBe(1);
+      expect(host.opens).toBe(1);
+    });
+
+    it("ends the connection and redials on a fresh ledger when the bearer to write is gone, writing no update", async () => {
+      const plane = scriptedCredentialPlane([SIGN_IN_BEARER, null]);
+      const fixture = await readyFixture({
+        ...LIVE,
+        advertiseCredentialUpdate: true,
+        auth: plane.auth,
+      });
+      const { host, session } = fixture;
+
+      session.notifyBearerRotated();
+      await advanceUntil(
+        () => host.connections.length === 2 && session.isReady(),
+        30_000,
+      );
+
+      expect(host.credentialUpdates).toEqual([]);
+      // A new connection on a fresh ledger: it opens as a first connection and sends no RESUME.
+      expect(host.opens).toBe(2);
+      expect(host.resumes).toEqual([]);
+      const second = host.controlFrames.filter(
+        (frame) => frame.connection === 1,
+      );
+      expect(second[0]?.type).toBe(MuxFrameType.OPEN);
+    });
+
+    it("ends the connection and redials without writing a sealed open that is no longer writable, so the next open presents the host-only token", async () => {
+      let opensRead = 0;
+      let sendsAsked = 0;
+      const auth: RemoteSessionAuth = {
+        ...hostAuth(),
+        readOpenAuth: () => {
+          opensRead += 1;
+          const bearer = opensRead === 1 ? SIGN_IN_BEARER : HOST_ONLY_BEARER;
+          return { bearer, authz: null, fingerprint: bearer };
+        },
+        // The row stops allowing the sign-in after the first open is sealed.
+        openStillWritable: () => {
+          sendsAsked += 1;
+          return sendsAsked > 1;
+        },
+      };
+      const fixture = await openFixture(
+        { ...LIVE, autoTick: false, auth },
+        false,
+      );
+      const { host, session } = fixture;
+
+      await advanceUntil(
+        () => host.connections.length === 2 && session.isReady(),
+        30_000,
+      );
+
+      expect(host.openBearers).toEqual([HOST_ONLY_BEARER]);
+      expect(host.opens).toBe(1);
+      expect(host.handshakes).toBe(2);
+      expect(opensRead).toBe(2);
+    });
+
+    it("writes and replays an update byte for byte as it was enqueued when its bearer is unchanged", async () => {
+      const plane = scriptedCredentialPlane([SIGN_IN_BEARER]);
+      const fixture = await readyFixture({
+        ...LIVE,
+        advertiseCredentialUpdate: true,
+        auth: plane.auth,
+      });
+      const { host, session } = fixture;
+      const encodedAt = (seq: number): Uint8Array => {
+        const source = new OutboundChunkSource(
+          {
+            type: MuxFrameType.CREDENTIAL_UPDATE,
+            streamId: SESSION_CONTROL_STREAM_ID,
+            qos: QosClass.INTERACTIVE,
+            json: { bearer: SIGN_IN_BEARER },
+            binary: null,
+          },
+          () => seq,
+          false,
+        );
+        return encodeMuxFrame(source.nextFrame());
+      };
+
+      session.notifyBearerRotated();
+      await until(() => host.credentialUpdates.length === 1);
+      const [written] = host.credentialUpdates;
+      if (written === undefined) throw new Error("the update never arrived");
+      expect(written.bearer).toBe(SIGN_IN_BEARER);
+      expect(Array.from(written.plaintext)).toEqual(
+        Array.from(encodedAt(written.seq)),
+      );
+
+      const socket = host.live().socket;
+      const before = socket.binarySends;
+      host.loseLeg();
+      session.notifyBearerRotated();
+      await until(() => socket.binarySends > before);
+      host.attach();
+      await until(() => host.credentialUpdates.length === 2);
+      const replayed = host.credentialUpdates[1];
+      if (replayed === undefined) throw new Error("the replay never arrived");
+      expect(replayed.seq).toBe(written.seq + 1);
+      expect(Array.from(replayed.plaintext)).toEqual(
+        Array.from(encodedAt(replayed.seq)),
+      );
+      expect(host.connections).toHaveLength(1);
     });
   });
 });

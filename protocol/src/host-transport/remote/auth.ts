@@ -58,6 +58,13 @@ export interface RemoteSessionAuth extends SessionCredentialPlane {
   readonly readOpenAuth: (
     attachGrant: AttachGrant,
   ) => RemoteSessionOpenAuth | null;
+  /**
+   * Whether the `open` read last may still be written, asked once it is sealed
+   * and just before it is sent: a sealed `open` cannot be read again, so a
+   * `false` ends the connection and the next dial reads a new one. Absent: an
+   * open that never stops being writable.
+   */
+  readonly openStillWritable?: () => boolean;
 }
 
 /** The bearer a pool session presents on `open`. */

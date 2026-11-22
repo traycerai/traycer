@@ -141,6 +141,7 @@ import {
 import {
   ChunkReassembler,
   ChunkReassemblyError,
+  encodeMuxMessageBody,
   MuxFrameOverExpansionError,
   STREAM_FRAME_NOT_ALLOWED_CODE,
   StreamFrameNotAllowedError,
@@ -6679,7 +6680,12 @@ export class RemoteSession<
     if (connection === null) {
       return;
     }
-    const plaintext = encodeMuxFrame(frame);
+    const written = this.withCredentialReadNow(frame);
+    if (written === null) {
+      this.dropUnwritableCredential(generation);
+      return;
+    }
+    const plaintext = encodeMuxFrame(written);
     // Appended before the seal, in pull order: the scheduler runs one write at
     // a time, so ring order is wire order, and a write that fails below leaves
     // the frame in the gap rather than nowhere.
@@ -6688,10 +6694,20 @@ export class RemoteSession<
     if (pending !== undefined) {
       pending.sealed = true;
     }
-    await this.sealAndSend(generation, connection, plaintext);
+    await this.sealAndSend(
+      generation,
+      connection,
+      plaintext,
+      frame.type === MuxFrameType.OPEN,
+    );
   }
 
-  /** One gap frame: re-sealed under a fresh Noise counter, never re-counted. */
+  /**
+   * One gap frame: re-sealed under a fresh Noise counter, never re-counted. A
+   * credential update carries the bearer read now, under its own seq: the host
+   * never counted the gap (it starts at the host's `received`), so it has seen
+   * no encoding of this frame, and its sequence gate reads only the seq.
+   */
   private async writeResentFrame(
     generation: number,
     muxFrame: Uint8Array,
@@ -6700,13 +6716,61 @@ export class RemoteSession<
     if (!this.isCurrent(generation) || connection === null) {
       return;
     }
-    await this.sealAndSend(generation, connection, muxFrame);
+    let resent = muxFrame;
+    if (muxFrame[1] === MuxFrameType.CREDENTIAL_UPDATE) {
+      const written = this.withCredentialReadNow(decodeMuxFrame(muxFrame));
+      if (written === null) {
+        this.dropUnwritableCredential(generation);
+        return;
+      }
+      resent = encodeMuxFrame(written);
+    }
+    // An `open` is never in a gap: only a ready session relinks.
+    await this.sealAndSend(generation, connection, resent, false);
+  }
+
+  /**
+   * `frame` as written now: a credential update carries the bearer read at
+   * this write, not at its enqueue, so a row or owner that changed in between
+   * is honoured. `null` when there is no bearer to write under its drawn seq.
+   */
+  private withCredentialReadNow(
+    frame: EncodeMuxFrameInput,
+  ): EncodeMuxFrameInput | null {
+    if (frame.type !== MuxFrameType.CREDENTIAL_UPDATE) return frame;
+    const bearer = this.options.auth.readCredentialUpdateBearer();
+    if (bearer === null) return null;
+    // The body `enqueueMessage` built, one unchunked frame: a bearer is far
+    // under both the chunk size and the size at which a frame is compressed,
+    // so an unchanged bearer encodes to the same bytes.
+    return {
+      ...frame,
+      compressed: false,
+      json: null,
+      binary: encodeMuxMessageBody(
+        { bearer } satisfies CredentialUpdatePayload,
+        null,
+      ),
+    };
+  }
+
+  /**
+   * Nothing may be written under a seq already drawn: the connection ends, and
+   * the next one starts a fresh ledger and seq space.
+   */
+  private dropUnwritableCredential(generation: number): void {
+    this.handleConnectionLost(
+      generation,
+      "the session's credential can no longer be written",
+      "not-host-evidence",
+    );
   }
 
   private async sealAndSend(
     generation: number,
     connection: ActiveConnection,
     muxFrame: Uint8Array,
+    open: boolean,
   ): Promise<void> {
     const leg = connection.socket;
     // A frame whose leg went while it sealed is in the ledger, sealed or not:
@@ -6722,6 +6786,16 @@ export class RemoteSession<
       throw cause;
     }
     if (!this.isLegCurrent(connection, leg)) {
+      return;
+    }
+    // A sealed `open` cannot be read again: one no longer writable ends the
+    // connection, and the next dial reads its own.
+    if (
+      open &&
+      this.dial.kind === "relay" &&
+      this.dial.auth.openStillWritable?.() === false
+    ) {
+      this.dropUnwritableCredential(generation);
       return;
     }
     // A SUBSCRIBE is sent from here on, whatever `sendData` answers: the host

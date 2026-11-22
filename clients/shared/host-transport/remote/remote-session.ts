@@ -763,6 +763,9 @@ function createReleasedSignOnSessionAuth(
       plan = HOST_TOKEN_PLAN;
       return hostTokenOpenAuth(readHostToken);
     },
+    // Asked once the open is sealed: an open carrying the sign-in goes only
+    // while the row, its authority and the host still allow it.
+    openStillWritable: () => plan.kind !== "sign-in" || signInGoesNow(),
     // Once a host names a reason, no transport in this process hands it the
     // released-way sign-in again, until this process sees that host's local
     // process instance change: an admitted sign-in session's update carries
