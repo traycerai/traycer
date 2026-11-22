@@ -12,6 +12,7 @@ import {
   PERSONAL_LEAVE_ACCOUNTS,
   PERSONAL_LEAVE_NOT_NEEDED,
   PERSONAL_LEAVE_SIGNED_IN,
+  PERSONAL_LEAVE_SKIPPED_SHARED,
   personalLeaveSameAccount,
   personalLeaveSkipped,
 } from "@/components/settings/move/personal-leave-copy";
@@ -134,7 +135,9 @@ function PersonalLeaveActions(props: {
     return (
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-ui-xs text-muted-foreground">
-          {personalLeaveSkipped(providerDisplayName(row.providerId))}
+          {row.shared
+            ? PERSONAL_LEAVE_SKIPPED_SHARED
+            : personalLeaveSkipped(providerDisplayName(row.providerId))}
         </p>
         <Button
           type="button"
