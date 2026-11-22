@@ -72,8 +72,8 @@ export function buildHostClaimCommand(args: HostClaimArgs): CommandFn {
     // their own existing recovery, which can refresh on their own refusals.
     const signIn = openStoredSignIn(auth);
     const host = await readOwnershipForClaim(signIn, endpoint.hostId);
-    // The sign-in the read was answered on, handed to the two host reads and
-    // the release.
+    // The sign-in the read was answered on, handed to the two host reads. The
+    // release asks on the helper's current sign-in.
     const signedIn = signIn.current();
     if (host.kind === "sandbox") {
       throw claimRefused(CLI_ERROR_CODES.HOST_IS_SANDBOX, CLAIM_WORDS.sandbox);

@@ -18,9 +18,10 @@ import type { HostAuth } from "./host-auth";
  *   again;
  * - spent, and still unsaved after up to three more save attempts a second
  *   apart: the pair is used from memory and the call is sent again on it. The
- *   disk line is printed only when that last failed save reported no space left.
- *   The spent-base marker it leaves lets a later command recover the pair only
- *   while authn can still replay that rotation;
+ *   disk line is printed when the store reported low disk space at any point of
+ *   that rotation's attempts, and not otherwise. The spent-base marker it leaves
+ *   lets a later command recover the pair only while authn can still replay
+ *   that rotation;
  * - spent, and a later save attempt lands it: as an ordinary refresh.
  */
 type StoredSignInAnswer<Answer> =

@@ -155,9 +155,8 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
     //
     // Once a record has asked for the refresh, a later record's first answer is
     // final because the wait has used its one recovery, whatever the stored file
-    // now holds. The one case this gives up: if another sign-in replaces the
-    // stored one during the wait and that new one is refused, it is not
-    // refreshed.
+    // now holds: for example, another sign-in that replaced the stored one
+    // during the wait and is refused is not refreshed.
     //
     // Bounds: each record request has its own 15 s bound; a refresh has its own
     // (the lock wait, the refresh request and any save attempts) and is cut by
