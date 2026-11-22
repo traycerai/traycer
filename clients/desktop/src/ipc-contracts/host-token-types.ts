@@ -13,6 +13,8 @@ export interface HostTokenBridgeChange {
   readonly hostId: string;
   readonly token: HostToken | null;
   readonly era: number;
+  /** The token main's write replaced (`null`: none, or a removal). */
+  readonly replaced: string | null;
 }
 
 /** Main's era for the person once the work it was asked for had run. */

@@ -95,7 +95,7 @@ interface TableWrite {
 // writer's own check failed; or declined because the token held for the pair
 // was issued later (`held`).
 type TableWriteResult =
-  | { readonly kind: "kept" }
+  | { readonly kind: "kept"; readonly replaced: string | null }
   | { readonly kind: "era-moved" }
   | { readonly kind: "not-wanted" }
   | { readonly kind: "older"; readonly held: HostToken };
@@ -386,7 +386,7 @@ export function createHostTokenSource(deps: {
         decided.result = { kind: "older", held: inFile };
         return latest;
       }
-      decided.result = { kind: "kept" };
+      decided.result = { kind: "kept", replaced: inFile?.token ?? null };
       const next = new Map(latest);
       const forUser = new Map(latest.get(userId) ?? []);
       forUser.set(hostId, token);
@@ -399,7 +399,7 @@ export function createHostTokenSource(deps: {
     if (result.kind === "kept" || result.kind === "older")
       storedIn.set(key, write.era);
     if (result.kind === "kept" && eraOf(userId) === write.era)
-      announce({ userId, hostId });
+      announce({ userId, hostId, replaced: result.replaced });
     return result;
   };
 
@@ -627,7 +627,8 @@ export function createHostTokenSource(deps: {
         next.delete(userId);
         return next;
       });
-      for (const hostId of hostIds) announce({ userId, hostId });
+      for (const hostId of hostIds)
+        announce({ userId, hostId, replaced: null });
     },
 
     era: eraOf,

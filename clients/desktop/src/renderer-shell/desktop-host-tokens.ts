@@ -36,14 +36,19 @@ export function createDesktopHostTokenSource(
   const records = createHostMintRecords();
   const keyOf = (userId: string, hostId: string): string =>
     `${userId}\u0000${hostId}`;
-  const announce = (userId: string, hostId: string): void => {
-    for (const listener of Array.from(listeners)) listener({ userId, hostId });
+  const announce = (
+    userId: string,
+    hostId: string,
+    replaced: string | null,
+  ): void => {
+    for (const listener of Array.from(listeners))
+      listener({ userId, hostId, replaced });
   };
   const dropPerson = (userId: string): void => {
     for (const key of Array.from(copy.keys())) {
       if (!key.startsWith(`${userId}\u0000`)) continue;
       copy.delete(key);
-      announce(userId, key.slice(userId.length + 1));
+      announce(userId, key.slice(userId.length + 1), null);
     }
   };
   // Every era that crosses the bridge, whichever way it came: anything that
@@ -64,8 +69,9 @@ export function createDesktopHostTokenSource(
   // snapshot, and the replies to an obtain or an adoption main kept. Each is
   // what main held when it was sent, and they can arrive out of order, so a
   // token never replaces one this copy holds that was issued later, unless
-  // the copy still holds exactly the token an obtain was sent to replace
-  // (`replaces`), as main's store does.
+  // the copy still holds exactly the token it replaces (`replaces`: what
+  // main's write replaced, for a change event; what an obtain was sent to
+  // replace, for its reply), as main's store does.
   const apply = (
     userId: string,
     hostId: string,
@@ -89,7 +95,7 @@ export function createDesktopHostTokenSource(
       return;
     if (token === null) copy.delete(key);
     else copy.set(key, { token, era });
-    announce(userId, hostId);
+    announce(userId, hostId, holding?.token.token ?? null);
   };
   // Main's era, read now. Anything that is not an era main issues reads as
   // none, and the work that asked for it keeps nothing.
@@ -110,7 +116,15 @@ export function createDesktopHostTokenSource(
   let isLoaded = false;
   bridge.subscribe((change) => {
     if (!isLoaded) delivered.add(keyOf(change.userId, change.hostId));
-    apply(change.userId, change.hostId, change.token, change.era, null);
+    // What main's write replaced: a copy still holding exactly that token
+    // drops it as main did, as the window that asked does with its reply.
+    apply(
+      change.userId,
+      change.hostId,
+      change.token,
+      change.era,
+      change.replaced,
+    );
   });
   // Asked after subscribing, so no change falls between the two. An entry of
   // an era older than one this window already took in is dropped by `apply`.

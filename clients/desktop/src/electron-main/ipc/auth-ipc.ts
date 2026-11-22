@@ -349,12 +349,13 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
     },
   );
   bridge.disposeFns.push(
-    tokens.subscribe(({ userId, hostId }) => {
+    tokens.subscribe(({ userId, hostId, replaced }) => {
       bridge.fanOut(RunnerHostEvent.hostTokensChange, {
         userId,
         hostId,
         token: tokens.current(userId, hostId),
         era: tokens.era(userId),
+        replaced,
       });
     }),
   );
