@@ -142,6 +142,7 @@ export async function unaryDoorHarness(
       expiresAtMs: now + 60_000,
     },
     tokens.era(UNARY_DOOR_USER_ID),
+    () => true,
   );
   const signInRecovery: StreamAuthRevalidator = {
     revalidateForReconnect: () => {

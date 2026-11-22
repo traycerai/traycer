@@ -830,14 +830,14 @@ function runInboxSubscription(
       };
       if (outcome === "rotated") {
         if (moved() || countedToBound()) return;
-          // The bearer genuinely rotated on every attempt yet the host
-          // still rejected the freshly-minted token. The `/stream` fatal
-          // frame only carries `UNAUTHORIZED` / `INCOMPATIBLE` (see
-          // `FatalErrorDetails` in ws-protocol), so it can't tell us
-          // whether this is an auth failure or an authz one. A new token
-          // being rejected points at authz, not a stale token — surface
-          // that the agent/epic may be invalid or inaccessible instead of
-          // blaming the bearer.
+        // The bearer genuinely rotated on every attempt yet the host
+        // still rejected the freshly-minted token. The `/stream` fatal
+        // frame only carries `UNAUTHORIZED` / `INCOMPATIBLE` (see
+        // `FatalErrorDetails` in ws-protocol), so it can't tell us
+        // whether this is an auth failure or an authz one. A new token
+        // being rejected points at authz, not a stale token — surface
+        // that the agent/epic may be invalid or inaccessible instead of
+        // blaming the bearer.
         if (left) {
           subscribeAfterDelay();
           return;

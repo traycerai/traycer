@@ -230,7 +230,7 @@ async function tokensFor(
     now: () => Date.now(),
   });
   if (held !== null) {
-    await source.adopt(USER_A, hostId, held, source.era(USER_A));
+    await source.adopt(USER_A, hostId, held, source.era(USER_A), () => true);
   }
   return { source, mintCalls: () => mintCalls };
 }
@@ -266,7 +266,7 @@ async function unverifiedTokens(
     now: () => Date.now(),
   });
   if (held !== null) {
-    await source.adopt(USER_A, hostId, held, source.era(USER_A));
+    await source.adopt(USER_A, hostId, held, source.era(USER_A), () => true);
   }
   return {
     source,
@@ -494,7 +494,7 @@ describe("local stream while authn cannot mint", () => {
       signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
       now: () => Date.now(),
     });
-    await source.adopt(USER_A, hostId, expired, source.era(USER_A));
+    await source.adopt(USER_A, hostId, expired, source.era(USER_A), () => true);
     const { client, session } = openClient(hostId, source, {
       kind: "user",
       id: USER_A,
@@ -684,7 +684,7 @@ describe("local stream while authn cannot mint", () => {
       now: () => Date.now(),
     });
     const expired = expiredJwt(Date.now());
-    await source.adopt(USER_A, hostId, expired, source.era(USER_A));
+    await source.adopt(USER_A, hostId, expired, source.era(USER_A), () => true);
     let refreshCalls = 0;
     streamAuth = {
       revalidateForReconnect: () => {
@@ -1069,7 +1069,7 @@ describe("local stream while authn cannot mint", () => {
       signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
       now: () => Date.now(),
     });
-    await source.adopt(USER_A, hostId, expired, source.era(USER_A));
+    await source.adopt(USER_A, hostId, expired, source.era(USER_A), () => true);
     const { client, session } = openClient(hostId, source, {
       kind: "user",
       id: USER_A,
@@ -1379,6 +1379,7 @@ describe("local stream while authn cannot mint", () => {
         hostId,
         { token: "usable-host-token", expiresAtMs: Date.now() + 3_600_000 },
         source.era(USER_A),
+        () => true,
       );
       const { client, session } = openClient(hostId, source, {
         kind: "user",
@@ -1878,7 +1879,7 @@ describe("local stream while authn cannot mint", () => {
       signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
       now: () => Date.now(),
     });
-    await source.adopt(USER_A, hostId, expired, source.era(USER_A));
+    await source.adopt(USER_A, hostId, expired, source.era(USER_A), () => true);
     const { client, session } = openClient(hostId, source, {
       kind: "user",
       id: USER_A,
@@ -1890,7 +1891,7 @@ describe("local stream while authn cannot mint", () => {
     await settle();
     // Another transport stored a token that this clock still reads as usable,
     // and authn answers from here on.
-    await source.adopt(USER_A, hostId, usable, source.era(USER_A));
+    await source.adopt(USER_A, hostId, usable, source.era(USER_A), () => true);
     authnAnswers = true;
     first.fireClose(1006, "dropped");
     const second = await socketAt(2);
@@ -1914,7 +1915,7 @@ describe("local stream while authn cannot mint", () => {
     const fresh = "host-token-bought-after-the-refusal";
     const mints = heldMints();
     const source = sourceWithMint(mints.mint);
-    await source.adopt(USER_A, hostId, usable, source.era(USER_A));
+    await source.adopt(USER_A, hostId, usable, source.era(USER_A), () => true);
     const { client, session } = openClient(hostId, source, {
       kind: "user",
       id: USER_A,
@@ -2046,7 +2047,7 @@ describe("local stream while authn cannot mint", () => {
       signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
       now: () => Date.now(),
     });
-    await source.adopt(USER_A, hostId, held, source.era(USER_A));
+    await source.adopt(USER_A, hostId, held, source.era(USER_A), () => true);
     // What authn received: the first refresh cannot reach it, the second does.
     const refreshRequests: Array<"unreachable" | "answered"> = [];
     streamAuth = {
@@ -2099,7 +2100,7 @@ describe("local stream while authn cannot mint", () => {
       signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
       now: () => Date.now(),
     });
-    await source.adopt(USER_A, hostId, held, source.era(USER_A));
+    await source.adopt(USER_A, hostId, held, source.era(USER_A), () => true);
     // Authn answers the refresh only when the test says so.
     const refreshRequests: string[] = [];
     let answerRefresh: (outcome: "rotated") => void = () => undefined;
@@ -2151,7 +2152,7 @@ describe("local stream while authn cannot mint", () => {
     };
     const mints = heldMints();
     const source = sourceWithMint(mints.mint);
-    await source.adopt(USER_A, hostId, usable, source.era(USER_A));
+    await source.adopt(USER_A, hostId, usable, source.era(USER_A), () => true);
     const { client, session } = openClient(hostId, source, {
       kind: "user",
       id: USER_A,

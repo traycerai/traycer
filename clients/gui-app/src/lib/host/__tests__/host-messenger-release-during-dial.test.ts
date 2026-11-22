@@ -327,6 +327,7 @@ describe("runtime host messenger release during dial", () => {
       teamEntry.hostId,
       { token: heldToken, expiresAtMs: Date.now() - 11 * 60_000 },
       hostTokens.era(bearer.identity.userId),
+      () => true,
     );
     const binding = buildRuntimeHostMessenger<typeof registry>({
       registry,
