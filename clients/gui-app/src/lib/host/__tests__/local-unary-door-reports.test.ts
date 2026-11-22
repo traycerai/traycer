@@ -52,13 +52,6 @@ function frameOf(raw: string): object {
   return parsed;
 }
 
-/** Lets queued promise work and zero-delay timers run, on real timers. */
-function tick(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 10);
-  });
-}
-
 const NO_HOST_TOKEN_MESSAGE = "No host-only token is held for this host";
 
 const echoV10 = defineRpcContract({
@@ -409,12 +402,18 @@ describe("a unary call's reports to the app's door", () => {
       });
       if (stream === null) throw new Error("local stream client did not build");
       const session = stream.subscribe("epic.subscribe", { epicId: "epic-a" });
+      // Registered before the dial is answered, so the admission cannot be missed.
+      const admitted = new Promise<void>((resolve) => {
+        session.onStatusChange((status) => {
+          if (status === "open") resolve();
+        });
+      });
       disposers.push(() => {
         session.close();
         stream.close("test teardown");
       });
       await answerDial(2, openAckFrame([], null));
-      await tick();
+      await admitted;
 
       answers[0]("rejected");
       expect(await driven.call).toMatchObject({ kind: "rejected" });
@@ -431,11 +430,11 @@ describe("a unary call's reports to the app's door", () => {
       expect(await answerDial(0, notAdmittedRefusal())).toBe(
         NO_HOST_TOKEN_PROBE,
       );
-      await tick();
+      // The call is waiting on the slow mint: it asked, and nothing settled it.
+      await vi.waitFor(() => expect(mints.asked()).toBeGreaterThanOrEqual(1));
       expect(driven.settled()).toBe(false);
 
       const minted = "team-host-token-after-slow-mint";
-      await vi.waitFor(() => expect(mints.asked()).toBeGreaterThanOrEqual(1));
       mints.answer({
         kind: "ok",
         token: { token: minted, expiresAtMs: Date.now() + 60_000 },
