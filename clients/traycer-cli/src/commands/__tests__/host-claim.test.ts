@@ -54,6 +54,16 @@ import { buildHostClaimCommand } from "../host-claim";
 import type { HostClaimArgs } from "../host-claim";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
+import {
+  bearerOf,
+  refreshAnswer,
+  REFRESHED_TOKEN,
+  removeStoredSignIn,
+  seedStoredSignIn,
+  STORED_REFRESH_TOKEN,
+  STORED_SIGN_IN_REFRESH_PATH,
+  storedSignInBytes,
+} from "../../__tests__/support/stored-sign-in";
 
 const HOST_ID = "host-local";
 const TEAM_ID = "team-acme";
@@ -73,7 +83,10 @@ let ownership: HostOwnership = {
   remoteAccess: true,
 };
 let ownershipStatus = 200;
+let ownershipRefusedBearers: string[] = [];
 let releaseStatus = 204;
+let releaseRefusedBearers: string[] = [];
+let refreshStatus: number | null = 200;
 let releaseBody: unknown = {};
 let questionAnswer = "y";
 let localFacts: () => Promise<unknown> = noTeamWork;
@@ -126,12 +139,22 @@ beforeEach(() => {
       const url = String(input);
       requests.push({ url, init });
       const parsed = new URL(url);
+      if (parsed.pathname === STORED_SIGN_IN_REFRESH_PATH) {
+        events.push("refresh");
+        return refreshAnswer(refreshStatus);
+      }
       if (parsed.pathname === "/api/v3/hosts") {
         events.push("ownership");
+        if (ownershipRefusedBearers.includes(bearerOf(init) ?? "")) {
+          return jsonResponse(401, {});
+        }
         return jsonResponse(ownershipStatus, { hosts: [ownership] });
       }
       if (parsed.pathname === `/api/v3/hosts/${HOST_ID}/team-release`) {
         events.push("release");
+        if (releaseRefusedBearers.includes(bearerOf(init) ?? "")) {
+          return jsonResponse(401, {});
+        }
         if (releaseStatus === 204) return new Response(null, { status: 204 });
         if (releaseStatus === 409) {
           return jsonResponse(409, { code: "host_return_not_computer" });
@@ -174,7 +197,10 @@ beforeEach(() => {
     remoteAccess: true,
   };
   ownershipStatus = 200;
+  ownershipRefusedBearers = [];
   releaseStatus = 204;
+  releaseRefusedBearers = [];
+  refreshStatus = 200;
   releaseBody = {};
   questionAnswer = "y";
   localFacts = noTeamWork;
@@ -441,4 +467,159 @@ describe("buildHostClaimCommand", () => {
       expect(mocks.provisionRunningHostCredentialMock).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("buildHostClaimCommand with a stored sign-in authn refuses", () => {
+  const STORED_USER_ID = "member-1";
+  const REFRESHED_HEADER = `Bearer ${REFRESHED_TOKEN}`;
+  const STORED_HEADER = `Bearer ${BEARER}`;
+  const OWNERSHIP_UNCONFIRMED =
+    "This computer's ownership could not be confirmed. Try again.";
+  const CREDENTIAL_REJECTED =
+    "The stored credential was rejected. Run `traycer login` to re-authenticate.";
+  const RELEASE_REFUSED =
+    "Sign in as a member of this team to claim this computer.";
+
+  beforeEach(async () => {
+    await seedStoredSignIn(BEARER, STORED_USER_ID);
+  });
+
+  afterEach(async () => {
+    await removeStoredSignIn();
+  });
+
+  function callsTo(pathname: string): Array<string | null> {
+    return requests
+      .filter(({ url }) => new URL(url).pathname === pathname)
+      .map(({ init }) => bearerOf(init));
+  }
+
+  const OWNERSHIP_PATH = "/api/v3/hosts";
+  const RELEASE_PATH = `/api/v3/hosts/${HOST_ID}/team-release`;
+
+  describe("when it reads the computer's ownership", () => {
+    it("refreshes once, reads again on the refreshed sign-in and carries it to the claim", async () => {
+      ownershipRefusedBearers = [STORED_HEADER];
+
+      const result = await makeClaimCommand(true)(fakeCtx(false));
+
+      expect(result.human).toBe("This computer is yours.");
+      expect(callsTo(OWNERSHIP_PATH)).toEqual([
+        STORED_HEADER,
+        REFRESHED_HEADER,
+      ]);
+      expect(callsTo(STORED_SIGN_IN_REFRESH_PATH)).toHaveLength(1);
+      const refresh = requests.find(
+        ({ url }) => new URL(url).pathname === STORED_SIGN_IN_REFRESH_PATH,
+      );
+      expect(JSON.parse(String(refresh?.init?.body))).toMatchObject({
+        refreshToken: STORED_REFRESH_TOKEN,
+      });
+      expect(JSON.parse(await storedSignInBytes())).toMatchObject({
+        token: REFRESHED_TOKEN,
+      });
+      expect(callsTo(RELEASE_PATH)).toEqual([REFRESHED_HEADER]);
+      expect(mocks.callHostRpcAtResolvedEndpointMock).toHaveBeenCalledWith(
+        "environment.host.read",
+        {},
+        expect.objectContaining({ hostId: HOST_ID }),
+        expect.objectContaining({ token: REFRESHED_TOKEN }),
+        expect.anything(),
+      );
+    });
+
+    it("ends with the sign-in to make again, and leaves the stored sign-in as it was, when the refresh is refused", async () => {
+      ownershipRefusedBearers = [STORED_HEADER];
+      refreshStatus = 401;
+      const before = await storedSignInBytes();
+
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: CREDENTIAL_REJECTED,
+        exitCode: 1,
+      });
+
+      expect(events).toEqual(["ownership", "refresh"]);
+      expect(mocks.callHostRpcAtResolvedEndpointMock).not.toHaveBeenCalled();
+      expect(await storedSignInBytes()).toBe(before);
+    });
+
+    it("keeps the ownership line when the read is refused again on the refreshed sign-in", async () => {
+      ownershipRefusedBearers = [STORED_HEADER, REFRESHED_HEADER];
+
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: OWNERSHIP_UNCONFIRMED,
+        exitCode: 1,
+      });
+
+      expect(events).toEqual(["ownership", "refresh", "ownership"]);
+    });
+
+    it("keeps the ownership line when authn cannot be reached for the refresh", async () => {
+      ownershipRefusedBearers = [STORED_HEADER];
+      refreshStatus = null;
+
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+        message: OWNERSHIP_UNCONFIRMED,
+        exitCode: 1,
+      });
+
+      expect(events).toEqual(["ownership", "refresh"]);
+    });
+  });
+
+  describe("when it releases the team's computer", () => {
+    it("refreshes once and sends the release again on the refreshed sign-in", async () => {
+      releaseRefusedBearers = [STORED_HEADER];
+
+      const result = await makeClaimCommand(true)(fakeCtx(false));
+
+      expect(result.human).toBe("This computer is yours.");
+      expect(callsTo(RELEASE_PATH)).toEqual([STORED_HEADER, REFRESHED_HEADER]);
+      expect(callsTo(STORED_SIGN_IN_REFRESH_PATH)).toHaveLength(1);
+      expect(JSON.parse(await storedSignInBytes())).toMatchObject({
+        token: REFRESHED_TOKEN,
+      });
+      expect(mocks.provisionRunningHostCredentialMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the release line, and leaves the stored sign-in as it was, when the refresh is refused", async () => {
+      releaseRefusedBearers = [STORED_HEADER];
+      refreshStatus = 401;
+      const before = await storedSignInBytes();
+
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: RELEASE_REFUSED,
+        exitCode: 1,
+      });
+
+      expect(events).toEqual(["ownership", "release", "refresh"]);
+      expect(await storedSignInBytes()).toBe(before);
+    });
+
+    it("keeps the release line when the release is refused again on the refreshed sign-in", async () => {
+      releaseRefusedBearers = [STORED_HEADER, REFRESHED_HEADER];
+
+      await expect(
+        makeClaimCommand(true)(fakeCtx(false)),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.AUTH_REJECTED,
+        message: RELEASE_REFUSED,
+        exitCode: 1,
+      });
+
+      expect(events).toEqual(["ownership", "release", "refresh", "release"]);
+    });
+  });
 });
