@@ -211,6 +211,7 @@ import {
 } from "../app/app-protocol";
 import { installSandboxProtocolHandler } from "../app/sandbox-protocol";
 import { applyHardwareAccelerationPreference } from "../app/gpu-acceleration";
+import { applyRemoteDebuggingPortPreference } from "../app/remote-debugging-port";
 import { configureHostResolverDoH } from "../app/host-resolver";
 import { configureUserAgent, preconnectTraycerHosts } from "../app/network";
 import {
@@ -592,8 +593,9 @@ async function timed(
 // Pre-ready: command-line switches, scheme registration, hardware
 // acceleration toggle, V8 heap, and crash collection all run before
 // Chromium initializes. These are synchronous in-process Electron calls
-// (two documented sync-filesystem exceptions: the GPU preference read in
-// app/gpu-acceleration.ts and the memory-backed /proc write in
+// (three documented sync-filesystem exceptions: the GPU and debugging-port
+// preference reads in app/gpu-acceleration.ts and
+// app/remote-debugging-port.ts, and the memory-backed /proc write in
 // app/core-dump-guard.ts, which must land before Chromium spawns children).
 export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
@@ -602,6 +604,7 @@ export function runPreReady(state: BootState): void {
   // `traycer-host`'s `BROWSER_CAPTURE_HELPER_PERMISSIONS`
   // (browser-capture-helper.ts).
   applyHardwareAccelerationPreference();
+  applyRemoteDebuggingPortPreference(state.config.environment);
   suppressWslKernelCoreDumps();
   // `initCrashReporter()` must run before `registerAppScheme()`. When a
   // Sentry DSN is configured, `SentryElectron.init()` makes its own raw
