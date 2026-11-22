@@ -587,7 +587,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     const session = releasedSession(
       `${RELEASED_HOST_ID}-row-flips-in-seal`,
       () => row,
-      () => Promise.resolve(true),
+      () => Promise.resolve(),
       () => SIGN_IN,
     );
     session.start();
@@ -612,7 +612,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     const session = releasedSession(
       `${RELEASED_HOST_ID}-rotates-in-seal`,
       () => true,
-      () => Promise.resolve(true),
+      () => Promise.resolve(),
       () => signIn,
     );
     session.start();
