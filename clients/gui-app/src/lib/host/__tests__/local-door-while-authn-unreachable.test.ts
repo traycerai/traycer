@@ -849,6 +849,7 @@ describe("local stream while authn cannot mint", () => {
     const mint = await source.obtain(USER_A, hostId, true, {
       signal: null,
       owner: processReleasedHosts.currentInstance(hostId),
+      observedNow: () => processReleasedHosts.currentInstance(hostId).observed,
     });
     expect(mint.kind).toBe("ok");
     expect(processReleasedHosts.opensReleasedWay(USER_A, hostId)).toBe(false);

@@ -627,6 +627,8 @@ describe("local unary while authn cannot mint", () => {
     await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, {
       signal: null,
       owner: memory.currentInstance(mockLocalHostEntry.hostId),
+      observedNow: () =>
+        memory.currentInstance(mockLocalHostEntry.hostId).observed,
     });
     const driven = driveCall(tokens, PERSONAL_ROW);
     clients.push(driven.client);
@@ -659,6 +661,8 @@ describe("local unary while authn cannot mint", () => {
     await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, {
       signal: null,
       owner: memory.currentInstance(mockLocalHostEntry.hostId),
+      observedNow: () =>
+        memory.currentInstance(mockLocalHostEntry.hostId).observed,
     });
     const driven = driveCall(tokens, PERSONAL_ROW);
     clients.push(driven.client);
@@ -1119,6 +1123,8 @@ describe("local unary while authn cannot mint", () => {
     await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, true, {
       signal: null,
       owner: memory.currentInstance(mockLocalHostEntry.hostId),
+      observedNow: () =>
+        memory.currentInstance(mockLocalHostEntry.hostId).observed,
     });
     await source.adopt(
       USER_ID,
@@ -1165,6 +1171,8 @@ describe("a held host-only token that the host refuses as expired, while authn i
     await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, true, {
       signal: null,
       owner: memory.currentInstance(mockLocalHostEntry.hostId),
+      observedNow: () =>
+        memory.currentInstance(mockLocalHostEntry.hostId).observed,
     });
     return tokens;
   }
@@ -1268,6 +1276,8 @@ describe("a sign-in is written only where its row and its host still allow it", 
     await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, {
       signal: null,
       owner: memory.currentInstance(mockLocalHostEntry.hostId),
+      observedNow: () =>
+        memory.currentInstance(mockLocalHostEntry.hostId).observed,
     });
     return tokens;
   }
@@ -1755,6 +1765,8 @@ describe("a sign-in is written only where its row and its host still allow it", 
     await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, {
       signal: null,
       owner: memory.currentInstance(mockLocalHostEntry.hostId),
+      observedNow: () =>
+        memory.currentInstance(mockLocalHostEntry.hostId).observed,
     });
     const driven = driveCallThroughSignOn(
       {
