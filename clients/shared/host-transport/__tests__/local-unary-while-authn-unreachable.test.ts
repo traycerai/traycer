@@ -816,6 +816,60 @@ describe("local unary while authn cannot mint", () => {
     expect(driven.refusals).toEqual([]);
   });
 
+  it("closes the call's socket when an idle release lands during the mint that follows the probe", async () => {
+    let asked = 0;
+    let answerMint: (outcome: HostTokenMintOutcome) => void = () => undefined;
+    const slowMint = new Promise<HostTokenMintOutcome>((resolve) => {
+      answerMint = resolve;
+    });
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        asked += 1;
+        return slowMint;
+      },
+      signIn: () => SIGN_IN,
+      now: () => Date.now(),
+    });
+    const driven = driveCall(trackHostTokenMints(source, memory), null);
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const probe = driven.sockets[0];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("not_admitted"));
+
+    // The call holds no slot while it waits for the mint, so the release finds
+    // nothing of this call to arm; the next claim must learn of it.
+    await vi.waitFor(() => expect(asked).toBeGreaterThanOrEqual(1), WAIT);
+    expect(driven.finished).toBe(false);
+    driven.client.releaseIdleLocalSessions();
+    const minted = "host-token-after-slow-mint";
+    answerMint({
+      kind: "ok",
+      token: { token: minted, expiresAtMs: Date.now() + 3_600_000 },
+    });
+
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    const retried = driven.sockets[1];
+    if (retried === undefined) throw new Error("minted dial missing");
+    const open = await openAndRead(retried);
+    expect(open.token).toBe(minted);
+    ackAndEcho(retried, open);
+    await answerEcho(retried);
+    expect(await driven.settled).toEqual({
+      kind: "fulfilled",
+      value: { echoed: "hi" },
+    });
+    await vi.waitFor(() => expect(retried.closed).not.toBeNull(), WAIT);
+  });
+
   it("carries the held expired token when the session is unverified", async () => {
     const expired = expiredJwt(Date.now());
     const { tokens, mintCalls } = await unverifiedSource(expired);
