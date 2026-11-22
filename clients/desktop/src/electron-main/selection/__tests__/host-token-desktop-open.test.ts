@@ -763,7 +763,7 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
       registry: { kind: "silent" } as const,
     },
   ])(
-    "sends no sign-in on the redial when the row read $name",
+    "sends the sign-in on the redial, as the row last read allows, when the row read $name",
     async ({ registry }) => {
       const remote = await startRemote({
         kind: "owner",
@@ -772,10 +772,8 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
       try {
         remote.registry.current = registry;
         await vi.advanceTimersByTimeAsync(8_000);
-        await vi.waitFor(() =>
-          expect(remote.peer.openCount).toBeGreaterThan(1),
-        );
-        expect(bearersOf(remote.peer)).not.toContain(SIGN_IN_TOKEN);
+        await vi.waitFor(() => expect(remote.peer.openCount).toBe(2));
+        expect(bearersOf(remote.peer)).toEqual(["", SIGN_IN_TOKEN]);
       } finally {
         remote.close();
       }
