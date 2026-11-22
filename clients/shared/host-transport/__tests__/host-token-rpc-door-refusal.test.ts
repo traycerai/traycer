@@ -51,6 +51,7 @@ import {
   type HostRequestOptions,
 } from "../host-messenger";
 import { resetNegotiatedManifests } from "../negotiated-manifest-registry";
+import { createReleasedHostMemory } from "../released-sign-on";
 import type {
   IWebSocketFactory,
   WebSocketCloseEvent,
@@ -408,6 +409,7 @@ function doorHarness(): DoorHarness {
     signIn: (userId) => (userId === USER_ID ? SIGN_IN : null),
     now: () => currentNow,
   });
+  const hosts = createReleasedHostMemory();
   const sockets: StubWebSocket[] = [];
   const socketWaiters: Array<() => void> = [];
   const factory: IWebSocketFactory = {
@@ -435,7 +437,7 @@ function doorHarness(): DoorHarness {
     hostAttestationWindowMs: 0,
     evidence: NO_TRANSPORT_EVIDENCE,
     hostBearerFor: hostTokenBearerFor(
-      trackHostTokenMints(tokens),
+      trackHostTokenMints(tokens, hosts),
       (hostId, kind) => {
         states.push({ hostId, kind, detail: null });
       },
@@ -459,6 +461,7 @@ function doorHarness(): DoorHarness {
   });
   const recovery = hostTokenUnaryRevalidator({
     tokens,
+    hosts,
     currentUserId: () => USER_ID,
     signInRecovery: null,
     onState: (hostId, kind) => {

@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  RevalidateOutcome,
+  StreamAuthRevalidator,
+} from "@traycer-clients/shared/auth/bearer-revalidator";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type { HostDoorReason } from "@traycer/protocol/framework/door-reason";
 import {
@@ -8,6 +12,7 @@ import {
 } from "@traycer-clients/shared/auth/host-token-source";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
+import type { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/request-context-provider";
 import {
   FakeNativeWebSocket,
   liveBearer,
@@ -18,6 +23,8 @@ import {
   signIn,
   USER_A,
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { dialsNow } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import {
@@ -30,9 +37,13 @@ import {
 // decides whether the worktrees are removed, and when the cleanup gives up.
 
 const SIGN_IN_TOKEN = "sign-in-token";
+const ROTATED_SIGN_IN_TOKEN = "rotated-sign-in-token";
 const HOST_TOKEN = "held-host-token";
-const HOST_ID = "cleanup-real-stream-host";
+/** Each case dials its own host id: the process-wide memory of a host's answers never reaches the next case. */
+const host = { id: "", count: 0 };
 const PATH = "/wt/a";
+/** Past the stream's first reconnect backoff. */
+const BACKOFF_PASSED_MS = 5_000;
 const NEVER_REACHED_HOST_REASON =
   "Couldn't reach the host to start the deletion.";
 
@@ -61,18 +72,24 @@ const releasedRefusal = (): string =>
 const named = (doorReason: HostDoorReason, retryable: boolean): string =>
   refusal("current-host-refusal", doorReason, retryable);
 
-async function tokenSource(held: boolean): Promise<HostTokenSource> {
+/** `unanswered`: the mint started by the first read never answers, as when authn is slow. */
+async function tokenSource(
+  held: boolean,
+  mint: "unavailable" | "unanswered",
+): Promise<HostTokenSource> {
   const source = createHostTokenSource({
     persistence: createMemoryHostTokenPersistence(),
     mint: () =>
-      Promise.resolve({ kind: "unavailable", detail: "authn offline" }),
+      mint === "unanswered"
+        ? new Promise(() => undefined)
+        : Promise.resolve({ kind: "unavailable", detail: "authn offline" }),
     signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
     now: () => Date.now(),
   });
   if (held) {
     await source.adopt(
       USER_A,
-      HOST_ID,
+      host.id,
       { token: HOST_TOKEN, expiresAtMs: Date.now() + 3_600_000 },
       source.era(USER_A),
     );
@@ -80,15 +97,50 @@ async function tokenSource(held: boolean): Promise<HostTokenSource> {
   return source;
 }
 
+/**
+ * What refreshes the person's sign-in after a host refused it: it answers
+ * `outcome` and, when it rotated, the context carries the new token.
+ */
+type SignInRefresh = (
+  provider: DefaultRequestContextProvider,
+) => StreamAuthRevalidator;
+
+const refreshAnswering =
+  (outcome: RevalidateOutcome): SignInRefresh =>
+  (provider) => ({
+    revalidateForReconnect: () => {
+      if (outcome === "rotated")
+        signIn(provider, USER_A, ROTATED_SIGN_IN_TOKEN);
+      return Promise.resolve(outcome);
+    },
+  });
+
+/** A change of the delete command's connection as its session reported it, with the flag read in the transition. */
+interface ObservedStatus {
+  readonly status: StreamConnectionStatus;
+  readonly dialsNow: boolean;
+}
+
+/** For each `reconnecting` the stream reported, whether another dial followed it at once. */
+const reconnectsDialedAtOnce = (statuses: readonly ObservedStatus[]) =>
+  statuses
+    .filter((observed) => observed.status === "reconnecting")
+    .map((observed) => observed.dialsNow);
+
 /** One cleanup of `PATH` against a personal host reached over a fake socket. */
-function startCleanup(source: HostTokenSource): {
+function startCleanup(
+  source: HostTokenSource,
+  refresh: SignInRefresh | null,
+): {
   readonly outcome: { current: WorktreeCleanupOutcome | null };
+  readonly statuses: ObservedStatus[];
 } {
+  const statuses: ObservedStatus[] = [];
   const provider = newProvider();
   signIn(provider, USER_A, SIGN_IN_TOKEN);
   const target = {
     ...mockLocalHostEntry,
-    hostId: HOST_ID,
+    hostId: host.id,
     owner: { kind: "user", id: USER_A } as const,
   };
   const openStreamTransport = (): DurableStreamTransport => {
@@ -97,31 +149,45 @@ function startCleanup(source: HostTokenSource): {
       endpoint: () =>
         target.websocketUrl === null
           ? null
-          : { hostId: HOST_ID, websocketUrl: target.websocketUrl },
+          : { hostId: host.id, websocketUrl: target.websocketUrl },
       bearer: liveBearer(provider),
       cloudAuthorized: () => true,
       authnBaseUrl: "https://authn.test",
-      auth: null,
+      auth: refresh === null ? null : refresh(provider),
       hostTokens: source,
       userId: USER_A,
       proactiveWakeEligible: false,
       autoStart: true,
     });
     if (client === null) throw new Error("local stream client did not build");
+    // A session keeps one status handler. The one the command installs is
+    // wrapped, so each status is read where the stream emits it.
+    const subscribe = client.subscribe.bind(client);
+    vi.spyOn(client, "subscribe").mockImplementation((method, params) => {
+      const session = subscribe(method, params);
+      const install = session.onStatusChange.bind(session);
+      vi.spyOn(session, "onStatusChange").mockImplementation((handler) => {
+        install((status, reason, retryCause, continuity) => {
+          statuses.push({ status, dialsNow: dialsNow(session) });
+          handler(status, reason, retryCause, continuity);
+        });
+      });
+      return session;
+    });
     return { wsStreamClient: client, close: () => client.close("test done") };
   };
   const outcome: { current: WorktreeCleanupOutcome | null } = {
     current: null,
   };
   void runWorktreeCleanup(openStreamTransport, {
-    hostId: HOST_ID,
+    hostId: host.id,
     paths: [PATH],
     source: "task_cleanup",
     stopOwnersPaths: new Set(),
   }).then((settled) => {
     outcome.current = settled;
   });
-  return { outcome };
+  return { outcome, statuses };
 }
 
 async function socketAt(count: number): Promise<FakeNativeWebSocket> {
@@ -166,6 +232,8 @@ async function hostDeletes(socket: FakeNativeWebSocket): Promise<void> {
 }
 
 beforeEach(() => {
+  host.count += 1;
+  host.id = `cleanup-real-stream-host-${host.count}`;
   processReleasedHosts.forgetAll();
   vi.useFakeTimers();
   vi.stubGlobal("WebSocket", FakeNativeWebSocket);
@@ -182,7 +250,10 @@ afterEach(async () => {
 
 describe("worktree cleanup against a host that takes the person's sign-in", () => {
   it("removes the worktrees of a released personal host once its sign-in is admitted on the immediate redial", async () => {
-    const { outcome } = startCleanup(await tokenSource(true));
+    const { outcome } = startCleanup(
+      await tokenSource(true, "unavailable"),
+      null,
+    );
     const first = await socketAt(1);
     expect(await openTokenOf(first)).toBe(HOST_TOKEN);
     first.fireMessage(releasedRefusal());
@@ -199,7 +270,10 @@ describe("worktree cleanup against a host that takes the person's sign-in", () =
   });
 
   it("removes the worktrees of a current personal host with no token once its invitation's sign-in is admitted", async () => {
-    const { outcome } = startCleanup(await tokenSource(false));
+    const { outcome } = startCleanup(
+      await tokenSource(false, "unavailable"),
+      null,
+    );
     const probe = await socketAt(1);
     expect(await openTokenOf(probe)).toBe(NO_HOST_TOKEN_PROBE);
     probe.fireMessage(named("owner_sign_in", false));
@@ -213,6 +287,107 @@ describe("worktree cleanup against a host that takes the person's sign-in", () =
         uncertain: [],
       }),
     );
+  });
+});
+
+describe("worktree cleanup settles only on the stream's backoff or a terminal end", () => {
+  it("removes the worktrees of a released personal host with no held host-only token once the sign-in handed over after the placeholder is admitted", async () => {
+    const { outcome, statuses } = startCleanup(
+      await tokenSource(false, "unavailable"),
+      null,
+    );
+    const placeholder = await socketAt(1);
+    expect(await openTokenOf(placeholder)).toBe(NO_HOST_TOKEN_PROBE);
+    placeholder.fireMessage(releasedRefusal());
+    const handedOver = await socketAt(2);
+    expect(await openTokenOf(handedOver)).toBe(SIGN_IN_TOKEN);
+    await hostDeletes(handedOver);
+    await vi.waitFor(() =>
+      expect(outcome.current).toEqual({
+        removed: [PATH],
+        failed: [],
+        uncertain: [],
+      }),
+    );
+    // The first dial's statuses go out before any handler exists, so the only
+    // `reconnecting` the cleanup sees is the handover's, flagged.
+    expect(reconnectsDialedAtOnce(statuses)).toEqual([true]);
+  });
+
+  it("removes the worktrees once the sign-in a released host refused bare was refreshed and the stream redialed at once", async () => {
+    const { outcome, statuses } = startCleanup(
+      await tokenSource(true, "unavailable"),
+      refreshAnswering("rotated"),
+    );
+    const first = await socketAt(1);
+    expect(await openTokenOf(first)).toBe(HOST_TOKEN);
+    first.fireMessage(releasedRefusal());
+    const expired = await socketAt(2);
+    expect(await openTokenOf(expired)).toBe(SIGN_IN_TOKEN);
+    expired.fireMessage(releasedRefusal());
+    // After a refresh that made progress the stream redials through its
+    // ordinary short backoff, with no further status.
+    await vi.advanceTimersByTimeAsync(BACKOFF_PASSED_MS);
+    const refreshed = await socketAt(3);
+    expect(await openTokenOf(refreshed)).toBe(ROTATED_SIGN_IN_TOKEN);
+    await hostDeletes(refreshed);
+    await vi.waitFor(() =>
+      expect(outcome.current).toEqual({
+        removed: [PATH],
+        failed: [],
+        uncertain: [],
+      }),
+    );
+    // The handover and the refresh's redial each report a dial at once, and no
+    // backoff is reported.
+    expect(reconnectsDialedAtOnce(statuses)).toEqual([true, true]);
+  });
+
+  it("reports the paths as not reached once the refresh of the sign-in a released host refused bare does not reach authn and the stream goes to backoff", async () => {
+    const { outcome, statuses } = startCleanup(
+      await tokenSource(true, "unavailable"),
+      refreshAnswering("network-error"),
+    );
+    const first = await socketAt(1);
+    expect(await openTokenOf(first)).toBe(HOST_TOKEN);
+    first.fireMessage(releasedRefusal());
+    const expired = await socketAt(2);
+    expect(await openTokenOf(expired)).toBe(SIGN_IN_TOKEN);
+    expired.fireMessage(releasedRefusal());
+    await settle();
+    await vi.waitFor(() =>
+      expect(outcome.current).toEqual({
+        removed: [],
+        failed: [{ worktreePath: PATH, reason: NEVER_REACHED_HOST_REASON }],
+        uncertain: [],
+      }),
+    );
+    // The handover and the refresh's own redial report a dial at once; the
+    // refresh then ends in backoff, which is an extra report with none.
+    expect(reconnectsDialedAtOnce(statuses)).toEqual([true, true, false]);
+  });
+
+  it("removes the worktrees of a released personal host whose mint never answers: the placeholder is written at once and the sign-in handed over after it is admitted", async () => {
+    const { outcome, statuses } = startCleanup(
+      await tokenSource(false, "unanswered"),
+      null,
+    );
+    const placeholder = await socketAt(1);
+    expect(await openTokenOf(placeholder)).toBe(NO_HOST_TOKEN_PROBE);
+    placeholder.fireMessage(releasedRefusal());
+    const handedOver = await socketAt(2);
+    expect(await openTokenOf(handedOver)).toBe(SIGN_IN_TOKEN);
+    await hostDeletes(handedOver);
+    await vi.waitFor(() =>
+      expect(outcome.current).toEqual({
+        removed: [PATH],
+        failed: [],
+        uncertain: [],
+      }),
+    );
+    // The first dial's statuses go out before any handler exists, so the only
+    // `reconnecting` the cleanup sees is the handover's, flagged.
+    expect(reconnectsDialedAtOnce(statuses)).toEqual([true]);
   });
 });
 
@@ -233,7 +408,10 @@ describe("worktree cleanup when the stream drops on its backoff before the reque
   ])(
     "reports the paths as not reached at once after $name, with no wait armed",
     async ({ drop }) => {
-      const { outcome } = startCleanup(await tokenSource(true));
+      const { outcome } = startCleanup(
+        await tokenSource(true, "unavailable"),
+        null,
+      );
       const socket = await socketAt(1);
       expect(await openTokenOf(socket)).toBe(HOST_TOKEN);
       drop(socket);

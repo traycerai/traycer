@@ -665,6 +665,42 @@ describe("traycer monitor local released-host sign-in", () => {
     return { answer: (response) => held.resolve(response) };
   }
 
+  /** Every mint authn takes is held: the test answers each by its order. */
+  function holdMints(): {
+    readonly answer: (index: number, response: Response) => void;
+  } {
+    const held: ((response: Response) => void)[] = [];
+    monitorHarness.state.grantResponse = () =>
+      new Promise<Response>((resolve) => {
+        held.push(resolve);
+      });
+    return {
+      answer: (index, response) => {
+        held[index]?.(response);
+      },
+    };
+  }
+
+  function grantedToken(token: string): Response {
+    return new Response(
+      JSON.stringify({ session_grant: token, session_grant_expires_in: 3600 }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  /** The host's process is replaced: the poll reads a new one at the same host id. */
+  async function replaceHostProcess(): Promise<void> {
+    monitorHarness.state.pid += 1;
+    monitorHarness.state.startedAt = `2026-01-01T0${monitorHarness.state.pid}:00:00.000Z`;
+    await letPollRead();
+  }
+
+  function drop(
+    socket: InstanceType<typeof monitorHarness.ScriptSocket>,
+  ): void {
+    socket.onclose?.({ code: 1006, reason: "drop", wasClean: false });
+  }
+
   async function ackOpen(
     socket: InstanceType<typeof monitorHarness.ScriptSocket>,
     open: Record<string, unknown>,
@@ -890,6 +926,123 @@ describe("traycer monitor local released-host sign-in", () => {
     });
   });
 
+  describe("a replacement process at the same host id", () => {
+    it("is asked its own mint, and the earlier process's mint answering not-admitted ends nothing", async () => {
+      const mints = holdMints();
+      startMonitor();
+      const earlier = await socketAt(0);
+      expect((await readOpen(earlier)).token).toBe(NO_HOST_TOKEN_PROBE);
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(1),
+        WAIT,
+      );
+      await replaceHostProcess();
+      drop(earlier);
+      await vi.advanceTimersByTimeAsync(6_000);
+      const own = await socketAt(1);
+      expect((await readOpen(own)).token).toBe(NO_HOST_TOKEN_PROBE);
+
+      // The replacement's bearer lookup asks authn for a mint of its own.
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts.length).toBeGreaterThan(1),
+        WAIT,
+      );
+      own.fireFrame(fatal("not_admitted", TEAM_REFUSAL));
+      await vi.advanceTimersByTimeAsync(0);
+      mints.answer(
+        0,
+        new Response(JSON.stringify({ code: "no_row" }), { status: 404 }),
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(await outcomeOf()).toBe("running");
+    });
+
+    it("does not end with the earlier process's reason when its recovery fails after the poll read the replacement", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      const mints = holdMints();
+      startMonitor();
+      const earlier = await socketAt(0);
+      expect((await readOpen(earlier)).token).toBe("held-token");
+      earlier.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(1),
+        WAIT,
+      );
+      await replaceHostProcess();
+
+      mints.answer(
+        0,
+        new Response(JSON.stringify({ code: "team_membership_required" }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(await outcomeOf()).toBe("running");
+      const own = await socketAt(1);
+      await readOpen(own);
+      expect(openToken(own)).not.toBeNull();
+    });
+
+    it("ends with the mint's line on the replacement's first not-admitted mint after the earlier process's admitted connection left", async () => {
+      const mints = holdMints();
+      startMonitor();
+      const probe = await socketAt(0);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      probe.fireFrame(
+        fatal("owner_sign_in", "current personal host invited sign-in"),
+      );
+      // The earlier process admits the sign-in; the replacement is read; the earlier connection leaves.
+      const admitted = await socketAt(1);
+      await admitWith(admitted);
+      await replaceHostProcess();
+      drop(admitted);
+      await vi.advanceTimersByTimeAsync(6_000);
+      const own = await socketAt(2);
+      expect((await readOpen(own)).token).toBe(NO_HOST_TOKEN_PROBE);
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts.length).toBeGreaterThan(1),
+        WAIT,
+      );
+      own.fireFrame(fatal("not_admitted", TEAM_REFUSAL));
+      await vi.advanceTimersByTimeAsync(0);
+
+      mints.answer(1, new Response("no row", { status: 404 }));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+    });
+
+    it("gives the replacement a fresh-mint recovery of its own after the earlier process's was spent", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      monitorHarness.state.grantResponse = () =>
+        Promise.resolve(grantedToken(`fresh-${monitorHarness.state.grants}`));
+      startMonitor();
+      const earlier = await socketAt(0);
+      expect((await readOpen(earlier)).token).toBe("held-token");
+      earlier.fireFrame(fatal("token_expired", "host token expired"));
+      // The earlier process's one recovery mints a token and the redial presents it.
+      const redial = await socketAt(1);
+      expect((await readOpen(redial)).token).toBe("fresh-1");
+      await replaceHostProcess();
+      drop(redial);
+      await vi.advanceTimersByTimeAsync(6_000);
+      const own = await socketAt(2);
+      expect((await readOpen(own)).token).toBe("fresh-1");
+      const before = monitorHarness.grantHosts.length;
+
+      own.fireFrame(fatal("token_expired", "host token expired"));
+
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts.length).toBeGreaterThan(before),
+        WAIT,
+      );
+      expect(await outcomeOf()).toBe("running");
+    });
+  });
+
   describe("a host's named reason is forgotten when its process instance changes", () => {
     /** A host that named a reason in this process, then refuses the probe bare: a released host's answer. */
     async function refuseProbeBare(
@@ -1075,6 +1228,63 @@ describe("traycer monitor local released-host sign-in", () => {
         WAIT,
       );
       mint.answer(new Response("rejected", { status: 401 }));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(fatalLinesPrinted()).toEqual([
+        "[traycer monitor] fatal: The stored credential was rejected. Run `traycer login` to re-authenticate.\n",
+      ]);
+      expect(monitorHarness.exits).toEqual([1]);
+    });
+
+    // A guard: it passes at 91ad79a0c. The earlier process takes the released way
+    // before the replacement is read, and the mints are refused after it.
+    it("keeps the stored-credential line when a released host refused an earlier process and the mints are refused after the poll read the replacement", async () => {
+      monitorHarness.state.refresh = "rotated";
+      const mints = holdMints();
+      startMonitorCommand();
+      const earlier = await socketAt(0);
+      expect((await readOpen(earlier)).token).toBe(NO_HOST_TOKEN_PROBE);
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(1),
+        WAIT,
+      );
+      // The earlier process takes the released way: its bare refusal is answered with the sign-in.
+      earlier.fireFrame(bareRefusal());
+      const signIn = await socketAt(1);
+      expect((await readOpen(signIn)).token).toBe(SIGN_IN);
+      await replaceHostProcess();
+      drop(signIn);
+      monitorHarness.state.grantResponse = () =>
+        Promise.resolve(new Response("rejected", { status: 401 }));
+
+      mints.answer(0, new Response("rejected", { status: 401 }));
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(fatalLinesPrinted()).toEqual([
+        "[traycer monitor] fatal: The stored credential was rejected. Run `traycer login` to re-authenticate.\n",
+      ]);
+      expect(monitorHarness.exits).toEqual([1]);
+    });
+
+    it("keeps the stored-credential line when the poll read the replacement before the earlier process's bare refusal was processed", async () => {
+      monitorHarness.state.refresh = "rotated";
+      const mints = holdMints();
+      startMonitorCommand();
+      const earlier = await socketAt(0);
+      expect((await readOpen(earlier)).token).toBe(NO_HOST_TOKEN_PROBE);
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(1),
+        WAIT,
+      );
+      await replaceHostProcess();
+      // The refusal answers the earlier process's open; the replacement has refused nothing.
+      earlier.fireFrame(bareRefusal());
+      monitorHarness.state.grantResponse = () =>
+        Promise.resolve(new Response("rejected", { status: 401 }));
+
+      mints.answer(0, new Response("rejected", { status: 401 }));
+      await vi.advanceTimersByTimeAsync(30_000);
 
       await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
       expect(fatalLinesPrinted()).toEqual([

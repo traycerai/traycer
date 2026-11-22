@@ -1156,10 +1156,10 @@ describe("HostDirectoryService", () => {
     const first = processReleasedHosts.currentInstance(localSnapshot.hostId);
 
     host.setLocalHost({ ...localSnapshot, displayName: "renamed" });
-    expect(processReleasedHosts.isCurrentInstance(first)).toBe(true);
+    expect(processReleasedHosts.isCurrent(first)).toBe(true);
 
     host.setLocalHost({ ...localSnapshot, pid: localSnapshot.pid + 1 });
-    expect(processReleasedHosts.isCurrentInstance(first)).toBe(false);
+    expect(processReleasedHosts.isCurrent(first)).toBe(false);
     // An answer the first process's socket delivers now marks nothing.
     processReleasedHosts.refusedNamingReason(first, false);
     expect(processReleasedHosts.namedReason(localSnapshot.hostId)).toBe(false);

@@ -846,7 +846,10 @@ describe("local stream while authn cannot mint", () => {
     await settle();
 
     allowFresh = true;
-    const mint = await source.obtain(USER_A, hostId, true, null);
+    const mint = await source.obtain(USER_A, hostId, true, {
+      signal: null,
+      owner: processReleasedHosts.currentInstance(hostId),
+    });
     expect(mint.kind).toBe("ok");
     expect(processReleasedHosts.opensReleasedWay(USER_A, hostId)).toBe(false);
     invited.fireClose(1006, "dropped after sign-in admission");
@@ -1342,6 +1345,23 @@ describe("local stream while authn cannot mint", () => {
       await settle();
       expect(hostDoorStateFor(hostId)?.kind).toBe("not-admitted");
       joiner.close();
+      client.close("test complete");
+      clearHostDoorState(hostId);
+    });
+
+    it("raises nothing for the replacement process when the mint it started for the earlier process fails, with the subscription alive throughout", async () => {
+      const hostId = "local-mint-across-process-change";
+      clearHostDoorState(hostId);
+      processReleasedHosts.observeInstance(hostId, "process-a");
+      const mints = heldMints();
+      const { client, session } = await startMintFrom(hostId, mints);
+
+      // The host restarts under the same id, and its replacement has not admitted anything yet.
+      processReleasedHosts.observeInstance(hostId, "process-b");
+      mints.answerAll({ kind: "not-admitted" });
+      await settle();
+      expect(hostDoorStateFor(hostId)).toBeNull();
+      session.close();
       client.close("test complete");
       clearHostDoorState(hostId);
     });
@@ -2116,6 +2136,37 @@ describe("local stream while authn cannot mint", () => {
     expect(carried).toEqual([fresh, fresh]);
     expect(refreshRequests).toHaveLength(1);
     other.close();
+    session.close();
+    client.close("test complete");
+    clearHostDoorState(hostId);
+  });
+
+  it("presents a held token the earlier process refused as expired to the replacement process", async () => {
+    const hostId = "local-refused-token-replacement-process";
+    clearHostDoorState(hostId);
+    processReleasedHosts.observeInstance(hostId, "process-a");
+    const usable = {
+      token: "locally-usable-host-token",
+      expiresAtMs: Date.now() + 3_600_000,
+    };
+    const mints = heldMints();
+    const source = sourceWithMint(mints.mint);
+    await source.adopt(USER_A, hostId, usable, source.era(USER_A));
+    const { client, session } = openClient(hostId, source, {
+      kind: "user",
+      id: USER_A,
+    });
+    const first = await socketOnThisTurn(1);
+    expect((await readOpen(first)).token).toBe(usable.token);
+    first.fireMessage(namedRefusal("token_expired"));
+    await vi.waitFor(() => expect(mints.asked()).toBe(1));
+    mints.answerAll({ kind: "unavailable", detail: "authn offline" });
+    await settle();
+
+    // The host restarts under the same id before the redial; the refusal was its predecessor's.
+    processReleasedHosts.observeInstance(hostId, "process-b");
+    const second = await socketAt(2);
+    expect((await readOpen(second)).token).toBe(usable.token);
     session.close();
     client.close("test complete");
     clearHostDoorState(hostId);

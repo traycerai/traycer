@@ -460,7 +460,7 @@ export function createLocalHostInventoryStreamClient(deps: {
   return (endpoint, userId) => {
     if (hostVersionNeedsUpdate(endpoint.version, MINIMUM_HOST_VERSION))
       return null;
-    const hostTokens = trackHostTokenMints(deps.hostTokens);
+    const hostTokens = trackHostTokenMints(deps.hostTokens, processReleasedHosts);
     const client = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
       hostId: endpoint.hostId,
@@ -491,8 +491,8 @@ export function createLocalHostInventoryStreamClient(deps: {
           hostTokenUnobtainable(hostTokens, userId, hostId),
         ownerSignInEligible: (hostId) =>
           ownerSignInEligible(hostTokens, userId, hostId),
-        heldTokenRefused: (hostId, presented) =>
-          heldTokenRefused(hostTokens, userId, hostId, presented),
+        heldTokenRefused: (instance, presented) =>
+          heldTokenRefused(hostTokens, userId, instance, presented),
         forgetHeldRefusal: (hostId) =>
           hostTokens.forgetHeldRefused(userId, hostId),
         hosts: processReleasedHosts,
@@ -500,6 +500,7 @@ export function createLocalHostInventoryStreamClient(deps: {
       ...hostTokenStreamAuth(
         {
           tokens: hostTokens,
+          hosts: processReleasedHosts,
           currentUserId: () => deps.bearer()?.identity.userId ?? null,
           hostId: endpoint.hostId,
           signInRecovery: null,

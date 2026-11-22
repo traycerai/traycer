@@ -1070,16 +1070,16 @@ function localDoorBearers(
   | "heldTokenRefusedFor"
   | "forgetHeldRefusalFor"
 > {
-  const tracked = trackHostTokenMints(tokens);
+  const tracked = trackHostTokenMints(tokens, processReleasedHosts);
   return {
     hostBearerFor: hostTokenBearerFor(tracked, noteHostTokenRefusal),
     releasedSignOnFor: signInForLocalRow(resolveRow, recovery, tracked),
     releasedHosts: processReleasedHosts,
-    heldTokenRefusedFor: (authority, presented) =>
+    heldTokenRefusedFor: (authority, presented, instance) =>
       heldTokenRefused(
         tracked,
         authority.bearer.identity.userId,
-        authority.endpoint.hostId,
+        instance,
         presented,
       ),
     forgetHeldRefusalFor: (authority) =>

@@ -9,7 +9,7 @@ import {
 import {
   createReleasedHostMemory,
   processReleasedHosts,
-  type HostInstanceStamp,
+  type HostInstance,
   type InvitationMark,
   type ReleasedHostMemory,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
@@ -111,10 +111,10 @@ vi.mock(
     return {
       ...actual,
       processReleasedHosts: {
-        currentInstance: (hostId: string): HostInstanceStamp =>
+        currentInstance: (hostId: string): HostInstance =>
           releasedMemory.read().currentInstance(hostId),
-        isCurrentInstance: (stamp: HostInstanceStamp): boolean =>
-          releasedMemory.read().isCurrentInstance(stamp),
+        isCurrent: (instance: HostInstance): boolean =>
+          releasedMemory.read().isCurrent(instance),
         observeInstance: (hostId: string, observed: string): void => {
           releasedMemory.read().observeInstance(hostId, observed);
         },
@@ -122,34 +122,34 @@ vi.mock(
           releasedMemory.read().opensReleasedWay(userId, hostId),
         namedReason: (hostId: string): boolean =>
           releasedMemory.read().namedReason(hostId),
-        signInAdmitted: (userId: string, stamp: HostInstanceStamp): void => {
-          releasedMemory.read().signInAdmitted(userId, stamp);
+        signInAdmitted: (userId: string, instance: HostInstance): void => {
+          releasedMemory.read().signInAdmitted(userId, instance);
         },
-        hostTokenAdmitted: (stamp: HostInstanceStamp): void => {
-          releasedMemory.read().hostTokenAdmitted(stamp);
+        hostTokenAdmitted: (instance: HostInstance): void => {
+          releasedMemory.read().hostTokenAdmitted(instance);
         },
         refusedNamingReason: (
-          stamp: HostInstanceStamp,
+          instance: HostInstance,
           invitation: boolean,
         ): void => {
-          releasedMemory.read().refusedNamingReason(stamp, invitation);
+          releasedMemory.read().refusedNamingReason(instance, invitation);
         },
-        invitationHeard: (stamp: HostInstanceStamp): InvitationMark =>
-          releasedMemory.read().invitationHeard(stamp),
+        invitationHeard: (instance: HostInstance): InvitationMark =>
+          releasedMemory.read().invitationHeard(instance),
         invitationWithdrawn: (mark: InvitationMark): boolean =>
           releasedMemory.read().invitationWithdrawn(mark),
-        declineProbe: (userId: string, stamp: HostInstanceStamp): void => {
-          releasedMemory.read().declineProbe(userId, stamp);
+        declineProbe: (userId: string, instance: HostInstance): void => {
+          releasedMemory.read().declineProbe(userId, instance);
         },
         probeDeclined: (userId: string, hostId: string): boolean =>
           releasedMemory.read().probeDeclined(userId, hostId),
         invitedSignInPending: (hostId: string): boolean =>
           releasedMemory.read().invitedSignInPending(hostId),
-        invitedSignInWritten: (stamp: HostInstanceStamp): void => {
-          releasedMemory.read().invitedSignInWritten(stamp);
+        invitedSignInWritten: (instance: HostInstance): void => {
+          releasedMemory.read().invitedSignInWritten(instance);
         },
-        invitedSignInAnswered: (stamp: HostInstanceStamp): void => {
-          releasedMemory.read().invitedSignInAnswered(stamp);
+        invitedSignInAnswered: (instance: HostInstance): void => {
+          releasedMemory.read().invitedSignInAnswered(instance);
         },
         forgetAll: (): void => {
           releasedMemory.read().forgetAll();

@@ -265,6 +265,9 @@ export function createBrowserSessionsHostDirectory(
       lastRefreshAt = null;
       forced = true;
     },
+    // The local entry wins. Main reaches a host id through the relay only when
+    // it has no local entry for that id. Main then observes no process for the
+    // id, so its `HostInstance` stays as the local path last left it.
     endpoint: (hostId) => {
       const entry = localEntryFor(hostId) ?? cachedRemote.get(hostId) ?? null;
       if (
@@ -414,7 +417,7 @@ export function openBrowserSessionsTransport(
       },
     };
   }
-  const hostTokens = trackHostTokenMints(deps.hostTokens);
+  const hostTokens = trackHostTokenMints(deps.hostTokens, processReleasedHosts);
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     hostId: target.hostId,
@@ -439,6 +442,7 @@ export function openBrowserSessionsTransport(
     ...hostTokenStreamAuth(
       {
         tokens: hostTokens,
+        hosts: processReleasedHosts,
         currentUserId: () => deps.bearer()?.identity.userId ?? null,
         hostId: target.hostId,
         signInRecovery: null,

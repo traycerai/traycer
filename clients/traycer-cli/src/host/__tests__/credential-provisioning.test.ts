@@ -947,6 +947,59 @@ describe("provisionInstalledHostCredential", () => {
     ]);
   });
 
+  it("ends nothing when the poll reads a replacement while a refused token's recovery awaits and the recovery is then refused", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(localHostMetadata());
+    mocks.revalidateCurrentContextMock.mockResolvedValue("rejected");
+    const answer = createDeferred<{ readonly kind: "sign-in-rejected" }>();
+    mocks.hostTokenMintMock.mockReset();
+    mocks.hostTokenMintMock.mockReturnValueOnce(answer.promise);
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void (async (): Promise<void> => {
+          const options = capturedClientOptions();
+          const revalidateRefused = options.auth?.revalidateRefused;
+          if (revalidateRefused === undefined) {
+            throw new Error("probe wired no refused-token recovery");
+          }
+          const refusal = { ...TOKEN_EXPIRED_REFUSAL };
+          options.door.refused(refusal, "host-1");
+          const recovery = revalidateRefused(refusal);
+          await vi.waitFor(() =>
+            expect(
+              mocks.hostTokenMintMock.mock.calls.map((call) => call[1]),
+            ).toEqual(["host-1"]),
+          );
+          // The poll now reads a replacement process at the same host id.
+          const readsBefore = mocks.readHostPidMetadataMock.mock.calls.length;
+          mocks.readHostPidMetadataMock.mockResolvedValue({
+            ...localHostMetadata(),
+            startedAt: "2026-11-15T01:00:00.000Z",
+          });
+          await vi.waitFor(() =>
+            expect(
+              mocks.readHostPidMetadataMock.mock.calls.length,
+            ).toBeGreaterThanOrEqual(readsBefore + 2),
+          );
+          await sleep(0);
+          answer.resolve({ kind: "sign-in-rejected" });
+          mocks.hostTokenRecoveryResult = await recovery;
+          options.onHostCredentialState("host-1", "active");
+        })();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+
+    // The verdict belongs to the process that refused: the stream redials on its backoff.
+    expect(mocks.hostTokenRecoveryResult).toBe("network-error");
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "active",
+      minted: false,
+    });
+  });
+
   it("cancels the recovery's fresh-token mint with the probe", async () => {
     const pendingMint = createDeferred<{
       readonly kind: "unavailable";

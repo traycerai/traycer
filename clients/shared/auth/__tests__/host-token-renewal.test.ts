@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { RevalidateOutcome } from "../bearer-revalidator";
 import type { BearerSourceProvider } from "../bearer-source";
 import {
   hostTokenBearer,
   hostTokenBearerFor,
   hostTokenRevalidator,
+  hostTokenStreamAuth,
   trackHostTokenMints,
   type HostTokenAccess,
 } from "../host-token-lease";
@@ -14,6 +17,10 @@ import {
   type HostTokenMintOutcome,
 } from "../host-token-source";
 import { mintHostTokenViaHttp } from "../../host-transport/remote/grant-client";
+import {
+  createReleasedHostMemory,
+  hostTokenUnobtainable,
+} from "../../host-transport/released-sign-on";
 import { WsStreamClient } from "../../host-transport/ws-stream-client";
 import { createWhatwgStreamWebSocketFactory } from "../../host-transport/whatwg-stream-ws-factory";
 import {
@@ -99,7 +106,7 @@ describe("host-token renewal", () => {
     };
     const bearer: BearerSourceProvider = () => signInLease;
     const streamBearer = hostTokenBearer(
-      trackHostTokenMints(tokens),
+      trackHostTokenMints(tokens, createReleasedHostMemory()),
       bearer,
       HOST_IDS[0],
       () => undefined,
@@ -192,7 +199,7 @@ describe("host-token renewal", () => {
       endpoint: () => ({ ...mockLocalHostEntry, hostId }),
       hostId,
       bearer: hostTokenBearer(
-        trackHostTokenMints(localTokens),
+        trackHostTokenMints(localTokens, createReleasedHostMemory()),
         liveBearer(provider),
         hostId,
         () => undefined,
@@ -388,16 +395,15 @@ describe("host-token lease after a user era changes", () => {
         tokens.current(userId, requestedHostId),
       loaded: () => tokens.loaded(),
       whenLoaded: () => tokens.whenLoaded(),
-      obtain: (userId, requestedHostId, fresh, signal) => {
-        const pending = tokens.obtain(userId, requestedHostId, fresh, signal);
+      obtain: (userId, requestedHostId, fresh, ask) => {
+        const pending = tokens.obtain(userId, requestedHostId, fresh, ask);
         bearerMint.resolve({ pending });
         return pending;
       },
-      lastFailure: (userId, requestedHostId) =>
-        tokens.lastFailure(userId, requestedHostId),
+      lastFailureOf: (userId, owner) => tokens.lastFailureOf(userId, owner),
     };
     const bearer = hostTokenBearer(
-      trackHostTokenMints(access),
+      trackHostTokenMints(access, createReleasedHostMemory()),
       () => signInLease,
       hostId,
       (_refusedHostId, state) => states.push(state),
@@ -432,7 +438,7 @@ describe("host-token lease after a user era changes", () => {
       getBearerToken: () => "sign-in-a",
     };
     const bearerFor = hostTokenBearerFor(
-      trackHostTokenMints(tokens),
+      trackHostTokenMints(tokens, createReleasedHostMemory()),
       (_refusedHostId, state) => states.push(state),
     );
     const pending = bearerFor(
@@ -476,6 +482,7 @@ describe("host-token revalidation after an era changes", () => {
     });
     const revalidator = hostTokenRevalidator({
       tokens,
+      hosts: createReleasedHostMemory(),
       currentUserId: () => USER_A,
       hostId: "era-retry-host",
       signInRecovery: null,
@@ -522,6 +529,7 @@ describe("host-token revalidation after an era changes", () => {
     });
     const revalidator = hostTokenRevalidator({
       tokens,
+      hosts: createReleasedHostMemory(),
       currentUserId: () => currentUserId,
       hostId: "era-retry-host",
       signInRecovery: null,
@@ -552,6 +560,9 @@ describe("host-token revalidation after an era changes", () => {
 
 describe("how a pair's last mint ended", () => {
   const HOST_ID = "computer-last-failure";
+  const hosts = createReleasedHostMemory();
+  const owner = hosts.currentInstance(HOST_ID);
+  const ask = { signal: null, owner };
 
   it("is forgotten when the person's era moves, and a late answer from the old era does not set it", async () => {
     const oldEraAnswer = deferred<HostTokenMintOutcome>();
@@ -570,18 +581,18 @@ describe("how a pair's last mint ended", () => {
     });
     await tokens.whenLoaded();
 
-    await tokens.obtain(USER_ID, HOST_ID, true, null);
-    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBe("not-a-member");
+    await tokens.obtain(USER_ID, HOST_ID, true, ask);
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("not-a-member");
 
     await tokens.forgetUser(USER_ID);
-    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBeNull();
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
 
-    const pending = tokens.obtain(USER_ID, HOST_ID, true, null);
+    const pending = tokens.obtain(USER_ID, HOST_ID, true, ask);
     await oldEraAsked.promise;
     await tokens.forgetUser(USER_ID);
     oldEraAnswer.resolve({ kind: "not-a-member" });
     await expect(pending).resolves.toEqual({ kind: "superseded" });
-    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBeNull();
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBeNull();
   });
 
   it("is unavailable when the token a mint bought could not be saved, whatever refused the pair before", async () => {
@@ -614,14 +625,14 @@ describe("how a pair's last mint ended", () => {
       now: () => Date.now(),
     });
     await tokens.whenLoaded();
-    await tokens.obtain(USER_ID, HOST_ID, true, null);
-    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBe("not-a-member");
+    await tokens.obtain(USER_ID, HOST_ID, true, ask);
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("not-a-member");
 
     saveFails = true;
-    await expect(tokens.obtain(USER_ID, HOST_ID, true, null)).rejects.toThrow(
+    await expect(tokens.obtain(USER_ID, HOST_ID, true, ask)).rejects.toThrow(
       "disk full",
     );
-    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBe("unavailable");
+    expect(tokens.lastFailureOf(USER_ID, owner)).toBe("unavailable");
   });
 });
 
@@ -644,8 +655,13 @@ describe("a held host-only token the host refused as expired while this clock re
       { token: refusedToken, expiresAtMs: Date.now() + 60_000 },
       source.era(USER_ID),
     );
-    const tokens = trackHostTokenMints(source);
-    tokens.noteHeldRefused(USER_ID, HOST_ID, refusedToken);
+    const hosts = createReleasedHostMemory();
+    const tokens = trackHostTokenMints(source, hosts);
+    tokens.noteHeldRefused(
+      hosts.currentInstance(HOST_ID),
+      USER_ID,
+      refusedToken,
+    );
     const bearerFor = hostTokenBearerFor(tokens, () => undefined);
     const lease = new MutableBearerLease(SIGN_IN_BEFORE, USER_ID);
     return {
@@ -677,5 +693,167 @@ describe("a held host-only token the host refused as expired while this clock re
 
     const lease = await waiting;
     expect(lease?.getBearerToken()).toBe(freshToken);
+  });
+});
+
+describe("a late refusal of an older mint", () => {
+  const HOST_ID = "computer-late-refusal";
+
+  it("leaves the newer mint's success standing, and no invitation is answered with the sign-in because of it", async () => {
+    // Two mints for one pair run at once: the sign-in rotated between them, so
+    // they are separate flights. The older stays pending while the newer
+    // obtains and stores a token.
+    let signIn = signInToken(1_000_000);
+    const olderAnswer = deferred<HostTokenMintOutcome>();
+    const olderAsked = deferred<void>();
+    const newerToken = {
+      token: "host-token-of-the-newer-mint",
+      expiresAtMs: Date.now() + 60_000,
+    };
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: (_hostId, mintedWith) => {
+        if (mintedWith === signInToken(1_000_000)) {
+          olderAsked.resolve();
+          return olderAnswer.promise;
+        }
+        return Promise.resolve<HostTokenMintOutcome>({
+          kind: "ok",
+          token: newerToken,
+        });
+      },
+      signIn: (userId) => (userId === USER_ID ? signIn : null),
+      now: () => Date.now(),
+    });
+    await source.whenLoaded();
+    const hosts = createReleasedHostMemory();
+    const ask = { signal: null, owner: hosts.currentInstance(HOST_ID) };
+
+    const older = source.obtain(USER_ID, HOST_ID, true, ask);
+    await olderAsked.promise;
+    signIn = signInToken(2_000_000);
+    await source.obtain(USER_ID, HOST_ID, true, ask);
+    expect(source.current(USER_ID, HOST_ID)?.token).toBe(newerToken.token);
+
+    olderAnswer.resolve({ kind: "not-admitted" });
+    await expect(older).resolves.toEqual({ kind: "not-admitted" });
+
+    expect(source.lastFailureOf(USER_ID, ask.owner)).toBeNull();
+    expect(
+      hostTokenUnobtainable(
+        trackHostTokenMints(source, hosts),
+        USER_ID,
+        HOST_ID,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("how a pair's last mint ended, across host process instances", () => {
+  const HOST_ID = "computer-replaced";
+
+  it("starts afresh for a replacement process, whatever its predecessor's mint ended in", async () => {
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(HOST_ID, "process-a");
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "not-a-member" }),
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => Date.now(),
+    });
+    await source.whenLoaded();
+    const tokens = trackHostTokenMints(source, hosts);
+
+    await tokens.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: hosts.currentInstance(HOST_ID),
+    });
+    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBe("not-a-member");
+
+    hosts.observeInstance(HOST_ID, "process-b");
+    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBeNull();
+  });
+});
+
+describe("a session recovery's sign-in refresh across an admission", () => {
+  const HOST_ID = "computer-refresh-across-admission";
+  const REFUSED_NOT_ADMITTED: FatalErrorDetails = {
+    code: "UNAUTHORIZED",
+    reason: "current-host-refusal",
+    doorReason: "not_admitted",
+    retryable: false,
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+
+  /** A local stream's recovery whose mints authn always refuses the sign-in for. */
+  async function recoveryWithAuthnRefusingTheSignIn() {
+    const hosts = createReleasedHostMemory();
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "sign-in-rejected" }),
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => Date.now(),
+    });
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      { token: "held-host-token", expiresAtMs: Date.now() + 60_000 },
+      source.era(USER_ID),
+    );
+    // The refresh requests authn received, each answered when the test says so.
+    const refreshRequests: Array<(outcome: RevalidateOutcome) => void> = [];
+    const stream = hostTokenStreamAuth(
+      {
+        tokens: trackHostTokenMints(source, hosts),
+        hosts,
+        currentUserId: () => USER_ID,
+        hostId: HOST_ID,
+        signInRecovery: {
+          revalidateForReconnect: () =>
+            new Promise<RevalidateOutcome>((resolve) => {
+              refreshRequests.push(resolve);
+            }),
+        },
+        onState: () => undefined,
+        now: () => Date.now(),
+      },
+      null,
+    );
+    return {
+      refreshRequests,
+      refused: () =>
+        stream.auth(() => true).revalidateRefused(REFUSED_NOT_ADMITTED),
+      admitted: () => stream.door.admitted(HOST_ID),
+    };
+  }
+
+  it("refreshes again for the newer sequence when the older refresh answers after the admission", async () => {
+    const rig = await recoveryWithAuthnRefusingTheSignIn();
+    const older = rig.refused();
+    await vi.waitFor(() => expect(rig.refreshRequests).toHaveLength(1));
+
+    rig.admitted();
+    rig.refreshRequests[0]("rotated");
+    await older;
+
+    const newer = rig.refused();
+    await vi.waitFor(() => expect(rig.refreshRequests).toHaveLength(2));
+    rig.refreshRequests[1]("network-error");
+    await newer;
+  });
+
+  it("refreshes for the newer sequence's own refusal, never joining the older sequence's refresh still running", async () => {
+    const rig = await recoveryWithAuthnRefusingTheSignIn();
+    const older = rig.refused();
+    await vi.waitFor(() => expect(rig.refreshRequests).toHaveLength(1));
+
+    rig.admitted();
+    const newer = rig.refused();
+    await vi.waitFor(() => expect(rig.refreshRequests).toHaveLength(2));
+
+    rig.refreshRequests[1]("network-error");
+    rig.refreshRequests[0]("network-error");
+    await Promise.all([older, newer]);
   });
 });

@@ -20,7 +20,7 @@ import type {
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import { isIncompatibleCloseForMethod } from "./i-stream-session";
-import { redialsWithSignInNow } from "./ws-stream-client";
+import { dialsNow } from "./ws-stream-client";
 import type { IHostStreamClient } from "./host-stream-client";
 
 export const WORKTREE_DELETE_BATCH_STREAM_METHOD = "worktree.deleteBatchByPath";
@@ -108,10 +108,11 @@ export interface WorktreeDeleteBatchConnectionStatus {
    */
   readonly startSent: boolean;
   /**
-   * This `reconnecting` is the one the stream follows at once by a dial that
-   * hands over a sign-in (`redialsWithSignInNow`); false on every other change.
+   * This `reconnecting` is one the stream follows at once by another dial
+   * (`dialsNow`); false on every other change. A `reconnecting` without it is
+   * the stream entering backoff.
    */
-  readonly signInRedial: boolean;
+  readonly dialsNow: boolean;
 }
 
 export interface WorktreeDeleteBatchStreamClientOptions {
@@ -272,7 +273,7 @@ export class WorktreeDeleteBatchStreamClient {
     }
     // An `observe` session exists only once the start was sent.
     const startSent = this.mode === "observe" || session.hasSentOpenRequest();
-    const signInRedial = redialsWithSignInNow(session);
+    const redialsAtOnce = dialsNow(session);
     if (status === "open") {
       this.callbacks.onConnectionStatus({
         status,
@@ -280,7 +281,7 @@ export class WorktreeDeleteBatchStreamClient {
         retryCause,
         continuity,
         startSent,
-        signInRedial,
+        dialsNow: redialsAtOnce,
       });
       return;
     }
@@ -327,7 +328,7 @@ export class WorktreeDeleteBatchStreamClient {
       retryCause,
       continuity,
       startSent,
-      signInRedial,
+      dialsNow: redialsAtOnce,
     });
   }
 

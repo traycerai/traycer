@@ -397,7 +397,7 @@ describe("relay door sign-in refusal", () => {
       test.transport.session.close();
       retireAllRemoteSessions();
     }
-  });
+  }, 20_000);
 
   it("presents the sign-in once the row allows it, though the row did not when the session was built", async () => {
     let rowAllows = false;

@@ -21,8 +21,9 @@ import {
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
-// The redial deadline of `run-worktree-cleanup.ts` (PRE_OPEN_REDIAL_DEADLINE_MS).
-const PRE_OPEN_REDIAL_DEADLINE_MS = 30_000;
+// No deadline bounds a `reconnecting` the stream follows at once by another
+// dial: the cleanup waits it out, however long a dial takes.
+const LONG_WAIT_MS = 10 * 60_000;
 
 // The current-host path: ONE `worktree.deleteBatchByPath` command per cleanup.
 // Recording every construction is what lets a test assert the migration's core
@@ -46,8 +47,8 @@ const legacyMock = vi.hoisted(() => ({
   stopOwnersByPath: new Map<string, boolean>(),
   /** Paths whose stream fails to open, driving `deleteOneWorktree`'s catch. */
   throwForPaths: new Set<string>(),
-  /** Paths whose stream is, at this moment, about to redial at once to hand over a sign-in. */
-  signInRedialPaths: new Set<string>(),
+  /** Paths whose stream is, at this moment, about to dial again at once. */
+  dialsNowPaths: new Set<string>(),
   closeCount: 0,
 }));
 
@@ -118,8 +119,8 @@ vi.mock(
         }
         legacyMock.callbacksByPath.set(options.worktreePath, options.callbacks);
       }
-      redialsWithSignInNow(): boolean {
-        return legacyMock.signInRedialPaths.has(this.worktreePath);
+      dialsNow(): boolean {
+        return legacyMock.dialsNowPaths.has(this.worktreePath);
       }
       close(): void {
         legacyMock.closeCount += 1;
@@ -193,13 +194,13 @@ function status(
     retryCause: null,
     continuity,
     startSent,
-    signInRedial: false,
+    dialsNow: false,
   };
 }
 
-/** The `reconnecting` the stream follows at once with a dial that hands over a sign-in. */
-function signInRedialStatus(): WorktreeDeleteBatchConnectionStatus {
-  return { ...status("reconnecting", null, false), signInRedial: true };
+/** The `reconnecting` the stream follows at once by another dial. */
+function dialsNowStatus(): WorktreeDeleteBatchConnectionStatus {
+  return { ...status("reconnecting", null, false), dialsNow: true };
 }
 
 /** Drives the command past the send of its start request. */
@@ -236,7 +237,7 @@ beforeEach(() => {
   legacyMock.callbacksByPath.clear();
   legacyMock.stopOwnersByPath.clear();
   legacyMock.throwForPaths.clear();
-  legacyMock.signInRedialPaths.clear();
+  legacyMock.dialsNowPaths.clear();
   legacyMock.closeCount = 0;
   loggerMock.throwForMessages.clear();
 });
@@ -396,7 +397,7 @@ describe("runWorktreeCleanup on a current host", () => {
     expect(legacyMock.paths).toEqual([]);
   });
 
-  it("waits out the redial that hands over a sign-in BEFORE the command was sent, and reports the paths failed once the deadline passes", async () => {
+  it("waits out a reconnecting the stream follows at once BEFORE the command was sent, with no deadline, and reports the paths failed when the stream enters backoff", async () => {
     vi.useFakeTimers();
     try {
       const promise = runTaskCleanup(["/wt/a"]);
@@ -405,12 +406,14 @@ describe("runWorktreeCleanup on a current host", () => {
         settled = true;
       });
       // The subscribe frame never got to a socket, so nothing was attempted and
-      // there is nothing uncertain about it; the stream redials it.
-      commandCallbacks().onConnectionStatus(signInRedialStatus());
-      await vi.advanceTimersByTimeAsync(PRE_OPEN_REDIAL_DEADLINE_MS - 1);
+      // there is nothing uncertain about it; the stream dials again at once.
+      commandCallbacks().onConnectionStatus(dialsNowStatus());
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
       expect(settled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(1);
+      commandCallbacks().onConnectionStatus(
+        status("reconnecting", null, false),
+      );
       await expect(promise).resolves.toEqual({
         removed: [],
         failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],
@@ -531,20 +534,32 @@ describe("runWorktreeCleanup on an older host", () => {
   // (exactly one subscribe, no reconnect re-run), and let the overall promise
   // settle so the summary toast + cache invalidation still fire. Unchanged by
   // the migration: an older host has no command to keep running without us.
-  it("settles when a per-target stream's sign-in redial does not open within the deadline", async () => {
+  it("waits out a per-target stream's redial at once with no deadline, and fails the paths when the stream enters backoff", async () => {
     vi.useFakeTimers();
     try {
       const promise = runTaskCleanup(["/wt/a"]);
       await reportUnsupported();
-      legacyMock.signInRedialPaths.add("/wt/a");
+      let settled = false;
+      void promise.then(() => {
+        settled = true;
+      });
+      legacyMock.dialsNowPaths.add("/wt/a");
       legacyCallbacksFor("/wt/a").onConnectionStatus(
         "reconnecting",
         null,
         null,
         null,
       );
-      await vi.advanceTimersByTimeAsync(PRE_OPEN_REDIAL_DEADLINE_MS);
+      await vi.advanceTimersByTimeAsync(LONG_WAIT_MS);
+      expect(settled).toBe(false);
 
+      legacyMock.dialsNowPaths.clear();
+      legacyCallbacksFor("/wt/a").onConnectionStatus(
+        "reconnecting",
+        null,
+        null,
+        null,
+      );
       await expect(promise).resolves.toEqual({
         removed: [],
         failed: [{ worktreePath: "/wt/a", reason: NEVER_REACHED_HOST_REASON }],

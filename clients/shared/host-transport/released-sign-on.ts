@@ -54,10 +54,14 @@ export interface ReleasedSignOn {
   readonly ownerSignInEligible: (hostId: string) => boolean;
   /**
    * The host refused `presented`, the host-only token on the open frame, as
-   * expired; that token is not presented again. Answers whether it was the held
-   * one presented because authn did not answer the mint.
+   * expired. That token is not presented to `instance` again, the process
+   * instance whose answer it was. Answers whether it was the held one
+   * presented because authn did not answer the mint.
    */
-  readonly heldTokenRefused: (hostId: string, presented: string) => boolean;
+  readonly heldTokenRefused: (
+    instance: HostInstance,
+    presented: string,
+  ) => boolean;
   /** No owner's sign-in can follow that refusal: see `TrackedHostTokens.forgetHeldRefused`. */
   readonly forgetHeldRefusal: (hostId: string) => void;
   /** What this process has seen of each host's answers; see {@link ReleasedHostMemory}. */
@@ -65,21 +69,26 @@ export interface ReleasedSignOn {
 }
 
 /**
- * The process instance of a host id that a {@link ReleasedHostMemory} last saw.
- * Only `currentInstance` hands one out and callers never build one. It is
- * compared by identity. An attempt (a socket, a unary call) reads it at the
- * dial and carries it, so each answer applies to the instance that gave it.
- * A host id that no observer reports, which is every remote host, keeps one
- * stamp for the life of the process. There the host id stays the key, and a
- * remote host that restarts under the same id is not told apart.
+ * The owner of everything this process learns from one process instance of a
+ * host id. Only `currentInstance` hands one out, and callers never build one.
+ * It is compared by identity. An attempt (a socket, a unary call, a sign-in
+ * authority, a plan) reads it at the dial and carries it. Every effect of that
+ * attempt's answers names it and does nothing once it is not current.
+ * State that belongs to one instance is keyed by this object in a `WeakMap`,
+ * in this memory and in any other layer. Replacing the instance drops all of
+ * it at once.
+ * A host id that no observer reports keeps one instance for the life of the
+ * process. Every host reached only through the relay is such a host id, so
+ * there the host id stays the key, and a relay host that restarts under the
+ * same id is not told apart.
  */
-export interface HostInstanceStamp {
+export interface HostInstance {
   readonly hostId: string;
 }
 
 /** Opaque: an invitation as its attempt heard it. Only `invitationHeard` makes one. */
 export interface InvitationMark {
-  readonly stamp: HostInstanceStamp;
+  readonly instance: HostInstance;
   readonly refusalsBefore: number;
 }
 
@@ -99,43 +108,43 @@ export interface InvitationMark {
  * A declined probe is the same person's and host's: it is forgotten with the
  * person, and when the host admits a host-only token.
  *
- * Every write takes the stamp of the attempt that heard the answer. It does
- * nothing unless that stamp is still the current instance, so a late answer
- * from an earlier process marks nothing for the one observed now. Every read
- * is by host id and answers for the current instance only.
+ * Every write takes the instance of the attempt that heard the answer, and
+ * does nothing unless that instance is current. A late answer from an earlier
+ * process marks nothing for the one observed now. Every read is by host id and
+ * answers for the current instance only.
  */
 export interface ReleasedHostMemory {
   /** Read at the dial and carried by the attempt. */
-  readonly currentInstance: (hostId: string) => HostInstanceStamp;
-  /** Whether no other process instance has been observed for the stamp's host id since that stamp was read. */
-  readonly isCurrentInstance: (stamp: HostInstanceStamp) => boolean;
+  readonly currentInstance: (hostId: string) => HostInstance;
+  /** Whether no other process instance has been observed for its host id since `instance` was read. */
+  readonly isCurrent: (instance: HostInstance) => boolean;
   /**
    * For observers of this machine's host processes only. `observed` is the
    * observer's own identity for the process. The first observation of a host
    * id is the instance that attempts already read. A different `observed`
-   * starts a new instance: a restarted host may answer differently, so nothing
+   * replaces the instance: a restarted host may answer differently, so nothing
    * the earlier one answered applies to it. This is never done on a refusal,
    * or a team computer could then receive the sign-in.
    */
   readonly observeInstance: (hostId: string, observed: string) => void;
   readonly opensReleasedWay: (userId: string, hostId: string) => boolean;
   readonly namedReason: (hostId: string) => boolean;
-  readonly signInAdmitted: (userId: string, stamp: HostInstanceStamp) => void;
-  readonly hostTokenAdmitted: (stamp: HostInstanceStamp) => void;
+  readonly signInAdmitted: (userId: string, instance: HostInstance) => void;
+  readonly hostTokenAdmitted: (instance: HostInstance) => void;
   /**
    * The host refused an open naming its reason. `invitation` is true for the
    * reason that invites the sign-in (`owner_sign_in`). Every other reason
    * also withdraws each invitation heard before it ({@link invitationWithdrawn}).
    */
   readonly refusedNamingReason: (
-    stamp: HostInstanceStamp,
+    instance: HostInstance,
     invitation: boolean,
   ) => void;
   /**
    * Taken when the attempt hears the invitation (`owner_sign_in`), and kept
    * with the plan and the sign-in it invited.
    */
-  readonly invitationHeard: (stamp: HostInstanceStamp) => InvitationMark;
+  readonly invitationHeard: (instance: HostInstance) => InvitationMark;
   /**
    * Whether the sign-in that `mark` invited may no longer go to its host. That
    * is the case when the host restarted, or when any transport has heard it
@@ -149,7 +158,7 @@ export interface ReleasedHostMemory {
    * (`not_admitted`): it is not probed again for them. `not_provisioned` is not
    * declined, since the host takes an owner without restarting this process.
    */
-  readonly declineProbe: (userId: string, stamp: HostInstanceStamp) => void;
+  readonly declineProbe: (userId: string, instance: HostInstance) => void;
   readonly probeDeclined: (userId: string, hostId: string) => boolean;
   /**
    * An open carrying the sign-in a current host invited (`owner_sign_in`) was
@@ -158,57 +167,79 @@ export interface ReleasedHostMemory {
    * transports overlap.
    */
   readonly invitedSignInPending: (hostId: string) => boolean;
-  readonly invitedSignInWritten: (stamp: HostInstanceStamp) => void;
+  readonly invitedSignInWritten: (instance: HostInstance) => void;
   /**
    * Once per written open: its ack, its refusal, or the end of its socket,
-   * with the stamp its write carried. An earlier instance's count was dropped
-   * with that instance, so its answer changes nothing.
+   * with the instance its write carried. An earlier instance's count went with
+   * that instance, so its answer changes nothing.
    */
-  readonly invitedSignInAnswered: (stamp: HostInstanceStamp) => void;
+  readonly invitedSignInAnswered: (instance: HostInstance) => void;
   readonly forgetAll: () => void;
+}
+
+/** What this memory knows of one host instance. */
+interface InstanceMarks {
+  named: boolean;
+  /** Non-invitation named refusals; `InvitationMark.refusalsBefore` is read from here. */
+  refusals: number;
+  invitedPending: number;
+  /** The person's era it was admitted or declined in: an older era is forgotten. */
+  released: object | null;
+  declined: object | null;
 }
 
 export function createReleasedHostMemory(): ReleasedHostMemory {
   let person: string | null = null;
-  /** Per host id: its current stamp and the observer's identity for it, `null` until observed. */
+  /** Replaced by `forgetAll`, so every released and declined mark of the earlier person ends. */
+  let personEra: object = {};
+  /** Per host id: its current instance and the observer's identity for it, `null` until observed. */
   const instances = new Map<
     string,
-    { readonly stamp: HostInstanceStamp; observed: string | null }
+    { readonly instance: HostInstance; observed: string | null }
   >();
-  const released = new Set<HostInstanceStamp>();
-  const named = new Set<HostInstanceStamp>();
-  const declined = new Set<HostInstanceStamp>();
-  const invitedPending = new Map<HostInstanceStamp, number>();
-  /**
-   * Per host id: refusals naming a reason other than an invitation, counted
-   * only from the current instance. Never reset, not even by a restart or
-   * sign-out, so a larger count than an invitation's `refusalsBefore` means a
-   * refusal since that invitation.
-   */
-  const refusals = new Map<string, number>();
-  const currentInstance = (hostId: string): HostInstanceStamp => {
-    const known = instances.get(hostId);
-    if (known !== undefined) return known.stamp;
-    const stamp: HostInstanceStamp = { hostId };
-    instances.set(hostId, { stamp, observed: null });
-    return stamp;
+  const marks = new WeakMap<HostInstance, InstanceMarks>();
+  const marksOf = (instance: HostInstance): InstanceMarks => {
+    const known = marks.get(instance);
+    if (known !== undefined) return known;
+    const created: InstanceMarks = {
+      named: false,
+      refusals: 0,
+      invitedPending: 0,
+      released: null,
+      declined: null,
+    };
+    marks.set(instance, created);
+    return created;
   };
-  const isCurrentInstance = (stamp: HostInstanceStamp): boolean =>
-    instances.get(stamp.hostId)?.stamp === stamp;
-  const known = (hostId: string): HostInstanceStamp | null =>
-    instances.get(hostId)?.stamp ?? null;
+  const currentInstance = (hostId: string): HostInstance => {
+    const known = instances.get(hostId);
+    if (known !== undefined) return known.instance;
+    const instance: HostInstance = { hostId };
+    instances.set(hostId, { instance, observed: null });
+    return instance;
+  };
+  const isCurrent = (instance: HostInstance): boolean =>
+    instances.get(instance.hostId)?.instance === instance;
+  /** The current instance's marks, or `null` for a host id never read. */
+  const currentMarks = (hostId: string): InstanceMarks | null => {
+    const known = instances.get(hostId);
+    return known === undefined ? null : (marks.get(known.instance) ?? null);
+  };
   const forgetAll = (): void => {
     person = null;
-    released.clear();
-    declined.clear();
+    personEra = {};
+  };
+  const forPerson = (userId: string): void => {
+    if (person !== userId) forgetAll();
+    person = userId;
   };
   return {
     currentInstance,
-    isCurrentInstance,
+    isCurrent,
     observeInstance: (hostId, observed) => {
       const entry = instances.get(hostId);
       if (entry === undefined) {
-        instances.set(hostId, { stamp: { hostId }, observed });
+        instances.set(hostId, { instance: { hostId }, observed });
         return;
       }
       if (entry.observed === null) {
@@ -216,70 +247,56 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
         return;
       }
       if (entry.observed === observed) return;
-      const earlier = entry.stamp;
-      released.delete(earlier);
-      named.delete(earlier);
-      declined.delete(earlier);
-      invitedPending.delete(earlier);
-      instances.set(hostId, { stamp: { hostId }, observed });
+      instances.set(hostId, { instance: { hostId }, observed });
     },
     opensReleasedWay: (userId, hostId) => {
       if (person !== userId) forgetAll();
-      const stamp = known(hostId);
-      return stamp !== null && released.has(stamp);
+      return currentMarks(hostId)?.released === personEra;
     },
-    namedReason: (hostId) => {
-      const stamp = known(hostId);
-      return stamp !== null && named.has(stamp);
+    namedReason: (hostId) => currentMarks(hostId)?.named === true,
+    signInAdmitted: (userId, instance) => {
+      if (!isCurrent(instance)) return;
+      const own = marksOf(instance);
+      if (own.named) return;
+      forPerson(userId);
+      own.released = personEra;
     },
-    signInAdmitted: (userId, stamp) => {
-      if (!isCurrentInstance(stamp) || named.has(stamp)) return;
-      if (person !== userId) forgetAll();
-      person = userId;
-      released.add(stamp);
+    hostTokenAdmitted: (instance) => {
+      if (!isCurrent(instance)) return;
+      const own = marksOf(instance);
+      own.released = null;
+      own.declined = null;
     },
-    hostTokenAdmitted: (stamp) => {
-      if (!isCurrentInstance(stamp)) return;
-      released.delete(stamp);
-      declined.delete(stamp);
+    refusedNamingReason: (instance, invitation) => {
+      if (!isCurrent(instance)) return;
+      const own = marksOf(instance);
+      own.released = null;
+      own.named = true;
+      if (!invitation) own.refusals += 1;
     },
-    refusedNamingReason: (stamp, invitation) => {
-      if (!isCurrentInstance(stamp)) return;
-      released.delete(stamp);
-      named.add(stamp);
-      if (!invitation)
-        refusals.set(stamp.hostId, (refusals.get(stamp.hostId) ?? 0) + 1);
-    },
-    invitationHeard: (stamp) => ({
-      stamp,
-      refusalsBefore: refusals.get(stamp.hostId) ?? 0,
+    invitationHeard: (instance) => ({
+      instance,
+      refusalsBefore: marksOf(instance).refusals,
     }),
     invitationWithdrawn: (mark) =>
-      !isCurrentInstance(mark.stamp) ||
-      (refusals.get(mark.stamp.hostId) ?? 0) > mark.refusalsBefore,
-    declineProbe: (userId, stamp) => {
-      if (!isCurrentInstance(stamp)) return;
-      if (person !== userId) forgetAll();
-      person = userId;
-      declined.add(stamp);
+      !isCurrent(mark.instance) ||
+      marksOf(mark.instance).refusals > mark.refusalsBefore,
+    declineProbe: (userId, instance) => {
+      if (!isCurrent(instance)) return;
+      forPerson(userId);
+      marksOf(instance).declined = personEra;
     },
-    probeDeclined: (userId, hostId) => {
-      const stamp = known(hostId);
-      return person === userId && stamp !== null && declined.has(stamp);
+    probeDeclined: (userId, hostId) =>
+      person === userId && currentMarks(hostId)?.declined === personEra,
+    invitedSignInPending: (hostId) =>
+      (currentMarks(hostId)?.invitedPending ?? 0) > 0,
+    invitedSignInWritten: (instance) => {
+      if (!isCurrent(instance)) return;
+      marksOf(instance).invitedPending += 1;
     },
-    invitedSignInPending: (hostId) => {
-      const stamp = known(hostId);
-      return stamp !== null && (invitedPending.get(stamp) ?? 0) > 0;
-    },
-    invitedSignInWritten: (stamp) => {
-      if (!isCurrentInstance(stamp)) return;
-      invitedPending.set(stamp, (invitedPending.get(stamp) ?? 0) + 1);
-    },
-    invitedSignInAnswered: (stamp) => {
-      const before = invitedPending.get(stamp);
-      if (before === undefined) return;
-      if (before > 1) invitedPending.set(stamp, before - 1);
-      else invitedPending.delete(stamp);
+    invitedSignInAnswered: (instance) => {
+      const own = marks.get(instance);
+      if (own !== undefined && own.invitedPending > 0) own.invitedPending -= 1;
     },
     forgetAll,
   };
@@ -369,18 +386,20 @@ export function ownerSignInEligible(
 /**
  * See {@link ReleasedSignOn.heldTokenRefused}. Only a held token already past
  * its end here: one this clock still calls usable, refused as expired, takes
- * the fresh-mint recovery instead.
+ * the fresh-mint recovery instead. The mark is the refusing instance's and
+ * ends with it.
  */
 export function heldTokenRefused(
   tokens: TrackedHostTokens,
   userId: string,
-  hostId: string,
+  instance: HostInstance,
   presented: string,
 ): boolean {
+  const hostId = instance.hostId;
   const held = heldWhileAuthnUnreachable(tokens, userId, hostId);
   // A late refusal of an older token never overwrites the current one's mark.
   if (tokens.current(userId, hostId)?.token === presented)
-    tokens.noteHeldRefused(userId, hostId, presented);
+    tokens.noteHeldRefused(instance, userId, presented);
   return (
     held !== null &&
     held.token === presented &&
@@ -410,8 +429,9 @@ export function releasedSignOnForLocalRow(
       asked === hostId && hostTokenUnobtainable(tokens, userId, hostId),
     ownerSignInEligible: (asked) =>
       asked === hostId && ownerSignInEligible(tokens, userId, hostId),
-    heldTokenRefused: (asked, presented) =>
-      asked === hostId && heldTokenRefused(tokens, userId, hostId, presented),
+    heldTokenRefused: (instance, presented) =>
+      instance.hostId === hostId &&
+      heldTokenRefused(tokens, userId, instance, presented),
     forgetHeldRefusal: (asked) => {
       if (asked === hostId) tokens.forgetHeldRefused(userId, hostId);
     },

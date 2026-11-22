@@ -556,11 +556,8 @@ async function requestWithHostToken<
                 : null,
             );
           },
-          heldTokenRefusedFor: (authority, presented) =>
-            localDoor.releasedSignOn.heldTokenRefused(
-              authority.endpoint.hostId,
-              presented,
-            ),
+          heldTokenRefusedFor: (_authority, presented, instance) =>
+            localDoor.releasedSignOn.heldTokenRefused(instance, presented),
           forgetHeldRefusalFor: (authority) =>
             localDoor.releasedSignOn.forgetHeldRefusal(
               authority.endpoint.hostId,

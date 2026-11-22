@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   authnDidNotAnswer,
   hostTokenBearer,
@@ -9,6 +9,7 @@ import type {
   HostTokenMintOutcome,
   HostTokenRenewal,
 } from "@traycer-clients/shared/auth/host-token-source";
+import { createReleasedHostMemory } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type {
   HostTokenBridgeChange,
   HostTokenSnapshotReply,
@@ -108,7 +109,10 @@ describe("desktop host-token source eras", () => {
     };
     const tokens = createDesktopHostTokenSource(bridge);
 
-    const pending = tokens.obtain(USER_ID, HOST_ID, false, null);
+    const pending = tokens.obtain(USER_ID, HOST_ID, false, {
+      signal: null,
+      owner: null,
+    });
     await tokens.forgetUser(USER_ID);
     answer.resolve({
       outcome: {
@@ -156,7 +160,10 @@ describe("desktop host-token source eras", () => {
     Reflect.set(bridge, "obtain", () => answer.promise);
     const tokens = createDesktopHostTokenSource(bridge);
 
-    const pending = tokens.obtain(USER_ID, HOST_ID, true, null);
+    const pending = tokens.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: null,
+    });
     setEra(2);
     emit({ userId: USER_ID, hostId: HOST_ID, token: null, era: 2 });
     answer.resolve({
@@ -174,7 +181,10 @@ describe("desktop host-token source eras", () => {
     Reflect.set(bridge, "obtain", () => answer.promise);
     const tokens = createDesktopHostTokenSource(bridge);
 
-    const pending = tokens.obtain(USER_ID, HOST_ID, true, null);
+    const pending = tokens.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: null,
+    });
     setEra(2);
     emit({ userId: USER_ID, hostId: HOST_ID, token: null, era: 2 });
     answer.resolve({
@@ -208,12 +218,12 @@ describe("desktop host-token source eras", () => {
     const { bridge, emit } = bridgeFixture();
     const tokens = createDesktopHostTokenSource(bridge);
 
-    await expect(tokens.obtain(USER_ID, HOST_ID, false, null)).resolves.toEqual(
-      {
-        kind: "ok",
-        token: HOST_TOKEN,
-      },
-    );
+    await expect(
+      tokens.obtain(USER_ID, HOST_ID, false, { signal: null, owner: null }),
+    ).resolves.toEqual({
+      kind: "ok",
+      token: HOST_TOKEN,
+    });
     expect(tokens.current(USER_ID, HOST_ID)).toEqual(HOST_TOKEN);
 
     const forgetting = tokens.forgetUser(USER_ID);
@@ -229,8 +239,11 @@ describe("desktop host-token source eras", () => {
     Reflect.set(bridge, "forgetUser", () => forgetAnswer.promise);
     const tokens = createDesktopHostTokenSource(bridge);
     const otherHostId = "computer-b";
-    await tokens.obtain(USER_ID, HOST_ID, false, null);
-    await tokens.obtain(USER_ID, otherHostId, false, null);
+    await tokens.obtain(USER_ID, HOST_ID, false, { signal: null, owner: null });
+    await tokens.obtain(USER_ID, otherHostId, false, {
+      signal: null,
+      owner: null,
+    });
     const changes: Array<{ readonly userId: string; readonly hostId: string }> =
       [];
     const unsubscribe = tokens.subscribe(({ userId, hostId }) =>
@@ -254,8 +267,11 @@ describe("desktop host-token source eras", () => {
     const tokens = createDesktopHostTokenSource(bridge);
     const otherHostId = "computer-b";
     const eventHostId = "computer-c";
-    await tokens.obtain(USER_ID, HOST_ID, false, null);
-    await tokens.obtain(USER_ID, otherHostId, false, null);
+    await tokens.obtain(USER_ID, HOST_ID, false, { signal: null, owner: null });
+    await tokens.obtain(USER_ID, otherHostId, false, {
+      signal: null,
+      owner: null,
+    });
     const changes: Array<{ readonly userId: string; readonly hostId: string }> =
       [];
     const unsubscribe = tokens.subscribe(({ userId, hostId }) =>
@@ -277,8 +293,11 @@ describe("desktop host-token source eras", () => {
     const { bridge, emit, setEra } = bridgeFixture();
     const tokens = createDesktopHostTokenSource(bridge);
     const otherHostId = "computer-b";
-    await tokens.obtain(USER_ID, HOST_ID, false, null);
-    await tokens.obtain(USER_ID, otherHostId, false, null);
+    await tokens.obtain(USER_ID, HOST_ID, false, { signal: null, owner: null });
+    await tokens.obtain(USER_ID, otherHostId, false, {
+      signal: null,
+      owner: null,
+    });
     expect(tokens.current(USER_ID, HOST_ID)).toEqual(HOST_TOKEN);
     expect(tokens.current(USER_ID, otherHostId)).toEqual(HOST_TOKEN);
 
@@ -304,7 +323,7 @@ describe("desktop host-token source eras", () => {
 
       expect(tokens.era(USER_ID)).toBe(NO_ISSUED_HOST_TOKEN_ERA);
       await expect(
-        tokens.obtain(USER_ID, HOST_ID, false, null),
+        tokens.obtain(USER_ID, HOST_ID, false, { signal: null, owner: null }),
       ).resolves.toEqual({
         kind: "superseded",
       });
@@ -324,7 +343,7 @@ describe("desktop host-token source eras", () => {
       const tokens = createDesktopHostTokenSource(bridge);
 
       await expect(
-        tokens.obtain(USER_ID, HOST_ID, false, null),
+        tokens.obtain(USER_ID, HOST_ID, false, { signal: null, owner: null }),
       ).resolves.toEqual({
         kind: "superseded",
       });
@@ -412,7 +431,7 @@ describe("desktop host-token source snapshot", () => {
     const { bridge, answerSnapshotWith } = bridgeFixture();
     answerSnapshotWith(snapshot.promise);
     const tokens = createDesktopHostTokenSource(bridge);
-    const tracked = trackHostTokenMints(tokens);
+    const tracked = trackHostTokenMints(tokens, createReleasedHostMemory());
     const bearer = hostTokenBearer(
       tracked,
       () => signInLease,
@@ -485,7 +504,7 @@ describe("desktop host-token source snapshot", () => {
     const { bridge, answerSnapshotWith } = bridgeFixture();
     answerSnapshotWith(Promise.reject(new Error("main did not answer")));
     const tokens = createDesktopHostTokenSource(bridge);
-    const tracked = trackHostTokenMints(tokens);
+    const tracked = trackHostTokenMints(tokens, createReleasedHostMemory());
 
     await tokens.whenLoaded();
 
@@ -500,5 +519,60 @@ describe("desktop host-token source snapshot", () => {
         () => undefined,
       )(HOST_ID),
     ).toBeNull();
+  });
+});
+
+describe("desktop host-token source across host process instances", () => {
+  it("sends an ask for the replacement process to main only after the earlier process's ask settled", async () => {
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(HOST_ID, "process-a");
+    const earlier = hosts.currentInstance(HOST_ID);
+    hosts.observeInstance(HOST_ID, "process-b");
+    const replacement = hosts.currentInstance(HOST_ID);
+    // What main saw and what the test did, in order: main joins asks by
+    // person and host, so a second ask beside the first would share its mint.
+    const events: string[] = [];
+    const answers = [
+      deferred<{ outcome: HostTokenMintOutcome; era: number }>(),
+      deferred<{ outcome: HostTokenMintOutcome; era: number }>(),
+    ];
+    let receivedAsks = 0;
+    const bridge: HostTokensBridgeSurface = {
+      era: () => 0,
+      obtain: () => {
+        receivedAsks += 1;
+        events.push(`main received ask ${receivedAsks}`);
+        return answers[receivedAsks - 1].promise;
+      },
+      renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
+      adopt: async () => ({ era: 0 }),
+      forgetUser: async () => ({ era: 1 }),
+      snapshot: async () => EMPTY_SNAPSHOT,
+      subscribe: (_handler) => ({ dispose: () => undefined }),
+    };
+    const tokens = createDesktopHostTokenSource(bridge);
+
+    const earlierAsk = tokens.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: earlier,
+    });
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const replacementAsk = tokens.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: replacement,
+    });
+    await Promise.resolve();
+
+    events.push("the earlier process's ask answered");
+    answers[0].resolve({ outcome: { kind: "not-admitted" }, era: 0 });
+    await vi.waitFor(() => expect(events).toHaveLength(3));
+    answers[1].resolve({ outcome: { kind: "ok", token: HOST_TOKEN }, era: 0 });
+    await Promise.all([earlierAsk, replacementAsk]);
+
+    expect(events).toEqual([
+      "main received ask 1",
+      "the earlier process's ask answered",
+      "main received ask 2",
+    ]);
   });
 });

@@ -165,7 +165,7 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
       retryCause: null,
       continuity: null,
       startSent: true,
-      signInRedial: false,
+      dialsNow: false,
     });
     batch.close();
   });
@@ -267,7 +267,7 @@ describe("WorktreeDeleteBatchStreamClient replay safety", () => {
       retryCause: null,
       continuity: null,
       startSent: true,
-      signInRedial: false,
+      dialsNow: false,
     });
     batch.close();
   });

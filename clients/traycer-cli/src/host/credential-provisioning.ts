@@ -13,6 +13,10 @@ import {
 import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import {
+  processReleasedHosts,
+  type HostInstance,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
+import {
   MutableBearerLease,
   readLeaseBearer,
 } from "../../../shared/auth/bearer-source";
@@ -391,20 +395,28 @@ export async function provisionInstalledHostCredential(
       endpoint === null ? null : tokens.deferredNotAdmitted(endpoint.hostId);
     // Recovery of a refused token, as on every other CLI open: one fresh
     // token and one more open, and a second refusal is final. A refusal is
-    // read by the recovery of the host the door named for that very refusal,
-    // never an earlier attempt's; a token found expired before its dial
+    // read by the recovery of the host process the door named for that very
+    // refusal, never an earlier attempt's, and its verdict stands only while
+    // that process does: once it is replaced the stream reconnects on its
+    // backoff and asks the replacement. A token found expired before its dial
     // belongs to the host that dial selected, the current endpoint while it
     // runs.
-    const refusedBy = new WeakMap<FatalErrorDetails, string>();
+    const refusedBy = new WeakMap<FatalErrorDetails, HostInstance>();
     const streamAuth: StreamAuthRevalidator = {
       revalidateForReconnect: () =>
         recoverHostToken(endpoint?.hostId ?? null, (recovery) =>
           recovery.revalidateForReconnect(),
         ),
-      revalidateRefused: (refusal) =>
-        recoverHostToken(refusedBy.get(refusal) ?? null, (recovery) =>
-          recovery.revalidateRefused(refusal),
-        ),
+      revalidateRefused: async (refusal) => {
+        const owner = refusedBy.get(refusal);
+        const outcome = await recoverHostToken(
+          owner?.hostId ?? null,
+          (recovery) => recovery.revalidateRefused(refusal),
+        );
+        return owner !== undefined && !processReleasedHosts.isCurrent(owner)
+          ? "network-error"
+          : outcome;
+      },
     };
     const recoverHostToken = (
       hostId: string | null,
@@ -451,8 +463,9 @@ export async function provisionInstalledHostCredential(
       // is earned again after a good open, and fences off a `not-admitted` of
       // a mint begun before it.
       door: {
+        // Fenced: the process current now is the one that refused.
         refused: (details, hostId) => {
-          refusedBy.set(details, hostId);
+          refusedBy.set(details, processReleasedHosts.currentInstance(hostId));
         },
         admitted: (hostId) => {
           doorRetried = false;

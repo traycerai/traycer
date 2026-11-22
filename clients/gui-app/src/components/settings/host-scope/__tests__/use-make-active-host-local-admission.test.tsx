@@ -11,6 +11,7 @@ import {
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenMintOutcome } from "@traycer-clients/shared/auth/host-token-source";
+import { createReleasedHostMemory } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   HostRpcError,
@@ -219,10 +220,13 @@ async function rejectAfterLocalHostTokenMint(
       mocks.state.hostTokenMintCalls += 1;
       return Promise.resolve(outcome);
     },
-    lastFailure: () => (outcome.kind === "ok" ? null : outcome.kind),
+    lastFailureOf: () => (outcome.kind === "ok" ? null : outcome.kind),
   };
   const hostBearerFor = hostTokenBearerFor(
-    trackHostTokenMints(localDoorHostTokens(tokens)),
+    trackHostTokenMints(
+      localDoorHostTokens(tokens),
+      createReleasedHostMemory(),
+    ),
     noteHostTokenRefusal,
   );
   const context = mocks.state.activeContext;

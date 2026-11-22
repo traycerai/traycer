@@ -18,6 +18,7 @@ import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
 import type { RefusalAwareAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import { hostTokenUnaryRevalidator } from "@traycer-clients/shared/auth/host-token-lease";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import {
   noteHostTokenRefusal,
@@ -376,6 +377,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // sign-in, so its refusal recovers the sign-in.
       const hostTokenRecovery = hostTokenUnaryRevalidator({
         tokens: runnerHost.hostTokens,
+        hosts: processReleasedHosts,
         currentUserId: () =>
           auth.getRequestContextProvider().current()?.identity.userId ?? null,
         signInRecovery: createStreamAuthRevalidator(auth),

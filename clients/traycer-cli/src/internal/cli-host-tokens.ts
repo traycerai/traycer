@@ -30,7 +30,7 @@ import {
   heldTokenRefused,
   hostTokenUnobtainable,
   ownerSignInEligible,
-  type HostInstanceStamp,
+  type HostInstance,
   type ReleasedSignOn,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
@@ -47,16 +47,15 @@ const LOCK_POLL_INTERVAL_MS = 50;
 /**
  * The held host-only token each person had refused by a host, for this
  * process: every unary call builds its own tokens, and one call's refusal must
- * still keep the next call from presenting that token. Kept per host process
- * instance, so a restarted host is asked afresh.
+ * still keep the next call from presenting that token. Kept on the host
+ * process that refused it, so a restarted host is asked afresh.
  */
-const heldRefusals = new WeakMap<HostInstanceStamp, Map<string, string>>();
-function processHeldRefusals(hostId: string): Map<string, string> {
-  const stamp = processReleasedHosts.currentInstance(hostId);
-  let refusals = heldRefusals.get(stamp);
+const heldRefusals = new WeakMap<HostInstance, Map<string, string>>();
+function processHeldRefusals(instance: HostInstance): Map<string, string> {
+  let refusals = heldRefusals.get(instance);
   if (refusals === undefined) {
     refusals = new Map();
-    heldRefusals.set(stamp, refusals);
+    heldRefusals.set(instance, refusals);
   }
   return refusals;
 }
@@ -178,7 +177,7 @@ export interface CliHostTokens {
   /** See `ownerSignInEligible`. */
   ownerSignInEligible(hostId: string): boolean;
   /** See `ReleasedSignOn.heldTokenRefused`. */
-  heldTokenRefused(hostId: string, presented: string): boolean;
+  heldTokenRefused(instance: HostInstance, presented: string): boolean;
   /** See `ReleasedSignOn.forgetHeldRefusal`. */
   forgetHeldRefusal(hostId: string): void;
 }
@@ -199,45 +198,53 @@ function createSource(signIn: VerifiedSignIn | null): HostTokenSource {
 
 export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const userId = signIn.lease.identity.userId;
+  const hosts = processReleasedHosts;
   const listeners = new Set<CliMintRefusalListener>();
-  // When each host last admitted an open, how many of its admitted connections
-  // have not left, and the `not-admitted` the command went on past with when
-  // its mint started. "When" is this process's order of admissions and mint
-  // starts, not the clock: two in one millisecond must still be ordered.
+  // When each host process last admitted an open, how many of its admitted
+  // connections have not left, and the `not-admitted` the command went on past
+  // with when its mint started. "When" is this process's order of admissions
+  // and mint starts, not the clock: two in one millisecond must still be
+  // ordered. Kept on the host process, so a replacement starts with none.
   let events = 0;
   const nextEvent = (): number => ++events;
-  const admittedAt = new Map<string, number>();
-  const admittedOpen = new Map<string, number>();
-  const deferred = new Map<
-    string,
+  const admittedAt = new WeakMap<HostInstance, number>();
+  const admittedOpen = new WeakMap<HostInstance, number>();
+  const deferred = new WeakMap<
+    HostInstance,
     { readonly failure: CliHostTokenFailure; readonly startedAt: number }
   >();
-  const admittedSince = (hostId: string, startedAt: number): boolean =>
-    (admittedOpen.get(hostId) ?? 0) > 0 ||
-    (admittedAt.get(hostId) ?? 0) > startedAt;
+  const admittedSince = (owner: HostInstance, startedAt: number): boolean =>
+    (admittedOpen.get(owner) ?? 0) > 0 ||
+    (admittedAt.get(owner) ?? 0) > startedAt;
+  // Asked only while `owner` is current, so the memory's reads by host id
+  // answer for it.
   const endsCommand = (
-    hostId: string,
+    owner: HostInstance,
     failure: CliHostTokenFailure,
     startedAt: number,
   ): boolean => {
     if (failure.kind !== "not-admitted") return true;
-    if (admittedSince(hostId, startedAt)) return false;
+    if (admittedSince(owner, startedAt)) return false;
     if (
-      (processReleasedHosts.namedReason(hostId) &&
-        !processReleasedHosts.invitedSignInPending(hostId)) ||
-      processReleasedHosts.probeDeclined(userId, hostId)
+      (hosts.namedReason(owner.hostId) &&
+        !hosts.invitedSignInPending(owner.hostId)) ||
+      hosts.probeDeclined(userId, owner.hostId)
     )
       return true;
-    deferred.set(hostId, { failure, startedAt });
+    deferred.set(owner, { failure, startedAt });
     return false;
   };
+  // A mint's refusal concerns the host process it started for: once another
+  // is observed, it ends nothing and is deferred for nothing.
   const report = (
-    hostId: string,
+    owner: HostInstance,
     failure: CliHostTokenFailure,
     startedAt: number,
   ): void => {
-    if (!endsCommand(hostId, failure, startedAt)) return;
-    for (const listener of Array.from(listeners)) listener(hostId, failure);
+    if (!hosts.isCurrent(owner) || !endsCommand(owner, failure, startedAt))
+      return;
+    for (const listener of Array.from(listeners))
+      listener(owner.hostId, failure);
   };
   const stored = createSource((id) =>
     id === userId ? readLeaseBearer(signIn.lease) : null,
@@ -261,39 +268,49 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // Every mint passes here, so a refusal for good is reported wherever asked. A token
   // that could not be saved is transient like an unreachable authn, never a rejected
   // sign-in. A mint with no signal of its own is cancelled with this process's mints.
-  const tracked = trackHostTokenMints({
-    current: (id, hostId) => stored.current(id, hostId),
-    loaded: () => stored.loaded(),
-    whenLoaded: () => stored.whenLoaded(),
-    lastFailure: (id, hostId) => stored.lastFailure(id, hostId),
-    obtain: async (id, hostId, fresh, signal) => {
-      const startedAt = nextEvent();
-      const outcome: HostTokenMintOutcome = await stored
-        .obtain(id, hostId, fresh, signal ?? signIn.signal)
-        .catch((): HostTokenMintOutcome => ({
-          kind: "unavailable",
-          detail: "host-only token not saved",
-        }));
-      if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
-        refusedAfterRefresh = true;
-      if (outcome.kind === "ok") refusedAfterRefresh = false;
-      refreshedSinceLastMint = false;
-      if (isHostRefusal(outcome)) report(hostId, outcome, startedAt);
-      return outcome;
+  // A mint belongs to the host process its asker named, or to the one current
+  // when it started.
+  const tracked = trackHostTokenMints(
+    {
+      current: (id, hostId) => stored.current(id, hostId),
+      loaded: () => stored.loaded(),
+      whenLoaded: () => stored.whenLoaded(),
+      lastFailureOf: (id, owner) => stored.lastFailureOf(id, owner),
+      obtain: async (id, hostId, fresh, { signal, owner: mintOwner }) => {
+        const owner = mintOwner ?? hosts.currentInstance(hostId);
+        const startedAt = nextEvent();
+        const outcome: HostTokenMintOutcome = await stored
+          .obtain(id, hostId, fresh, { signal: signal ?? signIn.signal, owner })
+          .catch((): HostTokenMintOutcome => ({
+            kind: "unavailable",
+            detail: "host-only token not saved",
+          }));
+        if (outcome.kind === "sign-in-rejected" && refreshedSinceLastMint)
+          refusedAfterRefresh = true;
+        if (outcome.kind === "ok") refusedAfterRefresh = false;
+        refreshedSinceLastMint = false;
+        if (isHostRefusal(outcome)) report(owner, outcome, startedAt);
+        return outcome;
+      },
     },
-  });
+    hosts,
+  );
   // The host's refusal of a held token is the process's, not this command's
   // tokens': see `processHeldRefusals`.
+  // A refusal is kept on the host process that refused; a read asks the one
+  // observed now.
   const source: TrackedHostTokens = {
     ...tracked,
-    noteHeldRefused: (id, hostId, presented) => {
-      processHeldRefusals(hostId).set(id, presented);
+    noteHeldRefused: (instance, id, presented) => {
+      processHeldRefusals(instance).set(id, presented);
     },
     forgetHeldRefused: (id, hostId) => {
-      processHeldRefusals(hostId).delete(id);
+      processHeldRefusals(hosts.currentInstance(hostId)).delete(id);
     },
     heldRefused: (id, hostId) => {
-      const refused = processHeldRefusals(hostId).get(id);
+      const refused = processHeldRefusals(hosts.currentInstance(hostId)).get(
+        id,
+      );
       return (
         refused !== undefined && tracked.current(id, hostId)?.token === refused
       );
@@ -323,21 +340,26 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // A command presents whatever this process may hold, and keeps no state
   // of the door's: it ends with the refusal it was given.
   const onState = (): void => undefined;
-  // One per host: each remembers the token it minted after the host's last
-  // refusal, which is what makes a second refusal final.
-  const recoveries = new Map<string, HostTokenSessionRevalidator>();
+  // One per host process instance: each remembers the token it minted after
+  // that instance's last refusal, which is what makes a second refusal final.
+  // A restarted host starts with a recovery of its own, never one an earlier
+  // instance spent. Asked only once the transport has checked the refusal is
+  // the current instance's.
+  const recoveries = new WeakMap<HostInstance, HostTokenSessionRevalidator>();
   const streamRecovery = (hostId: string): HostTokenSessionRevalidator => {
-    let recovery = recoveries.get(hostId);
+    const instance = hosts.currentInstance(hostId);
+    let recovery = recoveries.get(instance);
     if (recovery === undefined) {
       recovery = hostTokenRevalidator({
         tokens: source,
+        hosts,
         currentUserId: () => userId,
         hostId,
         signInRecovery,
         onState,
         now: Date.now,
       });
-      recoveries.set(hostId, recovery);
+      recoveries.set(instance, recovery);
     }
     return recovery;
   };
@@ -357,11 +379,12 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // Refreshed once and asked once more. Only a refused refresh or a second 401 rejects
   // the sign-in; an unreachable refresh leaves it unjudged.
   const recoverRefusedSignIn = async (
-    hostId: string,
+    owner: HostInstance,
     first: CliHostTokenFailure,
     firstStartedAt: number,
     signal: AbortSignal | null,
   ): Promise<CliHostBearer> => {
+    const hostId = owner.hostId;
     const refreshed = await refreshSignIn();
     if (refreshed === "network-error")
       return answer(hostId, {
@@ -369,48 +392,54 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
         detail: "sign-in refresh unavailable",
       });
     if (refreshed === "rejected") {
-      report(hostId, first, firstStartedAt);
+      report(owner, first, firstStartedAt);
       return answer(hostId, first);
     }
     const startedAt = nextEvent();
-    const second = await source.obtain(userId, hostId, true, signal);
-    if (second.kind === "sign-in-rejected") report(hostId, second, startedAt);
+    const second = await source.obtain(userId, hostId, true, { signal, owner });
+    if (second.kind === "sign-in-rejected") report(owner, second, startedAt);
     return answer(hostId, second);
   };
 
   const obtain = async (
-    hostId: string,
+    owner: HostInstance,
     fresh: boolean,
     signal: AbortSignal | null,
   ): Promise<CliHostBearer> => {
     const startedAt = nextEvent();
-    const first = await source.obtain(userId, hostId, fresh, signal);
-    if (first.kind === "no-sign-in") report(hostId, first, startedAt);
-    if (first.kind !== "sign-in-rejected") return answer(hostId, first);
-    return recoverRefusedSignIn(hostId, first, startedAt, signal);
+    const first = await source.obtain(userId, owner.hostId, fresh, {
+      signal,
+      owner,
+    });
+    if (first.kind === "no-sign-in") report(owner, first, startedAt);
+    if (first.kind !== "sign-in-rejected") return answer(owner.hostId, first);
+    return recoverRefusedSignIn(owner, first, startedAt, signal);
   };
 
-  // One background mint per host at a time, for the stream and the unary
-  // asks alike; nothing that dials awaits it. Fresh while the host has refused
-  // the held token: a mint that is not would hand that token back.
-  const minting = new Map<string, Promise<CliHostBearer>>();
+  // One background mint per host process at a time, for the stream and the
+  // unary asks alike; nothing that dials awaits it, and a replacement never
+  // joins its predecessor's. Fresh while the host has refused the held token:
+  // a mint that is not would hand that token back.
+  const minting = new WeakMap<HostInstance, Promise<CliHostBearer>>();
   const mintInBackground = (hostId: string): Promise<CliHostBearer> => {
-    const running = minting.get(hostId);
+    const owner = hosts.currentInstance(hostId);
+    const running = minting.get(owner);
     if (running !== undefined) return running;
-    const started = obtain(hostId, source.heldRefused(userId, hostId), null)
+    const started = obtain(owner, source.heldRefused(userId, hostId), null)
       .catch((): CliHostBearer => ({
         kind: "failed",
         failure: { kind: "unavailable", detail: "host-only token mint failed" },
       }))
-      .finally(() => minting.delete(hostId));
-    minting.set(hostId, started);
+      .finally(() => minting.delete(owner));
+    minting.set(owner, started);
     return started;
   };
 
   return {
     whenLoaded: () => stored.whenLoaded(),
     lease: leaseOf,
-    mintFresh: (hostId, signal) => obtain(hostId, true, signal),
+    mintFresh: (hostId, signal) =>
+      obtain(hosts.currentInstance(hostId), true, signal),
     hostBearerFor: async (hostId, waitForMint) => {
       if (presentsAsIs(hostId)) return leaseOf(hostId);
       const minted = mintInBackground(hostId);
@@ -436,15 +465,18 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       };
     },
     streamRecovery,
+    // Reached only through the door fence, so the current host process is the
+    // one that admitted; its release leaves that process's count alone.
     admitted: (hostId) => {
-      admittedAt.set(hostId, nextEvent());
-      admittedOpen.set(hostId, (admittedOpen.get(hostId) ?? 0) + 1);
+      const owner = hosts.currentInstance(hostId);
+      admittedAt.set(owner, nextEvent());
+      admittedOpen.set(owner, (admittedOpen.get(owner) ?? 0) + 1);
       streamRecovery(hostId).admitted();
       let left = false;
       return () => {
         if (left) return;
         left = true;
-        admittedOpen.set(hostId, (admittedOpen.get(hostId) ?? 1) - 1);
+        admittedOpen.set(owner, (admittedOpen.get(owner) ?? 1) - 1);
       };
     },
     streamBearer: (hostId) => {
@@ -466,8 +498,8 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       hostTokenUnobtainable(source, userId, hostId),
     ownerSignInEligible: (hostId) =>
       ownerSignInEligible(source, userId, hostId),
-    heldTokenRefused: (hostId, presented) =>
-      heldTokenRefused(source, userId, hostId, presented),
+    heldTokenRefused: (instance, presented) =>
+      heldTokenRefused(source, userId, instance, presented),
     forgetHeldRefusal: (hostId) => source.forgetHeldRefused(userId, hostId),
     onRefusalEndingCommand: (listener) => {
       listeners.add(listener);
@@ -476,24 +508,29 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       };
     },
     deferredNotAdmitted: (hostId) => {
-      const held = deferred.get(hostId);
-      return held === undefined || admittedSince(hostId, held.startedAt)
+      const owner = hosts.currentInstance(hostId);
+      const held = deferred.get(owner);
+      return held === undefined || admittedSince(owner, held.startedAt)
         ? null
         : held.failure;
     },
     // Once per refresh, through the reporting source. A 401 on the first mint after an
     // accepted refresh is a rejected sign-in; one another mint got to first recovers as any 401.
     renewAfterSignInRefresh: async (hostId) => {
+      const owner = hosts.currentInstance(hostId);
       const startedAt = nextEvent();
-      const renewed = await source.obtain(userId, hostId, true, signIn.signal);
-      if (renewed.kind === "no-sign-in") report(hostId, renewed, startedAt);
+      const renewed = await source.obtain(userId, hostId, true, {
+        signal: signIn.signal,
+        owner,
+      });
+      if (renewed.kind === "no-sign-in") report(owner, renewed, startedAt);
       if (renewed.kind !== "sign-in-rejected") return renewed.kind === "ok";
       if (refusedAfterRefresh) {
-        report(hostId, renewed, startedAt);
+        report(owner, renewed, startedAt);
         return false;
       }
       return (
-        (await recoverRefusedSignIn(hostId, renewed, startedAt, null)).kind ===
+        (await recoverRefusedSignIn(owner, renewed, startedAt, null)).kind ===
         "ok"
       );
     },
@@ -539,15 +576,15 @@ export function cliReleasedSignOn(
     recovery: { revalidateForReconnect: () => tokens.refreshSignIn() },
     hostTokenUnobtainable: (hostId) => tokens.hostTokenUnobtainable(hostId),
     ownerSignInEligible: (hostId) => tokens.ownerSignInEligible(hostId),
-    heldTokenRefused: (hostId, presented) =>
-      tokens.heldTokenRefused(hostId, presented),
+    heldTokenRefused: (instance, presented) =>
+      tokens.heldTokenRefused(instance, presented),
     forgetHeldRefusal: (hostId) => tokens.forgetHeldRefusal(hostId),
     hosts: processReleasedHosts,
   };
 }
 
 /** A host's process as its pid.json names it: a restart writes another. */
-export interface HostInstance {
+export interface HostProcess {
   readonly hostId: string;
   readonly pid: number;
   readonly startedAt: string;
@@ -557,16 +594,16 @@ export interface HostInstance {
  * For a command that re-reads pid.json while it runs. A host whose process
  * changed may be another release, so what its earlier process named no longer
  * says what it will answer: the memory starts a new instance, and every
- * attempt stamped with the old one marks and plans nothing. A refusal never
+ * attempt carrying the old one marks and plans nothing. A refusal never
  * starts one, or a team's computer could then be handed the sign-in.
  *
  * Observed before the endpoint it came with is published, so a dial that
- * reads the new endpoint is stamped with the new instance.
+ * reads the new endpoint carries the new instance.
  */
-export function observeHostInstance(instance: HostInstance): void {
+export function observeHostInstance(hostProcess: HostProcess): void {
   processReleasedHosts.observeInstance(
-    instance.hostId,
-    `${instance.pid}\u0000${instance.startedAt}`,
+    hostProcess.hostId,
+    `${hostProcess.pid}\u0000${hostProcess.startedAt}`,
   );
 }
 

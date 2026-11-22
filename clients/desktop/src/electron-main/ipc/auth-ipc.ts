@@ -228,7 +228,10 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       assertNumber(expectedEra, "hostTokensObtain.expectedEra");
       const outcome: HostTokenMintOutcome =
         tokens.era(userId) === expectedEra
-          ? await tokens.obtain(userId, hostId, fresh, null)
+          ? await tokens.obtain(userId, hostId, fresh, {
+              signal: null,
+              owner: null,
+            })
           : { kind: "superseded" };
       return { outcome, era: tokens.era(userId) };
     },

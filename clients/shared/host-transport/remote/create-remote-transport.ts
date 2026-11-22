@@ -18,7 +18,7 @@ import {
   RemoteSession,
   type IRemoteSession,
   type SignInBudgetedGrantProvider,
-  type SignInRefreshBudget,
+  type DialSequence,
 } from "./remote-session";
 import { RemoteHostMessenger } from "./remote-host-messenger";
 import { RemoteStreamClient } from "./remote-stream-client";
@@ -316,28 +316,25 @@ export function createRemoteHostTransport<
         );
         return options.hostTokens.era(options.userId) === era ? outcome : null;
       };
-      // authn refused the sign-in: refresh, unless the session's dial sequence
-      // has spent its one, and mint again. Any other outcome keeps the first
-      // provision: the relay's backoff, with no state.
+      // authn refused the sign-in: refresh, unless the dial sequence this
+      // attach belongs to has spent its one, and mint again. Any other outcome
+      // keeps the first provision: the relay's backoff, with no state.
       const mintAfterSignInRefresh = async (
         refused: RelayPassMintOutcome,
         era: number,
-        signInRefresh: SignInRefreshBudget,
+        sequence: DialSequence,
       ): Promise<RelayPassMintOutcome | null> => {
         const recovery = options.auth;
         if (
           recovery === null ||
-          (await signInRefresh.spend(() =>
-            recovery.revalidateForReconnect(),
-          )) !== "rotated"
+          (await sequence.spend(() => recovery.revalidateForReconnect())) !==
+            "rotated"
         )
           return refused;
         const refreshed = signInNow();
         return refreshed === null ? null : mintInEra(refreshed, era);
       };
-      const grantProvider: SignInBudgetedGrantProvider = async (
-        signInRefresh,
-      ) => {
+      const grantProvider: SignInBudgetedGrantProvider = async (sequence) => {
         const signInToken = signInNow();
         if (signInToken === null)
           return {
@@ -357,7 +354,7 @@ export function createRemoteHostTransport<
         const first = await mintInEra(signInToken, era);
         const minted =
           first?.kind === "sign-in-rejected"
-            ? await mintAfterSignInRefresh(first, era, signInRefresh)
+            ? await mintAfterSignInRefresh(first, era, sequence)
             : first;
         if (minted === null)
           return {
@@ -409,6 +406,7 @@ export function createRemoteHostTransport<
         ...hostTokenSessionAuth(
           {
             tokens: options.hostTokens,
+            hosts: processReleasedHosts,
             currentUserId: () => bearer()?.identity.userId ?? null,
             hostId: options.hostId,
             signInRecovery: options.auth,

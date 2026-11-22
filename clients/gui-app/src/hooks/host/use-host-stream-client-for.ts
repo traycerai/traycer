@@ -423,6 +423,7 @@ export function buildHostStreamClient(params: {
   const hostId = params.target.hostId;
   const localTokens = trackHostTokenMints(
     localDoorHostTokens(params.hostTokens),
+    processReleasedHosts,
   );
   // A mint reports only while a session that asked for it is open (the client
   // passes each session as the caller): a longer-lived surface's own next dial
@@ -468,6 +469,7 @@ export function buildHostStreamClient(params: {
     ...hostTokenStreamAuth(
       {
         tokens: localTokens,
+        hosts: processReleasedHosts,
         currentUserId: () => params.bearer()?.identity.userId ?? null,
         hostId,
         signInRecovery: params.auth,

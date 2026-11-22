@@ -9,7 +9,7 @@ import {
   createCliHostTokens,
   observeHostInstance,
   type CliHostTokenFailure,
-  type HostInstance,
+  type HostProcess,
   type SignInRevalidator,
   type CliMintRefusalListener,
 } from "../internal/cli-host-tokens";
@@ -18,7 +18,7 @@ import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refus
 import {
   isReleasedSignInRefusal,
   processReleasedHosts,
-  type HostInstanceStamp,
+  type HostInstance,
   type ReleasedSignOn,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
@@ -240,13 +240,15 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       });
   }, ENDPOINT_POLL_MS);
 
-  // The host each refusal of a host-only token came from, keyed by that
-  // refusal: the close a recovery answers carries the very details the door
-  // was told, so no subscription's close reads another attempt's host.
-  const refusedBy = new WeakMap<FatalErrorDetails, string>();
+  // The host process each refusal of a host-only token came from, keyed by
+  // that refusal: the close a recovery answers carries the very details the
+  // door was told, so no subscription's close reads another attempt's host.
+  // The door is fenced, so the process current when it is told is the one
+  // that refused.
+  const refusedBy = new WeakMap<FatalErrorDetails, HostInstance>();
   // The host processes that refused the host-only token the released way: a
   // sign-in authn rejects ends with the released monitor's line only there.
-  const releasedWay = new WeakSet<HostInstanceStamp>();
+  const releasedWay = new WeakSet<HostInstance>();
   const tookReleasedWay = (hostId: string): boolean =>
     releasedWay.has(processReleasedHosts.currentInstance(hostId));
   const client = new WsStreamClient<HostStreamRpcRegistry>({
@@ -275,12 +277,13 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // A refusal names the host whose recovery answers it.
     door: {
       refused: (details, hostId) => {
-        refusedBy.set(details, hostId);
+        refusedBy.set(details, processReleasedHosts.currentInstance(hostId));
       },
       admitted: (hostId) => credential.admitted(hostId),
     },
-    releasedWayTaken: (hostId) => {
-      releasedWay.add(processReleasedHosts.currentInstance(hostId));
+    // The refused socket's own host process.
+    releasedWayTaken: (instance) => {
+      releasedWay.add(instance);
     },
     clock: null,
     hostCredentialMint: credential.hostCredentialMint,
@@ -317,10 +320,15 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       // No host reported this refusal of a host-only token: the close is the
       // released sign-in's own end, which no host-only token recovers.
       (details) => {
-        const hostId = refusedBy.get(details);
-        return hostId === undefined
+        const owner = refusedBy.get(details);
+        return owner === undefined
           ? Promise.resolve<RevalidateOutcome>("rejected")
-          : credential.recover(hostId, details);
+          : credential.recover(owner.hostId, details);
+      },
+      // A refusal no door heard is the current stream's own end.
+      (details) => {
+        const owner = refusedBy.get(details);
+        return owner === undefined || processReleasedHosts.isCurrent(owner);
       },
       credential.signInRejected,
       (listener) =>
@@ -520,6 +528,9 @@ type InboxTarget = { readonly agentId: string; readonly epicId: string };
 
 type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
 
+/** Whether the host process that refused is still the one observed. */
+type InboxRefusalCurrent = (details: FatalErrorDetails) => boolean;
+
 type InboxMintRefusals = (
   listener: (failure: CliHostTokenFailure, tookReleasedWay: boolean) => void,
 ) => () => void;
@@ -543,6 +554,8 @@ const SESSION_EXPIRED_LINE =
  *   - `rejected`      → terminal, with the door's line: sign-in advice only
  *                       when `signInRejected()` says this machine is signed
  *                       out in fact.
+ * None applies once the host process that refused has been replaced: the
+ * monitor re-subscribes, and the replacement answers its own open.
  * Every other fatal (e.g. `INCOMPATIBLE`) is terminal, with the door's line
  * when it is a door refusal.
  *
@@ -556,6 +569,7 @@ const SESSION_EXPIRED_LINE =
 function runInboxSubscription(
   client: WsStreamClient<HostStreamRpcRegistry>,
   recover: InboxRecovery,
+  refusalCurrent: InboxRefusalCurrent,
   signInRejected: () => boolean,
   mintRefusals: InboxMintRefusals,
   presented: "host-token" | "agent-capability",
@@ -728,6 +742,12 @@ function runInboxSubscription(
       // await can't reject the swallowed handler promise into a hang.
       const outcome = await recover(details);
       if (settled) {
+        return;
+      }
+      // The host process that refused was replaced while its recovery ran:
+      // that verdict is not the replacement's, which is asked its own open.
+      if (!refusalCurrent(details)) {
+        subscribe();
         return;
       }
       logger.debug("Monitor auth revalidation completed", {
@@ -1125,7 +1145,7 @@ async function handleServerFrame(
 /** A resolved endpoint, and the process instance of the host that published it. */
 interface ResolvedStreamEndpoint {
   readonly endpoint: HostTransportEndpoint;
-  readonly instance: HostInstance;
+  readonly instance: HostProcess;
 }
 
 async function tryResolveStreamEndpoint(

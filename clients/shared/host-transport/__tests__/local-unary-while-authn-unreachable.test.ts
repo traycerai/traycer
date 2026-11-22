@@ -26,7 +26,7 @@ import type {
   WebSocketOpenEvent,
 } from "@traycer/protocol/host-transport/websocket";
 import { HostRequestAbortedError } from "@traycer/protocol/host-transport/remote/rpc-types";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import type { IWebSocketFactory } from "../ws-factory";
 import {
@@ -35,7 +35,10 @@ import {
   createReleasedHostMemory,
   type ReleasedHostMemory,
   type ReleasedSignOnRow,
+  type ReleasedUnaryCause,
+  type ReleasedUnarySignOn,
 } from "../released-sign-on";
+import type { HostRequestAuthority } from "../host-messenger";
 import { WsRpcClient } from "../ws-rpc-client";
 import { echoRegistry } from "./__fixtures__/echo-registry";
 
@@ -63,12 +66,15 @@ class UnarySocket implements WebSocketLike {
   onerror: ((event: WebSocketErrorEvent) => void) | null = null;
   onclose: ((event: WebSocketCloseEvent) => void) | null = null;
   readonly sent: string[] = [];
+  closed: { readonly code: number; readonly reason: string } | null = null;
 
   send(data: string): void {
     this.sent.push(data);
   }
 
-  close(_code: number, _reason: string): void {}
+  close(code: number, reason: string): void {
+    this.closed = { code, reason };
+  }
 
   fireOpen(): void {
     this.onopen?.({ type: "open" });
@@ -163,7 +169,10 @@ function blackHoledTokens(): {
     signIn: () => SIGN_IN,
     now: () => Date.now(),
   });
-  return { tokens: trackHostTokenMints(source), mintCalls: () => mintCalls };
+  return {
+    tokens: trackHostTokenMints(source, memory),
+    mintCalls: () => mintCalls,
+  };
 }
 
 /** A mint that answers when the test says so. */
@@ -212,7 +221,7 @@ function sourceOf(outcomes: readonly HostTokenMintOutcome[]): {
     signIn: () => SIGN_IN,
     now: () => Date.now(),
   });
-  return { source, tokens: trackHostTokenMints(source) };
+  return { source, tokens: trackHostTokenMints(source, memory) };
 }
 
 /**
@@ -239,7 +248,10 @@ async function unverifiedSource(
     now: () => Date.now(),
   });
   if (held !== null) await holdExpired(source, held);
-  return { tokens: trackHostTokenMints(source), mintCalls: () => mintCalls };
+  return {
+    tokens: trackHostTokenMints(source, memory),
+    mintCalls: () => mintCalls,
+  };
 }
 
 async function holdExpired(
@@ -330,6 +342,12 @@ function driveCallUntil(
   });
 }
 
+/** The client's ask of whether a sign-in may go, as `signInForLocalRow` answers it. */
+type SignOnFor = (
+  authority: HostRequestAuthority,
+  cause: ReleasedUnaryCause,
+) => Promise<ReleasedUnarySignOn | null>;
+
 /** The real client, with the row read live at every decision and the sign-in's refresh and the host memory the test gives it. */
 function driveCallOnRow(input: {
   readonly tokens: TrackedHostTokens;
@@ -338,6 +356,20 @@ function driveCallOnRow(input: {
   readonly hosts: ReleasedHostMemory | null;
   readonly abortSignal: AbortSignal;
 }): DrivenCall {
+  return driveCallThroughSignOn(input, (answerFromRow) => answerFromRow);
+}
+
+/** As {@link driveCallOnRow}, with the answer from the row passed through `throughSignOn` before the client sees it. */
+function driveCallThroughSignOn(
+  input: {
+    readonly tokens: TrackedHostTokens;
+    readonly readRow: () => ReleasedSignOnRow | null;
+    readonly recovery: StreamAuthRevalidator | null;
+    readonly hosts: ReleasedHostMemory | null;
+    readonly abortSignal: AbortSignal;
+  },
+  throughSignOn: (answerFromRow: SignOnFor) => SignOnFor,
+): DrivenCall {
   const { tokens, readRow, recovery, hosts, abortSignal } = input;
   const sockets: UnarySocket[] = [];
   const factory: IWebSocketFactory = {
@@ -361,13 +393,15 @@ function driveCallOnRow(input: {
     hostBearerFor: hostTokenBearerFor(tokens, (_hostId, kind) => {
       states.push(kind);
     }),
-    releasedSignOnFor: signInForLocalRow(readRow, recovery, tokens),
-    ...(hosts === null ? {} : { releasedHosts: hosts }),
-    heldTokenRefusedFor: (authority, presented) =>
+    releasedSignOnFor: throughSignOn(
+      signInForLocalRow(readRow, recovery, tokens),
+    ),
+    releasedHosts: hosts ?? memory,
+    heldTokenRefusedFor: (authority, presented, instance) =>
       heldTokenRefused(
         tokens,
         authority.bearer.identity.userId,
-        authority.endpoint.hostId,
+        instance,
         presented,
       ),
     forgetHeldRefusalFor: (authority) =>
@@ -430,6 +464,13 @@ async function answerEcho(socket: UnarySocket): Promise<void> {
 
 const clients: WsRpcClient<typeof echoRegistry>[] = [];
 
+/** The memory of the host's answers that every client and token source of a case shares. */
+let memory: ReleasedHostMemory = createReleasedHostMemory();
+
+beforeEach(() => {
+  memory = createReleasedHostMemory();
+});
+
 afterEach(() => {
   for (const client of clients.splice(0)) client.releaseIdleLocalSessions();
   vi.useRealTimers();
@@ -455,8 +496,11 @@ describe("local unary while authn cannot mint", () => {
       now: () => Date.now(),
     });
     await holdExpired(source, expired);
-    const tokens = trackHostTokenMints(source);
-    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, null);
+    const tokens = trackHostTokenMints(source, memory);
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, {
+      signal: null,
+      owner: memory.currentInstance(mockLocalHostEntry.hostId),
+    });
     const driven = driveCall(tokens, PERSONAL_ROW);
     clients.push(driven.client);
     await vi.waitFor(
@@ -485,7 +529,10 @@ describe("local unary while authn cannot mint", () => {
       { kind: "unavailable", detail: "authn still offline" },
     ]);
     await holdExpired(source, expired);
-    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, null);
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, {
+      signal: null,
+      owner: memory.currentInstance(mockLocalHostEntry.hostId),
+    });
     const driven = driveCall(tokens, PERSONAL_ROW);
     clients.push(driven.client);
     await vi.waitFor(
@@ -794,7 +841,7 @@ describe("local unary while authn cannot mint", () => {
       signIn: () => SIGN_IN,
       now: () => Date.now(),
     });
-    const tokens = trackHostTokenMints(source);
+    const tokens = trackHostTokenMints(source, memory);
     const first = driveCall(tokens, null);
     clients.push(first.client);
     await vi.advanceTimersByTimeAsync(0);
@@ -845,7 +892,7 @@ describe("local unary while authn cannot mint", () => {
       signIn: () => SIGN_IN,
       now: () => Date.now(),
     });
-    const driven = driveCall(trackHostTokenMints(source), null);
+    const driven = driveCall(trackHostTokenMints(source, memory), null);
     clients.push(driven.client);
     await vi.advanceTimersByTimeAsync(0);
     const probe = driven.sockets[0];
@@ -894,7 +941,7 @@ describe("local unary while authn cannot mint", () => {
     });
     const abort = new AbortController();
     const driven = driveCallUntil(
-      trackHostTokenMints(source),
+      trackHostTokenMints(source, memory),
       null,
       abort.signal,
     );
@@ -941,8 +988,11 @@ describe("local unary while authn cannot mint", () => {
       signIn: () => SIGN_IN,
       now: () => Date.now(),
     });
-    const tokens = trackHostTokenMints(source);
-    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, true, null);
+    const tokens = trackHostTokenMints(source, memory);
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, true, {
+      signal: null,
+      owner: memory.currentInstance(mockLocalHostEntry.hostId),
+    });
     await source.adopt(
       USER_ID,
       mockLocalHostEntry.hostId,
@@ -983,8 +1033,11 @@ describe("a held host-only token that the host refuses as expired, while authn i
       now: () => Date.now(),
     });
     await holdExpired(source, held);
-    const tokens = trackHostTokenMints(source);
-    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, true, null);
+    const tokens = trackHostTokenMints(source, memory);
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, true, {
+      signal: null,
+      owner: memory.currentInstance(mockLocalHostEntry.hostId),
+    });
     return tokens;
   }
 
@@ -1084,7 +1137,10 @@ describe("a sign-in is written only where its row and its host still allow it", 
       { kind: "unavailable", detail: "authn still offline" },
     ]);
     await holdExpired(source, expiredJwt(Date.now()));
-    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, null);
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, {
+      signal: null,
+      owner: memory.currentInstance(mockLocalHostEntry.hostId),
+    });
     return tokens;
   }
 
@@ -1120,7 +1176,10 @@ describe("a sign-in is written only where its row and its host still allow it", 
     );
   }
 
-  async function untilEnded(driven: DrivenCall, sockets: number): Promise<void> {
+  async function untilEnded(
+    driven: DrivenCall,
+    sockets: number,
+  ): Promise<void> {
     await vi.waitFor(
       () =>
         expect(driven.finished || driven.sockets.length >= sockets).toBe(true),
@@ -1230,13 +1289,16 @@ describe("a sign-in is written only where its row and its host still allow it", 
       signIn: () => SIGN_IN,
       now: () => Date.now(),
     });
-    const tokens = trackHostTokenMints(source);
+    const tokens = trackHostTokenMints(source, memory);
     const driven = driveCall(tokens, PERSONAL_ROW);
     clients.push(driven.client);
     await planOwnerSignIn(driven);
     minting.answer({
       kind: "ok",
-      token: { token: "minted-host-token", expiresAtMs: Date.now() + 3_600_000 },
+      token: {
+        token: "minted-host-token",
+        expiresAtMs: Date.now() + 3_600_000,
+      },
     });
     await vi.waitFor(
       () =>
@@ -1323,20 +1385,23 @@ describe("a sign-in is written only where its row and its host still allow it", 
     expect(driven.sockets).toHaveLength(2);
   });
 
-  it("dials the owner's invited sign-in on its own socket, never as a request on a persistent session admitted earlier on a token the host has since refused", async () => {
-    const expired = expiredJwt(Date.now());
-    const { source, tokens } = sourceOf([
-      { kind: "unavailable", detail: "authn offline" },
-      { kind: "unavailable", detail: "authn still offline" },
-    ]);
-    await holdExpired(source, expired);
-    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, null);
-    // Call B: its host-only token is presented, and the host admits a persistent session on it.
+  /** A persistent session admitted on a usable host-only token while host process "100" is the one observed. */
+  async function sessionAdmittedUnderProcess100(
+    hosts: ReleasedHostMemory,
+  ): Promise<{ readonly driven: DrivenCall; readonly session: UnarySocket }> {
+    hosts.observeInstance(mockLocalHostEntry.hostId, "100");
+    const { source, tokens } = sourceOf([]);
+    await source.adopt(
+      USER_ID,
+      mockLocalHostEntry.hostId,
+      { token: "usable-host-token", expiresAtMs: Date.now() + 3_600_000 },
+      source.era(USER_ID),
+    );
     const driven = driveCallOnRow({
       tokens,
       readRow: () => PERSONAL_ROW,
       recovery: null,
-      hosts: null,
+      hosts,
       abortSignal: new AbortController().signal,
     });
     clients.push(driven.client);
@@ -1347,7 +1412,7 @@ describe("a sign-in is written only where its row and its host still allow it", 
     const session = driven.sockets[0];
     if (session === undefined) throw new Error("host-token dial missing");
     const open = await openAndRead(session);
-    expect(open.token).toBe(expired.token);
+    expect(open.token).toBe("usable-host-token");
     session.fireMessage({
       kind: "openAck",
       manifest: open.manifest,
@@ -1356,37 +1421,43 @@ describe("a sign-in is written only where its row and its host still allow it", 
     });
     await answerEcho(session);
     expect(await driven.settled).toMatchObject({ kind: "fulfilled" });
+    return { driven, session };
+  }
 
-    // The host then refuses that token as expired, so it counts as no token held.
-    heldTokenRefused(
-      tokens,
-      USER_ID,
-      mockLocalHostEntry.hostId,
-      expired.token,
-    );
-
-    // Call A probes and is invited to send the owner's sign-in.
+  it("dials a new socket and writes nothing on a persistent session admitted by a host process that was since replaced", async () => {
+    const hosts = memory;
+    const { driven, session } = await sessionAdmittedUnderProcess100(hosts);
+    const writtenBefore = session.sent.length;
+    hosts.observeInstance(mockLocalHostEntry.hostId, "200");
     void requestEcho(driven.client);
     await vi.waitFor(
-      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      () =>
+        expect(
+          session.sent.length > writtenBefore || driven.sockets.length >= 2,
+        ).toBe(true),
       WAIT,
     );
-    const probe = driven.sockets[1];
-    if (probe === undefined) throw new Error("probe dial missing");
-    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
-    probe.fireMessage(namedRefusal("owner_sign_in"));
+    expect(session.sent).toHaveLength(writtenBefore);
+    expect(driven.sockets).toHaveLength(2);
+  });
+
+  it("sends a second call on the persistent session already admitted when the host process has not changed", async () => {
+    const { driven, session } = await sessionAdmittedUnderProcess100(memory);
+    const writtenBefore = session.sent.length;
+    void requestEcho(driven.client);
     await vi.waitFor(
-      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(3),
+      () =>
+        expect(
+          session.sent.length > writtenBefore || driven.sockets.length >= 2,
+        ).toBe(true),
       WAIT,
     );
-    const invited = driven.sockets[2];
-    if (invited === undefined) throw new Error("invited dial missing");
-    expect((await openAndRead(invited)).token).toBe(SIGN_IN);
-    expect(session.sent.join("\n")).not.toContain(SIGN_IN);
+    expect(session.sent.length).toBeGreaterThan(writtenBefore);
+    expect(driven.sockets).toHaveLength(1);
   });
 
   it("applies no decline and plans no sign-in when the probe's answer comes from a host process that was since replaced", async () => {
-    const hosts = createReleasedHostMemory();
+    const hosts = memory;
     hosts.observeInstance(mockLocalHostEntry.hostId, "process-a");
     const driven = driveCallOnRow({
       tokens: blackHoledTokens().tokens,
@@ -1415,7 +1486,7 @@ describe("a sign-in is written only where its row and its host still allow it", 
   });
 
   it("marks nothing for the current host process and tells the door nothing when a refusal comes from one that was since replaced", async () => {
-    const hosts = createReleasedHostMemory();
+    const hosts = memory;
     hosts.observeInstance(mockLocalHostEntry.hostId, "process-a");
     const { source, tokens } = sourceOf([]);
     await source.adopt(
@@ -1446,6 +1517,280 @@ describe("a sign-in is written only where its row and its host still allow it", 
     expect(driven.refusals).toEqual([]);
     expect(everythingWritten(driven)).not.toContain(SIGN_IN);
   });
+
+  /** A bare refusal by host process "100" plans the sign-in; the replacement socket has not yet written its OPEN. */
+  async function plannedByProcess100(hosts: ReleasedHostMemory): Promise<{
+    readonly driven: DrivenCall;
+    readonly replacement: UnarySocket;
+  }> {
+    hosts.observeInstance(mockLocalHostEntry.hostId, "100");
+    const driven = driveCallOnRow({
+      tokens: await heldExpiredReleasedHost(),
+      readRow: () => PERSONAL_ROW,
+      recovery: null,
+      hosts,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await planReleasedSignIn(driven);
+    const replacement = driven.sockets[1];
+    if (replacement === undefined) throw new Error("replacement dial missing");
+    return { driven, replacement };
+  }
+
+  async function replacementWritesOrCallEnds(
+    driven: DrivenCall,
+    replacement: UnarySocket,
+  ): Promise<void> {
+    replacement.fireOpen();
+    await vi.waitFor(
+      () =>
+        expect(
+          replacement.sent.length > 0 ||
+            driven.finished ||
+            driven.sockets.length >= 3,
+        ).toBe(true),
+      WAIT,
+    );
+  }
+
+  it("writes no sign-in on the replacement socket when the host process that refused the token bare was replaced before the socket's OPEN", async () => {
+    const hosts = memory;
+    const { driven, replacement } = await plannedByProcess100(hosts);
+    hosts.observeInstance(mockLocalHostEntry.hostId, "200");
+    await replacementWritesOrCallEnds(driven, replacement);
+    expect(replacement.sent.join("\n")).not.toContain(SIGN_IN);
+    expect(signInOpens(driven)).toBe(0);
+  });
+
+  it("still writes the person's sign-in on the replacement socket's OPEN when the host process has not changed since its bare refusal", async () => {
+    const { driven, replacement } = await plannedByProcess100(memory);
+    await replacementWritesOrCallEnds(driven, replacement);
+    expect(openToken(replacement)).toBe(SIGN_IN);
+  });
+
+  interface HeldRowRead {
+    readonly throughSignOn: (answerFromRow: SignOnFor) => SignOnFor;
+    /** Holds the next read, whatever asks. */
+    readonly hold: () => void;
+    /** Holds the `n`th read made for `cause` from now on. */
+    readonly holdNthRead: (cause: ReleasedUnaryCause, n: number) => void;
+    readonly waiting: () => number;
+    readonly release: () => void;
+  }
+
+  /** Holds the answer of a row read until the test lets it through. */
+  function heldRowRead(): HeldRowRead {
+    let held: {
+      readonly open: Promise<void>;
+      readonly let: () => void;
+    } | null = null;
+    let nth: {
+      readonly cause: ReleasedUnaryCause;
+      readonly n: number;
+      seen: number;
+    } | null = null;
+    let waiting = 0;
+    const newGate = (): {
+      readonly open: Promise<void>;
+      readonly let: () => void;
+    } => {
+      let letThrough: () => void = () => undefined;
+      const open = new Promise<void>((resolve) => {
+        letThrough = resolve;
+      });
+      return { open, let: letThrough };
+    };
+    return {
+      throughSignOn: (answerFromRow) => async (authority, cause) => {
+        let gate = held;
+        if (gate === null && nth !== null && nth.cause === cause) {
+          nth.seen += 1;
+          if (nth.seen === nth.n) {
+            gate = newGate();
+            held = gate;
+            nth = null;
+          }
+        }
+        if (gate !== null) {
+          waiting += 1;
+          await gate.open;
+        }
+        return answerFromRow(authority, cause);
+      },
+      hold: () => {
+        held = newGate();
+      },
+      holdNthRead: (cause, n) => {
+        nth = { cause, n, seen: 0 };
+      },
+      waiting: () => waiting,
+      release: () => {
+        held?.let();
+        held = null;
+      },
+    };
+  }
+
+  async function plannedWithHeldRowRead(hosts: ReleasedHostMemory): Promise<{
+    readonly driven: DrivenCall;
+    readonly replacement: UnarySocket;
+    readonly row: HeldRowRead;
+  }> {
+    const row = heldRowRead();
+    const driven = driveCallThroughSignOn(
+      {
+        tokens: await heldExpiredReleasedHost(),
+        readRow: () => PERSONAL_ROW,
+        recovery: null,
+        hosts,
+        abortSignal: new AbortController().signal,
+      },
+      row.throughSignOn,
+    );
+    clients.push(driven.client);
+    await planReleasedSignIn(driven);
+    const replacement = driven.sockets[1];
+    if (replacement === undefined) throw new Error("replacement dial missing");
+    row.hold();
+    replacement.fireOpen();
+    await vi.waitFor(
+      () => expect(row.waiting()).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    return { driven, replacement, row };
+  }
+
+  it("writes no sign-in when another transport hears the host name a reason while the OPEN waits on the row", async () => {
+    const hosts = memory;
+    const { driven, replacement, row } = await plannedWithHeldRowRead(hosts);
+    hosts.refusedNamingReason(
+      hosts.currentInstance(mockLocalHostEntry.hostId),
+      false,
+    );
+    row.release();
+    await vi.waitFor(
+      () =>
+        expect(
+          replacement.sent.length > 0 ||
+            driven.finished ||
+            driven.sockets.length >= 3,
+        ).toBe(true),
+      WAIT,
+    );
+    expect(replacement.sent.join("\n")).not.toContain(SIGN_IN);
+    expect(signInOpens(driven)).toBe(0);
+  });
+
+  it("writes the sign-in once the held row read answers, when the host named no reason meanwhile", async () => {
+    const { driven, replacement, row } = await plannedWithHeldRowRead(memory);
+    row.release();
+    await vi.waitFor(
+      () => expect(replacement.sent.length).toBeGreaterThan(0),
+      WAIT,
+    );
+    expect(openToken(replacement)).toBe(SIGN_IN);
+    expect(driven.sockets).toHaveLength(2);
+  });
+
+  it("writes no sign-in on a persistent session once the row moves to a team before the invited call's request, drops the session and dials the call as a first dial", async () => {
+    let row: ReleasedSignOnRow = PERSONAL_ROW;
+    const reads = heldRowRead();
+    const expired = expiredJwt(Date.now());
+    const { source, tokens } = sourceOf([
+      { kind: "unavailable", detail: "authn offline" },
+      { kind: "unavailable", detail: "authn still offline" },
+    ]);
+    await holdExpired(source, expired);
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, {
+      signal: null,
+      owner: memory.currentInstance(mockLocalHostEntry.hostId),
+    });
+    const driven = driveCallThroughSignOn(
+      {
+        tokens,
+        readRow: () => row,
+        recovery: null,
+        hosts: memory,
+        abortSignal: new AbortController().signal,
+      },
+      reads.throughSignOn,
+    );
+    clients.push(driven.client);
+    // Call B: its host-only token is presented and the host admits a persistent session on it.
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const session = driven.sockets[0];
+    if (session === undefined) throw new Error("host-token dial missing");
+    const open = await openAndRead(session);
+    expect(open.token).toBe(expired.token);
+    session.fireMessage({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: open.optionalManifest,
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    await answerEcho(session);
+    expect(await driven.settled).toMatchObject({ kind: "fulfilled" });
+    // The host then refuses that token, so call A probes and is invited to send the owner's sign-in.
+    heldTokenRefused(
+      tokens,
+      USER_ID,
+      memory.currentInstance(mockLocalHostEntry.hostId),
+      expired.token,
+    );
+    reads.holdNthRead("owner-sign-in", 2);
+    void requestEcho(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    const probe = driven.sockets[1];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("owner_sign_in"));
+    // The row is asked again where the invited call is written, and answers once the person's computer is a team's.
+    const opened = new Set<UnarySocket>();
+    const openWhenDialed = (index: number): void => {
+      const dialed = driven.sockets[index];
+      if (dialed !== undefined && !opened.has(dialed)) {
+        opened.add(dialed);
+        dialed.fireOpen();
+      }
+    };
+    await vi.waitFor(() => {
+      openWhenDialed(2);
+      expect(reads.waiting()).toBeGreaterThanOrEqual(1);
+    }, WAIT);
+    row = TEAM_ROW;
+    reads.release();
+    await vi.waitFor(() => {
+      openWhenDialed(2);
+      expect(driven.sockets[2]?.sent.length ?? 0).toBeGreaterThan(0);
+    }, WAIT);
+    expect(session.sent.join("\n")).not.toContain(SIGN_IN);
+    const firstDial = driven.sockets[2];
+    if (firstDial === undefined) throw new Error("first dial missing");
+    expect(openToken(firstDial)).not.toBe(SIGN_IN);
+    // The session is out of reuse: once the first dial has answered as a host
+    // without persistent sessions, a call with no sign-in dials a new socket
+    // and writes nothing on B's session.
+    ackAndEcho(firstDial, readFrame(firstDial.sent[0]));
+    await answerEcho(firstDial);
+    const writtenOnB = session.sent.length;
+    void requestEcho(driven.client);
+    await vi.waitFor(
+      () =>
+        expect(
+          session.sent.length > writtenOnB || driven.sockets.length >= 4,
+        ).toBe(true),
+      WAIT,
+    );
+    expect(session.sent).toHaveLength(writtenOnB);
+    expect(driven.sockets).toHaveLength(4);
+  });
 });
 
 describe("a held token's refusal", () => {
@@ -1458,7 +1803,7 @@ describe("a held token's refusal", () => {
       now: () => Date.now(),
     });
     await source.whenLoaded();
-    const tokens = trackHostTokenMints(source);
+    const tokens = trackHostTokenMints(source, memory);
     const hostId = mockLocalHostEntry.hostId;
     for (const held of [
       { token: "older-host-token", expiresAtMs: Date.now() - 60_000 },
@@ -1467,8 +1812,18 @@ describe("a held token's refusal", () => {
       await source.adopt(USER_ID, hostId, held, source.era(USER_ID));
     }
 
-    heldTokenRefused(tokens, USER_ID, hostId, "newer-host-token");
-    heldTokenRefused(tokens, USER_ID, hostId, "older-host-token");
+    heldTokenRefused(
+      tokens,
+      USER_ID,
+      memory.currentInstance(hostId),
+      "newer-host-token",
+    );
+    heldTokenRefused(
+      tokens,
+      USER_ID,
+      memory.currentInstance(hostId),
+      "older-host-token",
+    );
 
     expect(tokens.heldRefused(USER_ID, hostId)).toBe(true);
   });

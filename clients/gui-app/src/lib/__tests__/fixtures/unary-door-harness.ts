@@ -26,6 +26,7 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createAuthAwareMessenger } from "@traycer-clients/shared/host-transport/auth-aware-messenger";
+import { createReleasedHostMemory } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   createRetryingMessenger,
   DEFAULT_TRANSPORT_RETRY_POLICY,
@@ -149,8 +150,10 @@ export async function unaryDoorHarness(
       return Promise.resolve("rotated");
     },
   };
+  const hosts = createReleasedHostMemory();
   const hostRecovery = hostTokenUnaryRevalidator({
     tokens,
+    hosts,
     currentUserId: () =>
       useAuthStore.getState().contextMetadata?.userId ?? null,
     signInRecovery,
@@ -188,7 +191,7 @@ export async function unaryDoorHarness(
     options.hostId === POOL_DOOR_HOST_ID
       ? signInLease
       : await hostTokenBearerFor(
-          trackHostTokenMints(tokens),
+          trackHostTokenMints(tokens, hosts),
           noteHostTokenRefusal,
         )(options.hostId, signInLease, true, new AbortController().signal);
   if (bearer === null) throw new Error("expected a host-only token bearer");

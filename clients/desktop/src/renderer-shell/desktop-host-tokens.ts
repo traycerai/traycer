@@ -1,14 +1,16 @@
 import {
+  createHostMintRecords,
   isIssuedHostTokenEra,
-  type HostTokenMintFailure,
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
+import type { HostInstance } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type {
   HostToken,
   HostTokenChange,
 } from "@traycer-clients/shared/auth/host-token-store";
 import {
   NO_ISSUED_HOST_TOKEN_ERA,
+  type HostTokenObtainReply,
   type HostTokensBridgeSurface,
 } from "../ipc-contracts/host-token-types";
 
@@ -29,17 +31,31 @@ export function createDesktopHostTokenSource(
   const listeners = new Set<(change: HostTokenChange) => void>();
   const reported = new Map<string, number>();
   const forgetting = new Map<string, number>();
-  // How this window's asks ended, for every client in it: `lastFailure` is a
+  // How this window's asks ended, for every client in it: `lastFailureOf` is a
   // synchronous read, so it cannot ask main.
-  const failures = new Map<string, HostTokenMintFailure>();
+  const records = createHostMintRecords();
+  // Each pair's ask in flight to main and the instance it is for. Main joins
+  // asks by person and host alone, so an ask for another instance waits for
+  // this one to settle and never reaches main beside it.
+  const asking = new Map<
+    string,
+    { readonly owner: HostInstance | null; readonly settled: Promise<void> }
+  >();
+  const untilOwnTurn = async (
+    key: string,
+    owner: HostInstance | null,
+  ): Promise<void> => {
+    const other = asking.get(key);
+    if (owner === null || other === undefined || other.owner === owner) return;
+    await other.settled;
+    return untilOwnTurn(key, owner);
+  };
   const keyOf = (userId: string, hostId: string): string =>
     `${userId}\u0000${hostId}`;
   const announce = (userId: string, hostId: string): void => {
     for (const listener of Array.from(listeners)) listener({ userId, hostId });
   };
   const dropPerson = (userId: string): void => {
-    for (const key of Array.from(failures.keys()))
-      if (key.startsWith(`${userId}\u0000`)) failures.delete(key);
     for (const key of Array.from(copy.keys())) {
       if (!key.startsWith(`${userId}\u0000`)) continue;
       copy.delete(key);
@@ -131,20 +147,48 @@ export function createDesktopHostTokenSource(
       }
       return held;
     },
-    obtain: async (userId, hostId, fresh) => {
+    obtain: async (userId, hostId, fresh, { owner }) => {
+      // Its place in the order, before any wait.
+      const started = records.start();
+      const key = keyOf(userId, hostId);
+      await untilOwnTurn(key, owner);
       const era = eraOf(userId);
       if (era === NO_ISSUED_HOST_TOKEN_ERA) return { kind: "superseded" };
-      const reply = await bridge.obtain(userId, hostId, fresh, era);
+      const asked = bridge.obtain(userId, hostId, fresh, era);
+      const entry = {
+        owner,
+        settled: asked.then(
+          () => undefined,
+          () => undefined,
+        ),
+      };
+      asking.set(key, entry);
+      void entry.settled.then(() => {
+        if (asking.get(key) === entry) asking.delete(key);
+      });
+      let reply: HostTokenObtainReply;
+      try {
+        reply = await asked;
+      } catch (cause) {
+        // No token came of it, as when authn cannot be reached.
+        if (owner !== null && stillIn(userId, era, era))
+          records.record(owner, userId, era, started, "unavailable");
+        throw cause;
+      }
       learn(userId, reply.era);
       if (!stillIn(userId, era, reply.era)) return { kind: "superseded" };
-      if (reply.outcome.kind === "ok") {
-        failures.delete(keyOf(userId, hostId));
+      if (reply.outcome.kind === "ok")
         apply(userId, hostId, reply.outcome.token, reply.era);
-      } else failures.set(keyOf(userId, hostId), reply.outcome.kind);
+      if (owner !== null)
+        records.record(owner, userId, era, started, reply.outcome.kind);
       return reply.outcome;
     },
-    lastFailure: (userId, hostId) =>
-      failures.get(keyOf(userId, hostId)) ?? null,
+    lastFailureOf: (userId, owner) => {
+      const era = reported.get(userId);
+      return era === undefined || forgetting.has(userId)
+        ? null
+        : records.lastFailureOf(owner, userId, era);
+    },
     renew: async (userId, hostIds) => {
       const era = eraOf(userId);
       if (era === NO_ISSUED_HOST_TOKEN_ERA) return { kind: "superseded" };

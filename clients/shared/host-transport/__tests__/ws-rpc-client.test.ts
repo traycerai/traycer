@@ -337,7 +337,7 @@ function mutableTokenAccess(
         lastFailure = outcome.kind === "ok" ? null : outcome.kind;
         return outcome;
       },
-      lastFailure: () => lastFailure,
+      lastFailureOf: () => lastFailure,
     },
     setCurrent: (token) => {
       current = token;
@@ -351,8 +351,8 @@ function makeReleasedUnaryRig(input: {
   readonly outcomes: HostTokenMintOutcome[];
 }) {
   const mutable = mutableTokenAccess(input.initialToken, input.outcomes);
-  const tokens = trackHostTokenMints(mutable.access);
   const hosts = createReleasedHostMemory();
+  const tokens = trackHostTokenMints(mutable.access, hosts);
   const { factory, sockets } = makeFactory();
   let requestNumber = 0;
   let doorRefusals = 0;
@@ -377,13 +377,8 @@ function makeReleasedUnaryRig(input: {
       },
       admitted: () => () => undefined,
     }),
-    heldTokenRefusedFor: (_authority, presented) =>
-      heldTokenRefused(
-        tokens,
-        RELEASED_TEST_USER,
-        RELEASED_TEST_HOST,
-        presented,
-      ),
+    heldTokenRefusedFor: (_authority, presented, instance) =>
+      heldTokenRefused(tokens, RELEASED_TEST_USER, instance, presented),
     forgetHeldRefusalFor: () =>
       tokens.forgetHeldRefused(RELEASED_TEST_USER, RELEASED_TEST_HOST),
   });
@@ -1084,7 +1079,7 @@ describe("WsRpcClient", () => {
         RELEASED_TEST_USER,
         RELEASED_TEST_HOST,
         false,
-        null,
+        { signal: null, owner: null },
       );
       expect(minted.kind).toBe("ok");
 
