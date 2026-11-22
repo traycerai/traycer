@@ -30,6 +30,7 @@ import {
   type VersionedStreamRpcRegistry,
 } from "../../../framework/versioned-stream-rpc";
 import {
+  CHUNK_PACE_BURST_BYTES,
   CHUNK_PACE_BURST_FRAMES,
   ChunkReassembler,
   encodeMuxMessageBody,
@@ -2806,6 +2807,177 @@ describe("RemoteSession host-leg resume", () => {
       expect(host.credentialFrames).toEqual([]);
       expect(host.opens).toBe(2);
       expect(host.resumes).toEqual([]);
+    });
+  });
+
+  describe("the pacer is charged the bytes a credential update is actually written with", () => {
+    const SHORT = "short-bearer";
+    const LARGE = "g".repeat(60_000);
+
+    /**
+     * A credential plane whose reads are queued: each read takes the next
+     * queued answer, and the last one taken stands once the queue is empty.
+     * One update reads twice (enqueue, then write); a replay reads once more.
+     */
+    interface QueuedPlane {
+      readonly auth: RemoteSessionAuth;
+      readonly queue: string[];
+    }
+
+    function queuedPlane(): QueuedPlane {
+      const queue: string[] = [];
+      let standing = SHORT;
+      return {
+        auth: {
+          ...hostAuth(),
+          readCredentialUpdateBearer: () => {
+            standing = queue.shift() ?? standing;
+            return standing;
+          },
+        },
+        queue,
+      };
+    }
+
+    /**
+     * Sends unchanged large updates until the pacer's byte bucket holds at
+     * least one large frame and less than two, on a clock that never moves.
+     * Returns the size of one large frame.
+     */
+    async function drainToBetweenOneAndTwoLargeFrames(
+      fixture: Fixture,
+      plane: QueuedPlane,
+    ): Promise<number> {
+      const { host, session } = fixture;
+      plane.queue.push(LARGE, LARGE);
+      session.notifyBearerRotated();
+      await until(() => host.credentialUpdates.length === 1);
+      const largeFrameBytes = host.credentialFrames[0]?.plaintext.length ?? 0;
+      const drains = Math.floor(CHUNK_PACE_BURST_BYTES / largeFrameBytes) - 1;
+      for (let sent = 1; sent < drains; sent += 1) {
+        plane.queue.push(LARGE, LARGE);
+        session.notifyBearerRotated();
+        await until(() => host.credentialUpdates.length === sent + 1);
+      }
+      const left = CHUNK_PACE_BURST_BYTES - drains * largeFrameBytes;
+      expect(left).toBeGreaterThan(largeFrameBytes + 1_024);
+      expect(left).toBeLessThan(2 * largeFrameBytes - 16_384);
+      return largeFrameBytes;
+    }
+
+    async function pacedFixture(): Promise<{
+      readonly fixture: Fixture;
+      readonly plane: QueuedPlane;
+    }> {
+      const plane = queuedPlane();
+      const fixture = await readyFixture({
+        ...LIVE,
+        autoTick: false,
+        advertiseCredentialUpdate: true,
+        auth: plane.auth,
+      });
+      return { fixture, plane };
+    }
+
+    /** Asks for one more unchanged large update and reports whether it went out before the clock moved a millisecond. */
+    async function probeGoesOutAtOnce(
+      fixture: Fixture,
+      plane: QueuedPlane,
+    ): Promise<boolean> {
+      const { host, session } = fixture;
+      const before = host.credentialUpdates.length;
+      plane.queue.push(LARGE, LARGE);
+      session.notifyBearerRotated();
+      await step(1);
+      const wentOut = host.credentialUpdates.length === before + 1;
+      // Whatever the pacing, the update goes out once the bucket refills.
+      await advanceUntil(
+        () => host.credentialUpdates.length === before + 1,
+        5_000,
+      );
+      return wentOut;
+    }
+
+    it("makes the next update wait for the bytes of a larger bearer written in place of a short one on its first write", async () => {
+      const { fixture, plane } = await pacedFixture();
+      const { host, session } = fixture;
+      await drainToBetweenOneAndTwoLargeFrames(fixture, plane);
+      const sent = host.credentialUpdates.length;
+
+      plane.queue.push(SHORT, LARGE);
+      session.notifyBearerRotated();
+      await until(() => host.credentialUpdates.length === sent + 1);
+      expect(host.credentialUpdates[sent]?.bearer).toBe(LARGE);
+
+      expect(await probeGoesOutAtOnce(fixture, plane)).toBe(false);
+    });
+
+    it("makes the next update wait for the bytes of a larger bearer written in place of a short one on its replay", async () => {
+      const { fixture, plane } = await pacedFixture();
+      const { host, session } = fixture;
+      await drainToBetweenOneAndTwoLargeFrames(fixture, plane);
+      const sent = host.credentialUpdates.length;
+
+      // The short update is written into a lost leg, so the ledger holds it short.
+      const socket = host.live().socket;
+      const sentBefore = socket.binarySends;
+      host.loseLeg();
+      plane.queue.push(SHORT, SHORT);
+      session.notifyBearerRotated();
+      await until(() => socket.binarySends > sentBefore);
+      // The bearer has grown by the time the gap is resent.
+      plane.queue.push(LARGE);
+      host.attach();
+      await until(() => host.credentialUpdates.length === sent + 1);
+      expect(host.credentialUpdates[sent]?.bearer).toBe(LARGE);
+
+      expect(await probeGoesOutAtOnce(fixture, plane)).toBe(false);
+    });
+
+    it("gives no credit when a large update is rewritten to a short bearer: the next update still waits for the bytes it was charged", async () => {
+      const { fixture, plane } = await pacedFixture();
+      const { host, session } = fixture;
+      await drainToBetweenOneAndTwoLargeFrames(fixture, plane);
+      const sent = host.credentialUpdates.length;
+
+      plane.queue.push(LARGE, SHORT);
+      session.notifyBearerRotated();
+      await until(() => host.credentialUpdates.length === sent + 1);
+      expect(host.credentialUpdates[sent]?.bearer).toBe(SHORT);
+
+      expect(await probeGoesOutAtOnce(fixture, plane)).toBe(false);
+    });
+
+    it("holds in the resume ledger the grown frame as written, so the replay of a grown update is byte for byte what was sent", async () => {
+      const { fixture, plane } = await pacedFixture();
+      const { host, session } = fixture;
+
+      const socket = host.live().socket;
+      const sentBefore = socket.binarySends;
+      host.loseLeg();
+      plane.queue.push(SHORT, LARGE);
+      session.notifyBearerRotated();
+      await until(() => socket.binarySends > sentBefore);
+      host.attach();
+      await until(() => host.credentialUpdates.length === 1);
+
+      const [replayed] = host.credentialUpdates;
+      if (replayed === undefined) throw new Error("the replay never arrived");
+      expect(replayed.bearer).toBe(LARGE);
+      const grown = new OutboundChunkSource(
+        {
+          type: MuxFrameType.CREDENTIAL_UPDATE,
+          streamId: SESSION_CONTROL_STREAM_ID,
+          qos: QosClass.INTERACTIVE,
+          json: { bearer: LARGE },
+          binary: null,
+        },
+        () => replayed.seq,
+        false,
+      );
+      expect(Array.from(replayed.plaintext)).toEqual(
+        Array.from(encodeMuxFrame(grown.nextFrame())),
+      );
     });
   });
 });
