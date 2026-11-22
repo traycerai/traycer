@@ -2664,5 +2664,148 @@ describe("RemoteSession host-leg resume", () => {
         expect(host.resumes).toEqual([]);
       },
     );
+
+    // Without negotiated body compression no frame is compressed, so the 4 KiB
+    // size at which a frame is compressed does not bound a rewrite: a changed
+    // bearer is rewritten whenever its new body fits one chunk.
+    it.each([
+      { name: "4,096 bytes", size: 4_096 },
+      { name: "most of one 64 KiB chunk", size: 60_000 },
+    ])(
+      "rewrites an uncompressed update of $name for the bearer read at its first write, and keeps the leg up",
+      async ({ size }) => {
+        const changed = "c".repeat(size);
+        const plane = scriptedCredentialPlane([SIGN_IN_BEARER, changed]);
+        const fixture = await readyFixture({
+          ...LIVE,
+          advertiseCredentialUpdate: true,
+          auth: plane.auth,
+        });
+        const { host, session } = fixture;
+
+        session.notifyBearerRotated();
+        await advanceUntil(
+          () =>
+            host.credentialUpdates.length === 1 || host.connections.length > 1,
+          20_000,
+        );
+
+        expect(host.credentialUpdates.map((update) => update.bearer)).toEqual([
+          changed,
+        ]);
+        const [written] = host.credentialFrames;
+        if (written === undefined) throw new Error("the update never arrived");
+        const frame = decodeMuxFrame(written.plaintext);
+        expect(frame.compressed).toBe(false);
+        expect(frame.chunked).toBe(false);
+        expect(session.isReady()).toBe(true);
+        expect(fixture.readinessLost).not.toHaveBeenCalled();
+        expect(host.connections).toHaveLength(1);
+        expect(host.opens).toBe(1);
+      },
+    );
+
+    it("rewrites an uncompressed update of 4,096 bytes for the bearer read at its replay across a resume, under the lost update's seq, with no teardown", async () => {
+      const changed = "c".repeat(4_096);
+      // The enqueue and the write the relay loses read the small bearer; the resend reads the large one.
+      const plane = scriptedCredentialPlane([
+        SIGN_IN_BEARER,
+        SIGN_IN_BEARER,
+        changed,
+      ]);
+      const fixture = await readyFixture({
+        ...LIVE,
+        advertiseCredentialUpdate: true,
+        auth: plane.auth,
+      });
+      const { host, session } = fixture;
+
+      await updateLostThenReplayed(fixture, () => undefined);
+      await advanceUntil(
+        () =>
+          host.credentialUpdates.length === 1 || host.connections.length > 1,
+        20_000,
+      );
+
+      expect(host.credentialUpdates.map((update) => update.bearer)).toEqual([
+        changed,
+      ]);
+      const seqs = controlSeqs(host, 0);
+      expect(seqs).toEqual(range(seqs.length - 1));
+      expect(host.credentialUpdates[0]?.seq).toBe(seqs[seqs.length - 1]);
+      expect(host.resumes).toHaveLength(1);
+      expect(session.isReady()).toBe(true);
+      expect(fixture.readinessLost).not.toHaveBeenCalled();
+      expect(host.connections).toHaveLength(1);
+      expect(host.opens).toBe(1);
+    });
+
+    // Guards: the rewrite stays refused where the frame as enqueued would be
+    // framed differently from the new body.
+    it("ends the connection and writes nothing when body compression is negotiated and the changed bearer's body is 4,096 bytes, which would be compressed", async () => {
+      const plane = scriptedCredentialPlane([
+        SIGN_IN_BEARER,
+        "c".repeat(4_096),
+      ]);
+      const fixture = await readyFixture({
+        ...LIVE,
+        advertiseCredentialUpdate: true,
+        advertiseBodyCompression: true,
+        auth: plane.auth,
+      });
+      const { host, session } = fixture;
+
+      session.notifyBearerRotated();
+      await advanceUntil(
+        () => host.connections.length === 2 && session.isReady(),
+        30_000,
+      );
+
+      expect(host.credentialFrames).toEqual([]);
+      expect(host.opens).toBe(2);
+      expect(host.resumes).toEqual([]);
+    });
+
+    it("still rewrites an update whose new body is under 4 KiB when body compression is negotiated, with no teardown", async () => {
+      const changed = "c".repeat(100);
+      const plane = scriptedCredentialPlane([SIGN_IN_BEARER, changed]);
+      const fixture = await readyFixture({
+        ...LIVE,
+        advertiseCredentialUpdate: true,
+        advertiseBodyCompression: true,
+        auth: plane.auth,
+      });
+      const { host, session } = fixture;
+
+      session.notifyBearerRotated();
+      await until(() => host.credentialUpdates.length === 1);
+
+      expect(host.credentialUpdates[0]?.bearer).toBe(changed);
+      expect(session.isReady()).toBe(true);
+      expect(host.connections).toHaveLength(1);
+    });
+
+    it("ends the connection and writes nothing when no compression is negotiated but the changed bearer's body needs more than one chunk", async () => {
+      const plane = scriptedCredentialPlane([
+        SIGN_IN_BEARER,
+        "d".repeat(70_000),
+      ]);
+      const fixture = await readyFixture({
+        ...LIVE,
+        advertiseCredentialUpdate: true,
+        auth: plane.auth,
+      });
+      const { host, session } = fixture;
+
+      session.notifyBearerRotated();
+      await advanceUntil(
+        () => host.connections.length === 2 && session.isReady(),
+        30_000,
+      );
+
+      expect(host.credentialFrames).toEqual([]);
+      expect(host.opens).toBe(2);
+      expect(host.resumes).toEqual([]);
+    });
   });
 });
