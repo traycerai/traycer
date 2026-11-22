@@ -369,7 +369,7 @@ function makeReleasedUnaryRig(input: {
       refused: () => {
         doorRefusals += 1;
       },
-      admitted: () => undefined,
+      admitted: () => () => undefined,
     }),
     heldTokenRefusedFor: (_authority, presented) =>
       heldTokenRefused(

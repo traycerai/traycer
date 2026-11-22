@@ -147,7 +147,22 @@ vi.mock("../../browser-view/storage/browser-storage-state", () => ({
   ),
 }));
 
-function makeBridge(windows: Record<string, unknown>) {
+interface BridgeHost {
+  readonly getSnapshot: () => {
+    readonly hostId: string;
+    readonly pid: number;
+  } | null;
+  readonly on: (event: string, handler: () => void) => void;
+  readonly off: (event: string, handler: () => void) => void;
+}
+
+const NO_LOCAL_HOST: BridgeHost = {
+  getSnapshot: () => null,
+  on: vi.fn(),
+  off: vi.fn(),
+};
+
+function makeBridge(windows: Record<string, unknown>, host: BridgeHost) {
   return {
     handleInvoke: vi.fn(),
     disposeFns: [] as Array<() => void>,
@@ -172,11 +187,7 @@ function makeBridge(windows: Record<string, unknown>) {
     }),
     options: {
       authnBaseUrl: "https://authn.test",
-      host: {
-        getSnapshot: () => null,
-        on: vi.fn(),
-        off: vi.fn(),
-      },
+      host,
     },
     authSession: {
       get: () => ({
@@ -240,7 +251,7 @@ describe("browser.sessions stream reset on a host window reload", () => {
       await import("../../../ipc-contracts/ipc-channels");
     const { BrowserWindow } = await import("electron");
     const hostWindow = new BrowserWindow({});
-    const bridge = makeBridge({ "window-1": hostWindow });
+    const bridge = makeBridge({ "window-1": hostWindow }, NO_LOCAL_HOST);
     registerBrowserViewIpc(bridge as never);
     disposers.push(...bridge.disposeFns);
     const openSessions = findInvokeHandler(
@@ -287,5 +298,79 @@ describe("browser.sessions stream reset on a host window reload", () => {
     await openSessions({}, STREAM_KEY);
     await flushMicrotasks();
     expect(captured.transportOpens).toHaveLength(2);
+  });
+});
+
+describe("main's released-host memory follows the local host's process instance", () => {
+  const disposers: Array<() => void> = [];
+  const HOST_ID = "local-host-with-a-named-reason";
+
+  afterEach(async () => {
+    for (const dispose of disposers.splice(0)) dispose();
+    const { processReleasedHosts } =
+      await import("@traycer-clients/shared/host-transport/released-sign-on");
+    processReleasedHosts.forgetAll();
+  });
+
+  async function registerWithHost(initialPid: number): Promise<{
+    readonly restartAs: (pid: number) => void;
+    readonly publish: (hostId: string, pid: number) => void;
+    readonly named: () => boolean;
+  }> {
+    const { registerBrowserViewIpc } = await import("../browser-view-ipc");
+    const { processReleasedHosts } =
+      await import("@traycer-clients/shared/host-transport/released-sign-on");
+    let snapshot = { hostId: HOST_ID, pid: initialPid };
+    const publishSnapshot = (hostId: string, pid: number): void => {
+      snapshot = { hostId, pid };
+      for (const handler of changeHandlers) handler();
+    };
+    const changeHandlers: Array<() => void> = [];
+    const host: BridgeHost = {
+      getSnapshot: () => snapshot,
+      on: (event, handler) => {
+        if (event === "change") changeHandlers.push(handler);
+      },
+      off: () => undefined,
+    };
+    const bridge = makeBridge({}, host);
+    registerBrowserViewIpc(bridge as never);
+    disposers.push(...bridge.disposeFns);
+    processReleasedHosts.refusedNamingReason(HOST_ID);
+    return {
+      restartAs: (pid) => {
+        publishSnapshot(HOST_ID, pid);
+      },
+      publish: publishSnapshot,
+      named: () => processReleasedHosts.namedReason(HOST_ID),
+    };
+  }
+
+  it("forgets what the host named once the same host id comes back under another pid", async () => {
+    const host = await registerWithHost(100);
+    expect(host.named()).toBe(true);
+    host.restartAs(200);
+    expect(host.named()).toBe(false);
+  });
+
+  it("forgets what the host named once it returns under another pid after another host was the local one", async () => {
+    const host = await registerWithHost(100);
+    host.publish("another-local-host", 7);
+    expect(host.named()).toBe(true);
+    host.restartAs(200);
+    expect(host.named()).toBe(false);
+  });
+
+  it("keeps what the host named when it returns under the same pid after another host was the local one (control)", async () => {
+    const host = await registerWithHost(100);
+    host.publish("another-local-host", 7);
+    host.restartAs(100);
+    expect(host.named()).toBe(true);
+  });
+
+  it("keeps what the host named while the pid is unchanged (control)", async () => {
+    const host = await registerWithHost(100);
+    host.restartAs(100);
+    expect(host.named()).toBe(true);
   });
 });

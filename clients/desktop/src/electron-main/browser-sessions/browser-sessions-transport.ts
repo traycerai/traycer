@@ -13,7 +13,7 @@ import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-s
 import {
   hostTokenBearer,
   hostTokenHeldPastExpiry,
-  hostTokenSessionAuth,
+  hostTokenStreamAuth,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
@@ -98,6 +98,13 @@ export interface BrowserSessionsHostDirectory {
    */
   invalidate(hostId: string): void;
   /**
+   * Reads the registry again now, keeping the cached rows while it runs, and
+   * answers whether a read that STARTED after this call completed: `false` on
+   * a failed read, or with no bearer to read with. One already running may
+   * predate the question, so it is waited out first. Never throttled.
+   */
+  confirmRows(): Promise<boolean>;
+  /**
    * Drops the whole cached registry, and the cooldown that guards refetching
    * it, because the identity it was read for has changed.
    *
@@ -156,6 +163,8 @@ export function createBrowserSessionsHostDirectory(
   let inFlight: Promise<void> | null = null;
   let lastRefreshAt: number | null = null;
   let forced = false;
+  /** Registry reads that completed and were adopted. */
+  let readsAdopted = 0;
   const listeners = new Set<() => void>();
 
   const refresh = async (): Promise<void> => {
@@ -174,6 +183,7 @@ export function createBrowserSessionsHostDirectory(
       );
     }
     cachedRemote = next;
+    readsAdopted += 1;
     for (const listener of Array.from(listeners)) listener();
   };
 
@@ -243,6 +253,14 @@ export function createBrowserSessionsHostDirectory(
       cachedRemote.delete(hostId);
       forced = true;
     },
+    confirmRows: async () => {
+      const running = inFlight;
+      if (running !== null) await running;
+      const before = readsAdopted;
+      forced = true;
+      await refreshOnce();
+      return readsAdopted > before;
+    },
     reset: () => {
       cachedRemote = new Map();
       lastRefreshAt = null;
@@ -310,6 +328,12 @@ export interface BrowserSessionsTransportDeps {
    * on every remote dial, so a row that left the person is sent no sign-in.
    */
   readonly liveRow: () => HostDirectoryEntry | null;
+  /**
+   * `BrowserSessionsHostDirectory.confirmRows`. `liveRow` is a cache nothing
+   * keeps current, so a remote attach that would carry the sign-in reads the
+   * registry again first; a local door never waits on it.
+   */
+  readonly confirmRow: () => Promise<boolean>;
   readonly appVersion: string | null;
   /** Main's host-only tokens; the sign-in goes only where `opensReleasedWay` allows. */
   readonly hostTokens: HostTokenSource;
@@ -366,6 +390,8 @@ export function openBrowserSessionsTransport(
         const row = deps.liveRow();
         return row !== null && opensReleasedWay(row, userId);
       },
+      confirmRowBeforeSignIn: () =>
+        answeredWithin(deps.confirmRow(), ROW_CONFIRM_CEILING_MS),
       door: null,
       onState: ignoreHostTokenState,
       cloudAuthorized: deps.cloudAuthorized,
@@ -407,7 +433,7 @@ export function openBrowserSessionsTransport(
     ),
     // Main never refreshes the sign-in, so a refused one ends the stream too.
     releasedSignOn: releasedSignOnForLocalRow(
-      target,
+      deps.liveRow,
       target.hostId,
       userId,
       deps.bearer,
@@ -416,7 +442,7 @@ export function openBrowserSessionsTransport(
       processReleasedHosts,
     ),
     userId,
-    ...hostTokenSessionAuth(
+    ...hostTokenStreamAuth(
       {
         tokens: hostTokens,
         currentUserId: () => deps.bearer()?.identity.userId ?? null,
@@ -456,6 +482,29 @@ export function openBrowserSessionsTransport(
 
 /** Main draws no state of a host; the renderer's own connections raise it. */
 function ignoreHostTokenState(): void {}
+
+/**
+ * How long a remote attach that would carry the sign-in waits for the row to
+ * be read again. At the ceiling it goes without the sign-in.
+ */
+const ROW_CONFIRM_CEILING_MS = 5_000;
+
+/** `confirmed`, or `false` once `ceilingMs` passes first. */
+async function answeredWithin(
+  confirmed: Promise<boolean>,
+  ceilingMs: number,
+): Promise<boolean> {
+  let clearCeiling = (): void => undefined;
+  const ceiling = new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), ceilingMs);
+    clearCeiling = () => clearTimeout(timer);
+  });
+  try {
+    return await Promise.race([confirmed, ceiling]);
+  } finally {
+    clearCeiling();
+  }
+}
 
 /**
  * Which jar transport `target` may have, or `null` for none. The two lanes

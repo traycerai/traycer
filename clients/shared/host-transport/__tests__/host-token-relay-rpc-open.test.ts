@@ -168,6 +168,7 @@ async function expiryRelayHarness(refusals: readonly FatalErrorDetails[]) {
   };
   const transport = createRemoteHostTransport({
     opensReleasedWay: () => false,
+    confirmRowBeforeSignIn: null,
     hostId: entry.hostId,
     userId: USER_ID,
     relayAttachUrl: entry.websocketUrl ?? "",
@@ -235,6 +236,7 @@ function signInRelayHarness(
   });
   const transport = createRemoteHostTransport({
     opensReleasedWay: () => false,
+    confirmRowBeforeSignIn: null,
     hostId: entry.hostId,
     userId: USER_ID,
     relayAttachUrl: entry.websocketUrl ?? "",
@@ -544,6 +546,7 @@ describe("remote RPC relay OPEN host-token frame", () => {
       const bearer = () => new MutableBearerLease(SIGN_IN_TOKEN, USER_ID);
       const transport = createRemoteHostTransport({
         opensReleasedWay: () => false,
+        confirmRowBeforeSignIn: null,
         hostId: entry.hostId,
         userId: USER_ID,
         relayAttachUrl: entry.websocketUrl ?? "",
@@ -654,6 +657,7 @@ describe("remote RPC relay OPEN host-token frame", () => {
     vi.stubGlobal("fetch", fetchMock);
     const transport = createRemoteHostTransport({
       opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId: entry.hostId,
       userId: USER_ID,
       relayAttachUrl: entry.websocketUrl ?? "",

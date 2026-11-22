@@ -20,31 +20,46 @@ export interface ReleasedSignOnRow {
   readonly sandbox?: object | null;
 }
 
-/** How a transport opens a released host: with the person's sign-in. */
+/**
+ * How a transport opens a released host with the person's sign-in, and how a
+ * local door probes a host it can present no host-only token to.
+ */
 export interface ReleasedSignOn {
+  /** The person's sign-in: their identity for the probe, and the credential the sign-in plans present. */
   readonly signIn: BearerSourceProvider;
+  /**
+   * The row rule: whether this host's row may be handed the sign-in at all.
+   * It gates only the sign-in, never the probe, whose placeholder carries no
+   * credential.
+   */
+  readonly mayPresentSignIn: () => boolean;
   /** Recovers a sign-in the released host refused, as a released app did. */
   readonly recovery: StreamAuthRevalidator | null;
+  /*
+   * Each callback below is asked with the host the socket it answers for was
+   * selected for, never with what the caller's endpoint reads now. A builder
+   * bound to one host answers for no other.
+   */
   /**
    * This machine's host only: no host-only token can be presented
    * ({@link hostTokenUnobtainable}). A released client then opened its host
    * with the sign-in, and so does this one.
    */
-  readonly hostTokenUnobtainable: () => boolean;
+  readonly hostTokenUnobtainable: (hostId: string) => boolean;
   /**
    * This machine's host only: authn did not answer the mint and no host-only
    * token can be presented ({@link ownerSignInEligible}). Only then is a current
    * host's `owner_sign_in` answer followed by the sign-in.
    */
-  readonly ownerSignInEligible: () => boolean;
+  readonly ownerSignInEligible: (hostId: string) => boolean;
   /**
    * The host refused `presented`, the host-only token on the open frame, as
    * expired; that token is not presented again. Answers whether it was the held
    * one presented because authn did not answer the mint.
    */
-  readonly heldTokenRefused: (presented: string) => boolean;
+  readonly heldTokenRefused: (hostId: string, presented: string) => boolean;
   /** No owner's sign-in can follow that refusal: see `TrackedHostTokens.forgetHeldRefused`. */
-  readonly forgetHeldRefusal: () => void;
+  readonly forgetHeldRefusal: (hostId: string) => void;
   /** What this process has seen of each host's answers; see {@link ReleasedHostMemory}. */
   readonly hosts: ReleasedHostMemory;
 }
@@ -58,8 +73,10 @@ export interface ReleasedSignOn {
  * after this dial sequence's own refusal showed the released level. It holds
  * one person: a dial by anyone else forgets it, and so does
  * sign-out (`forgetAll`). It is forgotten for everyone the moment the host admits
- * a host-only token or refuses anything naming its reason (it was updated). A
- * host that has named a reason in this process is never handed the sign-in again.
+ * a host-only token or refuses anything naming its reason (it was updated).
+ * Once a host names a reason, no transport in this process hands it the
+ * released-way sign-in again, until this process sees that host's local
+ * process instance change.
  * A declined probe is the same person's and host's: it is forgotten with the
  * person, and when the host admits a host-only token.
  */
@@ -76,6 +93,21 @@ export interface ReleasedHostMemory {
    */
   readonly declineProbe: (userId: string, hostId: string) => void;
   readonly probeDeclined: (userId: string, hostId: string) => boolean;
+  /**
+   * An open carrying the sign-in a current host invited (`owner_sign_in`) was
+   * written to this host and has had no answer yet: no ack, no refusal, and
+   * the socket has not ended. Counted per host, since transports overlap.
+   */
+  readonly invitedSignInPending: (hostId: string) => boolean;
+  readonly invitedSignInWritten: (hostId: string) => void;
+  /** Once per written open: its ack, its refusal, or the end of its socket. */
+  readonly invitedSignInAnswered: (hostId: string) => void;
+  /**
+   * Forgets this host's named-reason mark and its declined probe: its local
+   * process instance changed, and a restarted host may answer differently.
+   * Never called on a refusal: a team computer could then receive the sign-in.
+   */
+  readonly forgetNamed: (hostId: string) => void;
   readonly forgetAll: () => void;
 }
 
@@ -84,6 +116,7 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
   const released = new Set<string>();
   const current = new Set<string>();
   const declined = new Set<string>();
+  const invitedPending = new Map<string, number>();
   const forgetAll = (): void => {
     person = null;
     released.clear();
@@ -116,6 +149,19 @@ export function createReleasedHostMemory(): ReleasedHostMemory {
     },
     probeDeclined: (userId, hostId) =>
       person === userId && declined.has(hostId),
+    invitedSignInPending: (hostId) => (invitedPending.get(hostId) ?? 0) > 0,
+    invitedSignInWritten: (hostId) => {
+      invitedPending.set(hostId, (invitedPending.get(hostId) ?? 0) + 1);
+    },
+    invitedSignInAnswered: (hostId) => {
+      const pending = (invitedPending.get(hostId) ?? 0) - 1;
+      if (pending > 0) invitedPending.set(hostId, pending);
+      else invitedPending.delete(hostId);
+    },
+    forgetNamed: (hostId) => {
+      current.delete(hostId);
+      declined.delete(hostId);
+    },
     forgetAll,
   };
 }
@@ -213,7 +259,9 @@ export function heldTokenRefused(
   presented: string,
 ): boolean {
   const held = heldWhileAuthnUnreachable(tokens, userId, hostId);
-  tokens.noteHeldRefused(userId, hostId, presented);
+  // A late refusal of an older token never overwrites the current one's mark.
+  if (tokens.current(userId, hostId)?.token === presented)
+    tokens.noteHeldRefused(userId, hostId, presented);
   return (
     held !== null &&
     held.token === presented &&
@@ -221,29 +269,48 @@ export function heldTokenRefused(
   );
 }
 
-/** For this machine's host when the caller holds its row; `null` unless the row allows it. */
+/**
+ * For this machine's host, for a caller holding its row in memory. Every row
+ * probes; only a row {@link opensReleasedWayOnThisMachine} allows is handed the
+ * sign-in, read again at every ask (`mayPresentSignIn`). Never a cloud read.
+ */
 export function releasedSignOnForLocalRow(
-  row: ReleasedSignOnRow | null,
+  readRow: () => ReleasedSignOnRow | null,
   hostId: string,
   userId: string,
   signIn: BearerSourceProvider,
   recovery: StreamAuthRevalidator | null,
   tokens: TrackedHostTokens,
   hosts: ReleasedHostMemory,
-): ReleasedSignOn | null {
-  return opensReleasedWayOnThisMachine(row, userId)
-    ? {
-        signIn,
-        recovery,
-        hostTokenUnobtainable: () =>
-          hostTokenUnobtainable(tokens, userId, hostId),
-        ownerSignInEligible: () => ownerSignInEligible(tokens, userId, hostId),
-        heldTokenRefused: (presented) =>
-          heldTokenRefused(tokens, userId, hostId, presented),
-        forgetHeldRefusal: () => tokens.forgetHeldRefused(userId, hostId),
-        hosts,
-      }
-    : null;
+): ReleasedSignOn {
+  return {
+    signIn,
+    mayPresentSignIn: () => opensReleasedWayOnThisMachine(readRow(), userId),
+    recovery,
+    hostTokenUnobtainable: (asked) =>
+      asked === hostId && hostTokenUnobtainable(tokens, userId, hostId),
+    ownerSignInEligible: (asked) =>
+      asked === hostId && ownerSignInEligible(tokens, userId, hostId),
+    heldTokenRefused: (asked, presented) =>
+      asked === hostId && heldTokenRefused(tokens, userId, hostId, presented),
+    forgetHeldRefusal: (asked) => {
+      if (asked === hostId) tokens.forgetHeldRefused(userId, hostId);
+    },
+    hosts,
+  };
+}
+
+/** A released host's bare refusal of an open that carried the person's sign-in: the fatal details of a stream's close, or a unary call's error. */
+const releasedSignInRefusals = new WeakSet<object>();
+export function markReleasedSignInRefusal(refusal: object): void {
+  releasedSignInRefusals.add(refusal);
+}
+export function isReleasedSignInRefusal(refusal: unknown): boolean {
+  return (
+    typeof refusal === "object" &&
+    refusal !== null &&
+    releasedSignInRefusals.has(refusal)
+  );
 }
 
 /** What a unary call is sent with instead of, or after, the host-only token. */
@@ -255,9 +322,18 @@ export interface ReleasedUnarySignOn {
 
 /**
  * Why the unary client asks: the host refused the token, none could be
- * presented, or a current host answered the probe `owner_sign_in`.
+ * presented, the host refused the held one as expired, or a current host
+ * answered the probe `owner_sign_in`. For `no-host-token` and
+ * `held-token-refused` the answer is whether the call may PROBE. With no
+ * host-only token held no row is asked, since the placeholder carries no
+ * credential; a held token the host refused is a token held, so the row rule
+ * gates that probe, as it gates the two causes that send the sign-in.
  */
-export type ReleasedUnaryCause = "refused" | "no-host-token" | "owner-sign-in";
+export type ReleasedUnaryCause =
+  | "refused"
+  | "no-host-token"
+  | "held-token-refused"
+  | "owner-sign-in";
 
 /**
  * `WsRpcClientOptions.releasedSignOnFor` for this machine's host, for a caller
@@ -275,11 +351,13 @@ export function signInForLocalRow(
     const hostId = authority.endpoint.hostId;
     const userId = authority.bearer.identity.userId;
     const allowed =
-      opensReleasedWayOnThisMachine(resolveRow(hostId), userId) &&
-      (cause === "refused" ||
-        (cause === "owner-sign-in"
-          ? ownerSignInEligible(tokens, userId, hostId)
-          : hostTokenUnobtainable(tokens, userId, hostId)));
+      cause === "no-host-token"
+        ? hostTokenUnobtainable(tokens, userId, hostId)
+        : opensReleasedWayOnThisMachine(resolveRow(hostId), userId) &&
+          (cause === "refused" ||
+            (cause === "owner-sign-in"
+              ? ownerSignInEligible(tokens, userId, hostId)
+              : hostTokenUnobtainable(tokens, userId, hostId)));
     return Promise.resolve(
       allowed ? { bearer: authority.bearer, recovery } : null,
     );

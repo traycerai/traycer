@@ -110,7 +110,7 @@ describe("host-token renewal", () => {
       tokens.renew(USER_ID, HOST_IDS),
       tokens.renew(USER_ID, HOST_IDS),
     ]);
-    const bearerBeforeRotation = streamBearer();
+    const bearerBeforeRotation = streamBearer(HOST_IDS[0]);
     if (bearerBeforeRotation === null)
       throw new Error("host token is unavailable");
     expect(bearerBeforeRotation.getBearerToken()).toBe("host-token-1");
@@ -253,6 +253,7 @@ describe("host-token renewal", () => {
     );
     const remote = createRemoteHostTransport({
       opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId: relayHostId,
       userId: USER_A,
       relayAttachUrl: "wss://relay.test/attach",
@@ -400,7 +401,7 @@ describe("host-token lease after a user era changes", () => {
       (_refusedHostId, state) => states.push(state),
     );
 
-    expect(bearer()).toBeNull();
+    expect(bearer(hostId)).toBeNull();
     await started.promise;
     const { pending: mintChain } = await bearerMint.promise;
     await tokens.forgetUser(USER_A);
@@ -432,7 +433,12 @@ describe("host-token lease after a user era changes", () => {
       trackHostTokenMints(tokens),
       (_refusedHostId, state) => states.push(state),
     );
-    const pending = bearerFor(hostId, signInLease, true);
+    const pending = bearerFor(
+      hostId,
+      signInLease,
+      true,
+      new AbortController().signal,
+    );
     await started.promise;
     await tokens.forgetUser(USER_A);
     answer.resolve({ kind: "not-a-member" });

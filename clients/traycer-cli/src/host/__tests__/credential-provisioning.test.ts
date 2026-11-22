@@ -20,7 +20,8 @@ import type {
   HostCredentialMintRequest,
 } from "../../../../shared/host-transport/host-credential-mint-flow";
 import type { StreamAuthRevalidator } from "../../../../shared/auth/bearer-revalidator";
-import type { BearerSourceProvider } from "../../../../shared/auth/bearer-source";
+import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import type { HostPidMetadata } from "../pid-metadata";
 import { config } from "../../config";
@@ -50,13 +51,17 @@ interface CapturedStreamClientOptions {
   readonly hostCredentialMint: (
     request: HostCredentialMintRequest,
   ) => Promise<HostCredentialMintOutcome>;
-  readonly bearer: BearerSourceProvider;
+  // What the stream presents for the host a socket was selected for.
+  readonly bearer: (hostId: string) => OpenFrameBearerSource | null;
   // The probe wires this so an expired access token can be refreshed instead
   // of making the first UNAUTHORIZED terminal; tests drive it directly.
   readonly auth: StreamAuthRevalidator | null;
   // The probe reports each admitted open here; tests call it to stand in for
   // one.
-  readonly door: { readonly admitted: () => void };
+  readonly door: {
+    readonly admitted: (hostId: string) => () => void;
+    readonly refused: (details: FatalErrorDetails, hostId: string) => void;
+  };
 }
 
 const mocks = vi.hoisted(() => {
@@ -479,7 +484,7 @@ describe("provisionInstalledHostCredential", () => {
       makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
     );
 
-    const bearer = capturedClientOptions().bearer();
+    const bearer = capturedClientOptions().bearer("host-1");
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
       kind: "active",
       minted: false,
@@ -534,7 +539,7 @@ describe("provisionInstalledHostCredential", () => {
             const options = capturedClientOptions();
             // The fake replaces the client, so an empty bearer stands in for
             // the placeholder that client would have presented.
-            expect(options.bearer()).toBeNull();
+            expect(options.bearer("host-1")).toBeNull();
             await vi.waitFor(() =>
               expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
             );
@@ -542,6 +547,8 @@ describe("provisionInstalledHostCredential", () => {
             if (revalidateRefused === undefined) {
               throw new Error("probe wired no refused-token recovery");
             }
+            // As the real stream: the door hears the refusal, then recovery runs.
+            options.door.refused(refusal, "host-1");
             void revalidateRefused(refusal).catch(() => undefined);
             session.emitStatus(
               "closed",
@@ -597,7 +604,7 @@ describe("provisionInstalledHostCredential", () => {
           const options = capturedClientOptions();
           // The first mint answers not-admitted while no sign-in can follow
           // yet: the run goes on past it.
-          expect(options.bearer()).toBeNull();
+          expect(options.bearer("host-named-reason")).toBeNull();
           await vi.waitFor(() =>
             expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
           );
@@ -606,11 +613,11 @@ describe("provisionInstalledHostCredential", () => {
           // starts a second mint, and the host admits the sign-in before it
           // answers.
           processReleasedHosts.refusedNamingReason("host-named-reason");
-          expect(options.bearer()).toBeNull();
+          expect(options.bearer("host-named-reason")).toBeNull();
           await vi.waitFor(() =>
             expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(2),
           );
-          options.door.admitted();
+          options.door.admitted("host-named-reason");
           mintAnswer.resolve({ kind: "not-admitted" });
           await sleep(0);
           options.onHostCredentialState("host-named-reason", "active");
@@ -642,17 +649,17 @@ describe("provisionInstalledHostCredential", () => {
         void (async (): Promise<void> => {
           const options = capturedClientOptions();
           // No token yet: the dial goes with the mint running beside it.
-          expect(options.bearer()).toBeNull();
+          expect(options.bearer("host-1")).toBeNull();
           await vi.waitFor(() =>
             expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
           );
           // The host admits the sign-in, and authn then says it has no row:
           // for the mint begun before the admission, and for the next ask.
           // Neither ends the run, which the host's own answer settles.
-          options.door.admitted();
+          options.door.admitted("host-1");
           mintAnswer.resolve({ kind: "not-admitted" });
           await sleep(0);
-          expect(options.bearer()).toBeNull();
+          expect(options.bearer("host-1")).toBeNull();
           await vi.waitFor(() =>
             expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(2),
           );
@@ -671,6 +678,105 @@ describe("provisionInstalledHostCredential", () => {
       minted: false,
     });
     expectCleanTeardown();
+  });
+
+  it("presents each socket the host-only token of the host it was selected for, though the endpoint poll has moved to another host", async () => {
+    const hostA = "host-selected-a";
+    const hostB = "host-polled-b";
+    const held = (token: string) => ({
+      token,
+      expiresAtMs: Date.now() + 3_600_000,
+    });
+    mocks.hostTokenTable = new Map([
+      [
+        "user-1",
+        new Map([
+          [hostA, held("token-for-a")],
+          [hostB, held("token-for-b")],
+        ]),
+      ],
+    ]);
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      ...localHostMetadata(),
+      hostId: hostA,
+    });
+    const presented: { a: string | null; b: string | null } = {
+      a: null,
+      b: null,
+    };
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void (async (): Promise<void> => {
+          const options = capturedClientOptions();
+          // A dial to host A is waiting; the poll now reads host B's pid file.
+          const readsBefore = mocks.readHostPidMetadataMock.mock.calls.length;
+          mocks.readHostPidMetadataMock.mockResolvedValue({
+            ...localHostMetadata(),
+            hostId: hostB,
+          });
+          await vi.waitFor(() =>
+            expect(
+              mocks.readHostPidMetadataMock.mock.calls.length,
+            ).toBeGreaterThanOrEqual(readsBefore + 2),
+          );
+          await sleep(0);
+          presented.a = options.bearer(hostA)?.getBearerToken() ?? null;
+          presented.b = options.bearer(hostB)?.getBearerToken() ?? null;
+          options.onHostCredentialState(hostA, "active");
+        })();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "active",
+      minted: false,
+    });
+    expect(presented).toEqual({ a: "token-for-a", b: "token-for-b" });
+  });
+
+  it("credits an admitted open to the host its socket was selected for, so the polled host's first mint refusal still ends the run", async () => {
+    const hostA = "host-admitted-a";
+    const hostB = "host-refused-b";
+    const mintAnswer = createDeferred<{ readonly kind: "not-admitted" }>();
+    mocks.hostTokenTable = new Map();
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      ...localHostMetadata(),
+      hostId: hostB,
+    });
+    mocks.hostTokenMintMock.mockReset();
+    mocks.hostTokenMintMock.mockReturnValueOnce(mintAnswer.promise);
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void (async (): Promise<void> => {
+          const options = capturedClientOptions();
+          // Host B's mint starts with its first ask, and B names a reason.
+          options.bearer(hostB);
+          await vi.waitFor(() =>
+            expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
+          );
+          await sleep(0);
+          processReleasedHosts.refusedNamingReason(hostB);
+          // A socket selected for host A is admitted while the poll reads B,
+          // and B's mint then answers that authn has no row for it.
+          options.door.admitted(hostA);
+          mintAnswer.resolve({ kind: "not-admitted" });
+        })();
+      }, 0);
+    };
+
+    const startedAt = Date.now();
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 5_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "mint-unavailable",
+    });
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
 
   it.each([
@@ -724,7 +830,7 @@ describe("provisionInstalledHostCredential", () => {
             void (async (): Promise<void> => {
               // The fake replaces the client, so reading the bearer stands in
               // for the open that asks for the host-only token.
-              expect(capturedClientOptions().bearer()).toBeNull();
+              expect(capturedClientOptions().bearer("host-1")).toBeNull();
               await vi.waitFor(() =>
                 expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
               );
@@ -771,11 +877,12 @@ describe("provisionInstalledHostCredential", () => {
         if (revalidateRefused === undefined) {
           throw new Error("probe wired no refused-token recovery");
         }
+        options.door.refused(refusal, "host-1");
         const recovery = revalidateRefused(refusal);
         void recovery.then(
           (result) => {
             mocks.hostTokenRecoveryResult = result;
-            options.bearer();
+            options.bearer("host-1");
             options.onHostCredentialState("host-1", "active");
             return result;
           },
@@ -795,7 +902,7 @@ describe("provisionInstalledHostCredential", () => {
     expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1);
     expect(mocks.hostTokenRecoveryResult).toBe("rotated");
     expect(mocks.revalidateCurrentContextMock).not.toHaveBeenCalled();
-    expect(capturedClientOptions().bearer()?.getBearerToken()).toBe(
+    expect(capturedClientOptions().bearer("host-1")?.getBearerToken()).toBe(
       "fresh-host-only-token",
     );
     expectCleanTeardown();
@@ -810,11 +917,12 @@ describe("provisionInstalledHostCredential", () => {
     mocks.hostTokenMintMock.mockImplementationOnce(() => pendingMint.promise);
     mocks.onSessionCreated = (): void => {
       setTimeout(() => {
-        const revalidateRefused =
-          capturedClientOptions().auth?.revalidateRefused;
+        const options = capturedClientOptions();
+        const revalidateRefused = options.auth?.revalidateRefused;
         if (revalidateRefused === undefined) {
           throw new Error("probe wired no refused-token recovery");
         }
+        options.door.refused(TOKEN_EXPIRED_REFUSAL, "host-1");
         void revalidateRefused(TOKEN_EXPIRED_REFUSAL).catch(() => undefined);
       }, 0);
     };
@@ -856,8 +964,10 @@ describe("provisionInstalledHostCredential", () => {
           if (revalidateRefused === undefined) {
             throw new Error("probe wired no refused-token recovery");
           }
+          options.door.refused(TOKEN_EXPIRED_REFUSAL, "host-1");
           results.push(await revalidateRefused(TOKEN_EXPIRED_REFUSAL));
-          if (admit) options.door.admitted();
+          if (admit) options.door.admitted("host-1");
+          options.door.refused(TOKEN_EXPIRED_REFUSAL, "host-1");
           results.push(await revalidateRefused(TOKEN_EXPIRED_REFUSAL));
           options.onHostCredentialState("host-1", "active");
         })();
@@ -1401,7 +1511,7 @@ describe("provisionInstalledHostCredential", () => {
           upgradeGuidance: null,
           doorReason: "not_admitted",
         });
-        capturedClientOptions().door.admitted();
+        capturedClientOptions().door.admitted("host-1");
       }, 0);
     };
 

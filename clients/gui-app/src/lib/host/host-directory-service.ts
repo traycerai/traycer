@@ -8,6 +8,7 @@ import {
   type PoolHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/host-directory";
 import { hostDirectoryEntryEquals } from "@traycer-clients/shared/host-client/host-connection-registry";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 import {
   fetchRemoteHosts,
@@ -452,7 +453,19 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (!this.isStarted()) {
       return;
     }
+    // Each local host's process instance. The same id under another pid than
+    // this process last saw for it is a restarted host, which may answer
+    // differently: this process's released-host memory forgets what it named.
+    // Never on an absent host, and never on a refusal. The snapshot carries no
+    // start time, so a pid the same host id reuses goes unseen.
+    const localHostPids = new Map<string, number>();
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
+      if (snapshot !== null) {
+        const seen = localHostPids.get(snapshot.hostId);
+        if (seen !== undefined && seen !== snapshot.pid)
+          processReleasedHosts.forgetNamed(snapshot.hostId);
+        localHostPids.set(snapshot.hostId, snapshot.pid);
+      }
       // A shell with no local host has no local ENTRY either, whatever a
       // snapshot says: the directory answers for this launch's capability.
       this.localEntry = this.hasLocalHost ? toLocalEntry(snapshot) : null;

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
-import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
 import { RECONNECT_INITIAL_BACKOFF_MS } from "@traycer/protocol/host-transport/remote/config";
 import {
   hostRpcRegistry,
@@ -25,6 +24,7 @@ import { retireAllRemoteSessions } from "../remote/active-remote-sessions";
 import { RemoteMuxTestPeer } from "./remote-mux-test-peer";
 import {
   hostDoorStateOfRefusal,
+  type HostDoorObserver,
   type HostDoorStateKind,
 } from "../host-door-state";
 
@@ -54,7 +54,7 @@ interface RecoveryHarness {
   readonly signInCalls: string[];
   readonly recover: HostTokenRevalidator;
   // What a relay session tells the lease when the host admits its open.
-  readonly door: SessionDoorObserver;
+  readonly door: HostDoorObserver;
 }
 
 async function harness(
@@ -357,6 +357,7 @@ describe("host-token refusal recovery", () => {
     vi.stubGlobal("fetch", fetchMock);
     const transport = createRemoteHostTransport({
       opensReleasedWay: () => false,
+      confirmRowBeforeSignIn: null,
       hostId: HOST_ID,
       userId: USER_ID,
       relayAttachUrl: "wss://relay.test/attach",

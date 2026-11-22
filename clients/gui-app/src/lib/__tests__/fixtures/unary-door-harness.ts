@@ -185,7 +185,7 @@ export async function unaryDoorHarness(
       : await hostTokenBearerFor(
           trackHostTokenMints(tokens),
           noteHostTokenRefusal,
-        )(options.hostId, signInLease, true);
+        )(options.hostId, signInLease, true, new AbortController().signal);
   if (bearer === null) throw new Error("expected a host-only token bearer");
   const raw = scriptedDoorMessenger(options.refusals, sentBearers);
   const messenger = recordingRefusedHost(

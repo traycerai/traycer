@@ -10,16 +10,20 @@ import {
   requireCliHostSession,
   type CliHostTokenFailure,
 } from "./cli-host-tokens";
-import type {
-  ReleasedSignOn,
-  ReleasedUnaryCause,
+import {
+  isReleasedSignInRefusal,
+  type ReleasedSignOn,
+  type ReleasedUnaryCause,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import {
   hostDoorRefusalCliError,
   hostTokenFailureCliError,
   signedOutCliError,
 } from "./host-door-words";
-import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
+import {
+  hostRefusalOf,
+  type DoorAdmissionRelease,
+} from "@traycer-clients/shared/host-transport/host-door-state";
 import { TEAM_TRANSFER_REFUSALS } from "@traycer-clients/shared/host-client/team-computer-refusals";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { randomUUID } from "node:crypto";
@@ -501,8 +505,8 @@ interface LocalHostDoor {
   readonly hostBearerFor: (
     waitForMint: boolean,
   ) => Promise<OpenFrameBearerSource | null>;
-  /** The host admitted a call. */
-  readonly admitted: () => void;
+  /** The host admitted a call; the release is called when that connection leaves. */
+  readonly admitted: () => DoorAdmissionRelease;
 }
 
 async function requestWithHostToken<
@@ -535,26 +539,32 @@ async function requestWithHostToken<
             admitted: localDoor.admitted,
           }),
           releasedSignOnFor: (
-            _authority: HostRequestAuthority,
+            authority: HostRequestAuthority,
             cause: ReleasedUnaryCause,
           ) => {
             const releasedSignOn = localDoor.releasedSignOn;
+            const hostId = authority.endpoint.hostId;
             const signIn = releasedSignOn.signIn();
             const eligible =
               cause === "refused" ||
               (cause === "owner-sign-in"
-                ? releasedSignOn.ownerSignInEligible()
-                : releasedSignOn.hostTokenUnobtainable());
+                ? releasedSignOn.ownerSignInEligible(hostId)
+                : releasedSignOn.hostTokenUnobtainable(hostId));
             return Promise.resolve(
               signIn !== null && eligible
                 ? { bearer: signIn, recovery: releasedSignOn.recovery }
                 : null,
             );
           },
-          heldTokenRefusedFor: (_authority, presented) =>
-            localDoor.releasedSignOn.heldTokenRefused(presented),
-          forgetHeldRefusalFor: () =>
-            localDoor.releasedSignOn.forgetHeldRefusal(),
+          heldTokenRefusedFor: (authority, presented) =>
+            localDoor.releasedSignOn.heldTokenRefused(
+              authority.endpoint.hostId,
+              presented,
+            ),
+          forgetHeldRefusalFor: (authority) =>
+            localDoor.releasedSignOn.forgetHeldRefusal(
+              authority.endpoint.hostId,
+            ),
           releasedHosts: localDoor.releasedSignOn.hosts,
           surfacesNotProvisioned: true,
         }),
@@ -924,7 +934,22 @@ export function hostRpcToCliError(err: unknown): unknown {
 }
 
 /**
+ * A released host's refusal of this person's sign-in, in its own words, as
+ * the released CLI printed every host refusal.
+ */
+export function releasedSignInRefusalCliError(reason: string): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.AUTH_REJECTED,
+    message: reason,
+    details: null,
+    exitCode: 1,
+  });
+}
+
+/**
  * Maps a host wire error code to a stable CLI error code:
+ *   - a released host's refusal of this person's sign-in → `AUTH_REJECTED`
+ *     with the host's own sentence, unless the sign-in itself was rejected.
  *   - a refusal by the host's door, after the call's one fresh token → the
  *     door's own line (`hostDoorRefusalCliError`), decided by its reason
  *     ahead of every code below: sign-in advice only for a machine signed out
@@ -970,6 +995,11 @@ export function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
+  const signInRejected = isRefusalAfterRejectedSignIn(err);
+  // A released host refused this person's sign-in: its own sentence, as the
+  // released CLI printed it. Only a dead sign-in says more.
+  if (!signInRejected && isReleasedSignInRefusal(err))
+    return releasedSignInRefusalCliError(err.message);
   // A capability cannot be repaired by the stored sign-in or a host-token mint.
   const doorRefusal = isRefusalOfAgentSessionCapability(err)
     ? null
@@ -977,10 +1007,8 @@ function mapHostRpcError(err: HostRpcError): CliError {
   const doorError =
     doorRefusal === null
       ? null
-      : hostDoorRefusalCliError(
-          doorRefusal,
-          isRefusalAfterRejectedSignIn(err),
-          () => unexpectedHostCliError(err),
+      : hostDoorRefusalCliError(doorRefusal, signInRejected, () =>
+          unexpectedHostCliError(err),
         );
   if (doorError !== null) return doorError;
   const admissionError =

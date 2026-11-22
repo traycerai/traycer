@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type {
+  HostListItem,
+  HostOwnerPrincipal,
+} from "@traycer/protocol/host/host-status";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 vi.mock(
   "@traycer-clients/shared/host-client/minimum-host-version",
@@ -88,6 +92,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   hostListItemToDirectoryEntry,
+  type HostListFetchResult,
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
@@ -101,6 +106,7 @@ import {
 import { RemoteMuxTestPeer } from "@traycer-clients/shared/host-transport/__tests__/remote-mux-test-peer";
 import type { IStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/ws-stream-factory";
 import type { WsStreamClientOptions } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { DEFAULT_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-transport/transport-config";
 import {
   FakeNativeWebSocket,
@@ -113,7 +119,10 @@ import {
   USER_A,
 } from "@traycer-clients/shared/test-fixtures/dial-gate-harness";
 import type { BrowserSessionsHostTransport } from "../../browser-sessions/browser-sessions-transport";
-import { openBrowserSessionsTransport } from "../../browser-sessions/browser-sessions-transport";
+import {
+  createBrowserSessionsHostDirectory,
+  openBrowserSessionsTransport,
+} from "../../browser-sessions/browser-sessions-transport";
 import { createLocalHostInventoryStreamClient } from "../local-host-inventory-subscription";
 
 const SIGN_IN_TOKEN = "main-sign-in-token";
@@ -121,11 +130,8 @@ const HOST_TOKEN = "main-host-token";
 const LOCAL_HOST_AT_FLOOR = { ...mockLocalHostEntry, version: "2.0.0" };
 const REMOTE_HOST_ID = "remote-personal-host";
 
-function remoteHostEntry(
-  appVersion: string,
-  publicKey: string,
-): RemoteHostDirectoryEntry {
-  const item: HostListItem = {
+function remoteHostItem(appVersion: string, publicKey: string): HostListItem {
+  return {
     hostId: REMOTE_HOST_ID,
     displayName: "Remote personal host",
     platform: "linux",
@@ -142,11 +148,21 @@ function remoteHostEntry(
       lastSeenAt: null,
     },
   };
-  return hostListItemToDirectoryEntry(item, "wss://relay.test/attach");
+}
+
+function remoteHostEntry(
+  appVersion: string,
+  publicKey: string,
+): RemoteHostDirectoryEntry {
+  return hostListItemToDirectoryEntry(
+    remoteHostItem(appVersion, publicKey),
+    "wss://relay.test/attach",
+  );
 }
 
 async function openLocalBrowserTransport(
   target: HostDirectoryEntry,
+  confirmRow: () => Promise<boolean>,
 ): Promise<BrowserSessionsHostTransport | null> {
   const provider = newProvider();
   signIn(provider, USER_A, SIGN_IN_TOKEN);
@@ -177,6 +193,7 @@ async function openLocalBrowserTransport(
       websocketUrl,
     }),
     liveRow: () => target,
+    confirmRow,
     appVersion: "1.0.0-test",
     hostTokens,
   });
@@ -265,6 +282,7 @@ describe("desktop main local streams open with host tokens", () => {
         cloudAuthorized: () => true,
         endpoint: localHost,
         liveRow: () => LOCAL_HOST_AT_FLOOR,
+        confirmRow: () => Promise.resolve(true),
         appVersion: "1.0.0-test",
         hostTokens,
       },
@@ -310,12 +328,17 @@ describe("desktop main local streams open with host tokens", () => {
       const socketsBefore = FakeNativeWebSocket.instances.length;
 
       if (previousOwner !== undefined) {
-        const prior = await openLocalBrowserTransport(entryFor(previousOwner));
+        const prior = await openLocalBrowserTransport(
+          entryFor(previousOwner),
+          () => Promise.resolve(true),
+        );
         expect(prior).not.toBeNull();
         prior?.close();
       }
 
-      const transport = await openLocalBrowserTransport(entryFor(owner));
+      const transport = await openLocalBrowserTransport(entryFor(owner), () =>
+        Promise.resolve(true),
+      );
       expect(transport !== null).toBe(admitted);
       if (transport === null) {
         expect(FakeNativeWebSocket.instances).toHaveLength(socketsBefore);
@@ -385,6 +408,7 @@ describe("desktop main local streams open with host tokens", () => {
         cloudAuthorized: () => true,
         endpoint: () => endpoint,
         liveRow: () => belowFloor,
+        confirmRow: () => Promise.resolve(true),
         appVersion: "1.0.0-test",
         hostTokens,
       }),
@@ -433,6 +457,7 @@ describe("desktop main local streams open with host tokens", () => {
       cloudAuthorized: () => true,
       endpoint: () => null,
       liveRow: () => row,
+      confirmRow: () => Promise.resolve(true),
       appVersion: "1.0.0-test",
       hostTokens,
     });
@@ -559,6 +584,240 @@ describe("desktop main local streams open with host tokens", () => {
     } finally {
       inventory.close();
       client.close("test complete");
+    }
+  });
+});
+
+describe("desktop main's browser-sessions sign-in waits for the row only on a remote attach", () => {
+  const RELEASED_REFUSAL: FatalErrorDetails = {
+    code: "UNAUTHORIZED",
+    reason: "released-host-token-refusal",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
+  const PERSONAL_OWNER = { kind: "user", id: USER_A } as const;
+  const TEAM_OWNER = { kind: "team", id: "team-a", name: "Alpha" } as const;
+
+  beforeEach(() => {
+    remoteSocketFactoryHarness.delegate = null;
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeNativeWebSocket);
+    FakeNativeWebSocket.instances.length = 0;
+  });
+
+  afterEach(async () => {
+    for (const socket of FakeNativeWebSocket.instances)
+      socket.fireClose(1006, "test teardown");
+    await settle();
+    retireAllRemoteSessions();
+    processReleasedHosts.forgetAll();
+    remoteSocketFactoryHarness.delegate = null;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  type Registry =
+    | { readonly kind: "owner"; readonly owner: HostOwnerPrincipal }
+    | { readonly kind: "fails" }
+    | { readonly kind: "silent" };
+
+  /** A remote personal host whose first open the host refuses the released way; returns once that open is sent. */
+  async function startRemote(initial: Registry): Promise<{
+    readonly peer: RemoteMuxTestPeer;
+    readonly registry: { current: Registry };
+    readonly reads: () => number;
+    readonly close: () => void;
+  }> {
+    const peer = new RemoteMuxTestPeer();
+    peer.refuseFirstOpen(RELEASED_REFUSAL);
+    remoteSocketFactoryHarness.delegate = peer.factory;
+    const provider = newProvider();
+    signIn(provider, USER_A, SIGN_IN_TOKEN);
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    await hostTokens.adopt(
+      USER_A,
+      REMOTE_HOST_ID,
+      { token: HOST_TOKEN, expiresAtMs: Date.now() + 3_600_000 },
+      hostTokens.era(USER_A),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            JSON.stringify({
+              grant: "relay-pass",
+              role: "client",
+              expires_in: 300,
+              session_grant: "relay-session-grant",
+              session_grant_expires_in: 300,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+    const registry = { current: initial };
+    let reads = 0;
+    const directory = createBrowserSessionsHostDirectory({
+      authnBaseUrl: () => "https://authn.test",
+      relayBaseUrl: "wss://relay.test/attach",
+      localHost: () => null,
+      bearerToken: () => SIGN_IN_TOKEN,
+      listRegisteredHosts: (): Promise<HostListFetchResult> => {
+        reads += 1;
+        const answer = registry.current;
+        if (answer.kind === "silent") return new Promise(() => undefined);
+        if (answer.kind === "fails")
+          return Promise.resolve({ kind: "network-error" });
+        return Promise.resolve({
+          kind: "ok",
+          response: {
+            hosts: [
+              {
+                ...remoteHostItem(MINIMUM_HOST_VERSION, peer.hostPublicKey),
+                owner: answer.owner,
+              },
+            ],
+          },
+        });
+      },
+      now: () => Date.now(),
+    });
+    // The row main holds when it builds the transport: the person's own.
+    const row = await directory.resolve(REMOTE_HOST_ID);
+    if (row === null) throw new Error("the registry did not list the host");
+    const transport = openBrowserSessionsTransport(row, USER_A, {
+      authnBaseUrl: () => "https://authn.test",
+      bearer: liveBearer(provider),
+      cloudAuthorized: () => true,
+      endpoint: () => null,
+      liveRow: () => directory.peek(REMOTE_HOST_ID),
+      confirmRow: () => directory.confirmRows(),
+      appVersion: "1.0.0-test",
+      hostTokens,
+    });
+    if (transport === null)
+      throw new Error("the remote transport did not build");
+    const sessions = new BrowserSessionsStreamClient({
+      wsStreamClient: transport.wsStreamClient,
+      scope: { kind: "independent" },
+      callbacks: {
+        onServerFrame: () => undefined,
+        onConnectionStatus: () => undefined,
+      },
+    });
+    // The first open is on the wire and refused; the redial is still to come.
+    await vi.waitFor(() => expect(peer.openCount).toBe(1));
+    return {
+      peer,
+      registry,
+      reads: () => reads,
+      close: () => {
+        sessions.close();
+        transport.close();
+      },
+    };
+  }
+
+  const bearersOf = (peer: RemoteMuxTestPeer): unknown[] =>
+    peer.opens.map((open) => open.bearer);
+
+  it("sends the sign-in once, after the bare refusal, when the row is still the person's", async () => {
+    const remote = await startRemote({ kind: "owner", owner: PERSONAL_OWNER });
+    try {
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => expect(remote.peer.openCount).toBe(2));
+      expect(bearersOf(remote.peer)).toEqual(["", SIGN_IN_TOKEN]);
+    } finally {
+      remote.close();
+    }
+  });
+
+  it("sends no sign-in when the row moved from the person's to a team's between the dials", async () => {
+    const remote = await startRemote({ kind: "owner", owner: PERSONAL_OWNER });
+    try {
+      remote.registry.current = { kind: "owner", owner: TEAM_OWNER };
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => expect(remote.peer.openCount).toBeGreaterThan(1));
+      expect(bearersOf(remote.peer)).not.toContain(SIGN_IN_TOKEN);
+      expect(remote.reads()).toBeGreaterThan(1);
+    } finally {
+      remote.close();
+    }
+  });
+
+  it.each([
+    { name: "fails", registry: { kind: "fails" } as const },
+    {
+      name: "does not answer within its ceiling",
+      registry: { kind: "silent" } as const,
+    },
+  ])(
+    "sends no sign-in on the redial when the row read $name",
+    async ({ registry }) => {
+      const remote = await startRemote({
+        kind: "owner",
+        owner: PERSONAL_OWNER,
+      });
+      try {
+        remote.registry.current = registry;
+        await vi.advanceTimersByTimeAsync(8_000);
+        await vi.waitFor(() =>
+          expect(remote.peer.openCount).toBeGreaterThan(1),
+        );
+        expect(bearersOf(remote.peer)).not.toContain(SIGN_IN_TOKEN);
+      } finally {
+        remote.close();
+      }
+    },
+  );
+
+  it("never awaits the row confirmation on a local door", async () => {
+    const confirmRow = vi.fn(() => Promise.resolve(true));
+    const transport = await openLocalBrowserTransport(
+      { ...LOCAL_HOST_AT_FLOOR, owner: PERSONAL_OWNER },
+      confirmRow,
+    );
+    if (transport === null)
+      throw new Error("the local transport did not build");
+    const sessions = new BrowserSessionsStreamClient({
+      wsStreamClient: transport.wsStreamClient,
+      scope: { kind: "independent" },
+      callbacks: {
+        onServerFrame: () => undefined,
+        onConnectionStatus: () => undefined,
+      },
+    });
+    try {
+      await vi.waitFor(() =>
+        expect(FakeNativeWebSocket.instances).toHaveLength(1),
+      );
+      const first = FakeNativeWebSocket.instances[0];
+      first.fireOpen();
+      await vi.waitFor(() =>
+        expect(sentFramesOfKind(first, "open")).toHaveLength(1),
+      );
+      first.fireMessage(
+        JSON.stringify({ kind: "fatalError", details: RELEASED_REFUSAL }),
+      );
+      await vi.waitFor(() =>
+        expect(FakeNativeWebSocket.instances).toHaveLength(2),
+      );
+      const second = FakeNativeWebSocket.instances[1];
+      second.fireOpen();
+      await vi.waitFor(() =>
+        expect(sentFramesOfKind(second, "open")).toHaveLength(1),
+      );
+      expect(sentFramesOfKind(second, "open")[0]?.token).toBe(SIGN_IN_TOKEN);
+      expect(confirmRow).not.toHaveBeenCalled();
+    } finally {
+      sessions.close();
+      transport.close();
     }
   });
 });

@@ -15,8 +15,7 @@ import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/tr
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
-import type { HostDoorStateKind } from "../host-door-state";
-import type { SessionDoorObserver } from "@traycer/protocol/host-transport/remote/auth";
+import type { HostDoorObserver, HostDoorStateKind } from "../host-door-state";
 import type {
   WebSocketCloseEvent,
   WebSocketErrorEvent,
@@ -24,6 +23,7 @@ import type {
   WebSocketMessageEvent,
   WebSocketOpenEvent,
 } from "@traycer/protocol/host-transport/websocket";
+import { HostRequestAbortedError } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import type { IWebSocketFactory } from "../ws-factory";
@@ -175,7 +175,7 @@ function deferredMint(): {
 }
 
 function recordingDoor(): {
-  readonly door: SessionDoorObserver;
+  readonly door: HostDoorObserver;
   readonly refusals: FatalErrorDetails[];
   readonly states: HostDoorStateKind[];
 } {
@@ -188,7 +188,7 @@ function recordingDoor(): {
       refused: (details) => {
         refusals.push(details);
       },
-      admitted: () => undefined,
+      admitted: () => () => undefined,
     },
   };
 }
@@ -274,6 +274,13 @@ interface DrivenCall {
 function requestEcho(
   client: WsRpcClient<typeof echoRegistry>,
 ): Promise<EchoResult> {
+  return requestEchoUntil(client, new AbortController().signal);
+}
+
+function requestEchoUntil(
+  client: WsRpcClient<typeof echoRegistry>,
+  abortSignal: AbortSignal,
+): Promise<EchoResult> {
   return client
     .request(
       "host.echo",
@@ -288,7 +295,7 @@ function requestEcho(
             websocketUrl: mockLocalHostEntry.websocketUrl,
           },
           bearer: new MutableBearerLease(SIGN_IN, USER_ID),
-          abortSignal: new AbortController().signal,
+          abortSignal,
         },
       },
     )
@@ -301,6 +308,14 @@ function requestEcho(
 function driveCall(
   tokens: TrackedHostTokens,
   row: ReleasedSignOnRow | null,
+): DrivenCall {
+  return driveCallUntil(tokens, row, new AbortController().signal);
+}
+
+function driveCallUntil(
+  tokens: TrackedHostTokens,
+  row: ReleasedSignOnRow | null,
+  abortSignal: AbortSignal,
 ): DrivenCall {
   const sockets: UnarySocket[] = [];
   const factory: IWebSocketFactory = {
@@ -345,7 +360,7 @@ function driveCall(
     refusals,
     states,
     finished: false,
-    settled: requestEcho(client),
+    settled: requestEchoUntil(client, abortSignal),
   };
   void driven.settled.then(
     () => {
@@ -513,9 +528,18 @@ describe("local unary while authn cannot mint", () => {
     const { tokens } = sourceOf([{ kind: "not-admitted" }]);
     const driven = driveCall(tokens, row);
     clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const probe = driven.sockets[0];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("not_admitted"));
     await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
     expect(await driven.settled).toMatchObject({ kind: "rejected" });
-    expect(driven.sockets).toHaveLength(0);
+    // One probe socket and no sign-in.
+    expect(driven.sockets.map(openToken)).toEqual([NO_HOST_TOKEN_PROBE]);
     expect(driven.states).toEqual(["not-admitted"]);
   });
 
@@ -831,7 +855,55 @@ describe("local unary while authn cannot mint", () => {
     expect(driven.refusals).toEqual([]);
   });
 
-  it("takes the fresh-mint recovery, never the probe, when a locally usable host-only token is refused as expired", async () => {
+  it("rejects at once with the abort error when the call is aborted while it waits for the post-probe mint, and the mint still completes", async () => {
+    vi.useFakeTimers();
+    const mint = deferredMint();
+    let mintCompleted = false;
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        mint.mint().then((outcome) => {
+          mintCompleted = true;
+          return outcome;
+        }),
+      signIn: () => SIGN_IN,
+      now: () => Date.now(),
+    });
+    const abort = new AbortController();
+    const driven = driveCallUntil(
+      trackHostTokenMints(source),
+      null,
+      abort.signal,
+    );
+    clients.push(driven.client);
+    await vi.advanceTimersByTimeAsync(0);
+    const probe = driven.sockets[0];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("not_admitted"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(driven.finished).toBe(false);
+
+    abort.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(driven.finished).toBe(true);
+    const outcome = await driven.settled;
+    if (outcome.kind !== "rejected") throw new Error("call was admitted");
+    expect(outcome.error).toBeInstanceOf(HostRequestAbortedError);
+
+    mint.answer({
+      kind: "ok",
+      token: { token: "late-host-token", expiresAtMs: Date.now() + 60_000 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mintCompleted).toBe(true);
+    expect(source.current(USER_ID, mockLocalHostEntry.hostId)?.token).toBe(
+      "late-host-token",
+    );
+    expect(driven.sockets).toHaveLength(1);
+  });
+
+  it("rejects with one door notification and dials no probe or second socket when a locally usable host-only token is refused as expired", async () => {
     // A clock-skewed host calls a token this clock still reads as usable
     // expired; a mint failed for the pair earlier, so the held-token rule is
     // live for it.
@@ -866,12 +938,110 @@ describe("local unary while authn cannot mint", () => {
     socket.fireMessage(namedRefusal("token_expired"));
     await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
     expect(await driven.settled).toMatchObject({ kind: "rejected" });
-    // The door hears the refusal, whose recovery is the fresh mint above this
-    // client; no probe and no sign-in is dialed.
+    // The recovery that asks for a fresh mint lies above this client; here no
+    // probe and no sign-in is dialed.
     expect(driven.refusals.map((details) => details.doorReason)).toEqual([
       "token_expired",
     ]);
     expect(driven.sockets).toHaveLength(1);
+  });
+});
+
+describe("a held host-only token that the host refuses as expired, while authn is down", () => {
+  const held = expiredJwt(Date.now());
+
+  /** Authn has not answered the pair's mint, and the token held for it is past its end. */
+  async function heldWhileAuthnDown(): Promise<TrackedHostTokens> {
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        Promise.resolve({ kind: "unavailable", detail: "authn offline" }),
+      signIn: () => SIGN_IN,
+      now: () => Date.now(),
+    });
+    await holdExpired(source, held);
+    const tokens = trackHostTokenMints(source);
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, true, null);
+    return tokens;
+  }
+
+  async function refuseHeldTokenAsExpired(driven: DrivenCall): Promise<void> {
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const socket = driven.sockets[0];
+    if (socket === undefined) throw new Error("host-token dial missing");
+    expect((await openAndRead(socket)).token).toBe(held.token);
+    socket.fireMessage(namedRefusal("token_expired"));
+  }
+
+  it("dials no probe on a team row and fails the call with the host's token_expired refusal, which the door hears once", async () => {
+    const driven = driveCall(await heldWhileAuthnDown(), TEAM_ROW);
+    clients.push(driven.client);
+    await refuseHeldTokenAsExpired(driven);
+    await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+    expect(await driven.settled).toMatchObject({
+      kind: "rejected",
+      error: { fatalDetails: { doorReason: "token_expired" } },
+    });
+    expect(driven.refusals.map((details) => details.doorReason)).toEqual([
+      "token_expired",
+    ]);
+    expect(driven.sockets).toHaveLength(1);
+  });
+
+  it("still probes on the person's own row", async () => {
+    const driven = driveCall(await heldWhileAuthnDown(), PERSONAL_ROW);
+    clients.push(driven.client);
+    await refuseHeldTokenAsExpired(driven);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    const probe = driven.sockets[1];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+  });
+
+  it("probes a team row at once when no host-only token is held and its mint has not answered", async () => {
+    const { tokens } = blackHoledTokens();
+    const driven = driveCall(tokens, TEAM_ROW);
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const probe = driven.sockets[0];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    expect(driven.finished).toBe(false);
+  });
+});
+
+describe("a held token's refusal", () => {
+  it("stays on the newer held token when a late refusal of an older token arrives, so the newer one is not presented again", async () => {
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () =>
+        Promise.resolve({ kind: "unavailable", detail: "authn offline" }),
+      signIn: () => SIGN_IN,
+      now: () => Date.now(),
+    });
+    await source.whenLoaded();
+    const tokens = trackHostTokenMints(source);
+    const hostId = mockLocalHostEntry.hostId;
+    for (const held of [
+      { token: "older-host-token", expiresAtMs: Date.now() - 60_000 },
+      { token: "newer-host-token", expiresAtMs: Date.now() - 30_000 },
+    ]) {
+      await source.adopt(USER_ID, hostId, held, source.era(USER_ID));
+    }
+
+    heldTokenRefused(tokens, USER_ID, hostId, "newer-host-token");
+    heldTokenRefused(tokens, USER_ID, hostId, "older-host-token");
+
+    expect(tokens.heldRefused(USER_ID, hostId)).toBe(true);
   });
 });
 

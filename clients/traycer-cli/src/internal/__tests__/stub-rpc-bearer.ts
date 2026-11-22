@@ -21,9 +21,11 @@ export async function resolveStubbedCallBearer(
   if (hostBearerFor === undefined) return options;
   const hostId = options.authority.endpoint.hostId;
   const signIn = options.authority.bearer;
+  // The call's own lifetime, as the real client hands it.
+  const callSignal = options.authority.abortSignal;
   const bearer =
-    (await hostBearerFor(hostId, signIn, false)) ??
-    (await hostBearerFor(hostId, signIn, true));
+    (await hostBearerFor(hostId, signIn, false, callSignal)) ??
+    (await hostBearerFor(hostId, signIn, true, callSignal));
   if (bearer === null) {
     throw new HostRpcError({
       code: "RPC_ERROR",

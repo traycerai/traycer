@@ -1,7 +1,7 @@
 import {
   hostTokenBearer,
   hostTokenHeldPastExpiry,
-  hostTokenSessionAuth,
+  hostTokenStreamAuth,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
@@ -491,18 +491,19 @@ export function createLocalHostInventoryStreamClient(deps: {
       // sequence's refusal showed the released level.
       releasedSignOn: {
         signIn: deps.bearer,
+        mayPresentSignIn: () => true,
         recovery: null,
-        hostTokenUnobtainable: () =>
-          hostTokenUnobtainable(hostTokens, userId, endpoint.hostId),
-        ownerSignInEligible: () =>
-          ownerSignInEligible(hostTokens, userId, endpoint.hostId),
-        heldTokenRefused: (presented) =>
-          heldTokenRefused(hostTokens, userId, endpoint.hostId, presented),
-        forgetHeldRefusal: () =>
-          hostTokens.forgetHeldRefused(userId, endpoint.hostId),
+        hostTokenUnobtainable: (hostId) =>
+          hostTokenUnobtainable(hostTokens, userId, hostId),
+        ownerSignInEligible: (hostId) =>
+          ownerSignInEligible(hostTokens, userId, hostId),
+        heldTokenRefused: (hostId, presented) =>
+          heldTokenRefused(hostTokens, userId, hostId, presented),
+        forgetHeldRefusal: (hostId) =>
+          hostTokens.forgetHeldRefused(userId, hostId),
         hosts: processReleasedHosts,
       },
-      ...hostTokenSessionAuth(
+      ...hostTokenStreamAuth(
         {
           tokens: hostTokens,
           currentUserId: () => deps.bearer()?.identity.userId ?? null,

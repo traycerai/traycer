@@ -29,6 +29,33 @@ const NEVER_REACHED_HOST_REASON =
   "Couldn't reach the host to start the deletion.";
 const STREAM_OPEN_FAILED_REASON = "Couldn't open the deletion stream.";
 
+/**
+ * How long a deletion whose request is not sent yet waits for the stream to
+ * redial a drop on its own: a released host's sign-in, a probe's invitation, a
+ * backoff for a token. Counted from the first such drop. A close ends it at
+ * once, a host's refusal that will not change among them.
+ */
+const PRE_OPEN_REDIAL_DEADLINE_MS = 30_000;
+
+/** The pre-open wait: armed by the first drop, cleared by an open or a settle. */
+function preOpenRedialWait(onExpired: () => void): {
+  readonly arm: () => void;
+  readonly clear: () => void;
+} {
+  let clearTimer: (() => void) | null = null;
+  return {
+    arm: () => {
+      if (clearTimer !== null) return;
+      const timer = setTimeout(onExpired, PRE_OPEN_REDIAL_DEADLINE_MS);
+      clearTimer = () => clearTimeout(timer);
+    },
+    clear: () => {
+      clearTimer?.();
+      clearTimer = null;
+    },
+  };
+}
+
 export interface WorktreeCleanupOutcome {
   readonly removed: ReadonlyArray<string>;
   readonly failed: ReadonlyArray<WorktreeCleanupFailure>;
@@ -220,6 +247,7 @@ function runCleanupCommand(
     ): void => {
       if (state.settled) return;
       state.settled = true;
+      redialWait.clear();
       requestClose(holder);
       const stillPending = [...pending];
       pending.clear();
@@ -241,6 +269,9 @@ function runCleanupCommand(
         },
       });
     };
+    const redialWait = preOpenRedialWait(() =>
+      settle({ kind: "failed", reason: NEVER_REACHED_HOST_REASON }),
+    );
     /**
      * This host has no such method, so the per-path fallback runs the work
      * instead.
@@ -261,6 +292,7 @@ function runCleanupCommand(
         return;
       }
       state.settled = true;
+      redialWait.clear();
       requestClose(holder);
       pending.clear();
       resolve({ kind: "unsupported" });
@@ -319,12 +351,19 @@ function runCleanupCommand(
               onConnectionStatus: ({ status, continuity, startSent }) => {
                 state.startSent = startSent;
                 if (continuity === "held") return;
+                if (status === "open") redialWait.clear();
                 if (status !== "reconnecting" && status !== "closed") return;
                 // A drop before the start request was sent means the host
-                // never had it: nothing was attempted, so the paths failed
-                // rather than being unknown. After the send the command may
-                // exist and keeps running without us.
+                // never had it: nothing was attempted. The stream redials it,
+                // so it is waited out within the deadline; a close, or the
+                // deadline, fails the paths rather than leaving them unknown.
+                // After the send the command may exist and keeps running
+                // without us.
                 if (!startSent) {
+                  if (status === "reconnecting") {
+                    redialWait.arm();
+                    return;
+                  }
                   settle({
                     kind: "failed",
                     reason: NEVER_REACHED_HOST_REASON,
@@ -436,8 +475,9 @@ type DeleteOneOutcome =
  * path, and the overall promise always resolves.
  *
  * A drop after `open` is `uncertain` (the host may still finish). A drop
- * before the session opened, an open failure, or an app terminal failure is
- * `failed`.
+ * before the session opened is waited out while the stream redials it, within
+ * `PRE_OPEN_REDIAL_DEADLINE_MS`; a close before it opened, the deadline, an
+ * open failure, or an app terminal failure is `failed`.
  */
 function deleteOneWorktree(input: {
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -451,9 +491,13 @@ function deleteOneWorktree(input: {
     const finish = (outcome: DeleteOneOutcome): void => {
       if (state.settled) return;
       state.settled = true;
+      redialWait.clear();
       requestClose(holder);
       resolve(outcome);
     };
+    const redialWait = preOpenRedialWait(() =>
+      finish({ kind: "failed", reason: NEVER_REACHED_HOST_REASON }),
+    );
 
     try {
       const owned = openOwnedDurableStreamClient(
@@ -492,13 +536,19 @@ function deleteOneWorktree(input: {
                 continuity,
               ) => {
                 if (continuity === "held") return;
+                if (status === "open") redialWait.clear();
                 // A drop or close after the request was sent arrives as
                 // `onDroppedAfterStart`, so one here came before it: nothing
-                // was started. It fails at once rather than wait on the
-                // transport's retry, so the summary toast and the cache
-                // invalidation still fire. `connecting`/`open` are the normal
-                // startup.
-                if (status !== "reconnecting" && status !== "closed") return;
+                // was started, and no subscribe went out to repeat. A drop the
+                // stream redials is waited out within the deadline; a close,
+                // or the deadline, fails it, so the summary toast and the
+                // cache invalidation still fire. `connecting`/`open` are the
+                // normal startup.
+                if (status === "reconnecting") {
+                  redialWait.arm();
+                  return;
+                }
+                if (status !== "closed") return;
                 finish({ kind: "failed", reason: NEVER_REACHED_HOST_REASON });
               },
             },

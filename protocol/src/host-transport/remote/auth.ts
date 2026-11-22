@@ -39,7 +39,12 @@ interface SessionCredentialPlane {
 
 export interface SessionDoorObserver {
   readonly refused: (details: FatalErrorDetails) => void;
-  readonly admitted: () => void;
+  /**
+   * The host admitted this session's open. The session calls the answer once,
+   * when that connection ends: lost, closed, or ended by a fatal, before it
+   * reports the fatal that ended it.
+   */
+  readonly admitted: () => () => void;
 }
 
 /**

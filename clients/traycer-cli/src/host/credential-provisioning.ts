@@ -3,6 +3,7 @@ import { hostTokenFailureCliError } from "../internal/host-door-words";
 import {
   cliReleasedSignOn,
   createCliHostTokens,
+  watchHostInstances,
   type CliHostTokenFailure,
 } from "../internal/cli-host-tokens";
 import {
@@ -228,11 +229,13 @@ export async function provisionInstalledHostCredential(
   // a momentarily-absent pid file keeps the last-known URL.
   let endpoint: HostTransportEndpoint | null = null;
   let pollInFlight = false;
+  const sawHostInstance = watchHostInstances();
   const refreshEndpoint = async (): Promise<void> => {
     if (pollInFlight) return;
     pollInFlight = true;
     try {
       const metadata = await readHostPidMetadata(options.environment);
+      if (metadata !== null) sawHostInstance(metadata);
       if (
         metadata !== null &&
         isValidLocalHostWebsocketUrl(metadata.websocketUrl)
@@ -368,11 +371,7 @@ export async function provisionInstalledHostCredential(
       refresh: () => revalidator.revalidateCurrentContext(),
       signal: probeAbort.signal,
     });
-    const releasedSignOn = cliReleasedSignOn(
-      () => endpoint?.hostId ?? null,
-      lease,
-      tokens,
-    );
+    const releasedSignOn = cliReleasedSignOn(lease, tokens);
     // The tokens on disk, so the first dial presents the held one.
     await tokens.whenLoaded();
     // A refusal no token or sign-in can follow ends the probe at once rather
@@ -391,14 +390,23 @@ export async function provisionInstalledHostCredential(
     const deferredNotAdmitted = (): CliHostTokenFailure | null =>
       endpoint === null ? null : tokens.deferredNotAdmitted(endpoint.hostId);
     // Recovery of a refused token, as on every other CLI open: one fresh
-    // token and one more open, and a second refusal is final.
+    // token and one more open, and a second refusal is final. A refusal is
+    // read by the recovery of the host that refused, which the door named
+    // just before; a token found expired before its dial belongs to the host
+    // that dial selected, the current endpoint while it runs.
+    let refusedHostId: string | null = null;
     const streamAuth: StreamAuthRevalidator = {
       revalidateForReconnect: () =>
-        recoverHostToken((recovery) => recovery.revalidateForReconnect()),
+        recoverHostToken(endpoint?.hostId ?? null, (recovery) =>
+          recovery.revalidateForReconnect(),
+        ),
       revalidateRefused: (refusal) =>
-        recoverHostToken((recovery) => recovery.revalidateRefused(refusal)),
+        recoverHostToken(refusedHostId, (recovery) =>
+          recovery.revalidateRefused(refusal),
+        ),
     };
     const recoverHostToken = (
+      hostId: string | null,
       recover: (
         recovery: HostTokenSessionRevalidator,
       ) => Promise<RevalidateOutcome>,
@@ -413,10 +421,10 @@ export async function provisionInstalledHostCredential(
       // `runner/exit.ts`), so the process waits for the event loop to
       // drain: a mint or refresh begun as the budget ran out would keep
       // `host install` alive past its advertised bound.
-      if (remaining() <= 0 || endpoint === null) {
+      if (remaining() <= 0 || hostId === null) {
         return Promise.resolve<RevalidateOutcome>("rejected");
       }
-      const settled = recover(tokens.streamRecovery(endpoint.hostId));
+      const settled = recover(tokens.streamRecovery(hostId));
       inFlightRevalidation = settled;
       return settled;
     };
@@ -432,9 +440,11 @@ export async function provisionInstalledHostCredential(
       hostId: null,
       endpoint: () => endpoint,
       // `null` while no host-only token can be presented for the host the
-      // endpoint names: the stream then probes while authn has not answered.
-      bearer: () =>
-        endpoint === null ? null : tokens.streamBearer(endpoint.hostId)(),
+      // socket was selected for: the stream then probes while authn has not
+      // answered. Never the token of whatever `endpoint` names by then.
+      bearer: (hostId) => tokens.streamBearer(hostId)(),
+      // Asked in the same synchronous dial that read `endpoint`: only the
+      // poll moves it, never within one dial.
       presentsHeldPastExpiry: () =>
         endpoint !== null && tokens.presentsHeldPastExpiry(endpoint.hostId),
       userId: lease.identity.userId,
@@ -444,10 +454,12 @@ export async function provisionInstalledHostCredential(
       // is earned again after a good open, and fences off a `not-admitted` of
       // a mint begun before it.
       door: {
-        refused: () => undefined,
-        admitted: () => {
+        refused: (_details, hostId) => {
+          refusedHostId = hostId;
+        },
+        admitted: (hostId) => {
           doorRetried = false;
-          if (endpoint !== null) tokens.admitted(endpoint.hostId);
+          return tokens.admitted(hostId);
         },
       },
       // No tracker wired yet on the CLI side: this is a short-lived

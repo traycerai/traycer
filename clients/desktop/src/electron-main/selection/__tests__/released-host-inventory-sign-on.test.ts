@@ -205,6 +205,66 @@ describe("desktop inventory push against a released local host", () => {
     vi.unstubAllGlobals();
   });
 
+  it("dials no socket for a local endpoint that moved to another host, so the first host's token is never written", async () => {
+    installSilentAuthn();
+    const provider = newProvider();
+    signIn(provider, USER_A, SIGN_IN_TOKEN);
+    const hostTokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => Promise.resolve({ kind: "unavailable", detail: "offline" }),
+      signIn: (userId) => (userId === USER_A ? SIGN_IN_TOKEN : null),
+      now: () => Date.now(),
+    });
+    const websocketUrl = RELEASED_HOST.websocketUrl;
+    if (websocketUrl === null) throw new Error("the mock host has no URL");
+    const otherHostId = "other-local-host";
+    await hostTokens.whenLoaded();
+    for (const [hostId, token] of [
+      [RELEASED_HOST.hostId, HOST_TOKEN],
+      [otherHostId, HOST_TOKEN_B],
+    ] as const) {
+      await hostTokens.adopt(
+        USER_A,
+        hostId,
+        { token, expiresAtMs: Date.now() + 60_000 },
+        hostTokens.era(USER_A),
+      );
+    }
+    const first = {
+      hostId: RELEASED_HOST.hostId,
+      websocketUrl,
+      version: RELEASED_HOST.version,
+    };
+    // The client is built for the first host; the local host then reads as another.
+    let current = first;
+    const build = createLocalHostInventoryStreamClient({
+      hostTokens,
+      localHost: () => current,
+      bearer: liveBearer(provider),
+      appVersion: "1.0.0-test",
+    });
+    const stream = build(first, USER_A);
+    if (stream === null)
+      throw new Error("inventory stream client did not build");
+    current = { ...first, hostId: otherHostId };
+    const inventory = new HostInventoryStreamClient({
+      wsStreamClient: stream,
+      callbacks: {
+        onSnapshot: () => undefined,
+        onConnectionStatus: () => undefined,
+      },
+    });
+    activeClosers.push(() => {
+      inventory.close();
+      stream.close("test complete");
+    });
+    // Main's client is built with the first host's id (`hostId: endpoint.hostId`),
+    // and the shared stream does not dial an endpoint that names another host.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(FakeNativeWebSocket.instances).toHaveLength(0);
+    expect(sentTokens()).toEqual([]);
+  });
+
   it("sends the sign-in after a current personal computer invites it", async () => {
     const opened = await openInventoryFor({
       hostId: CURRENT_HOST_FOR_INITIAL_INVITE,

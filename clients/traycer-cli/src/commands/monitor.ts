@@ -7,12 +7,18 @@ import {
 import {
   cliReleasedSignOn,
   createCliHostTokens,
+  watchHostInstances,
   type CliHostTokenFailure,
+  type HostInstance,
   type SignInRevalidator,
   type CliMintRefusalListener,
 } from "../internal/cli-host-tokens";
+import type { DoorAdmissionRelease } from "../../../shared/host-transport/host-door-state";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
-import type { ReleasedSignOn } from "@traycer-clients/shared/host-transport/released-sign-on";
+import {
+  isReleasedSignInRefusal,
+  type ReleasedSignOn,
+} from "@traycer-clients/shared/host-transport/released-sign-on";
 import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
 import {
   hostStreamRpcRegistry,
@@ -61,6 +67,7 @@ import { resolveHostAuth } from "../internal/host-auth";
 import {
   callHostRpcWithAgentCredential,
   PLAIN_DISPATCH,
+  releasedSignInRefusalCliError,
 } from "../internal/host-rpc";
 import {
   PROCESS_AGENT_ENVIRONMENT,
@@ -196,10 +203,13 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   const endpointResolutionLogState: EndpointResolutionLogState = {
     value: null,
   };
-  let endpoint = await tryResolveStreamEndpoint(
+  const initial = await tryResolveStreamEndpoint(
     logger,
     endpointResolutionLogState,
   );
+  let endpoint = initial?.endpoint ?? null;
+  const sawHostInstance = watchHostInstances();
+  if (initial !== null) sawHostInstance(initial.instance);
   logger.debug("Monitor initial endpoint resolution completed", {
     environment: config.environment,
     hasEndpoint: endpoint !== null,
@@ -213,8 +223,11 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     }
     pollInFlight = true;
     void tryResolveStreamEndpoint(logger, endpointResolutionLogState)
-      .then((next) => {
-        if (next !== null && !sameEndpoint(endpoint, next)) {
+      .then((resolved) => {
+        if (resolved === null) return;
+        sawHostInstance(resolved.instance);
+        const next = resolved.endpoint;
+        if (!sameEndpoint(endpoint, next)) {
           endpoint = next;
           logger.debug("Monitor endpoint refreshed", {
             environment: config.environment,
@@ -227,21 +240,24 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       });
   }, ENDPOINT_POLL_MS);
 
+  // The host whose refusal of a host-only token closed the stream: its
+  // recovery, not the current endpoint's, reads that refusal. The stream
+  // reports every such refusal before it closes.
+  let refusedHostId: string | null = null;
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
-    // The host this endpoint resolves to, or `null` while it has resolved none
-    // yet - which simply declines the seed. Safe even where `endpoint` is
-    // re-resolved later in the run: the seed is consulted only before this
-    // client's first handshake, which is while this id is still the current
-    // one, and the latch closes it for good after that.
-    hostId: endpoint?.hostId ?? null,
+    // `null`: the poll may move `endpoint` to another host id, and a client
+    // bound to a host never dials another. It only declines the seed, which
+    // this process has no earlier handshake to give.
+    hostId: null,
     endpoint: () => endpoint,
-    // The supplied capability or the normal host-only token. Neither an
-    // open nor an acknowledgement can replace the captured capability.
-    bearer: () =>
-      endpoint === null ? null : credential.bearer(endpoint.hostId)(),
+    // The supplied capability or the normal host-only token of the host the
+    // socket was selected for, never of whatever `endpoint` names by the
+    // time it is written. Neither an open nor an acknowledgement can replace
+    // the captured capability.
+    bearer: (hostId) => credential.bearer(hostId)(),
     userId: credential.userId,
-    releasedSignOn: credential.releasedSignOn(() => endpoint?.hostId ?? null),
+    releasedSignOn: credential.releasedSignOn,
     // `auth: null` opts out of the WsStreamClient's built-in stream-auth
     // recovery: the monitor runs its OWN recovery loop in
     // `runInboxSubscription` (a fresh token, then re-subscribe on `rotated` /
@@ -249,13 +265,14 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // handler too would double up. A refusal a fresh token cannot answer stays
     // terminal there.
     auth: null,
-    // Each admitted open resets the host's recovery, so a refusal hours
-    // after a good reconnect earns its one fresh token again.
+    // Each admitted open resets the recovery of the host that admitted it, so
+    // a refusal hours after a good reconnect earns its one fresh token again.
+    // A refusal names the host whose recovery answers it.
     door: {
-      refused: () => undefined,
-      admitted: () => {
-        if (endpoint !== null) credential.admitted(endpoint.hostId);
+      refused: (_details, hostId) => {
+        refusedHostId = hostId;
       },
+      admitted: (hostId) => credential.admitted(hostId),
     },
     clock: null,
     hostCredentialMint: credential.hostCredentialMint,
@@ -289,10 +306,12 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   try {
     await runInboxSubscription(
       client,
+      // No host reported refusing a host-only token: the close is the
+      // released sign-in's own end, which no host-only token recovers.
       (details) =>
-        endpoint === null
-          ? Promise.resolve<RevalidateOutcome>("network-error")
-          : credential.recover(endpoint.hostId, details),
+        refusedHostId === null
+          ? Promise.resolve<RevalidateOutcome>("rejected")
+          : credential.recover(refusedHostId, details),
       credential.signInRejected,
       (listener) =>
         credential.onRefusalEndingCommand((hostId, failure) => {
@@ -330,9 +349,10 @@ interface MonitorCredential {
   ) => Promise<RevalidateOutcome>;
   /**
    * The host admitted an open: its recovery's bounds start again, and a
-   * `not-admitted` of a mint begun before now ends nothing.
+   * `not-admitted` ends nothing while that connection is admitted, nor when
+   * its mint began before now.
    */
-  readonly admitted: (hostId: string) => void;
+  readonly admitted: (hostId: string) => DoorAdmissionRelease;
   readonly signInRejected: () => boolean;
   /** See `CliHostTokens.onRefusalEndingCommand`. */
   readonly onRefusalEndingCommand: (
@@ -340,9 +360,7 @@ interface MonitorCredential {
   ) => () => void;
   readonly hostCredentialMint: HostCredentialMintFlow | null;
   /** `null` for the agent session capability: a released host takes that one as it is. */
-  readonly releasedSignOn: (
-    hostId: () => string | null,
-  ) => ReleasedSignOn | null;
+  readonly releasedSignOn: ReleasedSignOn | null;
   /** `onRenewed` pushes a renewed token onto the open stream. */
   readonly startUpkeep: (
     hostId: () => string | null,
@@ -409,7 +427,7 @@ async function signInMonitorCredential(
     signInRejected: () => hostTokens.signInRejected(),
     onRefusalEndingCommand: (listener) =>
       hostTokens.onRefusalEndingCommand(listener),
-    releasedSignOn: (hostId) => cliReleasedSignOn(hostId, lease, hostTokens),
+    releasedSignOn: cliReleasedSignOn(lease, hostTokens),
     // Delegated host-credential provisioning. `monitor` is the CLI command
     // that most needs it: the host it watches should keep serving after this
     // process exits. Provisioning is silent, so this works the same whether
@@ -477,11 +495,11 @@ function capabilityMonitorCredential(
     userId: capability.bearer.identity.userId,
     bearer: () => capability.streamBearer,
     recover: () => capability.streamRecovery(),
-    admitted: () => undefined,
+    admitted: () => () => undefined,
     signInRejected: () => false,
     onRefusalEndingCommand: () => () => undefined,
     hostCredentialMint: null,
-    releasedSignOn: () => null,
+    releasedSignOn: null,
     startUpkeep: () => undefined,
     stopUpkeep: () => undefined,
   };
@@ -742,8 +760,15 @@ function runInboxSubscription(
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
+      // A released host's refusal of a live sign-in, in the host's own words
+      // as the released CLI's unary calls printed it: its own line named a
+      // refresh count this monitor no longer keeps.
+      const signedOut = signInRejected();
       fail(
-        hostDoorRefusalCliError(details, signInRejected(), hostClosed) ??
+        (!signedOut && isReleasedSignInRefusal(details)
+          ? releasedSignInRefusalCliError(details.reason)
+          : null) ??
+          hostDoorRefusalCliError(details, signedOut, hostClosed) ??
           hostClosed(),
       );
     };
@@ -1071,10 +1096,16 @@ async function handleServerFrame(
   }
 }
 
+/** A resolved endpoint, and the process instance of the host that published it. */
+interface ResolvedStreamEndpoint {
+  readonly endpoint: HostTransportEndpoint;
+  readonly instance: HostInstance;
+}
+
 async function tryResolveStreamEndpoint(
   logger: ILogger,
   logState: EndpointResolutionLogState,
-): Promise<HostTransportEndpoint | null> {
+): Promise<ResolvedStreamEndpoint | null> {
   const metadata = await readHostPidMetadata(config.environment);
   if (metadata === null) {
     logEndpointResolution(logState, "missing", () => {
@@ -1098,7 +1129,10 @@ async function tryResolveStreamEndpoint(
   }
   // `WsStreamClient` maps the `/rpc` URL to `/stream` itself.
   logState.value = `ready:${metadata.hostId}:${metadata.websocketUrl}`;
-  return { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl };
+  return {
+    endpoint: { hostId: metadata.hostId, websocketUrl: metadata.websocketUrl },
+    instance: metadata,
+  };
 }
 
 function sameEndpoint(

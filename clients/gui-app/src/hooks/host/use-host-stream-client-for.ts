@@ -40,12 +40,14 @@ import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-s
 import {
   hostTokenBearer,
   hostTokenHeldPastExpiry,
-  hostTokenSessionAuth,
+  hostTokenStreamAuth,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
 import {
   appHostDoorObserver,
+  appStreamDoorObserver,
+  hostTokenRefusalSinkWhile,
   noteHostTokenRefusal,
 } from "@/lib/host/host-door-observer";
 import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
@@ -250,6 +252,19 @@ function liveOpensReleasedWay(hostId: string, userId: string): () => boolean {
 }
 
 /**
+ * This machine's host's row in the app's in-memory directory, read on every
+ * ask; the row the client was built from while the app holds no directory.
+ */
+function liveLocalRow(
+  target: HostDirectoryEntry,
+): () => HostDirectoryEntry | null {
+  return () => {
+    const directory = getHostBindingSnapshot()?.directory;
+    return directory === undefined ? target : directory.findById(target.hostId);
+  };
+}
+
+/**
  * Constructs a per-host stream client with the standard dial/heartbeat
  * timings - the single place those timings live, shared by the app-wide
  * `HostStreamProvider`, the transient per-tab binding hook below, and the
@@ -375,6 +390,8 @@ export function buildHostStreamClient(params: {
         params.target.hostId,
         params.userId,
       ),
+      // The renderer's directory is kept current by its own poll.
+      confirmRowBeforeSignIn: null,
       door: appHostDoorObserver(params.target.hostId),
       onState: noteHostTokenRefusal,
       cloudAuthorized: params.cloudAuthorized,
@@ -409,7 +426,13 @@ export function buildHostStreamClient(params: {
   const localTokens = trackHostTokenMints(
     localDoorHostTokens(params.hostTokens),
   );
-  return new WsStreamClient<HostStreamRpcRegistry>({
+  // A mint this client started reports nothing once it is closed (a one-shot
+  // stream that ended): a longer-lived surface's own next dial asks again.
+  let client: WsStreamClient<HostStreamRpcRegistry> | null = null;
+  const onState = hostTokenRefusalSinkWhile(
+    () => client === null || !client.isClosed(),
+  );
+  client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
     // leg too. It was previously consulted only for the remote attach-grant
@@ -427,19 +450,14 @@ export function buildHostStreamClient(params: {
     // Epic open. See `stream-method-support-registry.ts`.
     hostId,
     endpoint: params.endpoint,
-    bearer: hostTokenBearer(
-      localTokens,
-      params.bearer,
-      hostId,
-      noteHostTokenRefusal,
-    ),
+    bearer: hostTokenBearer(localTokens, params.bearer, hostId, onState),
     presentsHeldPastExpiry: hostTokenHeldPastExpiry(
       localTokens,
       params.bearer,
       hostId,
     ),
     releasedSignOn: releasedSignOnForLocalRow(
-      params.target,
+      liveLocalRow(params.target),
       hostId,
       params.userId,
       params.bearer,
@@ -452,16 +470,16 @@ export function buildHostStreamClient(params: {
     userId: params.userId,
     // A refused open ran nothing, so a one-shot recovers too; `params.auth === null`
     // keeps it from starting the sign-in's recovery.
-    ...hostTokenSessionAuth(
+    ...hostTokenStreamAuth(
       {
         tokens: localTokens,
         currentUserId: () => params.bearer()?.identity.userId ?? null,
         hostId,
         signInRecovery: params.auth,
-        onState: noteHostTokenRefusal,
+        onState,
         now: Date.now,
       },
-      appHostDoorObserver(hostId),
+      appStreamDoorObserver,
     ),
     // App-wide for the same reason the mint flow below is: the wall clock is a
     // property of the machine, so every stream in the renderer parks and
@@ -495,6 +513,7 @@ export function buildHostStreamClient(params: {
     maxBackoffMs: DEFAULT_MAX_BACKOFF_MS,
     clientIdentity: getGuiClientIdentity(),
   });
+  return client;
 }
 
 /**

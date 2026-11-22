@@ -496,7 +496,7 @@ describe("host-token source per-person eras", () => {
       "computer-a",
       () => undefined,
     );
-    expect(bearer()).not.toBeNull();
+    expect(bearer("computer-a")).not.toBeNull();
 
     const forgetting = tokens.forgetUser(USER_A);
     await updateStarted.promise;
@@ -504,7 +504,7 @@ describe("host-token source per-person eras", () => {
     expect(tokens.current(USER_A, "computer-a")).toBeNull();
     const obtain = tokens.obtain(USER_A, "computer-a", false, null);
     await expect(obtain).resolves.toEqual({ kind: "no-sign-in" });
-    expect(bearer()).toBeNull();
+    expect(bearer("computer-a")).toBeNull();
     expect(mintCalls).toBe(0);
 
     releaseUpdate.resolve();

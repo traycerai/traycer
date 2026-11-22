@@ -8,6 +8,9 @@ import {
 import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rpc-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
+import { processReleasedHosts } from "../../../../shared/host-transport/released-sign-on";
+import { createCliHostTokens } from "../cli-host-tokens";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 
 const state = vi.hoisted(() => {
@@ -234,4 +237,33 @@ describe("callHostRpc host-token mint recovery", () => {
       });
     },
   );
+});
+
+describe("createCliHostTokens refusals that end a command", () => {
+  it("ends the command on a not-admitted mint begun in the same millisecond as the admission before it, once that connection has left", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      processReleasedHosts.refusedNamingReason("host-same-millisecond");
+      const tokens = createCliHostTokens({
+        lease: new MutableBearerLease("signin", "user-1"),
+        refresh: async () => "network-error",
+        signal: null,
+      });
+      await tokens.whenLoaded();
+      const ending: string[] = [];
+      tokens.onRefusalEndingCommand((hostId, failure) => {
+        ending.push(`${hostId}:${failure.kind}`);
+      });
+      // An open is admitted and its connection leaves; a mint then starts in
+      // the same millisecond and authn has no row for it.
+      tokens.admitted("host-same-millisecond")();
+      state.mintOutcomes.push({ kind: "not-admitted" });
+
+      await tokens.mintFresh("host-same-millisecond", null);
+
+      expect(ending).toEqual(["host-same-millisecond:not-admitted"]);
+    } finally {
+      now.mockRestore();
+    }
+  });
 });
