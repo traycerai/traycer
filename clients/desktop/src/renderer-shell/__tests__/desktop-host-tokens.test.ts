@@ -330,7 +330,7 @@ describe("desktop host-token source eras", () => {
     unsubscribe();
   });
 
-  it("announces every copied host when another host reports a newer era", async () => {
+  it("announces every copied host it drops when another host reports a newer era, and nothing for a host it never held", async () => {
     const { bridge, emit, setEra } = bridgeFixture();
     const tokens = createDesktopHostTokenSource(bridge);
     const otherHostId = "computer-b";
@@ -358,7 +358,6 @@ describe("desktop host-token source eras", () => {
     expect(changes).toEqual([
       { userId: USER_ID, hostId: HOST_ID },
       { userId: USER_ID, hostId: otherHostId },
-      { userId: USER_ID, hostId: eventHostId },
     ]);
     unsubscribe();
   });
