@@ -68,6 +68,8 @@ interface Rig {
   /** A registry push the shell delivers; the window skips it while hidden. */
   readonly push: () => void;
   readonly rotateCredential: () => number;
+  /** The signed-in person changes: the identity and the credential era move together. */
+  readonly switchIdentity: (identity: string) => number;
   readonly currentCredential: () => number;
   /** The confirmation a remote attach starts, and whether it has resolved. */
   readonly confirm: () => { readonly resolved: () => boolean };
@@ -93,10 +95,11 @@ async function startedWindow(hidden: boolean): Promise<Rig> {
   };
   const reads = heldReads();
   let credential = 1;
+  let identity = IDENTITY;
   const directory = new HostDirectoryService({
     onRegistryPollTick: null,
     runnerHost: host,
-    authContextId: () => IDENTITY,
+    authContextId: () => identity,
     credentialGeneration: () => credential,
     localHostIdSeeder: null,
     remoteFetcher: reads.fetcher,
@@ -112,6 +115,11 @@ async function startedWindow(hidden: boolean): Promise<Rig> {
         handler({ identityKey: IDENTITY, response: { hosts: [] } });
     },
     rotateCredential: () => {
+      credential += 1;
+      return credential;
+    },
+    switchIdentity: (next) => {
+      identity = next;
       credential += 1;
       return credential;
     },
@@ -370,6 +378,43 @@ describe("a hidden window reads for every sign-in attach, and a confirmation wai
 
     expect(confirmation.resolved()).toBe(true);
     expect(await rig.rowIds()).toEqual(["team-row"]);
+    expect(rig.reads.issued()).toBe(3);
+  });
+
+  // The entry the app uses when the signed-in person changes is
+  // `refreshForEra` with the incoming identity (`HostRuntime`'s context
+  // change), with nothing else dropped first.
+  it("(identity mark) keeps waiting for the incoming person's read when the signed-in person changes between the earlier read's settlement and the confirmation's wake", async () => {
+    const rig = await startedHiddenWindow();
+    rig.push();
+    const confirmation = rig.confirm();
+    await drain();
+    // The confirmation is pending on the first person's read A.
+    expect(rig.reads.issued()).toBe(2);
+    let switched = false;
+    const stop = rig.directory.onRefreshStateChange(() => {
+      if (switched) return;
+      switched = true;
+      const era = rig.switchIdentity("user-b");
+      void rig.directory.refreshForEra({
+        identity: "user-b",
+        credentialGeneration: era,
+      });
+    });
+
+    rig.reads.answer(1, "first-person-row");
+    await drain();
+    stop.dispose();
+
+    expect(rig.reads.issued()).toBe(3);
+    expect(rig.reads.running()).toBe(1);
+    expect(confirmation.resolved()).toBe(false);
+
+    rig.reads.answer(2, "second-person-row");
+    await drain();
+
+    expect(confirmation.resolved()).toBe(true);
+    expect(await rig.rowIds()).toEqual(["second-person-row"]);
     expect(rig.reads.issued()).toBe(3);
   });
 });
