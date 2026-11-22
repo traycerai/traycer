@@ -1386,8 +1386,15 @@ row's tooltip explains the activation consequence, and an unavailable row's
 tooltip reveals a cut-off name. Search appears from six hosts up; below that it
 is one more thing to skip past.
 
-Environment picker names also wrap in full. An outdated computer's row reads
-“Update to view these settings.” Its disabled state and Move sheet are unchanged.
+Environment picker names also wrap in full. A computer whose host serves no
+`environment.status` (a released host from before the Environment group) gets
+the not-moved Local row, “its own settings, not in Personal yet”, with no Move
+verb, and the window opens on it. Its pages are that host's own and editable,
+as that release drew them (`HostOwnPageFrame`): only Providers, Permissions,
+Agents (the guide alone), Model routing and Variables & shells. Reaching any
+other Environment page, by the picker, a link or a search hit, moves to
+Providers (`EnvironmentPickUpkeep`, mounted with every page). A host whose `environment.status` is
+1.0 keeps the greyed row “Update to view these settings.” and its Move sheet.
 
 **Nothing in the host group is local-only any more.** Shell and Diagnostics
 carried a `requiresLocalHost` flag (dimmed rail rows, a `RequiresLocalHostNotice`

@@ -4,6 +4,7 @@ import {
   rememberSettingsTabSection,
 } from "@/lib/settings-navigation";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 
 /**
  * The pages of Settings ▸ Environment, addressed by the configuration they
@@ -126,6 +127,24 @@ const PAGES_HIDDEN_BY_PICK: Readonly<
 };
 
 /**
+ * The pages a Local row on a host that serves no `environment.status` offers:
+ * the ones the release before the Environment group showed for a computer.
+ */
+const OLD_HOST_PAGES: ReadonlySet<EnvironmentPageId> = new Set([
+  "providers",
+  "permissions",
+  "agents",
+  "model-routing",
+  "variables",
+]);
+
+/** Whether such an old host's Local row offers `section`. */
+export function oldHostSectionShown(section: SettingsSectionId): boolean {
+  const pageId = pageIdForSection(section);
+  return pageId === null || OLD_HOST_PAGES.has(pageId);
+}
+
+/**
  * Whether the Environment group shows `section`'s row under `pick`. A section
  * of the group that is not one of the registry's pages is shown under every
  * pick; the retired ones (`RETIRED_SETTINGS_SECTION_IDS`) are never offered.
@@ -154,6 +173,10 @@ export function environmentSectionShown(
  * point. A removal is a fact the server reported, and Settings may be sitting
  * in a split pane the person is not looking at — so the caller passes the move
  * rather than inheriting one, and `moveEnvironmentSurface` has the two.
+ *
+ * A Local row on a host that serves no `environment.status` offers only
+ * `oldHostSectionShown`'s pages; that is read from the negotiated manifest at
+ * the move, by the picked host's id.
  */
 export function moveEnvironmentPick(input: {
   readonly next: EnvironmentPick;
@@ -162,9 +185,15 @@ export function moveEnvironmentPick(input: {
   readonly moveSurface: (section: SettingsSectionId) => void;
 }): void {
   input.setPick(input.next);
+  const section = input.activeSection;
+  if (section === null) return;
+  const oldHost =
+    input.next.kind === "local" &&
+    readNegotiatedMethodVersion(input.next.hostId, "environment.status") ===
+      false;
   if (
-    input.activeSection !== null &&
-    !environmentSectionShown(input.next, input.activeSection)
+    !environmentSectionShown(input.next, section) ||
+    (oldHost && !oldHostSectionShown(section))
   ) {
     input.moveSurface("providers");
   }

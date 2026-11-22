@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import type { EnvironmentInvitation } from "@traycer/protocol/host/environment/contracts";
 import { ChevronDown } from "lucide-react";
 import {
@@ -44,9 +44,12 @@ import {
   environmentPickValue,
   moveEnvironmentPick,
   moveEnvironmentSurface,
+  oldHostSectionShown,
   PERSONAL_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
+import { SettingsSectionContext } from "@/components/settings/settings-section-context";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -92,9 +95,19 @@ function useEnvironmentPickerModel(scope: HostScope): EnvironmentPickerModel {
  * moved, or turned out to be a team's, would keep its page offering the move.
  * Mounted with every Settings page (`SettingsPanelForSection`); with the
  * dropdown on screen too, both write the same answer.
+ *
+ * It also takes the surface off a page a Local row on a host that serves no
+ * `environment.status` does not offer, however that page was reached: a link,
+ * a settings search hit, or a window opening on that row.
  */
 export function EnvironmentPickUpkeep(): ReactNode {
   useEnvironmentPickerModel(useHostScopeFor(WINDOW_HOST_SELECTION));
+  const section = useContext(SettingsSectionContext);
+  const oldHost = useOldHostLocalPick();
+  const hidden = oldHost && section !== null && !oldHostSectionShown(section);
+  useEffect(() => {
+    if (hidden) moveEnvironmentSurface.onServerFact("providers");
+  }, [hidden]);
   return null;
 }
 

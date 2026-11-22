@@ -9,8 +9,8 @@ import {
   unresolvedSetupText,
   type EnvironmentPickerModel,
 } from "@/components/settings/environment/environment-picker-model";
+import { LOCAL_ROW_NOT_MOVED } from "@/components/settings/move/cohort-rows";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
-import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 import {
   PERSONAL_PICK,
   UNRESOLVED_PICK,
@@ -113,27 +113,48 @@ describe("localPickerRow", () => {
     expect(localPickerRow(OLD_LAPTOP, status, V11)).toBeNull();
   });
 
-  it.each<[string, NegotiatedMethodVersion]>([
-    ["negotiated at 1.0", V10],
-    ["absent from the host's methods", false],
-  ])(
-    "greys a host with environment.status %s that has not reached applying",
-    (_label, version) => {
-      const status = environmentStatusFixture({
-        principal: null,
-        setup: { stage: "moving_settings", state: "running" },
-      });
-      expect(localPickerRow(OLD_LAPTOP, status, version)).toEqual({
-        kind: "local",
-        hostId: "old",
-        name: "Old laptop",
-        subtitle: "Update to view these settings.",
-        verb: null,
-        needsUpdate: true,
-        defaultsToLocal: false,
-      });
-    },
-  );
+  it("greys a host with environment.status negotiated at 1.0 that has not reached applying", () => {
+    const status = environmentStatusFixture({
+      principal: null,
+      setup: { stage: "moving_settings", state: "running" },
+    });
+    expect(localPickerRow(OLD_LAPTOP, status, V10)).toEqual({
+      kind: "local",
+      hostId: "old",
+      name: "Old laptop",
+      subtitle: "Update to view these settings.",
+      verb: null,
+      needsUpdate: true,
+      defaultsToLocal: false,
+    });
+  });
+
+  it("gives a host whose methods lack environment.status its own pickable row, whatever it last said", () => {
+    const row = {
+      kind: "local",
+      hostId: "old",
+      name: "Old laptop",
+      subtitle: LOCAL_ROW_NOT_MOVED,
+      verb: null,
+      needsUpdate: false,
+      defaultsToLocal: true,
+    };
+    expect(localPickerRow(OLD_LAPTOP, null, false)).toEqual(row);
+    expect(
+      localPickerRow(
+        OLD_LAPTOP,
+        environmentStatusFixture({
+          principal: null,
+          setup: { stage: "moving_settings", state: "running" },
+        }),
+        false,
+      ),
+    ).toEqual(row);
+  });
+
+  it("leaves the Personal row's rule alone for a host whose methods lack environment.status", () => {
+    expect(hostRunsPersonal(OLD_LAPTOP, null, false)).toBe(false);
+  });
 
   it("greys an old host that has not answered, or has no setup at all", () => {
     expect(localPickerRow(OLD_LAPTOP, null, V10)?.needsUpdate).toBe(true);
@@ -311,6 +332,44 @@ describe("environmentPickerModel", () => {
     });
     expect(greyed.localRows[0]?.needsUpdate).toBe(true);
     expect(greyed.defaultPick).toEqual(PERSONAL_PICK);
+  });
+
+  it("defaults to the Local row of a window host whose methods lack environment.status, with no status to wait for", () => {
+    const model = environmentPickerModel({
+      hosts: [OLD_LAPTOP],
+      statuses: statusMap([["old", null]]),
+      versions: new Map([["old", false]]),
+      windowHostId: "old",
+    });
+
+    expect(model.localRows).toEqual([
+      {
+        kind: "local",
+        hostId: "old",
+        name: "Old laptop",
+        subtitle: LOCAL_ROW_NOT_MOVED,
+        verb: null,
+        needsUpdate: false,
+        defaultsToLocal: true,
+      },
+    ]);
+    expect(model.defaultPick).toEqual({
+      kind: "local",
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+  });
+
+  it("keeps waiting for a window host that has not negotiated yet and has no row", () => {
+    const model = environmentPickerModel({
+      hosts: [OLD_LAPTOP],
+      statuses: statusMap([["old", null]]),
+      versions: new Map([["old", null]]),
+      windowHostId: "old",
+    });
+
+    expect(model.localRows).toEqual([]);
+    expect(model.defaultPick).toEqual(UNRESOLVED_PICK);
   });
 });
 

@@ -14,6 +14,7 @@ import {
 import { PersonalPageNotices } from "@/components/settings/personal/personal-page-notices";
 import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-header-details";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { HostMinimumVersionGate } from "@/components/settings/host-scope/host-scope-gate";
@@ -256,16 +257,55 @@ function HostPageFrame(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const pick = useEnvironmentPick();
+  const oldHost = useOldHostLocalPick();
   const computerPage = SETTINGS_SECTIONS.some(
     (section) =>
       section.id === props.section &&
       (section.group === "personal" || section.group === "host"),
   );
-  const content = <HostPageContents {...props} />;
+  const content = oldHost ? (
+    <HostOwnPageFrame section={props.section}>
+      {props.children}
+    </HostOwnPageFrame>
+  ) : (
+    <HostPageContents {...props} />
+  );
   return pick.kind === "local" && computerPage ? (
     <LocalComputerPageGate>{content}</LocalComputerPageGate>
   ) : (
     content
+  );
+}
+
+/**
+ * A Local row on a host that serves no `environment.status`: every page is
+ * that host's own, read through it as the release before the Environment
+ * group read them. The frame reads nothing, since the host reports no status,
+ * notice or value kept on one host; the context carries the host for the rows
+ * that address it.
+ */
+function HostOwnPageFrame(props: {
+  readonly section: SettingsSectionId;
+  readonly children: ReactNode;
+}): ReactNode {
+  const pick = useEnvironmentPick();
+  const scope = usePersonalHostScope();
+  return (
+    <PersonalPageContext.Provider
+      value={{
+        section: props.section,
+        pick,
+        state: { kind: "unknown" },
+        hostName: scope.hostLabel,
+        hostId: scope.hostId,
+        client: scope.client,
+        localOverrides: NO_OVERRIDES,
+        notices: NO_NOTICES,
+        review: NO_REVIEW,
+      }}
+    >
+      {props.children}
+    </PersonalPageContext.Provider>
   );
 }
 

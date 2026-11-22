@@ -10,6 +10,10 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import type {
@@ -22,6 +26,7 @@ import {
 } from "@/components/settings/host-scope/host-scope-fixture";
 import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
 import type { NegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import { LOCAL_ROW_NOT_MOVED } from "@/components/settings/move/cohort-rows";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
@@ -120,6 +125,7 @@ vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
     isOverlayActive: () => false,
     openSettings: surface.openSettings,
     setSection: surface.setSection,
+    replaceOwnedSettingsRoute: () => undefined,
     active: null,
     close: () => undefined,
   }),
@@ -171,7 +177,14 @@ const running = environmentStatusFixture({ principal: { kind: "personal" } });
 
 function pickerElementForSection(
   windowHostId: string,
-  activeSection: "mcp-servers" | "skills" | "sandboxes" | "storage" | "members",
+  activeSection:
+    | "mcp-servers"
+    | "skills"
+    | "sandboxes"
+    | "storage"
+    | "members"
+    | "secrets"
+    | "agent-memories",
 ) {
   const hosts = [
     hostScopeOptionFixture({ hostId: "mac", name: "MacBook Pro" }),
@@ -201,7 +214,14 @@ function renderPicker(windowHostId: string) {
 
 function renderPickerForSection(
   windowHostId: string,
-  activeSection: "mcp-servers" | "skills" | "sandboxes" | "storage" | "members",
+  activeSection:
+    | "mcp-servers"
+    | "skills"
+    | "sandboxes"
+    | "storage"
+    | "members"
+    | "secrets"
+    | "agent-memories",
 ) {
   return render(pickerElementForSection(windowHostId, activeSection));
 }
@@ -259,6 +279,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetNegotiatedManifests();
 });
 
 describe("<EnvironmentPicker />", () => {
@@ -443,6 +464,41 @@ describe("<EnvironmentPicker />", () => {
     ).toBeTruthy();
     expect(grey.getAttribute("aria-disabled")).toBe("true");
     expect(screen.queryByTestId("environment-picker-local-tiny")).toBeNull();
+  });
+
+  it("draws a host whose methods lack environment.status as its own pickable row, with no Move to Personal, and picks it", () => {
+    answer("old", null, false);
+    renderPicker("mac");
+    openMenu();
+
+    const row = screen.getByTestId("environment-picker-local-old");
+    expect(row.textContent).toContain("Old laptop");
+    expect(row.textContent).toContain(LOCAL_ROW_NOT_MOVED);
+    expect(row.getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByTestId("environment-picker-move-old")).toBeNull();
+
+    act(() => {
+      fireEvent.click(row);
+    });
+    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+      kind: "local",
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+  });
+
+  it("makes the Local row of a window host whose methods lack environment.status the default pick", () => {
+    answer("old", null, false);
+    renderPicker("old");
+
+    expect(useSettingsEnvironmentPickStore.getState().defaultPick).toEqual({
+      kind: "local",
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+    expect(screen.getByTestId("environment-picker-trigger").textContent).toBe(
+      "Old laptopRuns its own settings",
+    );
   });
 
   it("makes the Local row the default pick for this window's own host only", () => {
@@ -651,6 +707,36 @@ describe("<EnvironmentPicker />", () => {
       });
       expect(surface.openSettings).not.toHaveBeenCalled();
       expect(surface.setSection).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "secrets",
+    "mcp-servers",
+    "skills",
+    "agent-memories",
+    "sandboxes",
+    "storage",
+  ] as const)(
+    "moves from %s to Providers when the Local row of a host whose methods lack environment.status is picked",
+    (section) => {
+      answer("old", null, false);
+      recordNegotiatedHostMethods("old", ["host.status"]);
+      renderPickerForSection("mac", section);
+      openMenu();
+
+      act(() => {
+        fireEvent.click(screen.getByTestId("environment-picker-local-old"));
+      });
+
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
+        kind: "local",
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+      expect(surface.openSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ section: "providers" }),
+      );
     },
   );
 

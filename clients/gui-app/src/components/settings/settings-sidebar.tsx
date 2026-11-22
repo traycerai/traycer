@@ -41,7 +41,11 @@ import { useSettingsSearchStore } from "@/stores/settings/settings-search-store"
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { EnvironmentPicker } from "@/components/settings/environment-picker";
 import { useGettingStartedGuideIsComplete } from "@/components/onboarding/getting-started-checklist";
-import { environmentSectionShown } from "@/lib/settings-environment-pages";
+import {
+  environmentSectionShown,
+  oldHostSectionShown,
+} from "@/lib/settings-environment-pages";
+import { useOldHostLocalPick } from "@/components/settings/personal/use-old-host-local-pick";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 export type SettingsSidebarMode =
@@ -94,6 +98,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   const sections = visibleSettingsSections();
   // A Local row hides the pages only a cloud configuration has.
   const environmentPick = useEnvironmentPick();
+  const oldHost = useOldHostLocalPick();
   // The Guide group leaves the rail once every Getting started step is done.
   const guideComplete = useGettingStartedGuideIsComplete();
   const groups = guideComplete
@@ -164,7 +169,8 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                 {sections.map((section, index) =>
                   section.group === group.id &&
                   (group.id !== "personal" ||
-                    environmentSectionShown(environmentPick, section.id)) ? (
+                    (environmentSectionShown(environmentPick, section.id) &&
+                      (!oldHost || oldHostSectionShown(section.id)))) ? (
                     <SettingsSidebarItem
                       key={section.id}
                       section={section}
