@@ -5,7 +5,7 @@ import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixt
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { resetNegotiatedStreamVersions } from "@traycer-clients/shared/host-transport/negotiated-stream-version-registry";
@@ -446,9 +446,17 @@ class FakeRegistryWindow implements RegistryManagedWindow {
 }
 
 describe("createMruWindowProxy (decision 10) - real production proxy", () => {
-  it("focuses the most-recently-used window, not the first- or last-inserted one", async () => {
-    const { createMruWindowProxy } = await import("../desktop-startup");
+  let createMruWindowProxy: (typeof import("../desktop-startup"))["createMruWindowProxy"];
 
+  // The first import of `desktop-startup` loads its whole sibling module
+  // graph, which can outlast the default 5 s test timeout on a loaded machine
+  // (about 160 ms unloaded). 30 s is roughly 200x the unloaded load, so only
+  // a hung import, not machine load, can reach it.
+  beforeAll(async () => {
+    ({ createMruWindowProxy } = await import("../desktop-startup"));
+  }, 30_000);
+
+  it("focuses the most-recently-used window, not the first- or last-inserted one", async () => {
     let nextWebContentsId = 1;
     const created: FakeRegistryWindow[] = [];
     const registry = new WindowRegistry<FakeRegistryWindow>({
@@ -499,8 +507,6 @@ describe("createMruWindowProxy (decision 10) - real production proxy", () => {
   });
 
   it("reflects the current MRU window's live visibility/minimized state and reports destroyed once nothing is registered", async () => {
-    const { createMruWindowProxy } = await import("../desktop-startup");
-
     let nextWebContentsId = 100;
     const registry = new WindowRegistry<FakeRegistryWindow>({
       createWindow: () => {
