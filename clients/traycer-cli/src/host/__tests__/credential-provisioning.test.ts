@@ -200,8 +200,7 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      | ((session: FakeStreamSession, lapIndex: number) => void)
-      | null,
+      ((session: FakeStreamSession, lapIndex: number) => void) | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
@@ -608,7 +607,8 @@ describe("provisionInstalledHostCredential", () => {
     mocks.hostTokenMintMock.mockReset();
     mocks.hostTokenMintMock
       .mockResolvedValueOnce({ kind: "not-admitted" })
-      .mockReturnValueOnce(mintAnswer.promise);
+      .mockReturnValueOnce(mintAnswer.promise)
+      .mockResolvedValue({ kind: "not-admitted" });
     mocks.onSessionCreated = (): void => {
       setTimeout(() => {
         void (async (): Promise<void> => {
@@ -619,6 +619,10 @@ describe("provisionInstalledHostCredential", () => {
           await vi.waitFor(() =>
             expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
           );
+          // Sequences this script, not the code: the first mint's answer is
+          // already resolved, and the reason must be named after the token
+          // source has recorded it. Nothing observable marks that point, and an
+          // ask made before it would only join the running mint.
           await sleep(0);
           // The host then names a reason and invites the sign-in. The next ask
           // starts a second mint, and the host admits the sign-in before it
@@ -632,7 +636,15 @@ describe("provisionInstalledHostCredential", () => {
             processReleasedHosts.currentInstance("host-named-reason"),
           );
           mintAnswer.resolve({ kind: "not-admitted" });
-          await sleep(0);
+          // One mint runs at a time per host: an ask starts another only once
+          // the second mint's answer has been recorded, so it is the awaited
+          // point at which the run has reacted to it.
+          await vi.waitFor(() => {
+            options.bearer("host-named-reason");
+            expect(mocks.hostTokenMintMock.mock.calls.length).toBeGreaterThan(
+              2,
+            );
+          });
           options.onHostCredentialState("host-named-reason", "active");
         })();
       }, 0);
@@ -671,12 +683,21 @@ describe("provisionInstalledHostCredential", () => {
           // Neither ends the run, which the host's own answer settles.
           options.door.admitted(processReleasedHosts.currentInstance("host-1"));
           mintAnswer.resolve({ kind: "not-admitted" });
-          await sleep(0);
-          expect(options.bearer("host-1")).toBeNull();
-          await vi.waitFor(() =>
-            expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(2),
-          );
-          await sleep(0);
+          // One mint runs at a time per host: each ask below starts the next
+          // mint only once the previous answer has been recorded, so the count
+          // is the awaited point at which the run has reacted to it.
+          await vi.waitFor(() => {
+            expect(options.bearer("host-1")).toBeNull();
+            expect(mocks.hostTokenMintMock.mock.calls.length).toBeGreaterThan(
+              1,
+            );
+          });
+          await vi.waitFor(() => {
+            expect(options.bearer("host-1")).toBeNull();
+            expect(mocks.hostTokenMintMock.mock.calls.length).toBeGreaterThan(
+              2,
+            );
+          });
           options.onHostCredentialState("host-1", "active");
         })();
       }, 0);
@@ -732,7 +753,8 @@ describe("provisionInstalledHostCredential", () => {
               mocks.readHostPidMetadataMock.mock.calls.length,
             ).toBeGreaterThanOrEqual(readsBefore + 2),
           );
-          await sleep(0);
+          // The poll reads again only after its previous read is recorded, so
+          // the second read after the change proves the first was.
           presented.a = options.bearer(hostA)?.getBearerToken() ?? null;
           presented.b = options.bearer(hostB)?.getBearerToken() ?? null;
           options.onHostCredentialState(hostA, "active");
@@ -771,7 +793,6 @@ describe("provisionInstalledHostCredential", () => {
           await vi.waitFor(() =>
             expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
           );
-          await sleep(0);
           nameReason(hostB);
           // A socket selected for host A is admitted while the poll reads B,
           // and B's mint then answers that authn has no row for it.
@@ -1005,7 +1026,8 @@ describe("provisionInstalledHostCredential", () => {
               mocks.readHostPidMetadataMock.mock.calls.length,
             ).toBeGreaterThanOrEqual(readsBefore + 2),
           );
-          await sleep(0);
+          // The poll reads again only after its previous read is recorded, so
+          // the second read after the change proves the first was.
           answer.resolve({ kind: "not-admitted" });
           mocks.hostTokenRecoveryResult = await recovery;
           options.onHostCredentialState("host-1", "active");
