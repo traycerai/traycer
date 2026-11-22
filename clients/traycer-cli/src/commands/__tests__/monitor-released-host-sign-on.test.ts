@@ -2,6 +2,8 @@ import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nameReason } from "../../internal/__tests__/released-memory-test-support";
+import { buildProgramWithAgentRoles } from "../../index";
 import { runMonitor } from "../monitor";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
@@ -61,6 +63,10 @@ const monitorHarness = vi.hoisted(() => {
     sockets: [] as InstanceType<typeof ScriptSocket>[],
     /** Every line the monitor printed, to stdout or stderr. */
     printed: [] as string[],
+    /** The host each host-only mint request authn took was for, in the order asked. */
+    grantHosts: [] as string[],
+    /** The exit code each `finishAndExit` the command reached was given. */
+    exits: [] as number[],
     state: {
       hostTokenTable: new Map() as HostTokenTable,
       reader: new AbortController(),
@@ -81,6 +87,16 @@ const monitorHarness = vi.hoisted(() => {
       info: () => undefined,
       warn: () => undefined,
       error: () => undefined,
+    },
+  };
+});
+
+vi.mock("../../runner/exit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runner/exit")>();
+  return {
+    ...actual,
+    finishAndExit: async (exitCode: number) => {
+      monitorHarness.exits.push(exitCode);
     },
   };
 });
@@ -349,6 +365,8 @@ beforeEach(() => {
   monitorRun = null;
   monitorHarness.sockets.splice(0);
   monitorHarness.printed.splice(0);
+  monitorHarness.exits.splice(0);
+  monitorHarness.grantHosts.splice(0);
   monitorHarness.state.hostTokenTable = new Map();
   monitorHarness.state.reader = new AbortController();
   monitorHarness.state.grants = 0;
@@ -369,6 +387,9 @@ beforeEach(() => {
       const method = init?.method ?? "GET";
       if (method === "POST" && url.pathname.endsWith("/session-grant")) {
         monitorHarness.state.grants += 1;
+        monitorHarness.grantHosts.push(
+          decodeURIComponent(url.pathname.split("/")[4] ?? ""),
+        );
         return monitorHarness.state.grantResponse();
       }
       if (method === "GET" && url.pathname.startsWith("/api/v3/hosts"))
@@ -385,6 +406,7 @@ afterEach(async () => {
 
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("traycer monitor local released-host sign-in", () => {
@@ -733,6 +755,41 @@ describe("traycer monitor local released-host sign-in", () => {
       await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
       expect(ended?.error).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
     });
+
+    it("asks authn for no mint of host A when host B's token is refused after A's was", async () => {
+      const hostA = monitorHarness.state.hostId;
+      const hostB = nextHostId();
+      holdUsableTokens(
+        new Map([
+          [hostA, "token-for-a"],
+          [hostB, "token-for-b"],
+        ]),
+      );
+      startMonitor();
+      const toA = await socketAt(0);
+      expect((await readOpen(toA)).token).toBe("token-for-a");
+      toA.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toContain(hostA),
+        WAIT,
+      );
+      // Authn answers nothing for A's mint; the redial is selected for B.
+      monitorHarness.state.hostId = hostB;
+      await letPollRead();
+      await vi.advanceTimersByTimeAsync(6_000);
+      const toB = await socketAt(1);
+      expect((await readOpen(toB)).token).toBe("token-for-b");
+      const before = monitorHarness.grantHosts.length;
+
+      toB.fireFrame(fatal("token_expired", "host token expired"));
+
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts.length).toBeGreaterThan(before),
+        WAIT,
+      );
+      expect(monitorHarness.grantHosts.slice(before)).toContain(hostB);
+      expect(monitorHarness.grantHosts.slice(before)).not.toContain(hostA);
+    });
   });
 
   describe("a mint's not-admitted against a current personal host's invited sign-in", () => {
@@ -787,12 +844,58 @@ describe("traycer monitor local released-host sign-in", () => {
     });
   });
 
+  describe("an invitation heard from one process instance of a host", () => {
+    it("is stale once the poll reads a new process: the mint's 404 then ends the command with its line, after the new process names a reason that is no invitation", async () => {
+      const mint = holdMint();
+      startMonitor();
+      const invited = await inviteSignIn();
+      monitorHarness.state.pid = 2;
+      monitorHarness.state.startedAt = "2026-01-01T01:00:00.000Z";
+      await letPollRead();
+      // The invited dial ends; the redial is the new process's own open.
+      invited.onclose?.({ code: 1006, reason: "drop", wasClean: false });
+      await vi.advanceTimersByTimeAsync(6_000);
+      const own = await socketAt(2);
+      expect((await readOpen(own)).token).toBe(NO_HOST_TOKEN_PROBE);
+      own.fireFrame(fatal("not_admitted", TEAM_REFUSAL));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await outcomeOf()).toBe("running");
+
+      mint.answer(new Response("no row", { status: 404 }));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
+    });
+
+    it("marks nothing for the new process when a named refusal from the old process's socket arrives late", async () => {
+      startMonitor();
+      const old = await socketAt(0);
+      await readOpen(old);
+      monitorHarness.state.pid = 2;
+      monitorHarness.state.startedAt = "2026-01-01T01:00:00.000Z";
+      await letPollRead();
+
+      old.fireFrame(fatal("not_admitted", TEAM_REFUSAL));
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const redial = await socketAt(1);
+      expect((await readOpen(redial)).token).toBe(NO_HOST_TOKEN_PROBE);
+      redial.fireFrame(bareRefusal());
+      await admitWith(await socketAt(2));
+      expect(monitorHarness.sockets.map(openToken)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+        NO_HOST_TOKEN_PROBE,
+        SIGN_IN,
+      ]);
+    });
+  });
+
   describe("a host's named reason is forgotten when its process instance changes", () => {
     /** A host that named a reason in this process, then refuses the probe bare: a released host's answer. */
     async function refuseProbeBare(
       afterInstanceChange: () => Promise<void>,
     ): Promise<void> {
-      processReleasedHosts.refusedNamingReason(monitorHarness.state.hostId);
+      nameReason(monitorHarness.state.hostId);
       startMonitor();
       const probe = await socketAt(0);
       await readOpen(probe);
@@ -800,15 +903,23 @@ describe("traycer monitor local released-host sign-in", () => {
       probe.fireFrame(bareRefusal());
     }
 
-    it("sends the sign-in after a bare refusal once the same host id comes back under a new process", async () => {
+    it("opens the placeholder first for the new process, and sends the sign-in only after it refuses bare", async () => {
       await refuseProbeBare(async () => {
         monitorHarness.state.pid = 2;
         monitorHarness.state.startedAt = "2026-01-01T01:00:00.000Z";
         await letPollRead();
       });
 
-      await admitWith(await socketAt(1));
-      expect(monitorHarness.sockets.map(openToken).at(-1)).toBe(SIGN_IN);
+      // The refusal answered the earlier process's open: it says nothing of the new one.
+      const redial = await socketAt(1);
+      expect((await readOpen(redial)).token).toBe(NO_HOST_TOKEN_PROBE);
+      redial.fireFrame(bareRefusal());
+      await admitWith(await socketAt(2));
+      expect(monitorHarness.sockets.map(openToken)).toEqual([
+        NO_HOST_TOKEN_PROBE,
+        NO_HOST_TOKEN_PROBE,
+        SIGN_IN,
+      ]);
       expect(await outcomeOf()).toBe("running");
     });
 
@@ -844,28 +955,139 @@ describe("traycer monitor local released-host sign-in", () => {
       }
     }
 
+    /** What the command's own handler printed for the error that ended it. */
+    function fatalLinesPrinted(): string[] {
+      return monitorHarness.printed.filter((line) =>
+        line.startsWith("[traycer monitor] fatal:"),
+      );
+    }
+
+    /** The real `traycer monitor` command: its error is rendered by the program's own handler. */
+    function startMonitorCommand(): void {
+      vi.stubEnv("TRAYCER_EPIC_ID", "epic-a");
+      ended = null;
+      const program = buildProgramWithAgentRoles(false);
+      program.exitOverride();
+      program.configureOutput({
+        writeErr: () => undefined,
+        writeOut: () => undefined,
+      });
+      const running = program.parseAsync(["monitor", "--agent-id", "agent-a"], {
+        from: "user",
+      });
+      monitorRun = running;
+      running.then(
+        () => {
+          ended = { error: null };
+        },
+        (error: unknown) => {
+          ended = { error };
+        },
+      );
+    }
+
     it.each(RELEASED_REASONS)(
-      "ends with the host's reason, as a refused unary call does: %s",
+      "prints the released monitor's line naming the host's reason and exits 1: %s",
       async (reason) => {
         monitorHarness.state.refresh = "rotated";
-        startMonitor();
+        startMonitorCommand();
 
         await refuseEveryOpenBare(reason);
 
         await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
-        expect(ended?.error).toMatchObject({
-          code: CLI_ERROR_CODES.AUTH_REJECTED,
-          message: reason,
-          exitCode: 1,
-        });
+        expect(fatalLinesPrinted()).toEqual([
+          `[traycer monitor] fatal: traycer monitor: ${reason} — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).\n`,
+        ]);
+        expect(monitorHarness.exits).toEqual([1]);
       },
     );
+
+    it("ends with a plain Error carrying no code, as the released monitor's refusal did", async () => {
+      monitorHarness.state.refresh = "rotated";
+      startMonitor();
+
+      await refuseEveryOpenBare(RELEASED_REASONS[0]);
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(ended?.error).toBeInstanceOf(Error);
+      expect(ended?.error).not.toHaveProperty("code");
+    });
+
+    it("prints the session-expired line when authn rejects the refresh and the host refuses the sign-in", async () => {
+      monitorHarness.state.refresh = "rejected";
+      startMonitorCommand();
+
+      await refuseEveryOpenBare(RELEASED_REASONS[0]);
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(fatalLinesPrinted()).toEqual([
+        "[traycer monitor] fatal: traycer monitor: session expired — re-authenticate.\n",
+      ]);
+      expect(monitorHarness.exits).toEqual([1]);
+    });
+
+    it("prints the session-expired line when authn refuses the first host-only mint after a released host refused the placeholder bare", async () => {
+      monitorHarness.state.refresh = "rotated";
+      const mint = holdMint();
+      startMonitorCommand();
+      const probe = await socketAt(0);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      await vi.waitFor(
+        () => expect(monitorHarness.state.grants).toBeGreaterThan(0),
+        WAIT,
+      );
+      probe.fireFrame(bareRefusal());
+      const signIn = await socketAt(1);
+      expect((await readOpen(signIn)).token).toBe(SIGN_IN);
+
+      // The refresh authn accepted is followed by one more mint; it is refused too.
+      mint.answer(new Response("rejected", { status: 401 }));
+      await vi.waitFor(
+        () => expect(monitorHarness.state.grants).toBeGreaterThan(1),
+        WAIT,
+      );
+      mint.answer(new Response("rejected", { status: 401 }));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(fatalLinesPrinted()).toEqual([
+        "[traycer monitor] fatal: traycer monitor: session expired — re-authenticate.\n",
+      ]);
+      expect(monitorHarness.exits).toEqual([1]);
+    });
+
+    // A guard: it passes on c8b3e988 by design. With no released-way refusal
+    // before it, the same mint refusal keeps the stored-credential line.
+    it("keeps the stored-credential line when authn refuses the first mint and no released host has refused", async () => {
+      monitorHarness.state.refresh = "rotated";
+      const mint = holdMint();
+      startMonitorCommand();
+      const probe = await socketAt(0);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      await vi.waitFor(
+        () => expect(monitorHarness.state.grants).toBeGreaterThan(0),
+        WAIT,
+      );
+
+      // The refresh authn accepted is followed by one more mint; it is refused too.
+      mint.answer(new Response("rejected", { status: 401 }));
+      await vi.waitFor(
+        () => expect(monitorHarness.state.grants).toBeGreaterThan(1),
+        WAIT,
+      );
+      mint.answer(new Response("rejected", { status: 401 }));
+
+      await vi.waitFor(() => expect(ended).not.toBeNull(), WAIT);
+      expect(fatalLinesPrinted()).toEqual([
+        "[traycer monitor] fatal: The stored credential was rejected. Run `traycer login` to re-authenticate.\n",
+      ]);
+      expect(monitorHarness.exits).toEqual([1]);
+    });
 
     // A guard: a host that named a reason in this process is never handed the sign-in, so
     // its bare refusal of the host-only token is an older host's.
     it("still prints the older-host line for a bare token refusal from a host that named a reason in this process", async () => {
       holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
-      processReleasedHosts.refusedNamingReason(monitorHarness.state.hostId);
+      nameReason(monitorHarness.state.hostId);
       startMonitor();
       const socket = await socketAt(0);
       await readOpen(socket);

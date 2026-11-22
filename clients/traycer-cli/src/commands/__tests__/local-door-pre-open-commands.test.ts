@@ -2,6 +2,7 @@ import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import type { HostTokenTable } from "@traycer-clients/shared/auth/host-token-store";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nameReason } from "../../internal/__tests__/released-memory-test-support";
 import { FRAME_TIMEOUT_MS } from "../../internal/host-rpc";
 import {
   BOT_SNAPSHOT_DEADLINE_MS,
@@ -1195,7 +1196,7 @@ describe("a released host that refuses the person's valid sign-in bare", () => {
   // its bare refusal of the host-only token is an older host's.
   it("still prints the older-host line for the delete's bare token refusal from a host that named a reason in this process", async () => {
     holdUsableHostToken();
-    processReleasedHosts.refusedNamingReason(harness.state.hostId);
+    nameReason(harness.state.hostId);
     const settled = settledOf(
       buildWorktreeDeleteCommand({ worktreePath: "/wt/x" })(makeCtx()),
     );
@@ -1210,7 +1211,7 @@ describe("a released host that refuses the person's valid sign-in bare", () => {
 
   it("still prints the older-host line for the bot read's bare token refusal from a host that named a reason in this process", async () => {
     holdUsableHostToken();
-    processReleasedHosts.refusedNamingReason(harness.state.hostId);
+    nameReason(harness.state.hostId);
     const { client } = await openLocalStreamClient();
     const settled = settledOf(readBotSnapshot(client, BOT_ID_A));
 

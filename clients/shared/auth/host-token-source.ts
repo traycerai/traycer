@@ -22,6 +22,12 @@ export type HostTokenMintOutcome =
   | { readonly kind: "no-sign-in" }
   | { readonly kind: "superseded" };
 
+/** How a pair's `obtain` can end without a token. */
+export type HostTokenMintFailure = Exclude<
+  HostTokenMintOutcome,
+  { readonly kind: "ok" }
+>["kind"];
+
 // `delayed`: hosts whose mint could not reach authn; each keeps the token it holds.
 export type HostTokenRenewal =
   | { readonly kind: "renewed"; readonly delayed: readonly string[] }
@@ -64,6 +70,12 @@ export interface HostTokenSource {
     fresh: boolean,
     signal: AbortSignal | null,
   ): Promise<HostTokenMintOutcome>;
+  /**
+   * How the last {@link obtain} for the pair in this process ended without a
+   * token, whichever caller asked: `null` until one failed, and again once one
+   * succeeds or the person's era moves. Process memory only.
+   */
+  lastFailure(userId: string, hostId: string): HostTokenMintFailure | null;
   /** One refresh buys at most one token per host, however many windows ask. */
   renew(userId: string, hostIds: readonly string[]): Promise<HostTokenRenewal>;
   /** Dropped if the person signed out or was replaced since `era`. */
@@ -110,6 +122,7 @@ export function createHostTokenSource(deps: {
   // Each pair's minting refresh (its end, never the token), so a refresh mints once per
   // host. Process memory only: a restart mints once more at most.
   const mintedWith = new Map<string, number>();
+  const failures = new Map<string, HostTokenMintFailure>();
   const eras = new Map<string, number>();
   const eraOf = (userId: string): number => eras.get(userId) ?? 0;
   const keyOf = (userId: string, hostId: string): string =>
@@ -204,10 +217,31 @@ export function createHostTokenSource(deps: {
       await loaded;
       if (eraOf(userId) !== era) return { kind: "superseded" };
       const token = held(userId, hostId);
-      if (!fresh && isUsableHostToken(token, deps.now()))
+      // An answer from an era the person has left says nothing of the new one.
+      const record = (kind: HostTokenMintOutcome["kind"]): void => {
+        if (eraOf(userId) !== era) return;
+        if (kind === "ok") failures.delete(keyOf(userId, hostId));
+        else failures.set(keyOf(userId, hostId), kind);
+      };
+      if (!fresh && isUsableHostToken(token, deps.now())) {
+        record("ok");
         return { kind: "ok", token };
-      return mintOnce(userId, hostId, era, signal);
+      }
+      let outcome: HostTokenMintOutcome;
+      try {
+        outcome = await mintOnce(userId, hostId, era, signal);
+      } catch (cause) {
+        // A token that could not be saved leaves none to present, like an
+        // unreachable authn: an earlier refusal no longer stands.
+        record("unavailable");
+        throw cause;
+      }
+      record(outcome.kind);
+      return outcome;
     },
+
+    lastFailure: (userId, hostId) =>
+      failures.get(keyOf(userId, hostId)) ?? null,
 
     renew: async (userId, hostIds) => {
       const era = eraOf(userId);
@@ -245,6 +279,8 @@ export function createHostTokenSource(deps: {
         if (key.startsWith(`${userId}\u0000`)) mintedWith.delete(key);
       for (const key of Array.from(storedIn.keys()))
         if (key.startsWith(`${userId}\u0000`)) storedIn.delete(key);
+      for (const key of Array.from(failures.keys()))
+        if (key.startsWith(`${userId}\u0000`)) failures.delete(key);
       await loaded;
       const hostIds = Array.from(table.get(userId)?.keys() ?? []);
       table = await deps.persistence.update((latest) => {

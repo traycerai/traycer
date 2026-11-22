@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nameReason } from "./released-memory-test-support";
 import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import { CLI_ERROR_CODES } from "../../runner/errors";
@@ -240,7 +241,7 @@ describe("a unary call to a released host that refuses the person's valid sign-i
   // A guard: a host that named a reason in this process is never handed the sign-in, so
   // its bare refusal of the host-only token is an older host's.
   it("still prints the older-host line for a bare token refusal from a host that named a reason in this process", async () => {
-    processReleasedHosts.refusedNamingReason(hostId);
+    nameReason(hostId);
 
     const error = await run(releasedRefusalWith("released-host-token-refusal"));
 

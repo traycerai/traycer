@@ -1,5 +1,6 @@
 import {
   isIssuedHostTokenEra,
+  type HostTokenMintFailure,
   type HostTokenSource,
 } from "@traycer-clients/shared/auth/host-token-source";
 import type {
@@ -28,12 +29,17 @@ export function createDesktopHostTokenSource(
   const listeners = new Set<(change: HostTokenChange) => void>();
   const reported = new Map<string, number>();
   const forgetting = new Map<string, number>();
+  // How this window's asks ended, for every client in it: `lastFailure` is a
+  // synchronous read, so it cannot ask main.
+  const failures = new Map<string, HostTokenMintFailure>();
   const keyOf = (userId: string, hostId: string): string =>
     `${userId}\u0000${hostId}`;
   const announce = (userId: string, hostId: string): void => {
     for (const listener of Array.from(listeners)) listener({ userId, hostId });
   };
   const dropPerson = (userId: string): void => {
+    for (const key of Array.from(failures.keys()))
+      if (key.startsWith(`${userId}\u0000`)) failures.delete(key);
     for (const key of Array.from(copy.keys())) {
       if (!key.startsWith(`${userId}\u0000`)) continue;
       copy.delete(key);
@@ -131,10 +137,14 @@ export function createDesktopHostTokenSource(
       const reply = await bridge.obtain(userId, hostId, fresh, era);
       learn(userId, reply.era);
       if (!stillIn(userId, era, reply.era)) return { kind: "superseded" };
-      if (reply.outcome.kind === "ok")
+      if (reply.outcome.kind === "ok") {
+        failures.delete(keyOf(userId, hostId));
         apply(userId, hostId, reply.outcome.token, reply.era);
+      } else failures.set(keyOf(userId, hostId), reply.outcome.kind);
       return reply.outcome;
     },
+    lastFailure: (userId, hostId) =>
+      failures.get(keyOf(userId, hostId)) ?? null,
     renew: async (userId, hostIds) => {
       const era = eraOf(userId);
       if (era === NO_ISSUED_HOST_TOKEN_ERA) return { kind: "superseded" };

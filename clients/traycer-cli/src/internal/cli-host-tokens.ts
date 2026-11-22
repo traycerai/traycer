@@ -15,6 +15,7 @@ import {
   hostTokenRevalidator,
   trackHostTokenMints,
   type HostTokenSessionRevalidator,
+  type TrackedHostTokens,
 } from "@traycer-clients/shared/auth/host-token-lease";
 import {
   createHostTokenSource,
@@ -29,6 +30,7 @@ import {
   heldTokenRefused,
   hostTokenUnobtainable,
   ownerSignInEligible,
+  type HostInstanceStamp,
   type ReleasedSignOn,
   processReleasedHosts,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
@@ -41,6 +43,23 @@ import {
 import type { HostAuth } from "./host-auth";
 
 const LOCK_POLL_INTERVAL_MS = 50;
+
+/**
+ * The held host-only token each person had refused by a host, for this
+ * process: every unary call builds its own tokens, and one call's refusal must
+ * still keep the next call from presenting that token. Kept per host process
+ * instance, so a restarted host is asked afresh.
+ */
+const heldRefusals = new WeakMap<HostInstanceStamp, Map<string, string>>();
+function processHeldRefusals(hostId: string): Map<string, string> {
+  const stamp = processReleasedHosts.currentInstance(hostId);
+  let refusals = heldRefusals.get(stamp);
+  if (refusals === undefined) {
+    refusals = new Map();
+    heldRefusals.set(stamp, refusals);
+  }
+  return refusals;
+}
 
 export interface CliSignIn {
   readonly lease: BearerLease;
@@ -99,7 +118,8 @@ export interface CliHostTokens {
   /** A fresh token whatever is on disk: `traycer login`'s. */
   mintFresh(hostId: string, signal: AbortSignal | null): Promise<CliHostBearer>;
   /**
-   * `WsRpcClientOptions.hostBearerFor` for `hostId`: a usable token at once.
+   * `WsRpcClientOptions.hostBearerFor` for `hostId`: a usable token the host
+   * has not refused, at once.
    * With `waitForMint` false, a held one of any age while authn has not
    * answered, else `null` (the call probes), at once, with the mint in the
    * background. With `true` (asked only after a current host named its reason
@@ -123,9 +143,9 @@ export interface CliHostTokens {
    */
   admitted(hostId: string): DoorAdmissionRelease;
   /**
-   * A usable token, or a held one of any age while authn has not answered;
-   * else `null`, and the transport probes while authn has not answered. Every
-   * ask without a usable token starts a mint in the background.
+   * A usable token the host has not refused, or a held one of any age while
+   * authn has not answered and the host has not refused it; else `null`, and
+   * the transport probes. Every other ask starts a mint in the background.
    */
   streamBearer(hostId: string): BearerSourceProvider;
   /**
@@ -153,8 +173,6 @@ export interface CliHostTokens {
   refreshSignIn(): Promise<RevalidateOutcome>;
   /** `true` when one was minted; its refusal is judged like any other mint's. */
   renewAfterSignInRefresh(hostId: string): Promise<boolean>;
-  /** The held token is presented past its end: authn could not be reached for a new one. */
-  presentsHeldPastExpiry(hostId: string): boolean;
   /** See `hostTokenUnobtainable`. */
   hostTokenUnobtainable(hostId: string): boolean;
   /** See `ownerSignInEligible`. */
@@ -243,10 +261,11 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   // Every mint passes here, so a refusal for good is reported wherever asked. A token
   // that could not be saved is transient like an unreachable authn, never a rejected
   // sign-in. A mint with no signal of its own is cancelled with this process's mints.
-  const source = trackHostTokenMints({
+  const tracked = trackHostTokenMints({
     current: (id, hostId) => stored.current(id, hostId),
     loaded: () => stored.loaded(),
     whenLoaded: () => stored.whenLoaded(),
+    lastFailure: (id, hostId) => stored.lastFailure(id, hostId),
     obtain: async (id, hostId, fresh, signal) => {
       const startedAt = nextEvent();
       const outcome: HostTokenMintOutcome = await stored
@@ -263,6 +282,23 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       return outcome;
     },
   });
+  // The host's refusal of a held token is the process's, not this command's
+  // tokens': see `processHeldRefusals`.
+  const source: TrackedHostTokens = {
+    ...tracked,
+    noteHeldRefused: (id, hostId, presented) => {
+      processHeldRefusals(hostId).set(id, presented);
+    },
+    forgetHeldRefused: (id, hostId) => {
+      processHeldRefusals(hostId).delete(id);
+    },
+    heldRefused: (id, hostId) => {
+      const refused = processHeldRefusals(hostId).get(id);
+      return (
+        refused !== undefined && tracked.current(id, hostId)?.token === refused
+      );
+    },
+  };
   const signInRejected = (): boolean => refreshRefused || refusedAfterRefresh;
   const signInRecovery = {
     revalidateForReconnect: refreshSignIn,
@@ -273,6 +309,10 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   });
   const presentsHeld = (hostId: string): boolean =>
     heldWhileAuthnUnreachable(source, userId, hostId) !== null;
+  // A held token the host refused is no token held, however usable it reads.
+  const presentsAsIs = (hostId: string): boolean =>
+    !source.heldRefused(userId, hostId) &&
+    isUsableHostToken(source.current(userId, hostId), Date.now());
   const answer = (
     hostId: string,
     outcome: HostTokenMintOutcome,
@@ -351,12 +391,13 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   };
 
   // One background mint per host at a time, for the stream and the unary
-  // asks alike; nothing that dials awaits it.
+  // asks alike; nothing that dials awaits it. Fresh while the host has refused
+  // the held token: a mint that is not would hand that token back.
   const minting = new Map<string, Promise<CliHostBearer>>();
   const mintInBackground = (hostId: string): Promise<CliHostBearer> => {
     const running = minting.get(hostId);
     if (running !== undefined) return running;
-    const started = obtain(hostId, false, null)
+    const started = obtain(hostId, source.heldRefused(userId, hostId), null)
       .catch((): CliHostBearer => ({
         kind: "failed",
         failure: { kind: "unavailable", detail: "host-only token mint failed" },
@@ -371,8 +412,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     lease: leaseOf,
     mintFresh: (hostId, signal) => obtain(hostId, true, signal),
     hostBearerFor: async (hostId, waitForMint) => {
-      if (isUsableHostToken(source.current(userId, hostId), Date.now()))
-        return leaseOf(hostId);
+      if (presentsAsIs(hostId)) return leaseOf(hostId);
       const minted = mintInBackground(hostId);
       if (!waitForMint) return presentsHeld(hostId) ? leaseOf(hostId) : null;
       return (await minted).kind === "ok" ? leaseOf(hostId) : null;
@@ -412,8 +452,7 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
       if (provider === undefined) {
         const lease = leaseOf(hostId);
         provider = () => {
-          if (isUsableHostToken(source.current(userId, hostId), Date.now()))
-            return lease;
+          if (presentsAsIs(hostId)) return lease;
           void mintInBackground(hostId);
           return presentsHeld(hostId) ? lease : null;
         };
@@ -423,7 +462,6 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     },
     signInRejected,
     refreshSignIn,
-    presentsHeldPastExpiry: presentsHeld,
     hostTokenUnobtainable: (hostId) =>
       hostTokenUnobtainable(source, userId, hostId),
     ownerSignInEligible: (hostId) =>
@@ -517,19 +555,19 @@ export interface HostInstance {
 
 /**
  * For a command that re-reads pid.json while it runs. A host whose process
- * changed may be another release, so what it named in this process no longer
- * says what it will answer: that is forgotten. A refusal never forgets it,
- * or a team's computer could then be handed the sign-in.
+ * changed may be another release, so what its earlier process named no longer
+ * says what it will answer: the memory starts a new instance, and every
+ * attempt stamped with the old one marks and plans nothing. A refusal never
+ * starts one, or a team's computer could then be handed the sign-in.
+ *
+ * Observed before the endpoint it came with is published, so a dial that
+ * reads the new endpoint is stamped with the new instance.
  */
-export function watchHostInstances(): (instance: HostInstance) => void {
-  const seen = new Map<string, string>();
-  return (instance) => {
-    const key = `${instance.pid}\u0000${instance.startedAt}`;
-    const before = seen.get(instance.hostId);
-    seen.set(instance.hostId, key);
-    if (before !== undefined && before !== key)
-      processReleasedHosts.forgetNamed(instance.hostId);
-  };
+export function observeHostInstance(instance: HostInstance): void {
+  processReleasedHosts.observeInstance(
+    instance.hostId,
+    `${instance.pid}\u0000${instance.startedAt}`,
+  );
 }
 
 export type CliHostSessionResult =

@@ -219,6 +219,7 @@ async function rejectAfterLocalHostTokenMint(
       mocks.state.hostTokenMintCalls += 1;
       return Promise.resolve(outcome);
     },
+    lastFailure: () => (outcome.kind === "ok" ? null : outcome.kind),
   };
   const hostBearerFor = hostTokenBearerFor(
     trackHostTokenMints(localDoorHostTokens(tokens)),

@@ -7,7 +7,7 @@ import {
 import {
   cliReleasedSignOn,
   createCliHostTokens,
-  watchHostInstances,
+  observeHostInstance,
   type CliHostTokenFailure,
   type HostInstance,
   type SignInRevalidator,
@@ -17,6 +17,8 @@ import type { DoorAdmissionRelease } from "../../../shared/host-transport/host-d
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import {
   isReleasedSignInRefusal,
+  processReleasedHosts,
+  type HostInstanceStamp,
   type ReleasedSignOn,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { formatAgentMessage } from "@traycer/protocol/agent/a2a-message-format";
@@ -67,7 +69,6 @@ import { resolveHostAuth } from "../internal/host-auth";
 import {
   callHostRpcWithAgentCredential,
   PLAIN_DISPATCH,
-  releasedSignInRefusalCliError,
 } from "../internal/host-rpc";
 import {
   PROCESS_AGENT_ENVIRONMENT,
@@ -207,9 +208,8 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     logger,
     endpointResolutionLogState,
   );
+  if (initial !== null) observeHostInstance(initial.instance);
   let endpoint = initial?.endpoint ?? null;
-  const sawHostInstance = watchHostInstances();
-  if (initial !== null) sawHostInstance(initial.instance);
   logger.debug("Monitor initial endpoint resolution completed", {
     environment: config.environment,
     hasEndpoint: endpoint !== null,
@@ -225,7 +225,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     void tryResolveStreamEndpoint(logger, endpointResolutionLogState)
       .then((resolved) => {
         if (resolved === null) return;
-        sawHostInstance(resolved.instance);
+        observeHostInstance(resolved.instance);
         const next = resolved.endpoint;
         if (!sameEndpoint(endpoint, next)) {
           endpoint = next;
@@ -240,10 +240,15 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       });
   }, ENDPOINT_POLL_MS);
 
-  // The host whose refusal of a host-only token closed the stream: its
-  // recovery, not the current endpoint's, reads that refusal. The stream
-  // reports every such refusal before it closes.
-  let refusedHostId: string | null = null;
+  // The host each refusal of a host-only token came from, keyed by that
+  // refusal: the close a recovery answers carries the very details the door
+  // was told, so no subscription's close reads another attempt's host.
+  const refusedBy = new WeakMap<FatalErrorDetails, string>();
+  // The host processes that refused the host-only token the released way: a
+  // sign-in authn rejects ends with the released monitor's line only there.
+  const releasedWay = new WeakSet<HostInstanceStamp>();
+  const tookReleasedWay = (hostId: string): boolean =>
+    releasedWay.has(processReleasedHosts.currentInstance(hostId));
   const client = new WsStreamClient<HostStreamRpcRegistry>({
     registry: hostStreamRpcRegistry,
     // `null`: the poll may move `endpoint` to another host id, and a client
@@ -269,10 +274,13 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // a refusal hours after a good reconnect earns its one fresh token again.
     // A refusal names the host whose recovery answers it.
     door: {
-      refused: (_details, hostId) => {
-        refusedHostId = hostId;
+      refused: (details, hostId) => {
+        refusedBy.set(details, hostId);
       },
       admitted: (hostId) => credential.admitted(hostId),
+    },
+    releasedWayTaken: (hostId) => {
+      releasedWay.add(processReleasedHosts.currentInstance(hostId));
     },
     clock: null,
     hostCredentialMint: credential.hostCredentialMint,
@@ -306,16 +314,19 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
   try {
     await runInboxSubscription(
       client,
-      // No host reported refusing a host-only token: the close is the
+      // No host reported this refusal of a host-only token: the close is the
       // released sign-in's own end, which no host-only token recovers.
-      (details) =>
-        refusedHostId === null
+      (details) => {
+        const hostId = refusedBy.get(details);
+        return hostId === undefined
           ? Promise.resolve<RevalidateOutcome>("rejected")
-          : credential.recover(refusedHostId, details),
+          : credential.recover(hostId, details);
+      },
       credential.signInRejected,
       (listener) =>
         credential.onRefusalEndingCommand((hostId, failure) => {
-          if (endpoint?.hostId === hostId) listener(failure);
+          if (endpoint?.hostId === hostId)
+            listener(failure, tookReleasedWay(hostId));
         }),
       credential.presented,
       agentCredential,
@@ -510,8 +521,12 @@ type InboxTarget = { readonly agentId: string; readonly epicId: string };
 type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
 
 type InboxMintRefusals = (
-  listener: (failure: CliHostTokenFailure) => void,
+  listener: (failure: CliHostTokenFailure, tookReleasedWay: boolean) => void,
 ) => () => void;
+
+/** The released monitor's line for a sign-in authn rejected. */
+const SESSION_EXPIRED_LINE =
+  "traycer monitor: session expired — re-authenticate.";
 
 /**
  * Drives the inbox subscription until a terminal failure or until stdout's
@@ -533,7 +548,8 @@ type InboxMintRefusals = (
  *
  * A mint refusal that ends the command (`CliHostTokens.onRefusalEndingCommand`),
  * whether the stream was waiting for its first token or recovering, is
- * terminal with the mint's line. A `not-admitted` a sign-in may still follow,
+ * terminal with the mint's line, or the released monitor's line for a rejected
+ * sign-in on a host that took the released way. A `not-admitted` a sign-in may still follow,
  * or one an admitted open has outlived, is not; one that cannot reach authn is
  * waited out. No dial waits for the mint.
  */
@@ -760,16 +776,22 @@ function runInboxSubscription(
         retryTimer = setTimeout(subscribe, AUTH_RETRY_DELAY_MS);
         return;
       }
-      // A released host's refusal of a live sign-in, in the host's own words
-      // as the released CLI's unary calls printed it: its own line named a
-      // refresh count this monitor no longer keeps.
       const signedOut = signInRejected();
+      // A released host's refusal of the person's sign-in, in the released
+      // monitor's words: the host's reason where its line counted refreshes
+      // this monitor no longer counts.
+      if (isReleasedSignInRefusal(details)) {
+        fail(
+          new Error(
+            signedOut
+              ? SESSION_EXPIRED_LINE
+              : `traycer monitor: ${details.reason} — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).`,
+          ),
+        );
+        return;
+      }
       fail(
-        (!signedOut && isReleasedSignInRefusal(details)
-          ? releasedSignInRefusalCliError(details.reason)
-          : null) ??
-          hostDoorRefusalCliError(details, signedOut, hostClosed) ??
-          hostClosed(),
+        hostDoorRefusalCliError(details, signedOut, hostClosed) ?? hostClosed(),
       );
     };
 
@@ -780,14 +802,18 @@ function runInboxSubscription(
     readerClosed.addEventListener("abort", stopForClosedReader, {
       once: true,
     });
-    stopMintRefusals = mintRefusals((failure) => {
+    stopMintRefusals = mintRefusals((failure, tookReleasedWay) => {
       logger.warn("Monitor host-only token mint refused", {
         environment: config.environment,
         failure: failure.kind,
         agentId: target.agentId,
         epicId: target.epicId,
       });
-      fail(hostTokenFailureCliError(failure));
+      fail(
+        failure.kind === "sign-in-rejected" && tookReleasedWay
+          ? new Error(SESSION_EXPIRED_LINE)
+          : hostTokenFailureCliError(failure),
+      );
     });
     subscribe();
   });

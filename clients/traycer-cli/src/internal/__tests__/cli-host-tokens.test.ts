@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nameReason } from "./released-memory-test-support";
 import { callHostRpcAtEndpoint, toAgentCliError } from "../host-rpc";
 import { resolveHostAuth } from "../host-auth";
 import {
@@ -9,7 +10,6 @@ import type { WsRpcClientOptions } from "../../../../shared/host-transport/ws-rp
 import type { HostRpcRegistry } from "@traycer/protocol/host/registry";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 import { MutableBearerLease } from "../../../../shared/auth/bearer-source";
-import { processReleasedHosts } from "../../../../shared/host-transport/released-sign-on";
 import { createCliHostTokens } from "../cli-host-tokens";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 
@@ -243,7 +243,7 @@ describe("createCliHostTokens refusals that end a command", () => {
   it("ends the command on a not-admitted mint begun in the same millisecond as the admission before it, once that connection has left", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     try {
-      processReleasedHosts.refusedNamingReason("host-same-millisecond");
+      nameReason("host-same-millisecond");
       const tokens = createCliHostTokens({
         lease: new MutableBearerLease("signin", "user-1"),
         refresh: async () => "network-error",

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nameReason } from "../../internal/__tests__/released-memory-test-support";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { HostTokenTable } from "../../../../shared/auth/host-token-store";
 import { processReleasedHosts } from "../../../../shared/host-transport/released-sign-on";
@@ -349,7 +350,7 @@ describe("runMonitor host-token renewal", () => {
     async (_name, failure, code, hostNamedReason) => {
       state.minted.push(failure);
       const { result, options } = await startMonitor();
-      if (hostNamedReason) processReleasedHosts.refusedNamingReason("host-1");
+      if (hostNamedReason) nameReason("host-1");
       options.bearer(HOST_ID);
       await waitForMintCount(1);
 
@@ -391,7 +392,7 @@ describe("runMonitor host-token renewal", () => {
     options.bearer(HOST_ID);
     await waitForMintCount(1);
     // The stream records a refusal that names its reason before it reports it.
-    processReleasedHosts.refusedNamingReason("host-1");
+    nameReason("host-1");
     refuseOpen(0, options, unauthorizedFatal("not_admitted"));
     await waitForMintCount(2);
 

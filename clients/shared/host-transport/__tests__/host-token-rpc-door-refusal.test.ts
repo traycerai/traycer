@@ -17,6 +17,7 @@ import {
   UNARY_CAPABILITY_PERSISTENT_SESSION,
 } from "@traycer/protocol/framework/index";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   mayHaveReachedHost,
   RetryableTransportError,
@@ -318,6 +319,17 @@ function credentialTokens(frames: readonly ParsedFrame[]): string[] {
   return tokens;
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve = (_value: T): void => undefined;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function captureRejection(pending: Promise<unknown>): Promise<unknown> {
   return pending.then(
     () => null,
@@ -327,6 +339,10 @@ function captureRejection(pending: Promise<unknown>): Promise<unknown> {
 
 interface DoorHarness {
   readonly call: (message: string) => Promise<{ readonly echoed: string }>;
+  readonly callUntil: (
+    message: string,
+    signal: AbortSignal,
+  ) => Promise<{ readonly echoed: string }>;
   readonly retryingCall: (
     message: string,
   ) => Promise<{ readonly echoed: string }>;
@@ -343,6 +359,11 @@ interface DoorHarness {
   readonly refusedBearer: RefusalAwareAuthRevalidator["revalidateRefusedBearer"];
   readonly expireHeldToken: () => void;
   readonly setNextMintOutcome: (outcome: HostTokenMintOutcome) => void;
+  /** The next mint authn is asked for stays unanswered until `answer`. */
+  readonly holdNextMint: () => {
+    readonly asked: Promise<void>;
+    readonly answer: (outcome: HostTokenMintOutcome) => void;
+  };
 }
 
 function doorHarness(): DoorHarness {
@@ -355,9 +376,19 @@ function doorHarness(): DoorHarness {
   const heldExpiresAtMs = initialNow + 3_600_000;
   let currentNow = initialNow;
   let nextMintOutcome: HostTokenMintOutcome | null = null;
+  let heldMint: {
+    readonly asked: () => void;
+    readonly outcome: Promise<HostTokenMintOutcome>;
+  } | null = null;
   const mint: HostTokenMint = (_hostId, signInToken) => {
     mintSignIns.push(signInToken);
     mintAttempts += 1;
+    if (heldMint !== null) {
+      const held = heldMint;
+      heldMint = null;
+      held.asked();
+      return held.outcome;
+    }
     if (nextMintOutcome !== null) {
       const outcome = nextMintOutcome;
       nextMintOutcome = null;
@@ -438,8 +469,8 @@ function doorHarness(): DoorHarness {
   const refusedBearer = vi.spyOn(recovery, "revalidateRefusedBearer");
   const auth: RefusalAwareAuthRevalidator = {
     revalidateExpectedBearer: () => Promise.resolve("rejected"),
-    revalidateRefusedBearer: (expected, hostId, refusal) =>
-      recovery.revalidateRefusedBearer(expected, hostId, refusal),
+    revalidateRefusedBearer: (expected, hostId, refusal, callSignal) =>
+      recovery.revalidateRefusedBearer(expected, hostId, refusal, callSignal),
     admissionOf: (expected, hostId) => recovery.admissionOf(expected, hostId),
   };
   const wrapped = createAuthAwareMessenger<typeof testRegistry>(
@@ -469,23 +500,44 @@ function doorHarness(): DoorHarness {
     setNextMintOutcome: (outcome) => {
       nextMintOutcome = outcome;
     },
+    holdNextMint: () => {
+      const asked = deferred<void>();
+      const answered = deferred<HostTokenMintOutcome>();
+      heldMint = { asked: asked.resolve, outcome: answered.promise };
+      return { asked: asked.promise, answer: answered.resolve };
+    },
     call: (message) =>
       wrapped.request(
         "host.echo",
         { message },
-        optionsFor(new MutableBearerLease(SIGN_IN, USER_ID)),
+        optionsFor(
+          new MutableBearerLease(SIGN_IN, USER_ID),
+          new AbortController().signal,
+        ),
+      ),
+    callUntil: (message, signal) =>
+      wrapped.request(
+        "host.echo",
+        { message },
+        optionsFor(new MutableBearerLease(SIGN_IN, USER_ID), signal),
       ),
     retryingCall: (message) =>
       retrying.request(
         "host.echo",
         { message },
-        optionsFor(new MutableBearerLease(SIGN_IN, USER_ID)),
+        optionsFor(
+          new MutableBearerLease(SIGN_IN, USER_ID),
+          new AbortController().signal,
+        ),
       ),
     rawCall: (message) =>
       client.request(
         "host.echo",
         { message },
-        optionsFor(new MutableBearerLease(SIGN_IN, USER_ID)),
+        optionsFor(
+          new MutableBearerLease(SIGN_IN, USER_ID),
+          new AbortController().signal,
+        ),
       ),
     socketAt: (index) => sockets[index],
     socketCount: () => sockets.length,
@@ -516,7 +568,10 @@ function doorHarness(): DoorHarness {
   };
 }
 
-function optionsFor(bearer: MutableBearerLease): HostRequestOptions {
+function optionsFor(
+  bearer: MutableBearerLease,
+  abortSignal: AbortSignal,
+): HostRequestOptions {
   return {
     idempotencyKey: null,
     replayMustBeKeyed: false,
@@ -524,7 +579,7 @@ function optionsFor(bearer: MutableBearerLease): HostRequestOptions {
     authority: {
       endpoint: { hostId: HOST_ID, websocketUrl: SOCKET_URL },
       bearer,
-      abortSignal: new AbortController().signal,
+      abortSignal,
     },
   };
 }
@@ -1251,5 +1306,48 @@ describe("persistent /rpc door refusals through the host-only token", () => {
       "membership-removed",
     ]);
     expect(JSON.stringify(socket.sent)).not.toContain(SIGN_IN);
+  });
+
+  describe("a fresh mint's failure after the call that asked for it", () => {
+    // A not_admitted refusal of the held token starts a fresh mint; the call is
+    // that mint's caller, and the mint is answered `not-admitted`.
+    async function refuseAndHoldFreshMint(signal: AbortSignal) {
+      const harness = doorHarness();
+      await harness.ready;
+      const freshMint = harness.holdNextMint();
+      const pending = captureRejection(harness.callUntil("held mint", signal));
+      const socket = await harness.nextSocket();
+      const first = await firstRequest(socket);
+      socket.fireMessage(
+        refusalFrame(
+          first,
+          responseError("UNAUTHORIZED", "not admitted", "not_admitted", false),
+        ),
+      );
+      await freshMint.asked;
+      return { harness, pending, answer: freshMint.answer };
+    }
+
+    it("raises nothing when the call was aborted during the mint, and the call ends aborted", async () => {
+      const controller = new AbortController();
+      const { harness, pending, answer } = await refuseAndHoldFreshMint(
+        controller.signal,
+      );
+      controller.abort();
+      answer({ kind: "not-admitted" });
+
+      expect(await pending).toBeInstanceOf(HostRequestAbortedError);
+      expect(harness.states).toEqual([]);
+    });
+
+    it("raises not-admitted when the call is still live as the mint is answered (guard)", async () => {
+      const { harness, pending, answer } = await refuseAndHoldFreshMint(
+        new AbortController().signal,
+      );
+      answer({ kind: "not-admitted" });
+
+      expect(await pending).toBeInstanceOf(HostRpcError);
+      expect(harness.states.map(({ kind }) => kind)).toEqual(["not-admitted"]);
+    });
   });
 });

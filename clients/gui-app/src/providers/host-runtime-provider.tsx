@@ -385,12 +385,13 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       const unaryRecovery: RefusalAwareAuthRevalidator = {
         revalidateExpectedBearer: (expected) =>
           auth.revalidateExpectedBearer(expected),
-        revalidateRefusedBearer: (expected, hostId, refusal) => {
+        revalidateRefusedBearer: (expected, hostId, refusal, callSignal) => {
           if (hostId !== POOL_HOST_ID)
             return hostTokenRecovery.revalidateRefusedBearer(
               expected,
               hostId,
               refusal,
+              callSignal,
             );
           if (refusal !== null && refusal.code !== "UNAUTHORIZED")
             return Promise.resolve("rejected");

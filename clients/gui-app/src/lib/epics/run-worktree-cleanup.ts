@@ -30,14 +30,14 @@ const NEVER_REACHED_HOST_REASON =
 const STREAM_OPEN_FAILED_REASON = "Couldn't open the deletion stream.";
 
 /**
- * How long a deletion whose request is not sent yet waits for the stream to
- * redial a drop on its own: a released host's sign-in, a probe's invitation, a
- * backoff for a token. Counted from the first such drop. A close ends it at
- * once, a host's refusal that will not change among them.
+ * How long a deletion whose request is not sent yet waits through the one
+ * redial the stream makes at once to hand over a sign-in (a released host's,
+ * or one a current host invited). Any other drop before the request, and a
+ * close, fail it at once.
  */
 const PRE_OPEN_REDIAL_DEADLINE_MS = 30_000;
 
-/** The pre-open wait: armed by the first drop, cleared by an open or a settle. */
+/** The pre-open wait: armed by a sign-in redial, cleared by an open or a settle. */
 function preOpenRedialWait(onExpired: () => void): {
   readonly arm: () => void;
   readonly clear: () => void;
@@ -348,19 +348,24 @@ function runCleanupCommand(
                 settle({ kind: "failed", reason });
               },
               onUnsupported: () => reportUnsupported(),
-              onConnectionStatus: ({ status, continuity, startSent }) => {
+              onConnectionStatus: ({
+                status,
+                continuity,
+                startSent,
+                signInRedial,
+              }) => {
                 state.startSent = startSent;
                 if (continuity === "held") return;
                 if (status === "open") redialWait.clear();
                 if (status !== "reconnecting" && status !== "closed") return;
                 // A drop before the start request was sent means the host
-                // never had it: nothing was attempted. The stream redials it,
-                // so it is waited out within the deadline; a close, or the
-                // deadline, fails the paths rather than leaving them unknown.
-                // After the send the command may exist and keeps running
-                // without us.
+                // never had it: nothing was attempted. Only the redial that
+                // hands over a sign-in is waited out, within the deadline; any
+                // other drop, a close, or the deadline fails the paths rather
+                // than leaving them unknown. After the send the command may
+                // exist and keeps running without us.
                 if (!startSent) {
-                  if (status === "reconnecting") {
+                  if (status === "reconnecting" && signInRedial) {
                     redialWait.arm();
                     return;
                   }
@@ -474,10 +479,10 @@ type DeleteOneOutcome =
  * re-run the host delete pipeline) - so exactly one subscribe is ever sent per
  * path, and the overall promise always resolves.
  *
- * A drop after `open` is `uncertain` (the host may still finish). A drop
- * before the session opened is waited out while the stream redials it, within
- * `PRE_OPEN_REDIAL_DEADLINE_MS`; a close before it opened, the deadline, an
- * open failure, or an app terminal failure is `failed`.
+ * A drop after `open` is `uncertain` (the host may still finish). Before the
+ * session opened, only the redial that hands over a sign-in is waited out,
+ * within `PRE_OPEN_REDIAL_DEADLINE_MS`; any other drop, a close, the deadline,
+ * an open failure, or an app terminal failure is `failed`.
  */
 function deleteOneWorktree(input: {
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -498,13 +503,15 @@ function deleteOneWorktree(input: {
     const redialWait = preOpenRedialWait(() =>
       finish({ kind: "failed", reason: NEVER_REACHED_HOST_REASON }),
     );
+    // Read by its own status callbacks, which run only once it exists.
+    let deleteClient: WorktreeDeleteStreamClient | null = null;
 
     try {
       const owned = openOwnedDurableStreamClient(
         input.openStreamTransport,
         input.hostId,
         (wsStreamClient) =>
-          new WorktreeDeleteStreamClient({
+          (deleteClient = new WorktreeDeleteStreamClient({
             wsStreamClient,
             worktreePath: input.worktreePath,
             scripts: null,
@@ -529,30 +536,28 @@ function deleteOneWorktree(input: {
                 }
                 finish({ kind: "uncertain" });
               },
-              onConnectionStatus: (
-                status,
-                _reason,
-                _retryCause,
-                continuity,
-              ) => {
+              onConnectionStatus: (status, _reason, _retryCause, continuity) => {
                 if (continuity === "held") return;
                 if (status === "open") redialWait.clear();
                 // A drop or close after the request was sent arrives as
                 // `onDroppedAfterStart`, so one here came before it: nothing
-                // was started, and no subscribe went out to repeat. A drop the
-                // stream redials is waited out within the deadline; a close,
-                // or the deadline, fails it, so the summary toast and the
-                // cache invalidation still fire. `connecting`/`open` are the
-                // normal startup.
-                if (status === "reconnecting") {
+                // was started, and no subscribe went out to repeat. Only the
+                // redial that hands over a sign-in is waited out, within the
+                // deadline; any other drop, a close, or the deadline fails it,
+                // so the summary toast and the cache invalidation still fire.
+                // `connecting`/`open` are the normal startup.
+                if (
+                  status === "reconnecting" &&
+                  deleteClient?.redialsWithSignInNow() === true
+                ) {
                   redialWait.arm();
                   return;
                 }
-                if (status !== "closed") return;
+                if (status !== "reconnecting" && status !== "closed") return;
                 finish({ kind: "failed", reason: NEVER_REACHED_HOST_REASON });
               },
             },
-          }),
+          })),
       );
       adoptClose(holder, owned.close);
     } catch (error) {

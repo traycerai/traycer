@@ -166,13 +166,18 @@ export async function unaryDoorHarness(
     };
   const auth: RefusalAwareAuthRevalidator = {
     revalidateExpectedBearer,
-    revalidateRefusedBearer: (expected, hostId, refusal) => {
+    revalidateRefusedBearer: (expected, hostId, refusal, callSignal) => {
       if (hostId === POOL_DOOR_HOST_ID) {
         if (refusal !== null && refusal.code !== "UNAUTHORIZED")
           return Promise.resolve("rejected");
         return revalidateExpectedBearer(expected);
       }
-      return hostRecovery.revalidateRefusedBearer(expected, hostId, refusal);
+      return hostRecovery.revalidateRefusedBearer(
+        expected,
+        hostId,
+        refusal,
+        callSignal,
+      );
     },
     admissionOf: (expected, hostId) =>
       hostId === POOL_DOOR_HOST_ID

@@ -13,6 +13,7 @@ import type {
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
+import { redialsWithSignInNow } from "./ws-stream-client";
 
 /**
  * Typed handlers for a `worktree.deleteByPath` session. Frames flow
@@ -50,7 +51,9 @@ export interface WorktreeDeleteStreamCallbacks {
    * Connection-status changes. `reason` is non-null only on the `closed`
    * transition (e.g. an unreachable host, or a fatal handshake error). A
    * `reconnecting` or `closed` here came before the request was sent, so no
-   * deletion was started.
+   * deletion was started. During one, the client's
+   * {@link WorktreeDeleteStreamClient.redialsWithSignInNow} says whether it is
+   * the redial that hands over a sign-in.
    */
   readonly onConnectionStatus: StatusChangeHandler;
 }
@@ -126,6 +129,15 @@ export class WorktreeDeleteStreamClient {
       }
       this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
+  }
+
+  /**
+   * Read during a status change: whether it is the `reconnecting` the stream
+   * follows at once by a dial that hands over a sign-in
+   * (`redialsWithSignInNow`).
+   */
+  redialsWithSignInNow(): boolean {
+    return redialsWithSignInNow(this.session);
   }
 
   /**

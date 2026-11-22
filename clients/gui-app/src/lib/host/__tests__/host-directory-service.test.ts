@@ -4,6 +4,7 @@ import { DefaultRequestContextProvider } from "@traycer-clients/shared/auth/requ
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import type {
   LocalHostSnapshot,
   RegisteredHostsChange,
@@ -1140,6 +1141,28 @@ describe("HostDirectoryService", () => {
       { count: 1, hasLocal: true },
       { count: 0, hasLocal: false },
     ]);
+  });
+
+  it("makes a new released-host instance when the local host id is published under another pid, and not for the same pid", async () => {
+    const host = makeHost(localSnapshot);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: null,
+    });
+    await directory.start();
+    const first = processReleasedHosts.currentInstance(localSnapshot.hostId);
+
+    host.setLocalHost({ ...localSnapshot, displayName: "renamed" });
+    expect(processReleasedHosts.isCurrentInstance(first)).toBe(true);
+
+    host.setLocalHost({ ...localSnapshot, pid: localSnapshot.pid + 1 });
+    expect(processReleasedHosts.isCurrentInstance(first)).toBe(false);
+    // An answer the first process's socket delivers now marks nothing.
+    processReleasedHosts.refusedNamingReason(first, false);
+    expect(processReleasedHosts.namedReason(localSnapshot.hostId)).toBe(false);
   });
 
   it("reflects the current local snapshot even when start() runs after the host already has one", async () => {

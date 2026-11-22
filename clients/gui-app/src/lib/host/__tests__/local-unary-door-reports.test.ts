@@ -508,7 +508,10 @@ describe("a unary call's reports to the app's door", () => {
 
     it("sends the sign-in after a bare refusal once the same host id is published under a new pid", async () => {
       const host = await directoryAt(100);
-      processReleasedHosts.refusedNamingReason(hostId);
+      processReleasedHosts.refusedNamingReason(
+        processReleasedHosts.currentInstance(hostId),
+        false,
+      );
       host.setLocalHost(snapshot(200));
       const driven = begin(
         personal(hostId),
@@ -522,7 +525,10 @@ describe("a unary call's reports to the app's door", () => {
 
     it("sends the sign-in once the host id returns under a new pid after another host was the local one", async () => {
       const host = await directoryAt(100);
-      processReleasedHosts.refusedNamingReason(hostId);
+      processReleasedHosts.refusedNamingReason(
+        processReleasedHosts.currentInstance(hostId),
+        false,
+      );
       host.setLocalHost({
         ...snapshot(7),
         hostId: "unary-named-reason-other-local-host",
@@ -540,7 +546,10 @@ describe("a unary call's reports to the app's door", () => {
 
     it("sends no sign-in when the host id returns under the same pid after another host was the local one (control)", async () => {
       const host = await directoryAt(100);
-      processReleasedHosts.refusedNamingReason(hostId);
+      processReleasedHosts.refusedNamingReason(
+        processReleasedHosts.currentInstance(hostId),
+        false,
+      );
       host.setLocalHost({
         ...snapshot(7),
         hostId: "unary-named-reason-other-local-host",
@@ -558,7 +567,10 @@ describe("a unary call's reports to the app's door", () => {
 
     it("sends no sign-in after the same bare refusal while the published pid is unchanged (control)", async () => {
       const host = await directoryAt(100);
-      processReleasedHosts.refusedNamingReason(hostId);
+      processReleasedHosts.refusedNamingReason(
+        processReleasedHosts.currentInstance(hostId),
+        false,
+      );
       host.setLocalHost(snapshot(100));
       const driven = begin(
         personal(hostId),

@@ -1,5 +1,7 @@
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
+import { UNARY_CAPABILITY_PERSISTENT_SESSION } from "@traycer/protocol/framework/index";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
+import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import {
   hostTokenBearerFor,
   trackHostTokenMints,
@@ -30,6 +32,8 @@ import type { IWebSocketFactory } from "../ws-factory";
 import {
   heldTokenRefused,
   signInForLocalRow,
+  createReleasedHostMemory,
+  type ReleasedHostMemory,
   type ReleasedSignOnRow,
 } from "../released-sign-on";
 import { WsRpcClient } from "../ws-rpc-client";
@@ -317,6 +321,24 @@ function driveCallUntil(
   row: ReleasedSignOnRow | null,
   abortSignal: AbortSignal,
 ): DrivenCall {
+  return driveCallOnRow({
+    tokens,
+    readRow: () => row,
+    recovery: null,
+    hosts: null,
+    abortSignal,
+  });
+}
+
+/** The real client, with the row read live at every decision and the sign-in's refresh and the host memory the test gives it. */
+function driveCallOnRow(input: {
+  readonly tokens: TrackedHostTokens;
+  readonly readRow: () => ReleasedSignOnRow | null;
+  readonly recovery: StreamAuthRevalidator | null;
+  readonly hosts: ReleasedHostMemory | null;
+  readonly abortSignal: AbortSignal;
+}): DrivenCall {
+  const { tokens, readRow, recovery, hosts, abortSignal } = input;
   const sockets: UnarySocket[] = [];
   const factory: IWebSocketFactory = {
     create: () => {
@@ -339,7 +361,8 @@ function driveCallUntil(
     hostBearerFor: hostTokenBearerFor(tokens, (_hostId, kind) => {
       states.push(kind);
     }),
-    releasedSignOnFor: signInForLocalRow(() => row, null, tokens),
+    releasedSignOnFor: signInForLocalRow(readRow, recovery, tokens),
+    ...(hosts === null ? {} : { releasedHosts: hosts }),
     heldTokenRefusedFor: (authority, presented) =>
       heldTokenRefused(
         tokens,
@@ -1016,6 +1039,412 @@ describe("a held host-only token that the host refuses as expired, while authn i
     if (probe === undefined) throw new Error("probe dial missing");
     expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
     expect(driven.finished).toBe(false);
+  });
+});
+
+describe("a sign-in is written only where its row and its host still allow it", () => {
+  const NO_HOST_TOKEN_MESSAGE = "No host-only token is held for this host";
+
+  function everythingWritten(driven: DrivenCall): string {
+    return driven.sockets.flatMap((socket) => socket.sent).join("\n");
+  }
+
+  function signInOpens(driven: DrivenCall): number {
+    return driven.sockets.filter((socket) =>
+      socket.sent.some((raw) => readFrame(raw).token === SIGN_IN),
+    ).length;
+  }
+
+  /** Resolves every pending sign-in refresh as the test says; each one is asked of authn. */
+  function pendingRefreshes(): {
+    readonly recovery: StreamAuthRevalidator;
+    readonly asked: () => number;
+    readonly answer: (outcome: "rotated" | "network-error") => void;
+  } {
+    const pending: Array<(outcome: "rotated" | "network-error") => void> = [];
+    const refresh = (): Promise<"rotated" | "network-error"> =>
+      new Promise((resolve) => {
+        pending.push(resolve);
+      });
+    return {
+      recovery: {
+        revalidateForReconnect: refresh,
+        revalidateRefused: refresh,
+      },
+      asked: () => pending.length,
+      answer: (outcome) => {
+        for (const resolve of pending.splice(0)) resolve(outcome);
+      },
+    };
+  }
+
+  async function heldExpiredReleasedHost(): Promise<TrackedHostTokens> {
+    const { source, tokens } = sourceOf([
+      { kind: "unavailable", detail: "authn offline" },
+      { kind: "unavailable", detail: "authn still offline" },
+    ]);
+    await holdExpired(source, expiredJwt(Date.now()));
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, null);
+    return tokens;
+  }
+
+  /** The held token is refused the released way: the call plans the person's sign-in on a second socket. */
+  async function planReleasedSignIn(driven: DrivenCall): Promise<void> {
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const first = driven.sockets[0];
+    if (first === undefined) throw new Error("host-token dial missing");
+    await openAndRead(first);
+    first.fireMessage(releasedRefusal());
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+  }
+
+  /** The probe is answered `owner_sign_in`: the call plans the owner's sign-in on a second socket. */
+  async function planOwnerSignIn(driven: DrivenCall): Promise<void> {
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const probe = driven.sockets[0];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("owner_sign_in"));
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+  }
+
+  async function untilEnded(driven: DrivenCall, sockets: number): Promise<void> {
+    await vi.waitFor(
+      () =>
+        expect(driven.finished || driven.sockets.length >= sockets).toBe(true),
+      WAIT,
+    );
+  }
+
+  it("writes no sign-in on any socket when the row moves to a team between the released plan and the OPEN", async () => {
+    let row: ReleasedSignOnRow = PERSONAL_ROW;
+    const driven = driveCallOnRow({
+      tokens: await heldExpiredReleasedHost(),
+      readRow: () => row,
+      recovery: null,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await planReleasedSignIn(driven);
+    row = TEAM_ROW;
+    driven.sockets[1]?.fireOpen();
+    await untilEnded(driven, 3);
+    expect(everythingWritten(driven)).not.toContain(SIGN_IN);
+  });
+
+  it("writes no second sign-in when the row moves to a team while the released sign-in's refresh runs", async () => {
+    let row: ReleasedSignOnRow = PERSONAL_ROW;
+    const refreshes = pendingRefreshes();
+    const driven = driveCallOnRow({
+      tokens: await heldExpiredReleasedHost(),
+      readRow: () => row,
+      recovery: refreshes.recovery,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await planReleasedSignIn(driven);
+    const signInSocket = driven.sockets[1];
+    if (signInSocket === undefined) throw new Error("sign-in dial missing");
+    expect((await openAndRead(signInSocket)).token).toBe(SIGN_IN);
+    signInSocket.fireMessage(releasedRefusal());
+    await vi.waitFor(() => expect(refreshes.asked()).toBe(1), WAIT);
+    row = TEAM_ROW;
+    refreshes.answer("rotated");
+    await untilEnded(driven, 3);
+    // Any later dial is opened too, so what it would write is on the wire; a
+    // dial whose sign-in is withdrawn writes nothing and ends the call.
+    for (const socket of driven.sockets.slice(2)) socket.fireOpen();
+    await vi.waitFor(
+      () => expect(driven.finished || signInOpens(driven) > 1).toBe(true),
+      WAIT,
+    );
+    expect(signInOpens(driven)).toBe(1);
+  });
+
+  it("writes no sign-in on any socket when the row moves to a team between the owner's invitation and the OPEN", async () => {
+    let row: ReleasedSignOnRow = PERSONAL_ROW;
+    const driven = driveCallOnRow({
+      tokens: blackHoledTokens().tokens,
+      readRow: () => row,
+      recovery: null,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await planOwnerSignIn(driven);
+    row = TEAM_ROW;
+    driven.sockets[1]?.fireOpen();
+    await untilEnded(driven, 3);
+    expect(everythingWritten(driven)).not.toContain(SIGN_IN);
+  });
+
+  it("writes no second sign-in when the row moves to a team while the owner's sign-in refresh runs", async () => {
+    let row: ReleasedSignOnRow = PERSONAL_ROW;
+    const refreshes = pendingRefreshes();
+    const driven = driveCallOnRow({
+      tokens: blackHoledTokens().tokens,
+      readRow: () => row,
+      recovery: refreshes.recovery,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await planOwnerSignIn(driven);
+    const signInSocket = driven.sockets[1];
+    if (signInSocket === undefined) throw new Error("sign-in dial missing");
+    expect((await openAndRead(signInSocket)).token).toBe(SIGN_IN);
+    signInSocket.fireMessage(namedRefusal("token_expired"));
+    await vi.waitFor(() => expect(refreshes.asked()).toBe(1), WAIT);
+    row = TEAM_ROW;
+    refreshes.answer("rotated");
+    await untilEnded(driven, 3);
+    // Any later dial is opened too, so what it would write is on the wire; a
+    // dial whose sign-in is withdrawn writes nothing and ends the call.
+    for (const socket of driven.sockets.slice(2)) socket.fireOpen();
+    await vi.waitFor(
+      () => expect(driven.finished || signInOpens(driven) > 1).toBe(true),
+      WAIT,
+    );
+    expect(signInOpens(driven)).toBe(1);
+  });
+
+  it("dials the host-only token, never the invited sign-in, when a mint answers ok while the invited socket is dialing", async () => {
+    const minting = deferredMint();
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: minting.mint,
+      signIn: () => SIGN_IN,
+      now: () => Date.now(),
+    });
+    const tokens = trackHostTokenMints(source);
+    const driven = driveCall(tokens, PERSONAL_ROW);
+    clients.push(driven.client);
+    await planOwnerSignIn(driven);
+    minting.answer({
+      kind: "ok",
+      token: { token: "minted-host-token", expiresAtMs: Date.now() + 3_600_000 },
+    });
+    await vi.waitFor(
+      () =>
+        expect(tokens.current(USER_ID, mockLocalHostEntry.hostId)?.token).toBe(
+          "minted-host-token",
+        ),
+      WAIT,
+    );
+    driven.sockets[1]?.fireOpen();
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(3),
+      WAIT,
+    );
+    const next = driven.sockets[2];
+    if (next === undefined) throw new Error("host-token redial missing");
+    expect((await openAndRead(next)).token).toBe("minted-host-token");
+    expect(everythingWritten(driven)).not.toContain(SIGN_IN);
+  });
+
+  it("sends the placeholder, not the refreshed sign-in, on the attempt after the invited sign-in is refused token_expired", async () => {
+    const refreshes = pendingRefreshes();
+    const driven = driveCallOnRow({
+      tokens: blackHoledTokens().tokens,
+      readRow: () => PERSONAL_ROW,
+      recovery: refreshes.recovery,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await planOwnerSignIn(driven);
+    const signInSocket = driven.sockets[1];
+    if (signInSocket === undefined) throw new Error("sign-in dial missing");
+    expect((await openAndRead(signInSocket)).token).toBe(SIGN_IN);
+    signInSocket.fireMessage(namedRefusal("token_expired"));
+    await vi.waitFor(() => expect(refreshes.asked()).toBe(1), WAIT);
+    refreshes.answer("rotated");
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(3),
+      WAIT,
+    );
+    const next = driven.sockets[2];
+    if (next === undefined) throw new Error("next attempt missing");
+    expect((await openAndRead(next)).token).toBe(NO_HOST_TOKEN_PROBE);
+    expect(signInOpens(driven)).toBe(1);
+  });
+
+  it("tells the door nothing when the owner's invited sign-in is refused bare", async () => {
+    const driven = driveCall(blackHoledTokens().tokens, PERSONAL_ROW);
+    clients.push(driven.client);
+    await planOwnerSignIn(driven);
+    const signInSocket = driven.sockets[1];
+    if (signInSocket === undefined) throw new Error("sign-in dial missing");
+    expect((await openAndRead(signInSocket)).token).toBe(SIGN_IN);
+    signInSocket.fireMessage(releasedRefusal());
+    await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+    expect(await driven.settled).toMatchObject({ kind: "rejected" });
+    expect(driven.refusals).toEqual([]);
+    expect(driven.states).toEqual([]);
+  });
+
+  it("ends with the host's refusal, having spent no refresh, when the sign-in's refresh never reaches authn", async () => {
+    const refreshes = pendingRefreshes();
+    const driven = driveCallOnRow({
+      tokens: await heldExpiredReleasedHost(),
+      readRow: () => PERSONAL_ROW,
+      recovery: refreshes.recovery,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await planReleasedSignIn(driven);
+    const signInSocket = driven.sockets[1];
+    if (signInSocket === undefined) throw new Error("sign-in dial missing");
+    expect((await openAndRead(signInSocket)).token).toBe(SIGN_IN);
+    signInSocket.fireMessage(releasedRefusal());
+    await vi.waitFor(() => expect(refreshes.asked()).toBe(1), WAIT);
+    refreshes.answer("network-error");
+    await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+    expect(await driven.settled).toMatchObject({
+      kind: "rejected",
+      error: { fatalDetails: { reason: "released-host-token-refusal" } },
+    });
+    expect(driven.refusals).toEqual([]);
+    expect(driven.sockets).toHaveLength(2);
+  });
+
+  it("dials the owner's invited sign-in on its own socket, never as a request on a persistent session admitted earlier on a token the host has since refused", async () => {
+    const expired = expiredJwt(Date.now());
+    const { source, tokens } = sourceOf([
+      { kind: "unavailable", detail: "authn offline" },
+      { kind: "unavailable", detail: "authn still offline" },
+    ]);
+    await holdExpired(source, expired);
+    await tokens.obtain(USER_ID, mockLocalHostEntry.hostId, false, null);
+    // Call B: its host-only token is presented, and the host admits a persistent session on it.
+    const driven = driveCallOnRow({
+      tokens,
+      readRow: () => PERSONAL_ROW,
+      recovery: null,
+      hosts: null,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const session = driven.sockets[0];
+    if (session === undefined) throw new Error("host-token dial missing");
+    const open = await openAndRead(session);
+    expect(open.token).toBe(expired.token);
+    session.fireMessage({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: open.optionalManifest,
+      capabilities: [UNARY_CAPABILITY_PERSISTENT_SESSION],
+    });
+    await answerEcho(session);
+    expect(await driven.settled).toMatchObject({ kind: "fulfilled" });
+
+    // The host then refuses that token as expired, so it counts as no token held.
+    heldTokenRefused(
+      tokens,
+      USER_ID,
+      mockLocalHostEntry.hostId,
+      expired.token,
+    );
+
+    // Call A probes and is invited to send the owner's sign-in.
+    void requestEcho(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(2),
+      WAIT,
+    );
+    const probe = driven.sockets[1];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    probe.fireMessage(namedRefusal("owner_sign_in"));
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(3),
+      WAIT,
+    );
+    const invited = driven.sockets[2];
+    if (invited === undefined) throw new Error("invited dial missing");
+    expect((await openAndRead(invited)).token).toBe(SIGN_IN);
+    expect(session.sent.join("\n")).not.toContain(SIGN_IN);
+  });
+
+  it("applies no decline and plans no sign-in when the probe's answer comes from a host process that was since replaced", async () => {
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(mockLocalHostEntry.hostId, "process-a");
+    const driven = driveCallOnRow({
+      tokens: blackHoledTokens().tokens,
+      readRow: () => PERSONAL_ROW,
+      recovery: null,
+      hosts,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const probe = driven.sockets[0];
+    if (probe === undefined) throw new Error("probe dial missing");
+    expect((await openAndRead(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+    hosts.observeInstance(mockLocalHostEntry.hostId, "process-b");
+    probe.fireMessage(namedRefusal("not_admitted"));
+    await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+    expect(await driven.settled).toMatchObject({
+      kind: "rejected",
+      error: { message: NO_HOST_TOKEN_MESSAGE },
+    });
+    expect(hosts.probeDeclined(USER_ID, mockLocalHostEntry.hostId)).toBe(false);
+    expect(driven.sockets).toHaveLength(1);
+  });
+
+  it("marks nothing for the current host process and tells the door nothing when a refusal comes from one that was since replaced", async () => {
+    const hosts = createReleasedHostMemory();
+    hosts.observeInstance(mockLocalHostEntry.hostId, "process-a");
+    const { source, tokens } = sourceOf([]);
+    await source.adopt(
+      USER_ID,
+      mockLocalHostEntry.hostId,
+      { token: "usable-host-token", expiresAtMs: Date.now() + 3_600_000 },
+      source.era(USER_ID),
+    );
+    const driven = driveCallOnRow({
+      tokens,
+      readRow: () => PERSONAL_ROW,
+      recovery: null,
+      hosts,
+      abortSignal: new AbortController().signal,
+    });
+    clients.push(driven.client);
+    await vi.waitFor(
+      () => expect(driven.sockets.length).toBeGreaterThanOrEqual(1),
+      WAIT,
+    );
+    const socket = driven.sockets[0];
+    if (socket === undefined) throw new Error("host-token dial missing");
+    expect((await openAndRead(socket)).token).toBe("usable-host-token");
+    hosts.observeInstance(mockLocalHostEntry.hostId, "process-b");
+    socket.fireMessage(namedRefusal("not_admitted"));
+    await vi.waitFor(() => expect(driven.finished).toBe(true), WAIT);
+    expect(hosts.namedReason(mockLocalHostEntry.hostId)).toBe(false);
+    expect(driven.refusals).toEqual([]);
+    expect(everythingWritten(driven)).not.toContain(SIGN_IN);
   });
 });
 

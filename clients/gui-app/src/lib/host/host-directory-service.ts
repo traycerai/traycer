@@ -453,19 +453,17 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (!this.isStarted()) {
       return;
     }
-    // Each local host's process instance. The same id under another pid than
-    // this process last saw for it is a restarted host, which may answer
-    // differently: this process's released-host memory forgets what it named.
-    // Never on an absent host, and never on a refusal. The snapshot carries no
-    // start time, so a pid the same host id reuses goes unseen.
-    const localHostPids = new Map<string, number>();
+    // Each local host's process instance, as its pid. The same id under
+    // another pid is a restarted host, which may answer differently. Nothing
+    // the earlier process answered applies to it, including answers still in
+    // flight on its sockets. An absent host is not an instance. The snapshot
+    // carries no start time, so a pid that the same host id reuses goes unseen.
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
-      if (snapshot !== null) {
-        const seen = localHostPids.get(snapshot.hostId);
-        if (seen !== undefined && seen !== snapshot.pid)
-          processReleasedHosts.forgetNamed(snapshot.hostId);
-        localHostPids.set(snapshot.hostId, snapshot.pid);
-      }
+      if (snapshot !== null)
+        processReleasedHosts.observeInstance(
+          snapshot.hostId,
+          String(snapshot.pid),
+        );
       // A shell with no local host has no local ENTRY either, whatever a
       // snapshot says: the directory answers for this launch's capability.
       this.localEntry = this.hasLocalHost ? toLocalEntry(snapshot) : null;

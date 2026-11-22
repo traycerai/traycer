@@ -1,6 +1,5 @@
 import {
   hostTokenBearer,
-  hostTokenHeldPastExpiry,
   hostTokenStreamAuth,
   trackHostTokenMints,
 } from "@traycer-clients/shared/auth/host-token-lease";
@@ -480,11 +479,6 @@ export function createLocalHostInventoryStreamClient(deps: {
         deps.bearer,
         endpoint.hostId,
         ignoreHostTokenState,
-      ),
-      presentsHeldPastExpiry: hostTokenHeldPastExpiry(
-        hostTokens,
-        deps.bearer,
-        endpoint.hostId,
       ),
       // Main never refreshes the sign-in, so a refused one ends the stream too.
       // It holds no row and reads none: the sign-in goes only after this dial

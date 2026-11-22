@@ -7,6 +7,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { nameReason } from "../../internal/__tests__/released-memory-test-support";
 import type {
   IStreamSession,
   StatusChangeHandler,
@@ -191,8 +192,7 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      | ((session: FakeStreamSession, lapIndex: number) => void)
-      | null,
+      ((session: FakeStreamSession, lapIndex: number) => void) | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
@@ -282,7 +282,6 @@ import {
   type HostCredentialProvisionOutcome,
   type ProvisionHostCredentialOptions,
 } from "../credential-provisioning";
-import { processReleasedHosts } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { noopLogger } from "../../logger";
 import { formatCredentialProvisionNote } from "../install-auth";
 
@@ -612,7 +611,7 @@ describe("provisionInstalledHostCredential", () => {
           // The host then names a reason and invites the sign-in. The next ask
           // starts a second mint, and the host admits the sign-in before it
           // answers.
-          processReleasedHosts.refusedNamingReason("host-named-reason");
+          nameReason("host-named-reason");
           expect(options.bearer("host-named-reason")).toBeNull();
           await vi.waitFor(() =>
             expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(2),
@@ -759,7 +758,7 @@ describe("provisionInstalledHostCredential", () => {
             expect(mocks.hostTokenMintMock).toHaveBeenCalledTimes(1),
           );
           await sleep(0);
-          processReleasedHosts.refusedNamingReason(hostB);
+          nameReason(hostB);
           // A socket selected for host A is admitted while the poll reads B,
           // and B's mint then answers that authn has no row for it.
           options.door.admitted(hostA);
@@ -906,6 +905,46 @@ describe("provisionInstalledHostCredential", () => {
       "fresh-host-only-token",
     );
     expectCleanTeardown();
+  });
+
+  it("asks authn for no mint of host A when host B's token is refused after A's was", async () => {
+    const hostA = "host-recovered-a";
+    const hostB = "host-refused-later-b";
+    mocks.readHostPidMetadataMock.mockResolvedValue({
+      ...localHostMetadata(),
+      hostId: hostA,
+    });
+    mocks.onSessionCreated = (): void => {
+      setTimeout(() => {
+        void (async (): Promise<void> => {
+          const options = capturedClientOptions();
+          const revalidateRefused = options.auth?.revalidateRefused;
+          if (revalidateRefused === undefined) {
+            throw new Error("probe wired no refused-token recovery");
+          }
+          const refusedA = { ...TOKEN_EXPIRED_REFUSAL };
+          options.door.refused(refusedA, hostA);
+          await revalidateRefused(refusedA);
+          const refusedB = { ...TOKEN_EXPIRED_REFUSAL };
+          options.door.refused(refusedB, hostB);
+          await revalidateRefused(refusedB);
+          options.onHostCredentialState(hostA, "active");
+        })();
+      }, 0);
+    };
+
+    const outcome = await provisionInstalledHostCredential(
+      makeOptions({ deadlineMs: 2_000, progress: vi.fn() }),
+    );
+
+    expect(outcome).toEqual<HostCredentialProvisionOutcome>({
+      kind: "active",
+      minted: false,
+    });
+    expect(mocks.hostTokenMintMock.mock.calls.map((call) => call[1])).toEqual([
+      hostA,
+      hostB,
+    ]);
   });
 
   it("cancels the recovery's fresh-token mint with the probe", async () => {

@@ -10,6 +10,7 @@ export function localDoorHostTokens(tokens: HostTokenAccess): HostTokenAccess {
     current: (userId, hostId) => tokens.current(userId, hostId),
     loaded: () => tokens.loaded(),
     whenLoaded: () => tokens.whenLoaded(),
+    lastFailure: (userId, hostId) => tokens.lastFailure(userId, hostId),
     obtain: async (userId, hostId, fresh, signal) => {
       const outcome = await tokens.obtain(userId, hostId, fresh, signal);
       if (outcome.kind !== "not-admitted") return outcome;

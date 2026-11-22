@@ -393,6 +393,8 @@ describe("host-token lease after a user era changes", () => {
         bearerMint.resolve({ pending });
         return pending;
       },
+      lastFailure: (userId, requestedHostId) =>
+        tokens.lastFailure(userId, requestedHostId),
     };
     const bearer = hostTokenBearer(
       trackHostTokenMints(access),
@@ -401,7 +403,7 @@ describe("host-token lease after a user era changes", () => {
       (_refusedHostId, state) => states.push(state),
     );
 
-    expect(bearer(hostId)).toBeNull();
+    expect(bearer(hostId, () => true)).toBeNull();
     await started.promise;
     const { pending: mintChain } = await bearerMint.promise;
     await tokens.forgetUser(USER_A);
@@ -545,5 +547,135 @@ describe("host-token revalidation after an era changes", () => {
 
     await expect(pending).resolves.toBe("rejected");
     expect(mintCalls).toBe(1);
+  });
+});
+
+describe("how a pair's last mint ended", () => {
+  const HOST_ID = "computer-last-failure";
+
+  it("is forgotten when the person's era moves, and a late answer from the old era does not set it", async () => {
+    const oldEraAnswer = deferred<HostTokenMintOutcome>();
+    const oldEraAsked = deferred<void>();
+    let mintCalls = 0;
+    const tokens = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        mintCalls += 1;
+        if (mintCalls === 1) return Promise.resolve({ kind: "not-a-member" });
+        oldEraAsked.resolve();
+        return oldEraAnswer.promise;
+      },
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => Date.now(),
+    });
+    await tokens.whenLoaded();
+
+    await tokens.obtain(USER_ID, HOST_ID, true, null);
+    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBe("not-a-member");
+
+    await tokens.forgetUser(USER_ID);
+    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBeNull();
+
+    const pending = tokens.obtain(USER_ID, HOST_ID, true, null);
+    await oldEraAsked.promise;
+    await tokens.forgetUser(USER_ID);
+    oldEraAnswer.resolve({ kind: "not-a-member" });
+    await expect(pending).resolves.toEqual({ kind: "superseded" });
+    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBeNull();
+  });
+
+  it("is unavailable when the token a mint bought could not be saved, whatever refused the pair before", async () => {
+    const memory = createMemoryHostTokenPersistence();
+    let saveFails = false;
+    let mintCalls = 0;
+    const tokens = createHostTokenSource({
+      persistence: {
+        load: () => memory.load(),
+        update: (change) =>
+          saveFails
+            ? Promise.reject(new Error("disk full"))
+            : memory.update(change),
+      },
+      mint: () => {
+        mintCalls += 1;
+        return Promise.resolve<HostTokenMintOutcome>(
+          mintCalls === 1
+            ? { kind: "not-a-member" }
+            : {
+                kind: "ok",
+                token: {
+                  token: "unsaved-token",
+                  expiresAtMs: Date.now() + 60_000,
+                },
+              },
+        );
+      },
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => Date.now(),
+    });
+    await tokens.whenLoaded();
+    await tokens.obtain(USER_ID, HOST_ID, true, null);
+    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBe("not-a-member");
+
+    saveFails = true;
+    await expect(tokens.obtain(USER_ID, HOST_ID, true, null)).rejects.toThrow(
+      "disk full",
+    );
+    expect(tokens.lastFailure(USER_ID, HOST_ID)).toBe("unavailable");
+  });
+});
+
+describe("a held host-only token the host refused as expired while this clock reads it usable", () => {
+  const HOST_ID = "computer-refused-usable";
+  const refusedToken = "usable-but-refused-host-token";
+  const freshToken = "host-token-bought-after-the-refusal";
+
+  async function rigWithRefusedToken() {
+    const answer = deferred<HostTokenMintOutcome>();
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => answer.promise,
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => Date.now(),
+    });
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      { token: refusedToken, expiresAtMs: Date.now() + 60_000 },
+      source.era(USER_ID),
+    );
+    const tokens = trackHostTokenMints(source);
+    tokens.noteHeldRefused(USER_ID, HOST_ID, refusedToken);
+    const bearerFor = hostTokenBearerFor(tokens, () => undefined);
+    const lease = new MutableBearerLease(SIGN_IN_BEFORE, USER_ID);
+    return {
+      source,
+      answerWithFreshToken: () =>
+        answer.resolve({
+          kind: "ok",
+          token: { token: freshToken, expiresAtMs: Date.now() + 60_000 },
+        }),
+      bearerFor: (waitForMint: boolean) =>
+        bearerFor(HOST_ID, lease, waitForMint, new AbortController().signal),
+    };
+  }
+
+  it("is no token to a call that does not wait: none at once, while a fresh mint buys another in the background", async () => {
+    const rig = await rigWithRefusedToken();
+
+    expect(await rig.bearerFor(false)).toBeNull();
+    rig.answerWithFreshToken();
+    await vi.waitFor(() =>
+      expect(rig.source.current(USER_ID, HOST_ID)?.token).toBe(freshToken),
+    );
+  });
+
+  it("is replaced by the token a fresh mint buys, for a call that waits", async () => {
+    const rig = await rigWithRefusedToken();
+    const waiting = rig.bearerFor(true);
+    rig.answerWithFreshToken();
+
+    const lease = await waiting;
+    expect(lease?.getBearerToken()).toBe(freshToken);
   });
 });

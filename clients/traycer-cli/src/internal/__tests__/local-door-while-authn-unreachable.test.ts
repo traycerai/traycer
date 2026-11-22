@@ -9,6 +9,8 @@ import {
 import {
   createReleasedHostMemory,
   processReleasedHosts,
+  type HostInstanceStamp,
+  type InvitationMark,
   type ReleasedHostMemory,
 } from "@traycer-clients/shared/host-transport/released-sign-on";
 import { WsStreamClient } from "../../../../shared/host-transport/ws-stream-client";
@@ -41,10 +43,7 @@ const WAIT = { timeout: 2_000, interval: 10 };
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000;
 
 type DoorMode =
-  | "unavailable"
-  | "unavailable-once"
-  | "not-admitted"
-  | "black-hole";
+  "unavailable" | "unavailable-once" | "not-admitted" | "black-hole";
 
 const harness = vi.hoisted(() => {
   class ScriptSocket implements StreamWebSocketLike {
@@ -112,34 +111,45 @@ vi.mock(
     return {
       ...actual,
       processReleasedHosts: {
+        currentInstance: (hostId: string): HostInstanceStamp =>
+          releasedMemory.read().currentInstance(hostId),
+        isCurrentInstance: (stamp: HostInstanceStamp): boolean =>
+          releasedMemory.read().isCurrentInstance(stamp),
+        observeInstance: (hostId: string, observed: string): void => {
+          releasedMemory.read().observeInstance(hostId, observed);
+        },
         opensReleasedWay: (userId: string, hostId: string): boolean =>
           releasedMemory.read().opensReleasedWay(userId, hostId),
         namedReason: (hostId: string): boolean =>
           releasedMemory.read().namedReason(hostId),
-        signInAdmitted: (userId: string, hostId: string): void => {
-          releasedMemory.read().signInAdmitted(userId, hostId);
+        signInAdmitted: (userId: string, stamp: HostInstanceStamp): void => {
+          releasedMemory.read().signInAdmitted(userId, stamp);
         },
-        hostTokenAdmitted: (hostId: string): void => {
-          releasedMemory.read().hostTokenAdmitted(hostId);
+        hostTokenAdmitted: (stamp: HostInstanceStamp): void => {
+          releasedMemory.read().hostTokenAdmitted(stamp);
         },
-        refusedNamingReason: (hostId: string): void => {
-          releasedMemory.read().refusedNamingReason(hostId);
+        refusedNamingReason: (
+          stamp: HostInstanceStamp,
+          invitation: boolean,
+        ): void => {
+          releasedMemory.read().refusedNamingReason(stamp, invitation);
         },
-        declineProbe: (userId: string, hostId: string): void => {
-          releasedMemory.read().declineProbe(userId, hostId);
+        invitationHeard: (stamp: HostInstanceStamp): InvitationMark =>
+          releasedMemory.read().invitationHeard(stamp),
+        invitationWithdrawn: (mark: InvitationMark): boolean =>
+          releasedMemory.read().invitationWithdrawn(mark),
+        declineProbe: (userId: string, stamp: HostInstanceStamp): void => {
+          releasedMemory.read().declineProbe(userId, stamp);
         },
         probeDeclined: (userId: string, hostId: string): boolean =>
           releasedMemory.read().probeDeclined(userId, hostId),
         invitedSignInPending: (hostId: string): boolean =>
           releasedMemory.read().invitedSignInPending(hostId),
-        invitedSignInWritten: (hostId: string): void => {
-          releasedMemory.read().invitedSignInWritten(hostId);
+        invitedSignInWritten: (stamp: HostInstanceStamp): void => {
+          releasedMemory.read().invitedSignInWritten(stamp);
         },
-        invitedSignInAnswered: (hostId: string): void => {
-          releasedMemory.read().invitedSignInAnswered(hostId);
-        },
-        forgetNamed: (hostId: string): void => {
-          releasedMemory.read().forgetNamed(hostId);
+        invitedSignInAnswered: (stamp: HostInstanceStamp): void => {
+          releasedMemory.read().invitedSignInAnswered(stamp);
         },
         forgetAll: (): void => {
           releasedMemory.read().forgetAll();
@@ -481,8 +491,6 @@ async function openStream(session: CliHostSession): Promise<void> {
     hostId: HOST_ID,
     endpoint: () => ENDPOINT,
     bearer: session.tokens.streamBearer(HOST_ID),
-    presentsHeldPastExpiry: () =>
-      session.tokens.presentsHeldPastExpiry(HOST_ID),
     releasedSignOn: session.releasedSignOn,
     userId: USER_ID,
     auth: session.tokens.streamRecovery(HOST_ID),
@@ -784,6 +792,63 @@ describe("CLI local doors while authn cannot mint", () => {
       NO_HOST_TOKEN_PROBE,
     ]);
     expect(harness.state.hostRowReads).toEqual([]);
+  });
+
+  describe("a held token the clock calls usable, which the host refuses as expired", () => {
+    const CACHED = "cached-token-the-clock-calls-usable";
+
+    function holdUsable(): void {
+      hold({ token: CACHED, expiresAtMs: Date.now() + 60 * 60 * 1000 });
+    }
+
+    it("unary: asks authn for a fresh mint, and the next call opens the placeholder", async () => {
+      holdUsable();
+      const refused = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+      const first = await socketAt(0);
+      expect((await readOpen(first)).token).toBe(CACHED);
+      expect(harness.state.grants).toBe(0);
+
+      first.fireFrame(expiredTokenRefusal());
+
+      await expect(toAgentCliError(refused)).rejects.toMatchObject({
+        exitCode: 1,
+      });
+      await vi.waitFor(
+        () => expect(harness.state.grants).toBeGreaterThan(0),
+        WAIT,
+      );
+      const next = callHostRpcAtEndpoint("host.status", {}, ENDPOINT);
+      const probe = await socketAt(1);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      probe.fireFrame(namedProbeRefusal());
+      // A current host named its refusal of the probe: the held token is
+      // presented again, and the host admits it.
+      const again = await socketAt(2);
+      const open = await readOpen(again);
+      expect(open.token).toBe(CACHED);
+      await admitStatus(again, open);
+      await expect(next).resolves.toMatchObject({ ready: true });
+    });
+
+    it("stream: opens the placeholder next and asks authn for a fresh mint", async () => {
+      holdUsable();
+      const opened = await openCliHostSession(auth(), HOST_ID, false, null);
+      if (opened.kind !== "ok") throw new Error("session did not open");
+      await openStream(opened.session);
+      const first = await socketAt(0);
+      expect((await readOpen(first)).token).toBe(CACHED);
+      expect(harness.state.grants).toBe(0);
+
+      first.fireFrame(expiredTokenRefusal());
+
+      const probe = await socketAt(1);
+      expect((await readOpen(probe)).token).toBe(NO_HOST_TOKEN_PROBE);
+      await vi.waitFor(
+        () => expect(harness.state.grants).toBeGreaterThan(0),
+        WAIT,
+      );
+      opened.session.dispose();
+    });
   });
 });
 

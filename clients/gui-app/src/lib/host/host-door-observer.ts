@@ -86,18 +86,6 @@ export function noteHostTokenRefusal(
   noteHostDoorState({ hostId, kind, detail: null });
 }
 
-/**
- * `noteHostTokenRefusal` for one surface: once `alive` reads false (the surface
- * closed), a mint it started reports nothing for it.
- */
-export function hostTokenRefusalSinkWhile(
-  alive: () => boolean,
-): (hostId: string, kind: HostDoorStateKind) => void {
-  return (hostId, kind) => {
-    if (alive()) noteHostTokenRefusal(hostId, kind);
-  };
-}
-
 export function noteHostTokenRenewal(hostId: string, delayed: boolean): void {
   if (delayed)
     noteHostDoorState({ hostId, kind: "access-check-delayed", detail: null });

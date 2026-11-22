@@ -1,6 +1,7 @@
 import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
 import {
   revalidateStream,
+  type RevalidateOutcome,
   type StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -19,11 +20,15 @@ import type {
   RemoteSessionOpenAuth,
 } from "@traycer/protocol/host-transport/remote/auth";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
-import type { AttachGrantProvider } from "@traycer/protocol/host-transport/remote/grant";
+import type {
+  AttachGrantProvider,
+  AttachGrantProvision,
+} from "@traycer/protocol/host-transport/remote/grant";
 import { readDoorReason } from "@traycer/protocol/framework/door-reason";
 import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
 import {
   isReleasedHostTokenRefusal,
+  type HostInstanceStamp,
   type ReleasedSignOn,
 } from "../released-sign-on";
 import { OPEN_AUTHZ_SESSION_GRANT_VERSION } from "@traycer/protocol/host-transport/mux";
@@ -170,12 +175,14 @@ export interface RemoteSessionOptions<
 > extends Omit<
   ProtocolRemoteSessionOptions<RpcRegistry, StreamRegistry>,
   | "auth"
+  | "grantProvider"
   | "onNegotiatedMethods"
   | "onNegotiatedStreamMethodVersions"
   | "evidence"
   | "servedStreamMajors"
   | "unaryResponseMs"
 > {
+  readonly grantProvider: SignInBudgetedGrantProvider;
   /**
    * The host-only token, for every host kind: `OPEN` presents it in `authz`
    * v2 with an EMPTY bearer, and a `CREDENTIAL_UPDATE` carries a renewed one
@@ -332,10 +339,62 @@ interface AttachTracking {
 
 const NOTHING_ADMITTED: DoorAdmissionRelease = () => undefined;
 
+/**
+ * A dial sequence's one sign-in refresh, shared by every sign-in revalidation
+ * made on the sequence's behalf: the attach grant's mint and the released
+ * sign-in's recovery. Spent only by a refresh authn answered; one that did not
+ * reach it (`network-error`) leaves it unspent, so an outage keeps the session
+ * on its ordinary backoff and the first answer after it still refreshes.
+ * Renewed by an admission. The host-token lease's mint recovery keeps its own.
+ */
+export interface SignInRefreshBudget {
+  /**
+   * Runs `refresh` unless the sequence has spent its refresh (`"spent"`). A
+   * refresh already running is joined, never run twice.
+   */
+  readonly spend: (
+    refresh: () => Promise<RevalidateOutcome>,
+  ) => Promise<RevalidateOutcome | "spent">;
+}
+
+/** The relay's attach-grant mint, given its session's sign-in refresh budget. */
+export type SignInBudgetedGrantProvider = (
+  signInRefresh: SignInRefreshBudget,
+) => Promise<AttachGrantProvision>;
+
+interface SessionSignInRefreshBudget extends SignInRefreshBudget {
+  readonly admitted: () => void;
+}
+
+function signInRefreshBudget(): SessionSignInRefreshBudget {
+  let spent = false;
+  let running: Promise<RevalidateOutcome> | null = null;
+  return {
+    spend: (refresh) => {
+      if (spent) return Promise.resolve("spent");
+      if (running !== null) return running;
+      const own = refresh()
+        .then((outcome) => {
+          if (outcome !== "network-error") spent = true;
+          return outcome;
+        })
+        .finally(() => {
+          if (running === own) running = null;
+        });
+      running = own;
+      return own;
+    },
+    admitted: () => {
+      spent = false;
+    },
+  };
+}
+
 function trackAttaches(
-  grantProvider: AttachGrantProvider,
+  grantProvider: SignInBudgetedGrantProvider,
   door: HostDoorObserver | null,
   lifetime: SessionLifetime,
+  signInRefresh: SessionSignInRefreshBudget,
   beforeGrant: () => Promise<void>,
 ): AttachTracking {
   let release: DoorAdmissionRelease | null = null;
@@ -348,9 +407,10 @@ function trackAttaches(
   return {
     grantProvider: async () => {
       await beforeGrant();
-      return grantProvider();
+      return grantProvider(signInRefresh);
     },
     admitted: () => {
+      signInRefresh.admitted();
       leave();
       if (lifetime.closed()) return NOTHING_ADMITTED;
       const own = door?.admitted() ?? NOTHING_ADMITTED;
@@ -365,13 +425,14 @@ function trackAttaches(
 
 function createHostTokenRemoteSessionAuth(
   hostId: string,
-  grantProvider: AttachGrantProvider,
+  grantProvider: SignInBudgetedGrantProvider,
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: HostDoorObserver | null,
   releasedSignOn: RemoteReleasedSignOn | null,
   lifetime: SessionLifetime,
 ): HostTokenSessionDial {
+  const signInRefresh = signInRefreshBudget();
   if (releasedSignOn !== null)
     return createReleasedSignOnSessionAuth(
       hostId,
@@ -381,9 +442,14 @@ function createHostTokenRemoteSessionAuth(
       door,
       releasedSignOn,
       lifetime,
+      signInRefresh,
     );
-  const tracking = trackAttaches(grantProvider, door, lifetime, () =>
-    Promise.resolve(),
+  const tracking = trackAttaches(
+    grantProvider,
+    door,
+    lifetime,
+    signInRefresh,
+    () => Promise.resolve(),
   );
   return {
     grantProvider: tracking.grantProvider,
@@ -397,19 +463,24 @@ function createHostTokenRemoteSessionAuth(
         auth === null || auth === undefined
           ? null
           : (refusal) => revalidateStream(auth, refusal),
-      ...(door === null
-        ? {}
-        : {
-            door: {
-              refused: (details: FatalErrorDetails) => {
-                door?.refused(details);
-              },
-              admitted: tracking.admitted,
-            },
-          }),
+      // Present with no observer too: an admission renews the sign-in refresh.
+      door: {
+        refused: (details: FatalErrorDetails) => {
+          door?.refused(details);
+        },
+        admitted: tracking.admitted,
+      },
     },
   };
 }
+
+/**
+ * The no-progress key of every open that carries the sign-in. A refresh that
+ * rotates the sign-in is no progress against a host that keeps refusing it
+ * bare, so the session's bound ends that loop instead of spending a refresh
+ * token on every lap. An open on the host-only token keys on the token.
+ */
+const RELEASED_SIGN_IN_FINGERPRINT = "released-sign-in";
 
 /**
  * A dial presents the host-only token first, unless this process remembers the
@@ -422,22 +493,15 @@ function createHostTokenRemoteSessionAuth(
  * carries the sign-in to it. A host that names its reason is never handed the
  * sign-in again.
  */
-/**
- * The no-progress key of every open that carries the sign-in. A refresh that
- * rotates the sign-in is no progress against a host that keeps refusing it
- * bare, so the session's bound ends that loop instead of spending a refresh
- * token on every lap. An open on the host-only token keys on the token.
- */
-const RELEASED_SIGN_IN_FINGERPRINT = "released-sign-in";
-
 function createReleasedSignOnSessionAuth(
   hostId: string,
-  grantProvider: AttachGrantProvider,
+  grantProvider: SignInBudgetedGrantProvider,
   readHostToken: () => string | null,
   auth: StreamAuthRevalidator | null,
   door: HostDoorObserver | null,
   releasedSignOn: RemoteReleasedSignOn,
   lifetime: SessionLifetime,
+  signInRefresh: SessionSignInRefreshBudget,
 ): HostTokenSessionDial {
   const readSignIn = bearerReader(releasedSignOn.signIn);
   const hosts = releasedSignOn.hosts;
@@ -457,11 +521,12 @@ function createReleasedSignOnSessionAuth(
   /** The person this dial's sign-in is for, while it presents one. */
   let signInUserId: string | null = null;
   /**
-   * One dial sequence spends at most one refresh: set by the first sign-in
-   * refresh, cleared by an admission. A second refusal redials without one,
-   * and the session's no-progress bound ends the sequence.
+   * The host process instance this memory had seen for the host when the
+   * latest open was read; every memory write a host answer makes takes it.
+   * Nothing observes a host reached only through the relay, so for it the
+   * stamp never changes and the host id is the key.
    */
-  let signInRefreshSpent = false;
+  let dialInstance: HostInstanceStamp = hosts.currentInstance(hostId);
   const remembered = (): string | null => {
     const lease = releasedSignOn.signIn();
     return lease !== null &&
@@ -475,15 +540,21 @@ function createReleasedSignOnSessionAuth(
   // Asked at attach start, before the open is read: only an attach whose open
   // would carry the sign-in waits for the row to be read again.
   const confirmRow = releasedSignOn.confirmRow;
-  const tracking = trackAttaches(grantProvider, door, lifetime, async () => {
-    rowConfirmed = true;
-    const wouldPresentSignIn =
-      releasedSignOn.opensReleasedWay() &&
-      !hosts.namedReason(hostId) &&
-      (plan === "sign-in-next" || remembered() !== null);
-    if (confirmRow === null || !wouldPresentSignIn) return;
-    rowConfirmed = await confirmRow().catch(() => false);
-  });
+  const tracking = trackAttaches(
+    grantProvider,
+    door,
+    lifetime,
+    signInRefresh,
+    async () => {
+      rowConfirmed = true;
+      const wouldPresentSignIn =
+        releasedSignOn.opensReleasedWay() &&
+        !hosts.namedReason(hostId) &&
+        (plan === "sign-in-next" || remembered() !== null);
+      if (confirmRow === null || !wouldPresentSignIn) return;
+      rowConfirmed = await confirmRow().catch(() => false);
+    },
+  );
   // Only a refusal of this dial's open switches to the sign-in: a current host
   // can end a session it admitted the same way. With no sign-in to present,
   // the refusal takes the host-only token's own path, and so does a row that
@@ -501,17 +572,15 @@ function createReleasedSignOnSessionAuth(
   const recoverSignIn = async (
     refusal: FatalErrorDetails,
   ): Promise<RemoteSessionAuthRecoveryOutcome> => {
-    if (signInRefreshSpent) {
-      plan = "sign-in-next";
-      return "rotated";
-    }
-    signInRefreshSpent = true;
     const recovery = releasedSignOn.recovery;
+    if (recovery === null) return "rejected";
     const askedAt = dialsStarted;
-    const outcome =
-      recovery === null
-        ? "rejected"
-        : await revalidateStream(recovery, refusal);
+    const answered = await signInRefresh.spend(() =>
+      revalidateStream(recovery, refusal),
+    );
+    // Spent: the redial presents the sign-in it holds, and the session's
+    // no-progress bound ends a sequence the host keeps refusing.
+    const outcome = answered === "spent" ? "rotated" : answered;
     // A later open owns the plan, and a closed session has none.
     if (dialsStarted !== askedAt || lifetime.closed()) return outcome;
     if (outcome === "rotated" || outcome === "network-error")
@@ -532,6 +601,7 @@ function createReleasedSignOnSessionAuth(
     missingOpenAuthCause: "missing-host-token",
     readOpenAuth: () => {
       dialsStarted += 1;
+      dialInstance = hosts.currentInstance(hostId);
       openAdmitted = false;
       const allowed = rowAllows();
       signInFromMemory = allowed && remembered() !== null;
@@ -588,7 +658,7 @@ function createReleasedSignOnSessionAuth(
     door: {
       // Answered by the next dial, or reported once its recovery gives up.
       refused: (details) => {
-        if (named(details)) hosts.refusedNamingReason(hostId);
+        if (named(details)) hosts.refusedNamingReason(dialInstance, false);
         // Only a credential reason is answered by the token dial; any other
         // named reason shows its cover now.
         if (
@@ -600,10 +670,9 @@ function createReleasedSignOnSessionAuth(
       },
       admitted: () => {
         openAdmitted = true;
-        signInRefreshSpent = false;
         if (plan === "sign-in" && signInUserId !== null)
-          hosts.signInAdmitted(signInUserId, hostId);
-        else hosts.hostTokenAdmitted(hostId);
+          hosts.signInAdmitted(signInUserId, dialInstance);
+        else hosts.hostTokenAdmitted(dialInstance);
         return tracking.admitted();
       },
     },
