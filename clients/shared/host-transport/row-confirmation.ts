@@ -16,34 +16,38 @@ export interface RowConfirmationAttach {
  * never rejects.
  *
  * The confirmation's loop lives no longer than the confirmation: it is handed
- * `stillWaiting`, which turns false at the ceiling (in the timer's own
- * callback, so no read can start past it), once the attach ends, and once
- * `confirm` has settled. It checks that before starting any read; a read it
- * already started finishes and commits as any read does.
+ * `stillWaiting`, which is false once the clock has reached the deadline, the
+ * attach has ended, or `confirm` has settled. It checks that before starting
+ * any read; a read it already started finishes and commits as any read does.
+ *
+ * The deadline is a time, compared with `Date.now()` (the clock the timer
+ * runs on) at each check. The timer only releases the wait and decides
+ * nothing: a stalled runtime can run a read's continuation after the
+ * deadline but before the timer's callback.
  */
 export async function confirmRowWithin(
   confirm: (stillWaiting: () => boolean) => Promise<unknown>,
   attach: RowConfirmationAttach,
 ): Promise<void> {
-  let over = false;
+  const deadline = Date.now() + ROW_CONFIRM_CEILING_MS;
+  let settled = false;
   let clearCeiling = (): void => undefined;
   const ceiling = new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      over = true;
-      resolve();
-    }, ROW_CONFIRM_CEILING_MS);
+    const timer = setTimeout(resolve, ROW_CONFIRM_CEILING_MS);
     clearCeiling = () => clearTimeout(timer);
   });
   try {
     await Promise.race([
-      confirm(() => !over && attach.current()).then(
+      confirm(
+        () => !settled && Date.now() < deadline && attach.current(),
+      ).then(
         () => undefined,
         () => undefined,
       ),
       ceiling,
     ]);
   } finally {
-    over = true;
+    settled = true;
     clearCeiling();
   }
 }
