@@ -5,7 +5,7 @@ import { AUTHENTICATED_USER_FIXTURE_ID } from "@traycer-clients/shared/test-fixt
 import type { FatalErrorDetails } from "@traycer/protocol/framework/index";
 import { NO_HOST_TOKEN_PROBE } from "@traycer/protocol/framework/door-reason";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -151,7 +151,10 @@ async function admitSignIn(): Promise<void> {
     capabilities: ["credentialUpdate"],
   });
   await vi.waitFor(
-    () => expect(sockets[1].textSent.length).toBeGreaterThan(0),
+    () =>
+      expect(processReleasedHosts.opensReleasedWay(USER_ID, HOST_ID)).toBe(
+        true,
+      ),
     WAIT,
   );
 }
@@ -189,6 +192,12 @@ function setSignedOut(): void {
 }
 
 describe("released host memory across a gui sign-out", () => {
+  beforeEach(() => {
+    // The stream's waits and reconnect backoff run on this clock; `vi.waitFor`
+    // advances it by its interval on every check.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
   afterEach(() => {
     for (const client of clients.splice(0)) client.close("test-done");
     processReleasedHosts.forgetAll();
