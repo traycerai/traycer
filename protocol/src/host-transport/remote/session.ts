@@ -6712,7 +6712,9 @@ export class RemoteSession<
     let sealedBearer = carried;
     if (frame.type === MuxFrameType.CREDENTIAL_UPDATE) {
       const write =
-        carried === null ? null : this.credentialWriteNow(frame, carried);
+        carried === null
+          ? null
+          : this.credentialWriteNow(connection, frame, carried);
       if (write === null) {
         this.dropUnwritableCredential(generation);
         return;
@@ -6758,7 +6760,9 @@ export class RemoteSession<
       ? (connection.writtenChunkBearers.get(frame.seq) ?? null)
       : writtenCredentialBearer(frame);
     const write =
-      carried === null ? null : this.credentialWriteNow(frame, carried);
+      carried === null
+          ? null
+          : this.credentialWriteNow(connection, frame, carried);
     if (write === null) {
       this.dropUnwritableCredential(generation);
       return;
@@ -6776,12 +6780,13 @@ export class RemoteSession<
    * read at this write, not at its enqueue, so a row or owner that changed in
    * between is honoured. The bearer `carried` writes `frame` itself, as
    * enqueued. A new one is written only into one unchunked, uncompressed frame
-   * whose new body stays under the size at which a frame is compressed,
-   * framed exactly as `enqueueMessage` frames such a body. `null` where
-   * nothing correct fits the seq: no bearer, or another framing that would
-   * need a new one.
+   * whose new body `enqueueMessage` would frame the same way: one chunk, and,
+   * where the connection compresses bodies, under the size at which a frame is
+   * compressed. `null` where nothing correct fits the seq: no bearer, or
+   * another framing that would need a new one.
    */
   private credentialWriteNow(
+    connection: ActiveConnection,
     frame: EncodeMuxFrameInput,
     carried: string,
   ): { readonly frame: EncodeMuxFrameInput; readonly bearer: string } | null {
@@ -6795,7 +6800,9 @@ export class RemoteSession<
     if (
       frame.chunked ||
       frame.compressed ||
-      binary.byteLength >= COMPRESSION_MIN_PAYLOAD_BYTES
+      binary.byteLength > BULK_CHUNK_SIZE_BYTES ||
+      (connection.bodyCompressionSupported &&
+        binary.byteLength >= COMPRESSION_MIN_PAYLOAD_BYTES)
     )
       return null;
     return { frame: { ...frame, json: null, binary }, bearer };
