@@ -85,6 +85,7 @@ async function harness(
       expiresAtMs: NOW + 10_000,
     },
     tokens.era(USER_ID),
+    () => true,
   );
   const recovery = signInRecovery ?? {
     revalidateForReconnect: () => {
@@ -342,6 +343,7 @@ describe("host-token refusal recovery", () => {
         expiresAtMs: Date.now() + 60_000,
       },
       tokens.era(USER_ID),
+      () => true,
     );
     const fetchMock = vi.fn<typeof fetch>(
       async () =>

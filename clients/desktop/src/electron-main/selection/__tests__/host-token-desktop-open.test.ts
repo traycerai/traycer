@@ -180,6 +180,7 @@ async function openLocalBrowserTransport(
       expiresAtMs: Date.now() + 60_000,
     },
     hostTokens.era(USER_A),
+    () => true,
   );
   const websocketUrl = target.websocketUrl;
   if (websocketUrl === null)
@@ -236,6 +237,7 @@ describe("desktop main local streams open with host tokens", () => {
         expiresAtMs: Date.now() + 60_000,
       },
       hostTokens.era(USER_A),
+      () => true,
     );
 
     const websocketUrl = LOCAL_HOST_AT_FLOOR.websocketUrl;
@@ -436,6 +438,7 @@ describe("desktop main local streams open with host tokens", () => {
         expiresAtMs: Date.now() + 60_000,
       },
       hostTokens.era(USER_A),
+      () => true,
     );
     const fetchMock = vi.fn<typeof fetch>(
       async () =>
@@ -509,6 +512,7 @@ describe("desktop main local streams open with host tokens", () => {
         expiresAtMs: Date.now() + 60_000,
       },
       hostTokens.era(USER_A),
+      () => true,
     );
     const websocketUrl = LOCAL_HOST_AT_FLOOR.websocketUrl;
     if (websocketUrl === null)
@@ -644,6 +648,7 @@ describe("desktop main's browser-sessions sign-in waits for the row only on a re
       REMOTE_HOST_ID,
       { token: HOST_TOKEN, expiresAtMs: Date.now() + 3_600_000 },
       hostTokens.era(USER_A),
+      () => true,
     );
     vi.stubGlobal(
       "fetch",

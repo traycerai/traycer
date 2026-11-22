@@ -123,6 +123,7 @@ describe("local stream host-token open frame", () => {
         expiresAtMs: Date.now() + 3_600_000,
       },
       tokens.era(USER_A),
+      () => true,
     );
     return tokens;
   }
@@ -460,6 +461,7 @@ describe("local stream host-token open frame", () => {
         expiresAtMs: initialTokenExpiresAtMs,
       },
       hostTokens.era(USER_A),
+      () => true,
     );
     const client = buildLocalClient(target, provider, hostTokens);
     const session = client.subscribe("epic.subscribe", { epicId: "epic-a" });
@@ -615,6 +617,7 @@ describe("local stream host-token open frame", () => {
       hostId,
       { token: tokenInOpen, expiresAtMs: Date.now() + 10_000 },
       hostTokens.era(USER_A),
+      () => true,
     );
     const target = { ...mockLocalHostEntry, hostId };
     const client = buildLocalClient(target, provider, hostTokens);
@@ -732,6 +735,7 @@ describe("local stream host-token open frame", () => {
       hostId,
       { token: "initial-held-token", expiresAtMs: Date.now() + 60_000 },
       hostTokens.era(USER_A),
+      () => true,
     );
     const client = buildLocalClient(
       { ...mockLocalHostEntry, hostId },

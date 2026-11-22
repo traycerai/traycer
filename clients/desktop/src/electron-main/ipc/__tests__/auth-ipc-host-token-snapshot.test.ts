@@ -96,9 +96,27 @@ async function heldTokens(): Promise<HostTokenSource> {
     signIn: null,
     now: () => Date.now(),
   });
-  await tokens.adopt("user-a", "host-1", TOKEN_A1, tokens.era("user-a"));
-  await tokens.adopt("user-a", "host-2", TOKEN_A2, tokens.era("user-a"));
-  await tokens.adopt("user-b", "host-1", TOKEN_B1, tokens.era("user-b"));
+  await tokens.adopt(
+    "user-a",
+    "host-1",
+    TOKEN_A1,
+    tokens.era("user-a"),
+    () => true,
+  );
+  await tokens.adopt(
+    "user-a",
+    "host-2",
+    TOKEN_A2,
+    tokens.era("user-a"),
+    () => true,
+  );
+  await tokens.adopt(
+    "user-b",
+    "host-1",
+    TOKEN_B1,
+    tokens.era("user-b"),
+    () => true,
+  );
   return tokens;
 }
 

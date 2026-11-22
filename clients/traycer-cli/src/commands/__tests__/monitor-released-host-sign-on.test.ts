@@ -1195,6 +1195,123 @@ describe("traycer monitor local released-host sign-in", () => {
       expect(await outcomeOf()).toBe("running");
     });
 
+    it("does not end on host A's refresh count when the endpoint moved to host B first, and counts B from zero", async () => {
+      const hostA = monitorHarness.state.hostId;
+      const hostB = nextHostId();
+      holdUsableTokens(
+        new Map([
+          [hostA, "token-a"],
+          [hostB, "token-b"],
+        ]),
+      );
+      // The first three recoveries are answered at once; the fourth is held.
+      const fourth: { release: (response: Response) => void } = {
+        release: () => undefined,
+      };
+      monitorHarness.state.grantResponse = () =>
+        monitorHarness.state.grants === 4
+          ? new Promise<Response>((resolve) => {
+              fourth.release = resolve;
+            })
+          : Promise.resolve(
+              grantedToken(`fresh-${monitorHarness.state.grants}`),
+            );
+      startMonitor();
+      // Host A refuses its token on three admitted opens: each recovery rotates and counts.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const socket = await socketAt(attempt);
+        await admitWith(socket);
+        socket.fireFrame(fatal("token_expired", "host token expired"));
+        await vi.waitFor(
+          () => expect(monitorHarness.grantHosts).toHaveLength(attempt + 1),
+          WAIT,
+        );
+      }
+      // The fourth refusal's recovery is pending when the endpoint moves to host B.
+      const fourthSocket = await socketAt(3);
+      await admitWith(fourthSocket);
+      fourthSocket.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(4),
+        WAIT,
+      );
+      monitorHarness.state.hostId = hostB;
+      await letPollRead();
+
+      fourth.release(grantedToken("fresh-4"));
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(await outcomeOf()).toBe("running");
+      expect(monitorHarness.sockets).toHaveLength(4);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const toB = await socketAt(4);
+      await admitWith(toB);
+      expect(openToken(toB)).toBe("token-b");
+      // Host B's first refusal is its first count, so its recovery rotates and goes on.
+      toB.fireFrame(fatal("token_expired", "host token expired"));
+      await vi.waitFor(
+        () => expect(monitorHarness.grantHosts).toHaveLength(5),
+        WAIT,
+      );
+      await socketAt(5);
+      expect(await outcomeOf()).toBe("running");
+    });
+
+    it("ends at the cap through successive replaced processes whose recoveries are each rejected, every re-subscribe paced", async () => {
+      holdUsableTokens(new Map([[monitorHarness.state.hostId, "held-token"]]));
+      const mints = holdMints();
+      startMonitor();
+      let rounds = 0;
+      for (; rounds < 6 && ended === null; rounds += 1) {
+        const socket = await socketAt(rounds);
+        await readOpen(socket);
+        socket.fireFrame(fatal("token_expired", "host token expired"));
+        await vi.waitFor(
+          () => expect(monitorHarness.grantHosts).toHaveLength(rounds + 1),
+          WAIT,
+        );
+        await replaceHostProcess();
+        // authn has no row for the host: the recovery is rejected, and the person is still signed in.
+        mints.answer(
+          rounds,
+          new Response(JSON.stringify({ code: "no_row" }), { status: 404 }),
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        if (ended === null) {
+          expect(monitorHarness.sockets).toHaveLength(rounds + 1);
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+      }
+
+      expect(ended).not.toBeNull();
+      expect(rounds).toBeGreaterThanOrEqual(3);
+      expect(rounds).toBeLessThanOrEqual(4);
+    });
+
+    it("refreshes once for real, and does not end, when a mint is refused, a sibling's pair is adopted, and the next mint is refused again", async () => {
+      monitorHarness.state.realRevalidator = true;
+      monitorHarness.state.grantResponse = () =>
+        Promise.resolve(
+          monitorHarness.state.grants <= 2
+            ? new Response("rejected", { status: 401 })
+            : grantedToken("fresh-after-refresh"),
+        );
+      startMonitor();
+      await socketAt(0);
+
+      await vi.waitFor(
+        () =>
+          expect(monitorHarness.state.rotations).toEqual([
+            "superseded",
+            "applied",
+          ]),
+        WAIT,
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(await outcomeOf()).toBe("running");
+    });
+
     it("subscribes to the new endpoint, and does not end, when the endpoint changes host id during a pending recovery that is then rejected", async () => {
       const hostA = monitorHarness.state.hostId;
       const hostB = nextHostId();

@@ -141,6 +141,7 @@ async function expiryRelayHarness(refusals: readonly FatalErrorDetails[]) {
       expiresAtMs: Date.now() + 60_000,
     },
     hostTokens.era(USER_ID),
+    () => true,
   );
   vi.stubGlobal(
     "fetch",
@@ -730,6 +731,7 @@ describe("remote RPC relay OPEN host-token frame", () => {
         expiresAtMs: Date.now() + 60_000,
       },
       hostTokens.era(USER_ID),
+      () => true,
     );
     const fetchMock = vi.fn<typeof fetch>(
       async () =>

@@ -91,6 +91,7 @@ async function tokenSource(
       host.id,
       { token: HOST_TOKEN, expiresAtMs: Date.now() + 3_600_000 },
       source.era(USER_A),
+      () => true,
     );
   }
   return source;

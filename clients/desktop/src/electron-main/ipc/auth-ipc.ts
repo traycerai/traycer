@@ -285,7 +285,14 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
       assertString(userId, "hostTokensAdopt.userId");
       assertString(hostId, "hostTokensAdopt.hostId");
       assertNumber(expectedEra, "hostTokensAdopt.expectedEra");
-      await tokens.adopt(userId, hostId, hostTokenOf(token), expectedEra);
+      // Main holds no attempt for it: the window asked its own before sending.
+      await tokens.adopt(
+        userId,
+        hostId,
+        hostTokenOf(token),
+        expectedEra,
+        () => true,
+      );
       return { era: tokens.era(userId) };
     },
   );

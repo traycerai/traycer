@@ -170,14 +170,12 @@ export interface CliHostTokens {
    * then a refused mint is the sign-in recovering.
    */
   signInRejected(): boolean;
-  /** The stored sign-in's refresh ahead of its expiry, judged as above. */
-  refreshSignIn(): Promise<RevalidateOutcome>;
   /**
-   * The same refresh for a transport's sign-in recovery: "adopted" when it
-   * took a sibling's rotation from the store, which authn did not answer for
-   * that transport, so it spends none of its budget.
+   * The stored sign-in's refresh, judged as above: "adopted" when it took a
+   * sibling's rotation from the store, which authn did not answer for this
+   * caller, so it spends none of any budget.
    */
-  rotateSignIn(): Promise<SignInRotation>;
+  refreshSignIn(): Promise<SignInRotation>;
   /** `true` when one was minted; its refusal is judged like any other mint's. */
   renewAfterSignInRefresh(hostId: string): Promise<boolean>;
   /** See `hostTokenUnobtainable`. */
@@ -270,24 +268,21 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   );
   // The one judge of a rejected sign-in, for every mint this process makes:
   // a refresh authn refused, or a 401 on the first mint after a refresh it
-  // accepted. A token minted, or a refresh accepted (a sibling's adopted
-  // included), starts it again.
+  // accepted for this process. A token minted, or a refresh accepted (a
+  // sibling's adopted included), starts it again; an adopted one spends
+  // nothing, so a 401 after it is not yet the judge's.
   let refreshRefused = false;
   let refreshedSinceLastMint = false;
   let refusedAfterRefresh = false;
-  const rotateSignIn = async (): Promise<SignInRotation> => {
+  const refreshSignIn = async (): Promise<SignInRotation> => {
     const outcome = await signIn.refresh();
     if (outcome === "rejected") refreshRefused = true;
     if (outcome === "rotated" || outcome === "adopted") {
       refreshRefused = false;
       refusedAfterRefresh = false;
-      refreshedSinceLastMint = true;
+      refreshedSinceLastMint = outcome === "rotated";
     }
     return outcome;
-  };
-  const refreshSignIn = async (): Promise<RevalidateOutcome> => {
-    const outcome = await rotateSignIn();
-    return outcome === "adopted" ? "rotated" : outcome;
   };
   // Every mint passes here, so a refusal for good is reported wherever asked. A token
   // that could not be saved is transient like an unreachable authn, never a rejected
@@ -402,7 +397,9 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
   const streamBearers = new Map<string, BearerSourceProvider>();
 
   // Refreshed once and asked once more. Only a refused refresh or a second 401 rejects
-  // the sign-in; an unreachable refresh leaves it unjudged.
+  // the sign-in; an unreachable refresh leaves it unjudged. A sibling's rotation
+  // adopted from the store is no refresh of this one: a 401 after it still earns
+  // the one authn answers.
   const recoverRefusedSignIn = async (
     owner: HostInstance,
     first: CliHostTokenFailure,
@@ -422,7 +419,10 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     }
     const startedAt = nextEvent();
     const second = await source.obtain(userId, hostId, true, { signal, owner });
-    if (second.kind === "sign-in-rejected") report(owner, second, startedAt);
+    if (second.kind !== "sign-in-rejected") return answer(hostId, second);
+    if (refreshed === "adopted")
+      return recoverRefusedSignIn(owner, second, startedAt, signal);
+    report(owner, second, startedAt);
     return answer(hostId, second);
   };
 
@@ -519,7 +519,6 @@ export function createCliHostTokens(signIn: CliSignIn): CliHostTokens {
     },
     signInRejected,
     refreshSignIn,
-    rotateSignIn,
     hostTokenUnobtainable: (hostId) =>
       hostTokenUnobtainable(source, userId, hostId),
     ownerSignInEligible: (hostId) =>
@@ -589,7 +588,7 @@ export function cliReleasedSignOn(
   lease: BearerLease,
   tokens: Pick<
     CliHostTokens,
-    | "rotateSignIn"
+    | "refreshSignIn"
     | "hostTokenUnobtainable"
     | "ownerSignInEligible"
     | "heldTokenRefused"
@@ -602,7 +601,7 @@ export function cliReleasedSignOn(
     // reads a missing row.
     mayPresentSignIn: () => true,
     // The transport's own: it reads "adopted" as no refresh spent.
-    recovery: { revalidateForReconnect: () => tokens.rotateSignIn() },
+    recovery: { revalidateForReconnect: () => tokens.refreshSignIn() },
     hostTokenUnobtainable: (hostId) => tokens.hostTokenUnobtainable(hostId),
     ownerSignInEligible: (hostId) => tokens.ownerSignInEligible(hostId),
     heldTokenRefused: (instance, presented) =>

@@ -331,11 +331,12 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       (details) => {
         const owner = refusedBy.get(details);
         if (owner === undefined) return null;
+        const watching = endpoint?.hostId ?? null;
         return {
           hostId: owner.hostId,
           current:
-            processReleasedHosts.isCurrent(owner) &&
-            endpoint?.hostId === owner.hostId,
+            processReleasedHosts.isCurrent(owner) && watching === owner.hostId,
+          watching,
         };
       },
       credential.signInRejected,
@@ -482,7 +483,7 @@ async function signInMonitorCredential(
           const outcome = await hostTokens.refreshSignIn();
           const current = hostId();
           if (
-            outcome === "rotated" &&
+            (outcome === "rotated" || outcome === "adopted") &&
             current !== null &&
             (await hostTokens.renewAfterSignInRefresh(current))
           ) {
@@ -537,12 +538,15 @@ type InboxTarget = { readonly agentId: string; readonly epicId: string };
 type InboxRecovery = (details: FatalErrorDetails) => Promise<RevalidateOutcome>;
 
 /**
- * The host that refused, and whether it is still the monitor's: the same host
- * process, at the endpoint it watches. `null` for a refusal no door heard.
+ * The host that refused, whether it is still the monitor's (the same host
+ * process, at the endpoint it watches), and the host id the monitor watches
+ * now. `null` for a refusal no door heard.
  */
-type InboxRefusalOf = (
-  details: FatalErrorDetails,
-) => { readonly hostId: string; readonly current: boolean } | null;
+type InboxRefusalOf = (details: FatalErrorDetails) => {
+  readonly hostId: string;
+  readonly current: boolean;
+  readonly watching: string | null;
+} | null;
 
 type InboxMintRefusals = (
   listener: (failure: CliHostTokenFailure, tookReleasedWay: boolean) => void,
@@ -789,13 +793,43 @@ function runInboxSubscription(
         agentId: target.agentId,
         epicId: target.epicId,
       });
-      if (outcome === "rotated") {
+      // The count is read only for the host id watched now: a verdict from a
+      // host id the monitor has moved off counts nothing and starts the new
+      // host id's count.
+      const moved = (): boolean => {
+        if (refusal === null || refusal.watching === refusal.hostId)
+          return false;
+        authRefreshCount = 0;
+        countedHostId = refusal.watching;
+        subscribeAfterDelay();
+        return true;
+      };
+      // One step of this host id's count; `true` when it reached the bound
+      // and ended the monitor.
+      const countedToBound = (): boolean => {
         if (refusal !== null && refusal.hostId !== countedHostId) {
           authRefreshCount = 0;
           countedHostId = refusal.hostId;
         }
         authRefreshCount += 1;
-        if (authRefreshCount > MAX_CONSECUTIVE_AUTH_REFRESHES) {
+        if (authRefreshCount <= MAX_CONSECUTIVE_AUTH_REFRESHES) return false;
+        // The bearer genuinely rotated on every attempt yet the host
+        // still rejected the freshly-minted token. The `/stream` fatal
+        // frame only carries `UNAUTHORIZED` / `INCOMPATIBLE` (see
+        // `FatalErrorDetails` in ws-protocol), so it can't tell us
+        // whether this is an auth failure or an authz one. A new token
+        // being rejected points at authz, not a stale token — surface
+        // that the agent/epic may be invalid or inaccessible instead of
+        // blaming the bearer.
+        fail(
+          new Error(
+            `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).`,
+          ),
+        );
+        return true;
+      };
+      if (outcome === "rotated") {
+        if (moved() || countedToBound()) return;
           // The bearer genuinely rotated on every attempt yet the host
           // still rejected the freshly-minted token. The `/stream` fatal
           // frame only carries `UNAUTHORIZED` / `INCOMPATIBLE` (see
@@ -804,13 +838,6 @@ function runInboxSubscription(
           // being rejected points at authz, not a stale token — surface
           // that the agent/epic may be invalid or inaccessible instead of
           // blaming the bearer.
-          fail(
-            new Error(
-              `traycer monitor: session rejected after ${authRefreshCount} refreshes — the agent/epic may be invalid or inaccessible (check --agent-id and TRAYCER_EPIC_ID).`,
-            ),
-          );
-          return;
-        }
         if (left) {
           subscribeAfterDelay();
           return;
@@ -838,6 +865,9 @@ function runInboxSubscription(
       }
       const signedOut = signInRejected();
       if (left && !signedOut) {
+        // A replaced process's host-tied rejection ends nothing by itself, but
+        // counts one step toward the same bound.
+        if (outcome === "rejected" && (moved() || countedToBound())) return;
         subscribeAfterDelay();
         return;
       }

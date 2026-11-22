@@ -354,10 +354,13 @@ export interface DialSequence {
    * Runs `refresh` unless this sequence has spent its refresh (`"spent"`). A
    * refresh already running for this sequence is joined, never run twice.
    * `"adopted"` (a sibling's rotation taken from the store) spends nothing:
-   * authn did not answer this sequence.
+   * authn did not answer this sequence. Nor does an answer that finds no
+   * asker still asked (`stillAsked` of the starter and of every joiner): a
+   * retired attempt's answer leaves the budget to the next current one.
    */
   readonly spend: (
     refresh: () => Promise<SignInRefreshOutcome>,
+    stillAsked: () => boolean,
   ) => Promise<SignInRefreshOutcome | "spent">;
 }
 
@@ -376,19 +379,29 @@ type SignInRefreshOutcome = RevalidateOutcome | "adopted";
 function dialSequence(owner: HostInstance): DialSequence {
   let spent = false;
   let running: Promise<SignInRefreshOutcome> | null = null;
+  /** The askers of the running refresh: its starter and every joiner. */
+  const askers = new Set<() => boolean>();
   return {
     owner,
-    spend: (refresh) => {
+    spend: (refresh, stillAsked) => {
       if (spent) return Promise.resolve("spent");
+      askers.add(stillAsked);
       if (running !== null) return running;
       const own = refresh()
         .then((outcome) => {
-          if (outcome !== "network-error" && outcome !== "adopted")
+          if (
+            outcome !== "network-error" &&
+            outcome !== "adopted" &&
+            [...askers].some((asked) => asked())
+          )
             spent = true;
           return outcome;
         })
         .finally(() => {
-          if (running === own) running = null;
+          if (running === own) {
+            running = null;
+            askers.clear();
+          }
         });
       running = own;
       return own;
@@ -456,6 +469,13 @@ function trackAttaches(
   return {
     grantProvider: async (attempt) => {
       await beforeGrant();
+      // A retired attach opens no sequence: the session discards its answer.
+      if (!attempt.current())
+        return {
+          kind: "unavailable",
+          detail: "the attach was retired while the row was confirmed",
+          context: "",
+        };
       const sequence =
         attempt.leg === "admitted" ? legSequence() : liveSequence();
       return grantProvider(sequence, {
@@ -578,8 +598,14 @@ function createReleasedSignOnSessionAuth(
     },
     hosts,
   );
-  /** Whether this attach's row read was confirmed, where it must be (`confirmRow`). */
+  /**
+   * The last answered confirmation of the row (`confirmRow`): a confirmation
+   * still pending changes nothing until it answers. Before any, the live row
+   * alone decides, as in c8b3e988.
+   */
   let rowConfirmed = true;
+  /** Confirmations asked; only the latest one's answer is kept. */
+  let confirmationsAsked = 0;
   const rowAllows = (): boolean =>
     rowConfirmed && releasedSignOn.opensReleasedWay();
   /**
@@ -648,13 +674,15 @@ function createReleasedSignOnSessionAuth(
     },
     lifetime,
     async () => {
-      rowConfirmed = true;
       const wouldPresentSignIn =
         releasedSignOn.opensReleasedWay() &&
         !hosts.namedReason(hostId) &&
         (signInPlanned() || remembered() !== null);
       if (confirmRow === null || !wouldPresentSignIn) return;
-      rowConfirmed = await confirmRow().catch(() => false);
+      confirmationsAsked += 1;
+      const asked = confirmationsAsked;
+      const confirmed = await confirmRow().catch(() => false);
+      if (asked === confirmationsAsked) rowConfirmed = confirmed;
     },
   );
   // Only a refusal of this dial's open switches to the sign-in: a current host
@@ -677,16 +705,19 @@ function createReleasedSignOnSessionAuth(
     const recovery = releasedSignOn.recovery;
     if (recovery === null) return "rejected";
     const askedAt = dialsStarted;
-    const answered = await sequence.spend(() =>
-      recovery.revalidateForReconnect(),
+    // A later open owns the plan, and a closed session has none.
+    const stillAsked = (): boolean =>
+      dialsStarted === askedAt && !lifetime.closed();
+    const answered = await sequence.spend(
+      () => recovery.revalidateForReconnect(),
+      stillAsked,
     );
     // Spent: the redial presents the sign-in it holds, and the session's
     // no-progress bound ends a sequence the host keeps refusing. Adopted: a
     // sibling's rotation, presented like one of this sequence's own.
     const outcome =
       answered === "spent" || answered === "adopted" ? "rotated" : answered;
-    // A later open owns the plan, and a closed session has none.
-    if (dialsStarted !== askedAt || lifetime.closed()) return outcome;
+    if (!stillAsked()) return outcome;
     if (outcome === "rotated" || outcome === "network-error")
       plan = { kind: "sign-in-next", owner: sequence.owner };
     // A refusal of the person's sign-in never reaches the door: the session

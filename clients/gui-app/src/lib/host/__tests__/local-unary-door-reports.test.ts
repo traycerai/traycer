@@ -219,6 +219,7 @@ async function heldTokenSource(hostId: string): Promise<HostTokenSource> {
     hostId,
     { token: HOST_TOKEN, expiresAtMs: Date.now() + 3_600_000 },
     source.era(USER_A),
+    () => true,
   );
   return source;
 }
@@ -496,6 +497,7 @@ describe("a unary call's reports to the app's door", () => {
         hostId,
         { token: HOST_TOKEN, expiresAtMs: Date.now() + 3_600_000 },
         mints.source.era(USER_A),
+        () => true,
       );
       let revalidations = 0;
       const driven = begin(personal(hostId), mints.source, {

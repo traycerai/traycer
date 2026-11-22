@@ -99,6 +99,7 @@ import {
   localUnarySessionKey,
   LocalUnarySession,
   LocalUnarySessionDirectory,
+  answersAsRun,
   type AttachedPersistentSocket,
   type PersistentSocketHandlers,
   type SessionHandoff,
@@ -338,9 +339,10 @@ interface InvitedSignIn {
 }
 
 /**
- * An answer from a host process that is no longer the host's: dropped at the
- * socket, and the call never sent there or not run there. The call dials
- * once more, planned as a fresh call is (see `openSession`).
+ * A call whose request was never written to a socket that a host process no
+ * longer the host's then lost. It dials once more, planned as a fresh call is
+ * (see `openSession`). A written request lost the same way stays as uncertain
+ * as any socket loss leaves it.
  */
 const lostToReplacedProcess = new WeakSet<HostRpcError>();
 
@@ -962,8 +964,8 @@ export class WsRpcClient<
         !mayHaveReachedHost(cause) &&
         !this.releasedHosts.isCurrent(owner)
       ) {
-        // Not sent, or not run, on a session whose host process was since
-        // replaced: the call dials once more (see `lostToReplacedProcess`).
+        // Not written to a session whose host process was since replaced: the
+        // call dials once more (see `lostToReplacedProcess`).
         lostToReplacedProcess.add(cause);
       } else if (cause instanceof HostRpcError) {
         this.refusedBy.set(cause, owner);
@@ -2464,7 +2466,9 @@ function openSession(options: SessionOptions): Session {
    * One dial outcome per socket, whichever event decides it first. The
    * authority deduplicates by attempt id anyway, but reporting once keeps the
    * call sites honest about what an ATTEMPT is: `onerror` is normally followed
-   * by `onclose`, and both describe the same failed dial.
+   * by `onclose`, and both describe the same failed dial. A socket to a host
+   * process that is no longer the host's reports nothing: its outcome says
+   * nothing about the process that now answers for the host.
    */
   let dialOutcomeReported = false;
   const reportDialOutcome = (
@@ -2472,6 +2476,7 @@ function openSession(options: SessionOptions): Session {
   ): void => {
     if (dialOutcomeReported) return;
     dialOutcomeReported = true;
+    if (!isCurrent(owner)) return;
     if (outcome === "success") {
       evidence.reportDialSuccess(hostId, requestId, "local-ws");
       return;
@@ -2726,6 +2731,16 @@ function openSession(options: SessionOptions): Session {
 
   socket.onopen = () => {
     opened = true;
+    if (!isCurrent(owner)) {
+      // Opened to a host process that is no longer the host's: dropped as a
+      // socket lost before the request, announcing no live session.
+      const lost = transientFailure(
+        `WebSocket closed before next frame (code=1000, reason='ok')`,
+      );
+      lostToReplacedProcess.add(lost);
+      failAll(lost);
+      return;
+    }
     livenessStarted = true;
     // Success first, then the announcement: the success clears this host's
     // death streak, and the live session then makes later failures inert until
@@ -2784,23 +2799,20 @@ function openSession(options: SessionOptions): Session {
     // The one entry for every frame of this socket. A frame from a host
     // process that is no longer the host's is never handed on as an answer:
     // nothing that host refused, admitted or advertised reaches any caller.
-    // Only a call's own answer passes once its request was written, a result
-    // or a method error, since the call ran there.
+    // Only a call's own answer that it ran there passes once its request was
+    // written. Any other frame is the socket's loss, failed as a close before
+    // the next frame is: a written request is as uncertain as that leaves it,
+    // and only an unwritten one dials again.
     if (!isCurrent(owner)) {
       if (multiplex !== null) {
         multiplex.onReplacedProcessFrame(frame);
         return;
       }
       if (!(requestSent && answersWrittenRequest(frame, requestId))) {
-        const lost = new RetryableTransportError({
-          code: "RPC_ERROR",
-          message: `WebSocket closed before next frame (code=1000, reason='ok')`,
-          requestId,
-          method,
-          fatalDetails: null,
-          replaySafetyFromKey: false,
-        });
-        lostToReplacedProcess.add(lost);
+        const lost = transientFailure(
+          `WebSocket closed before next frame (code=1000, reason='ok')`,
+        );
+        if (!requestSent) lostToReplacedProcess.add(lost);
         failAll(lost);
         return;
       }
@@ -3252,15 +3264,12 @@ function waitForSessionAdmission<T>(
   });
 }
 
-/**
- * The host's answer to the written request `requestId` that says the call ran
- * there: its result, or a method error. A retryable error says it did not run.
- */
+/** The host's answer to the written request `requestId` that says the call ran there. */
 function answersWrittenRequest(frame: HostFrame, requestId: string): boolean {
   return (
     frame.kind === "response" &&
     frame.requestId === requestId &&
-    (frame.error === null || frame.error.retryable !== true)
+    answersAsRun(frame)
   );
 }
 

@@ -3332,15 +3332,17 @@ describe("released personal host, local stream", () => {
       await vi.advanceTimersByTimeAsync(0);
     };
 
+    interface Refused {
+      readonly sockets: StubStreamWebSocket[];
+      readonly statuses: string[];
+      readonly answerMint: (outcome: HostTokenMintOutcome) => void;
+    }
+
     async function refusedNotAdmitted(
       hosts: ReleasedHostMemory,
       signedInAs: () => string | null,
       signIn: BearerSourceProvider,
-    ): Promise<{
-      readonly sockets: StubStreamWebSocket[];
-      readonly statuses: string[];
-      readonly answerMint: (outcome: HostTokenMintOutcome) => void;
-    }> {
+    ): Promise<Refused> {
       vi.useFakeTimers();
       hosts.observeInstance(HOST_ID, "100");
       const { factory, sockets } = makeStubSocketFactory();
@@ -3370,6 +3372,93 @@ describe("released personal host, local stream", () => {
       refused.sockets[1].fireOpen();
       await settle();
       expect(readFrame(refused.sockets[1].textSent[0]).token).toBe(HOST_TOKEN);
+    });
+
+    /** The mint for the instance just replaced answers `not-admitted`; the person is still signed in. */
+    async function replacedWhileMinting(
+      hosts: ReleasedHostMemory,
+      refused: Refused,
+      replacement: string,
+    ): Promise<void> {
+      hosts.observeInstance(HOST_ID, replacement);
+      refused.answerMint({ kind: "not-admitted" });
+      await settle();
+    }
+
+    /** The paced dial of the observed instance, which the host then refuses by its own open. */
+    async function dialAndRefuse(
+      refused: Refused,
+      dialed: number,
+    ): Promise<void> {
+      expect(refused.statuses).not.toContain("closed");
+      expect(refused.sockets).toHaveLength(dialed);
+      await vi.advanceTimersByTimeAsync(9);
+      expect(refused.sockets).toHaveLength(dialed);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(refused.sockets).toHaveLength(dialed + 1);
+      refused.sockets[dialed].fireOpen();
+      await settle();
+      refused.sockets[dialed].fireText(namedRefusal("not_admitted"));
+      await settle();
+    }
+
+    it("counts a stale rejection once, and the replacement's admission resets the count", async () => {
+      const hosts = createReleasedHostMemory();
+      const refused = await refusedNotAdmitted(
+        hosts,
+        () => USER_ID,
+        () => new MutableBearerLease(SIGN_IN, USER_ID),
+      );
+      await replacedWhileMinting(hosts, refused, "200");
+      // Count one. The replacement is dialed, and the host admits it.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(refused.sockets).toHaveLength(2);
+      refused.sockets[1].fireOpen();
+      await settle();
+      const open = readFrame(refused.sockets[1].textSent[0]);
+      refused.sockets[1].fireText({
+        kind: "openAck",
+        manifest: open.manifest,
+        capabilities: ["credentialUpdate"],
+      });
+      await settle();
+      expect(refused.statuses).toContain("open");
+      // The count resets on proof of health, a delivered application frame, not at the ack.
+      refused.sockets[1].fireText({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+      });
+      await settle();
+
+      // After the admission two more stale rejections stay under the bound: with
+      // the count not reset they would be the third and end the stream.
+      refused.sockets[1].fireText(namedRefusal("not_admitted"));
+      await settle();
+      await replacedWhileMinting(hosts, refused, "300");
+      await dialAndRefuse(refused, 2);
+      await replacedWhileMinting(hosts, refused, "400");
+      expect(refused.statuses).not.toContain("closed");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(refused.sockets).toHaveLength(4);
+    });
+
+    it("ends the stream at the bound when three successive instances are each replaced while their mint answers not-admitted, pacing every dial", async () => {
+      const hosts = createReleasedHostMemory();
+      const refused = await refusedNotAdmitted(
+        hosts,
+        () => USER_ID,
+        () => new MutableBearerLease(SIGN_IN, USER_ID),
+      );
+      await replacedWhileMinting(hosts, refused, "200");
+      await dialAndRefuse(refused, 1);
+      await replacedWhileMinting(hosts, refused, "300");
+      await dialAndRefuse(refused, 2);
+      expect(refused.statuses).not.toContain("closed");
+      await replacedWhileMinting(hosts, refused, "400");
+      // The third stale rejection reaches the bound.
+      expect(refused.statuses).toContain("closed");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(refused.sockets).toHaveLength(3);
     });
 
     it("is terminal for any instance when the person was signed out by the recovery", async () => {

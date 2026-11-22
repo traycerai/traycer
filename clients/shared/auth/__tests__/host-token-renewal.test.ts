@@ -193,6 +193,7 @@ describe("host-token renewal", () => {
         expiresAtMs: Date.now() + 3_600_000,
       },
       localTokens.era(USER_A),
+      () => true,
     );
     const localClient = new WsStreamClient({
       clientIdentity: TEST_CLIENT_IDENTITY,
@@ -258,6 +259,7 @@ describe("host-token renewal", () => {
         expiresAtMs: Date.now() + 3_600_000,
       },
       relayTokens.era(USER_A),
+      () => true,
     );
     const remote = createRemoteHostTransport({
       opensReleasedWay: () => false,
@@ -655,6 +657,7 @@ describe("a held host-only token the host refused as expired while this clock re
       HOST_ID,
       { token: refusedToken, expiresAtMs: Date.now() + 60_000 },
       source.era(USER_ID),
+      () => true,
     );
     const hosts = createReleasedHostMemory();
     const tokens = trackHostTokenMints(source, hosts);
@@ -801,6 +804,7 @@ describe("a session recovery's sign-in refresh across an admission", () => {
       HOST_ID,
       { token: "held-host-token", expiresAtMs: Date.now() + 60_000 },
       source.era(USER_ID),
+      () => true,
     );
     // The refresh requests authn received, each answered when the test says so.
     const refreshRequests: Array<(outcome: RevalidateOutcome) => void> = [];
@@ -894,6 +898,7 @@ describe("a recovery's bounds across host process instances", () => {
       HOST_ID,
       { token: "held-host-token", expiresAtMs: Date.now() + 3_600_000 },
       source.era(USER_ID),
+      () => true,
     );
     return { source, mints };
   }
@@ -993,5 +998,126 @@ describe("an owned ask while a renewal's mint is running", () => {
     await expect(ask).resolves.toEqual({ kind: "ok", token: RENEWED_TOKEN });
     await renewal;
     expect(mints).toHaveLength(1);
+  });
+});
+
+describe("asks for an observed and an unobserved host process", () => {
+  const HOST_ID = "computer-observed-and-unobserved";
+  const OK_TOKEN = { token: "observed-host-token", expiresAtMs: 10_000_000 };
+
+  interface HeldMint {
+    readonly promise: Promise<HostTokenMintOutcome>;
+    readonly resolve: (value: HostTokenMintOutcome) => void;
+  }
+
+  /** A source whose every mint request waits for the test, in arrival order. */
+  function sourceHoldingEveryMint() {
+    const requests: HeldMint[] = [];
+    const source = createHostTokenSource({
+      persistence: createMemoryHostTokenPersistence(),
+      mint: () => {
+        const request = deferred<HostTokenMintOutcome>();
+        requests.push(request);
+        return request.promise;
+      },
+      signIn: (userId) => (userId === USER_ID ? SIGN_IN_BEFORE : null),
+      now: () => 1_000,
+    });
+    return { source, requests };
+  }
+
+  const unobserved = { hostId: HOST_ID, observed: null };
+  const observed = { hostId: HOST_ID, observed: "200" };
+
+  it("gives a known process's ask its own mint, and its own outcome, when an unobserved process's ask is held first", async () => {
+    const { source, requests } = sourceHoldingEveryMint();
+    const unknownAsk = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: unobserved,
+    });
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    const knownAsk = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: observed,
+    });
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+
+    requests[0].resolve({ kind: "not-admitted" });
+    requests[1].resolve({ kind: "ok", token: OK_TOKEN });
+
+    await expect(unknownAsk).resolves.toEqual({ kind: "not-admitted" });
+    await expect(knownAsk).resolves.toEqual({ kind: "ok", token: OK_TOKEN });
+    expect(source.lastFailureOf(USER_ID, observed)).toBeNull();
+  });
+
+  it("gives an unobserved process's ask its own mint, and keeps its outcome from a known process, when the known process's ask is held first", async () => {
+    const { source, requests } = sourceHoldingEveryMint();
+    const knownAsk = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: observed,
+    });
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    const unknownAsk = source.obtain(USER_ID, HOST_ID, true, {
+      signal: null,
+      owner: unobserved,
+    });
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+
+    requests[0].resolve({ kind: "ok", token: OK_TOKEN });
+    requests[1].resolve({ kind: "not-admitted" });
+
+    await expect(knownAsk).resolves.toEqual({ kind: "ok", token: OK_TOKEN });
+    await expect(unknownAsk).resolves.toEqual({ kind: "not-admitted" });
+    expect(source.lastFailureOf(USER_ID, observed)).toBeNull();
+  });
+});
+
+describe("an adopted token whose caller stopped wanting it before the write", () => {
+  const HOST_ID = "computer-adopt-no-longer-wanted";
+  const OLD_TOKEN = { token: "old-host-token", expiresAtMs: 10_000_000 };
+  const NEW_TOKEN = { token: "new-host-token", expiresAtMs: 10_000_000 };
+
+  it("keeps the held token when the write is released after the caller stopped wanting the new one", async () => {
+    const inner = createMemoryHostTokenPersistence();
+    let writeHeld = false;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const source = createHostTokenSource({
+      persistence: {
+        load: () => inner.load(),
+        update: async (change) => {
+          if (writeHeld) await gate;
+          return inner.update(change);
+        },
+      },
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => 1_000,
+    });
+    await source.adopt(
+      USER_ID,
+      HOST_ID,
+      OLD_TOKEN,
+      source.era(USER_ID),
+      () => true,
+    );
+    expect(source.current(USER_ID, HOST_ID)).toEqual(OLD_TOKEN);
+
+    writeHeld = true;
+    let wanted = true;
+    const adopting = source.adopt(
+      USER_ID,
+      HOST_ID,
+      NEW_TOKEN,
+      source.era(USER_ID),
+      () => wanted,
+    );
+    wanted = false;
+    release();
+    await adopting;
+
+    expect(source.current(USER_ID, HOST_ID)).toEqual(OLD_TOKEN);
   });
 });

@@ -163,7 +163,87 @@ function collectCandidates(sourceFile: ts.SourceFile): Candidate[] {
   return found;
 }
 
-/** The scalar pair: a `string | null` host id kept beside a count (`noProgressHostId`). */
+/** A numeric `let` or property: `let n = 0`, `count = 0`. */
+function isNumericCounter(node: ts.Node): boolean {
+  return (
+    (ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) &&
+    node.initializer !== undefined &&
+    ts.isNumericLiteral(node.initializer)
+  );
+}
+
+/** The declarations that share a scope with `node`: one block, one class, one file. */
+function siblingDeclarations(node: ts.Node): ts.Node[] {
+  const holder = ts.isVariableDeclaration(node)
+    ? node.parent.parent.parent
+    : node.parent;
+  const found: ts.Node[] = [];
+  ts.forEachChild(holder, (child) => {
+    if (ts.isVariableStatement(child)) {
+      found.push(...child.declarationList.declarations);
+    } else {
+      found.push(child);
+    }
+  });
+  return found;
+}
+
+/** The name an assignment writes: `x = ...` or `this.x = ...`. */
+function assignedName(node: ts.Node): string | null {
+  if (
+    !ts.isBinaryExpression(node) ||
+    node.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+  ) {
+    return null;
+  }
+  const left = node.left;
+  if (ts.isIdentifier(left)) return left.text;
+  return ts.isPropertyAccessExpression(left) ? left.name.text : null;
+}
+
+/** Whether one block assigns `hostIdName` and also assigns `0` to one of `counters`. */
+function resetsCounterWithHostId(
+  sourceFile: ts.SourceFile,
+  hostIdName: string,
+  counters: ReadonlySet<string>,
+): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isBlock(node)) {
+      const written: string[] = [];
+      const zeroed: string[] = [];
+      const collect = (inner: ts.Node): void => {
+        const name = assignedName(inner);
+        if (name !== null && ts.isBinaryExpression(inner)) {
+          written.push(name);
+          if (ts.isNumericLiteral(inner.right) && inner.right.text === "0") {
+            zeroed.push(name);
+          }
+        }
+        ts.forEachChild(inner, collect);
+      };
+      ts.forEachChild(node, collect);
+      if (
+        written.includes(hostIdName) &&
+        zeroed.some((name) => counters.has(name))
+      ) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+}
+
+/**
+ * The scalar pair: a `string | null` host id kept beside a numeric counter in
+ * the same scope, which a block resets to zero when it assigns the host id
+ * (`noProgressHostId` and its count, `countedHostId` and `authRefreshCount`).
+ * The counter is the answer the host id scopes.
+ */
 function collectScalarPairs(sourceFile: ts.SourceFile): Candidate[] {
   const found: Candidate[] = [];
   const visit = (node: ts.Node): void => {
@@ -173,7 +253,26 @@ function collectScalarPairs(sourceFile: ts.SourceFile): Candidate[] {
       /^string \| null$/.test(node.type.getText().trim())
     ) {
       const identifier = nameOf(node.name);
-      if (identifier !== null && /HostId$/.test(identifier)) {
+      if (
+        identifier !== null &&
+        /HostId$/.test(identifier) &&
+        resetsCounterWithHostId(
+          sourceFile,
+          identifier,
+          new Set(
+            siblingDeclarations(node)
+              .filter(isNumericCounter)
+              .flatMap((counter) => {
+                const counterName =
+                  ts.isVariableDeclaration(counter) ||
+                  ts.isPropertyDeclaration(counter)
+                    ? nameOf(counter.name)
+                    : null;
+                return counterName === null ? [] : [counterName];
+              }),
+          ),
+        )
+      ) {
         found.push({
           identifier,
           line:
@@ -187,7 +286,7 @@ function collectScalarPairs(sourceFile: ts.SourceFile): Candidate[] {
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return found.filter((candidate) => /noProgress/i.test(candidate.identifier));
+  return found;
 }
 
 /** The first argument of each `.set(` or `.add(` on `identifier` in this file. */

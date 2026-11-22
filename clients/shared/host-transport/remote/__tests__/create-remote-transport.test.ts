@@ -1004,6 +1004,7 @@ describe("createRemoteHostTransport grant mint across a user-era change", () => 
       hostId,
       { token: "held-host-token", expiresAtMs: Date.now() + 3_600_000 },
       tokens.era(userId),
+      () => true,
     );
     const adopt = vi.spyOn(tokens, "adopt");
     const eraReads = vi.spyOn(tokens, "era");

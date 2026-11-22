@@ -719,31 +719,15 @@ export class LocalUnarySession<Registry extends VersionedRpcRegistry> {
   }
 
   /**
-   * A frame from a host process that is no longer the host's. A call's own
-   * answer that says it ran there (its result, or a method error) is
-   * delivered. A retryable error says its call did not run, and a fatal says
-   * none of the sent calls did: those calls fail before send, carrying none
-   * of the replaced process's refusal, and the session closes on a fatal. Any
-   * other frame is the socket's loss.
+   * A frame from a host process that is no longer the host's. Only a call's
+   * own answer that says it ran there is delivered ({@link answersAsRun}).
+   * Every other frame, a door refusal or a fatal included, is the socket's
+   * loss: sent calls are left uncertain and queued ones fail before send, as
+   * on any loss.
    */
   private onReplacedProcessFrame(frame: HostFrame): void {
-    if (frame.kind === "response") {
-      if (frame.error === null || frame.error.retryable !== true) {
-        this.onFrame(frame);
-        return;
-      }
-      const entry = this.inFlight.get(frame.requestId);
-      if (entry !== undefined)
-        this.rejectInFlight(entry, notRunOnReplacedProcess(entry));
-      return;
-    }
-    if (frame.kind === "fatalError") {
-      // rejectInFlight pumps the queue: drop the socket first.
-      this.closeSocket();
-      for (const entry of Array.from(this.inFlight.values()))
-        this.rejectInFlight(entry, notRunOnReplacedProcess(entry));
-      this.failQueued(null);
-      this.retireIfUnoccupied(true);
+    if (answersAsRun(frame)) {
+      this.onFrame(frame);
       return;
     }
     this.onPeerLoss(
@@ -1426,11 +1410,16 @@ function abortedCall(
   });
 }
 
-function notRunOnReplacedProcess(entry: InFlightCall): RetryableTransportError {
-  return preSendRetryable(
-    entry.requestId,
-    entry.method,
-    "Persistent session has closed",
+/**
+ * A response that says its call ran on the host: a result, or a method error.
+ * A retryable error or a door refusal (a `doorReason`) is about whether the
+ * call was let in, not its outcome.
+ */
+export function answersAsRun(frame: HostFrame): boolean {
+  return (
+    frame.kind === "response" &&
+    (frame.error === null ||
+      (frame.error.retryable !== true && frame.error.doorReason === undefined))
   );
 }
 

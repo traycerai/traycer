@@ -3887,12 +3887,18 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
         this.config.method,
       )}`,
     );
+    // The streak counts one host's refusals. If the endpoint now names another,
+    // that host has not been dialed yet: redial without counting.
+    const countsForDialedHost =
+      this.config.endpoint()?.hostId === this.noProgressHostId;
     if (outcome === "rejected") {
       // A rejection that left this client's person signed in is an answer
-      // about the instance that refused: once that instance is replaced, the
-      // one now observed is dialed and answers for itself, as after a socket
-      // loss. A rejection that signed the person out ends the stream for any
-      // instance. With no sign-in to read, every rejection ends it.
+      // about the instance that refused. Once that instance is replaced, it
+      // ends nothing by itself: it counts toward the host's bound like any
+      // refusal that made no progress, and the instance now observed is
+      // dialed and answers for itself. A rejection that signed the person out
+      // ends the stream for any instance. With no sign-in to read, every
+      // rejection ends it.
       const released = this.config.releasedSignOn;
       if (
         refusedBy !== null &&
@@ -3900,6 +3906,22 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
         released !== null &&
         released.signIn() !== null
       ) {
+        if (countsForDialedHost) {
+          this.noProgressUnauthorizedReconnects += 1;
+          if (
+            this.noProgressUnauthorizedReconnects >=
+            MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS
+          ) {
+            console.error(
+              `[stream] giving up after ${this.noProgressUnauthorizedReconnects} ` +
+                `no-progress UNAUTHORIZED reconnects (method=${String(
+                  this.config.method,
+                )}); reload required`,
+            );
+            this.goTerminal(details);
+            return;
+          }
+        }
         this.enterBackoff();
         return;
       }
@@ -3908,10 +3930,6 @@ class StreamSession<Registry extends VersionedStreamRpcRegistry>
       this.goTerminal(details);
       return;
     }
-    // The streak counts one host's refusals. If the endpoint now names another,
-    // that host has not been dialed yet: redial without counting.
-    const countsForDialedHost =
-      this.config.endpoint()?.hostId === this.noProgressHostId;
     if (outcome === "local-plane-retained") {
       if (!countsForDialedHost) {
         this.enterBackoff();

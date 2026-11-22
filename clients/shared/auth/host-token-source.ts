@@ -75,6 +75,22 @@ function ownerKey(flightKey: string, observed: string): string {
   return `${flightKey}\u0000${observed}`;
 }
 
+// Whose ask starts or joins a mint: none (a renewal), an owner not yet
+// observed, or an observed process.
+type MintAsker =
+  | { readonly kind: "none" }
+  | { readonly kind: "unknown" }
+  | { readonly kind: "known"; readonly observed: string };
+
+const NO_ASKER: MintAsker = { kind: "none" };
+
+// Read once, as the ask starts.
+function askerOf(owner: HostMintOwner | null): MintAsker {
+  if (owner === null) return NO_ASKER;
+  const observed = owner.observed;
+  return observed === null ? { kind: "unknown" } : { kind: "known", observed };
+}
+
 export function createHostMintRecords(): HostMintRecords {
   let order = 0;
   const records = new WeakMap<
@@ -154,11 +170,11 @@ export interface HostTokenSource {
   /** Every token {@link current} returns for the person, by host id. */
   heldFor(userId: string): ReadonlyMap<string, HostToken>;
   /**
-   * Concurrent asks for one pair share a mint unless they name different
-   * observed processes: an ask for an observed process joins that process's
-   * mint, or else a mint started by an ask naming none (a renewal, or an owner
-   * not yet observed); it never joins another process's. An ask naming none
-   * joins the pair's latest mint. An ask with no owner records nothing.
+   * Concurrent asks for one pair share a mint only within one owner: an ask
+   * for an observed process joins that process's mint, an ask for an owner
+   * not yet observed joins another such ask's, and either joins a running
+   * renewal; neither joins the other's. An ask with no owner joins the pair's
+   * latest mint and records nothing.
    */
   obtain(
     userId: string,
@@ -177,12 +193,17 @@ export interface HostTokenSource {
   ): HostTokenMintFailure | null;
   /** One refresh buys at most one token per host, however many windows ask. */
   renew(userId: string, hostIds: readonly string[]): Promise<HostTokenRenewal>;
-  /** Dropped if the person signed out or was replaced since `era`. */
+  /**
+   * Dropped if the person signed out or was replaced since `era`, or if
+   * `stillWanted` is false when the token would be written: it is read in the
+   * same step as the write.
+   */
   adopt(
     userId: string,
     hostId: string,
     token: HostToken,
     era: number,
+    stillWanted: () => boolean,
   ): Promise<void>;
   /** Advances their era at once, so anything begun before keeps nothing. */
   forgetUser(userId: string): Promise<void>;
@@ -217,11 +238,14 @@ export function createHostTokenSource(deps: {
     },
   );
   const listeners = new Set<(change: HostTokenChange) => void>();
-  // Per flight key: the latest mint, which an ask naming no observed process
-  // joins; the latest mint such an ask started, which any ask joins; and each
-  // observed process's own, under `flightKey\0observed`.
+  // Per flight key: the latest mint, which an ask with no owner joins; the
+  // mint an ask with no owner started (a renewal), which every ask joins; the
+  // mint an owner not yet observed started, which only such owners join; and
+  // each observed process's own, under `ownerKey`. An observed owner never
+  // joins a mint started for an owner not yet observed, nor the reverse.
   const latestFlight = new Map<string, Promise<HostTokenMintOutcome>>();
-  const sharedFlights = new Map<string, Promise<HostTokenMintOutcome>>();
+  const renewFlights = new Map<string, Promise<HostTokenMintOutcome>>();
+  const unknownFlights = new Map<string, Promise<HostTokenMintOutcome>>();
   const observedFlights = new Map<string, Promise<HostTokenMintOutcome>>();
   // Each pair's minting refresh (its end, never the token), so a refresh mints once per
   // host. Process memory only: a restart mints once more at most.
@@ -251,12 +275,13 @@ export function createHostTokenSource(deps: {
     hostId: string,
     token: HostToken,
     era: number,
+    stillWanted: () => boolean,
   ): Promise<boolean> => {
     let kept = false;
     // Checked inside the atomic update, so it is ordered against the update
-    // that forgets this person.
+    // that forgets this person, and the asker's own check is the write's.
     table = await deps.persistence.update((latest) => {
-      kept = eraOf(userId) === era;
+      kept = eraOf(userId) === era && stillWanted();
       if (!kept) return latest;
       storedIn.set(keyOf(userId, hostId), era);
       const next = new Map(latest);
@@ -275,7 +300,7 @@ export function createHostTokenSource(deps: {
     hostId: string,
     era: number,
     signal: AbortSignal | null,
-    observed: string | null,
+    asker: MintAsker,
   ): Promise<HostTokenMintOutcome> => {
     if (eraOf(userId) !== era) return Promise.resolve({ kind: "superseded" });
     const signInToken = signIn?.(userId) ?? null;
@@ -286,32 +311,41 @@ export function createHostTokenSource(deps: {
     // not stand in for a later ask.
     const flightKey = `${key}\u0000${mark ?? "unknown"}\u0000${era}`;
     const running =
-      observed === null
+      asker.kind === "none"
         ? latestFlight.get(flightKey)
-        : (observedFlights.get(ownerKey(flightKey, observed)) ??
-          sharedFlights.get(flightKey));
+        : asker.kind === "unknown"
+          ? (unknownFlights.get(flightKey) ?? renewFlights.get(flightKey))
+          : (observedFlights.get(ownerKey(flightKey, asker.observed)) ??
+            renewFlights.get(flightKey));
     if (running !== undefined) return running;
     const attempt = (async (): Promise<HostTokenMintOutcome> => {
       const outcome = await deps.mint(hostId, signInToken, signal);
       if (eraOf(userId) !== era) return { kind: "superseded" };
       if (outcome.kind === "ok") {
-        if (!(await store(userId, hostId, outcome.token, era)))
+        // A mint's own token: every asker of it is waiting for this write.
+        if (!(await store(userId, hostId, outcome.token, era, () => true)))
           return { kind: "superseded" };
         if (mark === null) mintedWith.delete(key);
         else mintedWith.set(key, mark);
       }
       return outcome;
     })().finally(() => {
-      if (observed === null) {
-        if (sharedFlights.get(flightKey) === attempt)
-          sharedFlights.delete(flightKey);
-      } else if (observedFlights.get(ownerKey(flightKey, observed)) === attempt)
-        observedFlights.delete(ownerKey(flightKey, observed));
+      if (asker.kind === "none") {
+        if (renewFlights.get(flightKey) === attempt)
+          renewFlights.delete(flightKey);
+      } else if (asker.kind === "unknown") {
+        if (unknownFlights.get(flightKey) === attempt)
+          unknownFlights.delete(flightKey);
+      } else if (
+        observedFlights.get(ownerKey(flightKey, asker.observed)) === attempt
+      )
+        observedFlights.delete(ownerKey(flightKey, asker.observed));
       if (latestFlight.get(flightKey) === attempt)
         latestFlight.delete(flightKey);
     });
-    if (observed === null) sharedFlights.set(flightKey, attempt);
-    else observedFlights.set(ownerKey(flightKey, observed), attempt);
+    if (asker.kind === "none") renewFlights.set(flightKey, attempt);
+    else if (asker.kind === "unknown") unknownFlights.set(flightKey, attempt);
+    else observedFlights.set(ownerKey(flightKey, asker.observed), attempt);
     latestFlight.set(flightKey, attempt);
     return attempt;
   };
@@ -332,7 +366,7 @@ export function createHostTokenSource(deps: {
     obtain: async (userId, hostId, fresh, { signal, owner }) => {
       const era = eraOf(userId);
       // The process the ask is for, as observed when it was asked.
-      const observed = owner?.observed ?? null;
+      const asker = askerOf(owner);
       // Its place in the order, before the load wait: two asks in one load
       // window never tie.
       const started = records.start();
@@ -350,7 +384,7 @@ export function createHostTokenSource(deps: {
       }
       let outcome: HostTokenMintOutcome;
       try {
-        outcome = await mintOnce(userId, hostId, era, signal, observed);
+        outcome = await mintOnce(userId, hostId, era, signal, asker);
       } catch (cause) {
         // A token that could not be saved leaves none to present, like an
         // unreachable authn: an earlier refusal no longer stands.
@@ -377,7 +411,7 @@ export function createHostTokenSource(deps: {
       );
       if (due.length === 0) return { kind: "already-current" };
       const outcomes = await Promise.all(
-        due.map((hostId) => mintOnce(userId, hostId, era, null, null)),
+        due.map((hostId) => mintOnce(userId, hostId, era, null, NO_ASKER)),
       );
       if (eraOf(userId) !== era) return { kind: "superseded" };
       return {
@@ -388,10 +422,10 @@ export function createHostTokenSource(deps: {
       };
     },
 
-    adopt: async (userId, hostId, token, era) => {
+    adopt: async (userId, hostId, token, era, stillWanted) => {
       if (eraOf(userId) !== era) return;
       await loaded;
-      await store(userId, hostId, token, era);
+      await store(userId, hostId, token, era, stillWanted);
     },
 
     forgetUser: async (userId) => {

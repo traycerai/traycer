@@ -567,6 +567,7 @@ function doorHarness(): DoorHarness {
         expiresAtMs: heldExpiresAtMs,
       },
       tokens.era(USER_ID),
+      () => true,
     ),
   };
 }

@@ -180,6 +180,7 @@ describe("host-token file persistence", () => {
         expiresAtMs: 10_000,
       },
       tokens.era(USER_A),
+      () => true,
     );
     await tokens.adopt(
       USER_A,
@@ -189,6 +190,7 @@ describe("host-token file persistence", () => {
         expiresAtMs: 20_000,
       },
       tokens.era(USER_A),
+      () => true,
     );
 
     const watch: {
@@ -324,6 +326,7 @@ describe("host-token source per-person eras", () => {
         expiresAtMs: 10_000,
       },
       tokens.era(USER_A),
+      () => true,
     );
     const forgetting = tokens.forgetUser(USER_A);
     expect(tokens.era(USER_A)).toBe(1);

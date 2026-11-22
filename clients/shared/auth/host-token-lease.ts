@@ -28,6 +28,7 @@ export type HostTokenSessionRevalidator = HostTokenRevalidator & {
 import type {
   HostInstance,
   ReleasedHostMemory,
+  SignInRecovery,
 } from "../host-transport/released-sign-on";
 import type {
   HostTokenMintFailure,
@@ -397,11 +398,12 @@ interface ReplacementBounds {
    * when the budget allows none. A session's dial sequence spends at most one
    * refresh that authn answered (rotated or refused), until an admission, and
    * a caller that asks while one runs joins it and shares its outcome; each
-   * unary recovery spends its own.
+   * unary recovery spends its own. A sibling's rotation taken from the store
+   * (`adopted`) was not authn's answer, and spends nothing.
    */
   readonly refreshSignIn: (
-    recovery: StreamAuthRevalidator,
-  ) => Promise<RevalidateOutcome> | null;
+    recovery: SignInRecovery,
+  ) => Promise<RevalidateOutcome | "adopted"> | null;
 }
 
 type HostTokenRevalidatorDeps = {
@@ -411,7 +413,7 @@ type HostTokenRevalidatorDeps = {
   /** Who is signed in now; read for their id, never their credential. */
   readonly currentUserId: () => string | null;
   readonly hostId: string;
-  readonly signInRecovery: StreamAuthRevalidator | null;
+  readonly signInRecovery: SignInRecovery | null;
   readonly onState: HostTokenStateSink;
   readonly now: () => number;
 };
@@ -491,7 +493,7 @@ interface RecoverySequence extends ReplacementBounds {
 
 function recoverySequence(owner: HostInstance): RecoverySequence {
   let spent = false;
-  let running: Promise<RevalidateOutcome> | null = null;
+  let running: Promise<RevalidateOutcome | "adopted"> | null = null;
   return {
     owner,
     expiry: untilAdmittedBound(),
@@ -502,8 +504,10 @@ function recoverySequence(owner: HostInstance): RecoverySequence {
       const refresh = recovery
         .revalidateForReconnect()
         .then((outcome) => {
-          // A refresh that never reached authn spends nothing.
-          if (outcome !== "network-error") spent = true;
+          // Only a refresh authn answered spends: one that never reached
+          // it, or a sibling's rotation adopted from the store, does not.
+          if (outcome !== "network-error" && outcome !== "adopted")
+            spent = true;
           return outcome;
         })
         .finally(() => {
@@ -566,6 +570,10 @@ function revalidatorWithBounds(
       const refresh = bounds.refreshSignIn(deps.signInRecovery);
       if (refresh === null) return "rejected";
       const recovered = await refresh;
+      // An adopted rotation mints as a rotated one does, and leaves the
+      // refresh to the next refusal of the sign-in.
+      if (recovered === "adopted")
+        return mintFresh(userId, false, eraRetried, bounds, owner, report);
       return recovered === "rotated"
         ? mintFresh(userId, true, eraRetried, bounds, owner, report)
         : recovered;
@@ -647,7 +655,7 @@ export function hostTokenUnaryRevalidator(deps: {
   readonly tokens: Pick<HostTokenAccess, "current" | "obtain">;
   readonly hosts: HostInstanceOwners;
   readonly currentUserId: () => string | null;
-  readonly signInRecovery: StreamAuthRevalidator | null;
+  readonly signInRecovery: SignInRecovery | null;
   readonly onState: HostTokenStateSink;
   readonly now: () => number;
 }): Required<

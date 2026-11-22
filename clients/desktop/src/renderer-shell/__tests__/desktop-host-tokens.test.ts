@@ -393,7 +393,13 @@ describe("desktop host-token source eras", () => {
       Reflect.set(bridge, "adopt", async () => ({ era }));
       const tokens = createDesktopHostTokenSource(bridge);
 
-      await tokens.adopt(USER_ID, HOST_ID, HOST_TOKEN, tokens.era(USER_ID));
+      await tokens.adopt(
+        USER_ID,
+        HOST_ID,
+        HOST_TOKEN,
+        tokens.era(USER_ID),
+        () => true,
+      );
 
       expect(tokens.current(USER_ID, HOST_ID)).toBeNull();
     },
@@ -575,7 +581,7 @@ describe("desktop host-token source across windows asking for different host pro
         era: main.era(userId),
       }),
       adopt: async (userId, hostId, token, expectedEra) => {
-        await main.adopt(userId, hostId, token, expectedEra);
+        await main.adopt(userId, hostId, token, expectedEra, () => true);
         return { era: main.era(userId) };
       },
       forgetUser: async (userId) => {

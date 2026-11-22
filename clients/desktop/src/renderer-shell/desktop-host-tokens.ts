@@ -165,8 +165,11 @@ export function createDesktopHostTokenSource(
         ? reply.renewal
         : { kind: "superseded" };
     },
-    adopt: async (userId, hostId, token, era) => {
+    adopt: async (userId, hostId, token, era, stillWanted) => {
       if (forgetting.has(userId) || era === NO_ISSUED_HOST_TOKEN_ERA) return;
+      // Main writes it: asked in the step that sends it there, the last this
+      // window can check before main's write.
+      if (!stillWanted()) return;
       const reply = await bridge.adopt(userId, hostId, token, era);
       learn(userId, reply.era);
       // Main kept it only if the era it began in had not moved.

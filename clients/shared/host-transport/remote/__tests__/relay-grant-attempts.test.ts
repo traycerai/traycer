@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defineVersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import {
+  defineVersionedRpcRegistry,
+  type FatalErrorDetails,
+} from "@traycer/protocol/framework/index";
+import { SESSION_CAPABILITY_CREDENTIAL_UPDATE } from "@traycer/protocol/host-transport/mux";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
   CLIENT_REAUTH_JITTER_MS,
@@ -8,7 +12,10 @@ import {
   countWebCrypto,
   settleNoise,
 } from "@traycer/protocol/host-transport/remote/__tests__/web-crypto-completion-fixture";
-import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type {
+  RevalidateOutcome,
+  StreamAuthRevalidator,
+} from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import {
   createHostTokenSource,
@@ -29,6 +36,31 @@ import { emptyStreamRegistry, FakeRelayHost } from "./fake-relay-host";
 const HOST_ID = "relay-grant-attempts-host";
 const USER_ID = "user-relay-grant-attempts";
 const SIGN_IN = "sign-in-token";
+const ROTATED_SIGN_IN = "sign-in-token-rotated";
+const SECOND_ROTATED_SIGN_IN = "sign-in-token-rotated-again";
+const RELEASED_HOST_ID = "relay-grant-attempts-released-host";
+/** What a released host says when its own check refuses a host-only token. */
+const RELEASED_REFUSAL: FatalErrorDetails = {
+  code: "UNAUTHORIZED",
+  reason: "released-host-token-refusal",
+  incompatibleMethods: null,
+  upgradeGuidance: null,
+};
+
+/** How a test's transport is built: its host, whether the row opens released, and its sign-in. */
+interface TransportSettings {
+  readonly hostId: string;
+  readonly releasedWay: boolean;
+  readonly confirmRow: (() => Promise<boolean>) | null;
+  readonly signIn: () => string;
+}
+
+const PLAIN_TRANSPORT: TransportSettings = {
+  hostId: HOST_ID,
+  releasedWay: false,
+  confirmRow: null,
+  signIn: () => SIGN_IN,
+};
 /** Short of the 15-minute standing bound, so the fake host's sign of life keeps the session. */
 const FEED_STROKE_MS = 5 * 60 * 1000;
 /** The re-auth cadence plus its jitter always covers the first fire. */
@@ -99,6 +131,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
   let authn: ScriptedAuthn;
   let states: string[];
   let revalidations: number;
+  let refreshGate: Promise<RevalidateOutcome> | null;
   let built: RemoteHostTransport<
     VersionedRpcRegistry,
     VersionedStreamRpcRegistry
@@ -119,6 +152,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     authn = scriptedAuthn();
     states = [];
     revalidations = 0;
+    refreshGate = null;
     built = null;
   });
 
@@ -131,20 +165,19 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     vi.restoreAllMocks();
   });
 
-  /** A sign-in refresh that always rotates, counted. */
+  /** A sign-in refresh that rotates at once, or when `refreshGate` answers; counted. */
   const recovery: StreamAuthRevalidator = {
     revalidateForReconnect: () => {
       revalidations += 1;
-      return Promise.resolve("rotated");
+      return refreshGate ?? Promise.resolve("rotated");
     },
   };
 
-  function openTransport(): RemoteHostTransport<
-    VersionedRpcRegistry,
-    VersionedStreamRpcRegistry
-  > {
+  function openTransport(
+    settings: TransportSettings,
+  ): RemoteHostTransport<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
     const bearerSource: OpenFrameBearerSource = {
-      getBearerToken: () => SIGN_IN,
+      getBearerToken: settings.signIn,
       identity: { userId: USER_ID },
     };
     let nextRequestId = 0;
@@ -153,9 +186,9 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
       VersionedStreamRpcRegistry
     >({
       clientIdentity: TEST_CLIENT_IDENTITY,
-      opensReleasedWay: () => false,
-      confirmRowBeforeSignIn: null,
-      hostId: HOST_ID,
+      opensReleasedWay: () => settings.releasedWay,
+      confirmRowBeforeSignIn: settings.confirmRow,
+      hostId: settings.hostId,
       userId: USER_ID,
       relayAttachUrl: "wss://relay.invalid/attach",
       authnBaseUrl: "https://authn.invalid",
@@ -238,7 +271,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     readonly answerReauthMint: (answer: MintAnswer) => void;
   }> {
     const answerReauthMint = authn.hold(2);
-    const { session } = openTransport();
+    const { session } = openTransport(PLAIN_TRANSPORT);
     session.start();
     await advanceUntil(() => session.isReady(), 10_000);
     await advanceFeedingHost(() => authn.calls() === 2);
@@ -296,7 +329,7 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
     // Request 2 is the ready leg's re-auth; request 4 is the next dial's.
     authn.script(2, "unauthorized");
     authn.script(4, "unauthorized");
-    const { session } = openTransport();
+    const { session } = openTransport(PLAIN_TRANSPORT);
     session.start();
     await advanceUntil(() => session.isReady(), 10_000);
     await advanceFeedingHost(() => authn.calls() === 3);
@@ -308,4 +341,209 @@ describe("a relay session's grant mints, each for the attempt that asked", () =>
 
     expect(revalidations).toBe(2);
   });
+
+  it("asks authn for no second mint when a sign-in refresh answers rotated after its attempt was retired", async () => {
+    authn.script(1, "unauthorized");
+    let answerRefresh: (outcome: RevalidateOutcome) => void = () => undefined;
+    refreshGate = new Promise<RevalidateOutcome>((resolve) => {
+      answerRefresh = resolve;
+    });
+    const { session } = openTransport(PLAIN_TRANSPORT);
+    session.start();
+    await advanceUntil(() => revalidations === 1, 10_000);
+
+    session.close();
+    retireAllRemoteSessions();
+    answerRefresh("rotated");
+    await advance(0);
+
+    expect(authn.calls()).toBe(1);
+  });
+
+  it("keeps the held host-only token when an adopted token's write is released after its attempt was retired", async () => {
+    const inner = createMemoryHostTokenPersistence();
+    let writes = 0;
+    let releaseWrite: () => void = () => undefined;
+    const writeHeld = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    tokens = createHostTokenSource({
+      persistence: {
+        load: () => inner.load(),
+        update: async (change) => {
+          writes += 1;
+          await writeHeld;
+          return inner.update(change);
+        },
+      },
+      mint: () => Promise.resolve({ kind: "no-sign-in" }),
+      signIn: null,
+      now: () => Date.now(),
+    });
+    const { session } = openTransport(PLAIN_TRANSPORT);
+    session.start();
+    await advanceUntil(() => writes === 1, 10_000);
+
+    session.close();
+    retireAllRemoteSessions();
+    releaseWrite();
+    await advance(0);
+
+    expect(tokens.current(USER_ID, HOST_ID)?.token).not.toBe("host-token-1");
+  });
+
+  /** A sign-in refresh the test answers: asked by the next `revalidateForReconnect`. */
+  function heldRefresh(): { readonly answer: (o: RevalidateOutcome) => void } {
+    let answer: (outcome: RevalidateOutcome) => void = () => undefined;
+    refreshGate = new Promise<RevalidateOutcome>((resolve) => {
+      answer = resolve;
+    });
+    return { answer: (outcome) => answer(outcome) };
+  }
+
+  /** A released host that takes the sign-in the host-only token's refusal asks for, and the row confirmations a test scripts. */
+  function releasedSession(
+    hostId: string,
+    confirmRow: () => Promise<boolean>,
+    signIn: () => string,
+  ): RemoteHostTransport<
+    VersionedRpcRegistry,
+    VersionedStreamRpcRegistry
+  >["session"] {
+    relay.openAckCapabilities = [SESSION_CAPABILITY_CREDENTIAL_UPDATE];
+    relay.decideOpen = (_bearer, openIndex) =>
+      relay.openAuthz[openIndex] === null
+        ? { kind: "ack" }
+        : { kind: "fatal", details: RELEASED_REFUSAL };
+    const { session } = openTransport({
+      hostId,
+      releasedWay: true,
+      confirmRow,
+      signIn,
+    });
+    return session;
+  }
+
+  it("writes the rotated sign-in in a credential update while the row's confirmation for the re-auth attach is pending, when the last answer was true", async () => {
+    let signIn = SIGN_IN;
+    let confirmations = 0;
+    let answerConfirmation: (confirmed: boolean) => void = () => undefined;
+    const pending = new Promise<boolean>((resolve) => {
+      answerConfirmation = resolve;
+    });
+    // The second confirmation is the re-auth's: the redial's was the first, and answered true.
+    const confirmRow = (): Promise<boolean> => {
+      confirmations += 1;
+      return confirmations === 2 ? pending : Promise.resolve(true);
+    };
+    const session = releasedSession(RELEASED_HOST_ID, confirmRow, () => signIn);
+    session.start();
+    await advanceUntil(() => session.isReady(), 15_000);
+    expect(relay.openBearers).toEqual(["", SIGN_IN]);
+    await advanceFeedingHost(() => confirmations === 2);
+
+    signIn = ROTATED_SIGN_IN;
+    session.notifyBearerRotated();
+    await advance(0);
+
+    expect(sentCredentialBearers()).toContain(ROTATED_SIGN_IN);
+    answerConfirmation(true);
+  });
+
+  it("keeps the host-only token in a credential update while a periodic refresh's confirmation is pending after the last answer was false, and writes the sign-in once it answers true", async () => {
+    let signIn = SIGN_IN;
+    let confirmations = 0;
+    let answerThird: (confirmed: boolean) => void = () => undefined;
+    const third = new Promise<boolean>((resolve) => {
+      answerThird = resolve;
+    });
+    // The redial's confirmation (1) is true; the re-auth's (2) is false, and
+    // the leg stays; the next periodic refresh's (3) is pending.
+    const confirmRow = (): Promise<boolean> => {
+      confirmations += 1;
+      if (confirmations === 2) return Promise.resolve(false);
+      return confirmations === 3 ? third : Promise.resolve(true);
+    };
+    const session = releasedSession(
+      `${RELEASED_HOST_ID}-last-answer-false`,
+      confirmRow,
+      () => signIn,
+    );
+    session.start();
+    await advanceUntil(() => session.isReady(), 15_000);
+    expect(relay.openBearers).toEqual(["", SIGN_IN]);
+    await advanceFeedingHost(() => confirmations === 2);
+    await advanceFeedingHost(() => confirmations === 3);
+    expect(session.isReady()).toBe(true);
+
+    signIn = ROTATED_SIGN_IN;
+    const sentBefore = sentCredentialBearers().length;
+    session.notifyBearerRotated();
+    await advance(0);
+
+    // Nothing the last false answer withdrew goes while the next one is pending.
+    expect(sentCredentialBearers()).not.toContain(ROTATED_SIGN_IN);
+    expect(sentCredentialBearers().slice(sentBefore)).not.toContain(SIGN_IN);
+
+    answerThird(true);
+    await advance(0);
+    signIn = SECOND_ROTATED_SIGN_IN;
+    session.notifyBearerRotated();
+    await advance(0);
+
+    expect(sentCredentialBearers()).toContain(SECOND_ROTATED_SIGN_IN);
+  });
+
+  it("gives the relink's attach its own one sign-in refresh after a re-auth's refresh answers rotated for an attach the drop retired, again after a second such answer", async () => {
+    // Cycle one: the re-auth's mint (2) is refused, the leg drops, the relink's
+    // mint (3) is held and then refused, and its re-mint (4) is admitted.
+    // Cycle two: the next re-auth's mint (5) is refused, and the relink's (6)
+    // is held and then refused.
+    authn.script(2, "unauthorized");
+    authn.script(5, "unauthorized");
+    const answerFirstRelinkMint = authn.hold(3);
+    const answerSecondRelinkMint = authn.hold(6);
+    const { session } = openTransport(PLAIN_TRANSPORT);
+    session.start();
+    await advanceUntil(() => session.isReady(), 10_000);
+
+    const retiredFirst = heldRefresh();
+    await advanceFeedingHost(() => revalidations === 1);
+    relay.dropCurrentConnection();
+    await advanceUntil(() => authn.calls() === 3, 30_000);
+    // The retired re-auth's answer spends nothing and asks for no mint.
+    retiredFirst.answer("rotated");
+    await advance(0);
+    expect(authn.calls()).toBe(3);
+    expect(revalidations).toBe(1);
+    // The relink's own refusal makes its own one refresh.
+    refreshGate = null;
+    answerFirstRelinkMint("unauthorized");
+    await advanceUntil(() => session.isReady() && authn.calls() === 4, 30_000);
+    expect(revalidations).toBe(2);
+
+    const retiredSecond = heldRefresh();
+    await advanceFeedingHost(() => revalidations === 3);
+    relay.dropCurrentConnection();
+    await advanceUntil(() => authn.calls() === 6, 30_000);
+    retiredSecond.answer("rotated");
+    await advance(0);
+    expect(authn.calls()).toBe(6);
+    expect(revalidations).toBe(3);
+    refreshGate = null;
+    answerSecondRelinkMint("unauthorized");
+    await advanceUntil(() => session.isReady() && authn.calls() === 7, 30_000);
+    expect(revalidations).toBe(4);
+  });
+
+  /** The bearer of every credential update the fake host has received. */
+  function sentCredentialBearers(): string[] {
+    const bearers: string[] = [];
+    for (const update of relay.credentialUpdates) {
+      if (typeof update !== "object" || update === null) continue;
+      const bearer: unknown = Reflect.get(update, "bearer");
+      if (typeof bearer === "string") bearers.push(bearer);
+    }
+    return bearers;
+  }
 });

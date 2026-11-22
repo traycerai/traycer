@@ -64,6 +64,16 @@ const OWNER_KEYED: readonly string[] = [
 ];
 
 const BASELINE: Readonly<Record<string, BaselineEntry>> = {
+  "traycer-cli/src/commands/monitor.ts::countedHostId": {
+    class: "HOST-ID-LIFETIME",
+    reason:
+      "Ruling G4: the monitor's consecutive auth refreshes counted per host id, the 1.5.4 bound on refreshes",
+    ref: "cli-v1.5.4:clients/traycer-cli/src/commands/monitor.ts:504-519",
+  },
+  "shared/host-selection/selection-authority-engine.ts::preferredHostId": {
+    class: "NOT-AN-ANSWER",
+    reason: "The person's preferred host, a selection, not a host answer",
+  },
   "desktop/src/electron-main/app/support.ts::frozenEvidenceByKey": {
     class: "NOT-AN-ANSWER",
     reason:
@@ -226,10 +236,15 @@ const BASELINE: Readonly<Record<string, BaselineEntry>> = {
     reason:
       "The latest mint per person, host, refresh and era, which an ask naming no observed process joins; owned asks start in observedFlights",
   },
-  "shared/auth/host-token-source.ts::sharedFlights": {
+  "shared/auth/host-token-source.ts::renewFlights": {
     class: "NULL-OWNER-FLIGHT",
     reason:
-      "The latest mint an ask naming no observed process started, which any ask joins",
+      "The renewal mint, which an owned ask joins (hold-fixed); it names no observed process",
+  },
+  "shared/auth/host-token-source.ts::unknownFlights": {
+    class: "NULL-OWNER-FLIGHT",
+    reason:
+      "The mints of asks whose host process is not observed yet; they name no observed process",
   },
   "shared/auth/host-token-source.ts::storedIn": {
     class: "RULING",
@@ -495,11 +510,22 @@ const BASELINE: Readonly<Record<string, BaselineEntry>> = {
 describe("host-id-keyed stores of host and mint answers", () => {
   const found = scanHostIdKeyedStores(CLIENTS_ROOT);
 
-  it("lists every string-keyed answer store, so a new one needs a reason", () => {
-    const unlisted = found
-      .filter((store) => !(store.key in BASELINE))
+  const unlisted = (baseline: Readonly<Record<string, BaselineEntry>>) =>
+    found
+      .filter((store) => !(store.key in baseline))
       .map((store) => `${store.key} (line ${store.line})`);
-    expect(unlisted).toEqual([]);
+
+  it("lists every string-keyed answer store, so a new one needs a reason", () => {
+    expect(unlisted(BASELINE)).toEqual([]);
+  });
+
+  it("fails when the monitor's per-host-id refresh counter is not listed, and passes when it is", () => {
+    const MONITOR = "traycer-cli/src/commands/monitor.ts::countedHostId";
+    expect(found.map((store) => store.key)).toContain(MONITOR);
+    const { [MONITOR]: _listed, ...without } = BASELINE;
+    expect(unlisted(without)).toHaveLength(1);
+    expect(unlisted(without)[0]).toContain(MONITOR);
+    expect(unlisted(BASELINE)).toEqual([]);
   });
 
   it("lists no store that no longer exists, or that is keyed by owner now", () => {
@@ -585,12 +611,42 @@ describe("host-id-keyed stores of host and mint answers", () => {
       ).toEqual(["table"]);
     });
 
-    it("finds the scalar pair of a host id kept beside a count", () => {
+    it("finds a host id kept beside a counter that one block resets when it assigns the host id", () => {
       expect(
         scan(`
-          class A { private noProgressHostId: string | null = null; }
+          class A {
+            private noProgressHostId: string | null = null;
+            private noProgressReconnects = 0;
+            note(hostId: string) {
+              if (this.noProgressHostId !== hostId) {
+                this.noProgressReconnects = 0;
+                this.noProgressHostId = hostId;
+              }
+            }
+          }
+          function monitor() {
+            let refreshCount = 0;
+            let countedHostId: string | null = null;
+            const note = (hostId: string) => {
+              refreshCount = 0;
+              countedHostId = hostId;
+            };
+          }
+        `).sort(),
+      ).toEqual(["countedHostId", "noProgressHostId"]);
+    });
+
+    it("passes a host id that no block resets a counter with", () => {
+      expect(
+        scan(`
+          class A {
+            private openFrameHostId: string | null = null;
+            private attempts = 0;
+            open(hostId: string) { this.openFrameHostId = hostId; }
+            reset() { this.attempts = 0; }
+          }
         `),
-      ).toEqual(["noProgressHostId"]);
+      ).toEqual([]);
     });
 
     it("passes a store keyed by the process instance or by the owner key", () => {
