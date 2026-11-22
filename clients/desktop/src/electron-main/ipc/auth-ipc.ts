@@ -301,7 +301,8 @@ function registerHostTokensIpc(bridge: RunnerIpcBridge): void {
         hostId,
         hostTokenOf(token),
         expectedEra,
-        () => processReleasedHosts.currentInstance(hostId).observed === observed,
+        () =>
+          processReleasedHosts.currentInstance(hostId).observed === observed,
       );
       return { era: tokens.era(userId) };
     },

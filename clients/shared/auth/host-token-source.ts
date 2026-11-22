@@ -451,8 +451,7 @@ export function createHostTokenSource(deps: {
       await store(userId, hostId, token, {
         era,
         started,
-        mayWrite: () =>
-          (writtenFrom.get(key) ?? 0) < started && stillWanted(),
+        mayWrite: () => (writtenFrom.get(key) ?? 0) < started && stillWanted(),
       });
     },
 
